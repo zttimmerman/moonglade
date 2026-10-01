@@ -12,7 +12,7 @@ def _git(repo, *a):
 
 @check("build.pin_enforced", order=10, capability="server-build", stack="down")
 def pin_enforced(ctx):
-    """Dirty + unpinned vendor trees are forced back to fork.lock before building."""
+    """`hs build` on dirty + unpinned vendor trees forces them back to fork.lock before building."""
     lock = P.fork_lock()
     # sabotage: move core HEAD off the pin, modify a tracked file, add an untracked file; dirty playerbots too
     r = _git(P.CORE_SRC, "checkout", "-q", "--detach", "HEAD~1")
@@ -23,7 +23,10 @@ def pin_enforced(ctx):
     before = {"core": build.pin_state(P.CORE_SRC, lock["core_sha"], "modules/"),
               "playerbots": build.pin_state(P.BOTS_SRC, lock["playerbots_sha"])}
     require(before["core"] and before["playerbots"], "sabotage did not register as unpinned/dirty", before=before)
-    info = build.sync_vendor()
+    r = subprocess.run([str(P.HARNESS / "hs"), "build"], capture_output=True, text=True)
+    info = {"after": {"exit": r.returncode, "stderr_tail": r.stderr[-1000:]},
+            "modules": sorted(e.name for e in (P.CORE_SRC / "modules").iterdir() if e.is_symlink())}
+    require(r.returncode == 0, "`hs build` failed on a sabotaged vendor tree", **info)
     after = {"core": build.pin_state(P.CORE_SRC, lock["core_sha"], "modules/"),
              "playerbots": build.pin_state(P.BOTS_SRC, lock["playerbots_sha"])}
     ev = {"problems_before": before, "problems_after": after, "sync": info["after"], "modules": info["modules"]}
@@ -58,14 +61,17 @@ def playerbots_active(ctx):
     for f in (P.LOGS / "Server.log", stack.LOG["worldserver"]):
         if f.exists():
             logtxt += f.read_text(errors="replace")
-    init_lines = [l for l in logtxt.splitlines() if "playerbot" in l.lower()][:15]
-    fatal = [l for l in logtxt.splitlines() if "playerbot" in l.lower() and any(w in l.lower() for w in ("fatal", "abort", "assert"))]
+    lines = logtxt.splitlines()
+    init_lines = [l for l in lines if "mod-playerbots initialized" in l]
+    fatal = [l for l in lines if "playerbot" in l.lower() and any(w in l.lower() for w in ("fatal", "abort", "assert"))]
     tables = int(db.scalar(f"SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='{P.DB_NAMES['playerbots']}'") or 0)
-    res = soap.gm("playerbots bot list")
-    unknown = "no such command" in res.output.lower() or "there is no such" in res.output.lower()
-    ev = {"log_playerbot_lines": init_lines, "fatal_lines": fatal, "playerbots_db_tables": tables, "gm": res.evidence()}
-    require(init_lines, "no playerbots lines in worldserver logs", **ev)
+    # `.playerbots pmon` is console-usable and succeeds; an unknown command yields LANG_CMD_INVALID
+    # "Command '%s' does not exist" (ChatCommand.cpp) with a SOAP fault.
+    res = soap.gm("playerbots pmon")
+    ev = {"init_marker_lines": init_lines[:5], "fatal_lines": fatal, "playerbots_db_tables": tables, "gm": res.evidence()}
+    require(init_lines, "no 'mod-playerbots initialized' line in worldserver logs", **ev)
     require(not fatal, "fatal playerbots log lines", **ev)
     require(tables > 0, "playerbots DB has no tables", **ev)
-    require(not unknown, "playerbots GM command not recognized", **ev)
+    require("does not exist" not in res.output, "playerbots GM command not recognized", **ev)
+    require(res.ok, "playerbots GM command did not succeed", **ev)
     return ev

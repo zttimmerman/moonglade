@@ -136,7 +136,7 @@ def protocol_probe(ctx):
 @check("client.protocol_badpass", order=121, capability="client-connectivity", stack="up")
 def protocol_badpass(ctx):
     """Wrong password: challenge accepted (account exists) but the logon proof is rejected with AC's
-    incorrect-password result, no session key is issued, and the world server refuses a session."""
+    proof rejection (WOW_FAIL_UNKNOWN_ACCOUNT 0x04 after a successful challenge), no session key is issued, and the world server refuses a session."""
     _fx(F.ensure_account)
     key_sql = f"SELECT HEX(session_key) FROM account WHERE username='{P.TEST_USER.upper()}'"
     key_before = db.scalar(key_sql, "auth")
@@ -154,7 +154,7 @@ def protocol_badpass(ctx):
                   "AUTH_LOGON_PROOF error WOW_FAIL_UNKNOWN_ACCOUNT (0x04) and logs 'tried to login with invalid password'"}
     require(lr.challenge_result == probe.W.WOW_SUCCESS, "challenge was not accepted (account missing?)", **ev)
     require(lr.proof_result == probe.W.WOW_FAIL_UNKNOWN_ACCOUNT,
-            "logon proof not rejected with the server's incorrect-password result (0x04)", **ev)
+            "logon proof not rejected with WOW_FAIL_UNKNOWN_ACCOUNT (0x04) after a successful challenge", **ev)
     require(lr.session_key is None and not lr.server_proof_ok, "probe obtained a session key", **ev)
     require(ev["session_key_unchanged"], "server stored a new session key for a failed logon", **ev)
     # Informational only: authserver's file appender doesn't flush promptly, so the line can lag the reply.

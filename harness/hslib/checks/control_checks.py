@@ -22,7 +22,7 @@ def invalid(ctx):
     r = subprocess.run([str(P.HARNESS / "hs"), "gm", "definitelynotacommand"], capture_output=True, text=True, timeout=60)
     ev = {"exit": r.returncode, "output": r.stdout[-800:], "stderr": r.stderr[-400:]}
     require(r.returncode == 1, "expected exit 1 for unknown command", **ev)
-    require(r.stdout.strip(), "no server error text", **ev)
+    require("does not exist" in r.stdout, "server error text (LANG_CMD_INVALID) not surfaced", **ev)
     return ev
 
 
