@@ -64,6 +64,10 @@ def write_all(world_datadir: Path | None = None, extra_world: dict | None = None
         ov = {}
         if dist.name == "playerbots.conf.dist":
             ov["PlayerbotsDatabaseInfo"] = _dbinfo("playerbots")
+            # M0 profile: small population. Defaults (500 random bots + 50 addclass accounts) are too heavy for
+            # a 16 GB Mac and slow first boot (docs/research/playerbots-scripting.md §5). M2 sets the real budget.
+            ov |= {"AiPlayerbot.MinRandomBots": "10", "AiPlayerbot.MaxRandomBots": "10",
+                   "AiPlayerbot.AddClassAccountPoolSize": "5"}
         render(dist, dist.with_suffix(""), ov)
         rendered.append(dist.with_suffix("").name)
     return {"authserver.conf": auth, "worldserver.conf": world, "modules": rendered}

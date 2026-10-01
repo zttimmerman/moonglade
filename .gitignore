@@ -11,3 +11,7 @@ harness/summary.md
 *.log
 .DS_Store
 node_modules/
+# era-diff generated reports
+tools/era-diff/out/
+__pycache__/
+*.pyc

@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Hearthstone harness results",
+  "type": "object",
+  "required": ["meta", "checks"],
+  "properties": {
+    "meta": {
+      "type": "object",
+      "required": ["started", "finished", "repo_sha", "fork_lock", "host", "full_run"],
+      "properties": {
+        "started": {"type": "string"},
+        "finished": {"type": "string"},
+        "repo_sha": {"type": "string"},
+        "fork_lock": {"type": "object", "required": ["core_sha", "playerbots_sha"]},
+        "host": {"type": "object", "required": ["platform", "machine"]},
+        "full_run": {"type": "boolean"}
+      }
+    },
+    "checks": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["id", "status", "duration_s", "evidence"],
+        "properties": {
+          "id": {"type": "string"},
+          "status": {"enum": ["pass", "fail", "error", "skip"]},
+          "duration_s": {"type": "number"},
+          "evidence": {"type": "object", "minProperties": 1}
+        }
+      }
+    }
+  }
+}

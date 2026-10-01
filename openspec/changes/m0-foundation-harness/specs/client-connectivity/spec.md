@@ -24,7 +24,7 @@ The harness SHALL include a headless client that speaks the 3.3.5a build 12340 p
 
 #### Scenario: Wrong password is rejected
 - **WHEN** the probe tries to log on with a wrong password
-- **THEN** logon fails with an incorrect-password result, and no world session is established
+- **THEN** the logon challenge succeeds (account exists) but the logon proof is rejected (AzerothCore reports a bad SRP6 proof as `WOW_FAIL_UNKNOWN_ACCOUNT` 0x04, AuthSession.cpp), no session key is issued, and no world session can be established
 - Check: `client.protocol_badpass`
 
 ### Requirement: Client configuration

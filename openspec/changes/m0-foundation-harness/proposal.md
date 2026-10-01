@@ -27,4 +27,6 @@ Nothing can be verified until a headless harness can build the server, boot it, 
 New dirs: `harness/`, `docs/`, `patches/`, `modules/`. Gitignored runtime dirs: `vendor/`, `build/`, `server/`, `env/`, `data/`. Uses Homebrew deps (boost, ccache). Ports bound to 127.0.0.1 only: 3307 (MySQL), 3724 (auth), 8085 (world), 7878 (SOAP).
 
 ## Spec-change log
-(none yet — any later loosening of a scenario is recorded here with a reason, per CLAUDE.md §10)
+Any later change to a scenario is recorded here with a reason, per CLAUDE.md §10.
+
+- 2026-10-01 · `client.protocol_badpass`: "incorrect-password result" replaced with the server's actual observable behavior. AzerothCore never sends `WOW_FAIL_INCORRECT_PASSWORD` (0x05). For a wrong password it accepts the challenge and rejects the proof with `WOW_FAIL_UNKNOWN_ACCOUNT` (0x04) (`vendor/azerothcore-wotlk/src/server/apps/authserver/Server/AuthSession.cpp` HandleLogonProof, SRP6 verify-fail branch). This is a clarification, not a loosening: the check also asserts that no session key is issued and that world auth is refused. Raised by builder B1. To be reviewed at the M0 gate.
