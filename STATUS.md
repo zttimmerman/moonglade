@@ -1,6 +1,6 @@
 # STATUS
 
-_Last updated: 2026-10-01 (session 1)_
+_Last updated: 2026-10-01 (session 1, end: stopped at M0 human gate + Gate 1)_
 
 ## Current milestone: M0 Foundation
 Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, design, tasks).
@@ -8,21 +8,16 @@ Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, desi
 ## Task board
 | Task | State | Notes |
 |---|---|---|
-| 1.1 Repo structure, fork.lock, ADRs | done (pending verifier) | ADR-0001..0003 |
-| 1.2 harness skeleton + runner | done (pending verifier) | `harness/hs`, `hslib/` |
-| 2.1 `hs build` | in progress | switched to Release (RelWithDebInfo build/ = 26 GB); clean rebuild running |
-| 3.x lifecycle | done (pending verifier) | fixed: stale realm VERSION_MISMATCH flag after a crashed worldserver start made authserver exit; flaky failfast excerpt (stdout/stderr buffering) fixed by separate stderr logs |
-| 4.x GM/SQL, playerbots active | done (pending verifier) | |
-| 5.x protocol probe + fixtures (B1) | done (pending verifier) | badpass scenario wording clarified (logged in proposal) |
-| 6.1 client-config (B2) | done (pending verifier) | |
-| 7.1 reporting completeness | done (pending verifier) | |
-| 8.1 playerbots scripting research (B3) | done | `docs/research/playerbots-scripting.md` |
-| 9.1 verifier pass | todo | after Release rebuild + clean full run |
-| 9.2 human gate | blocked on Zach | needs client + CrossOver |
-| Gate 1 memo (B4) | ready for Zach | `docs/gate1-era-profile-memo.md`, tool `tools/era-diff/` |
+| M0 tasks 1.1–8.1 | **done, verifier PASS** | cycle 1 FAIL (`build.playerbots_active` couldn't fail) → fixed `fbad133` → cycle 2 PASS |
+| 9.2 M0 human gate | **blocked on Zach** | needs 3.3.5a enUS client + CrossOver; see `docs/client-setup.md` |
+| Gate 1 memo | **awaiting Zach's signature** | `docs/gate1-era-profile-memo.md` (6 checkboxes) |
+| F1 pin enforcement misses gitignored content | todo (before M2) | verifier concern: a real dir dropped in `vendor/azerothcore-wotlk/modules/` isn't removed (`git clean` w/o `-x`, `/modules/*` ignored) and would compile in. Fix: remove non-symlink, untracked entries under core `modules/`; `-x` clean for playerbots tree; extend `build.pin_enforced` |
+| F2 `report.full_run` proves files written only externally | todo (low) | verifier concern 2 |
+| M1 planning (`./play`) | todo | after M0 gate |
+| M3 | blocked on Gate 1 | |
 
 ## Last full harness result
-Run 2 (2026-10-01, RelWithDebInfo): 23 pass, 2 fail. `lifecycle.isolated` caught the playerbots command server listening on `*:8888` (now disabled), and `report.full_run` failed as a consequence. A rerun is pending after the Release rebuild.
+2026-10-01, HEAD `fbad133`, Release build: **25 pass / 0 fail**, exit 0. Three consecutive full runs by the verifier, plus my own runs. One `[human-verify]` scenario is pending (M0 gate). Disk free about 44 GB.
 
 ## Known issues / notes for later milestones
 - The playerbots command server (`AiPlayerbot.CommandServerPort`) binds 0.0.0.0 with no address option. It's disabled. If M2/M4 scripting wants it, it needs a module patch to bind 127.0.0.1, and an ADR.
