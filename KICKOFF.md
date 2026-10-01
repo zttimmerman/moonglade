@@ -2,6 +2,8 @@
 
 Standing rules moved to `CLAUDE.md`. Harness requirements (section 5) moved to `docs/harness-requirements.md`. Section numbers kept from the original.
 
+> **Correction (2026-10-01, from Zach):** the target is WotLK 3.3.5a (build 12340), all content through level 80. "Pre-2.3" and "era profile" below mean adjusting **1–60 pacing and difficulty only** on top of WotLK. The VMaNGOS diff is limited to entities that exist in both DBs and fall in the 1–60 scope. It never deletes or replaces TBC/WotLK content or systems (Outland, Northrend, Death Knights, and so on). VMaNGOS is a read-only data reference. See CLAUDE.md §1, §2, §7.
+
 ## 3. Open decision (Gate 1)
 
 **Era profile scope.** Present the human with a short decision memo: what the pre-2.3 profile would change (XP curve, quest XP, outdoor elite flags, mount levels, class mount quests, anything else you find), the effort and risk of each, and whether it should be a toggle or the default. Do not build M3 until this gate is signed.

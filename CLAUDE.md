@@ -6,10 +6,13 @@ Offline single-player WoW (AzerothCore 3.3.5a) on macOS ARM64. These rules apply
 
 A single-player, fully offline World of Warcraft experience on macOS (Apple Silicon). One command boots a local server and launches the client. The world feels populated by AI players. Dungeons are completable solo or with bot companions. An optional "era profile" restores pre-2.3 (vanilla-style) leveling pace and difficulty.
 
+**Target:** the target game is WotLK 3.3.5a (build 12340): all of its content and systems through level 80, including Outland, Northrend, and Death Knights. This is not a vanilla project. The era profile only adjusts 1–60 pacing and difficulty; it never removes or replaces WotLK content or systems.
+
 This is a **personal project**. Nothing it produces (client binaries, patched files, repacks) is redistributed.
 
 ## 2. Fixed decisions (do not relitigate without a human gate)
 
+- **Game version:** WotLK 3.3.5a, build 12340.
 - **Server core:** AzerothCore (WotLK 3.3.5a), forked. Changes go in modules and SQL where possible, core patches only when unavoidable, and each core patch gets an ADR.
 - **Bots:** mod-playerbots. Scaling: a SoloCraft-style module (evaluate the existing one before writing new).
 - **Client:** the Windows 3.3.5a (build 12340) client, run under CrossOver/Wine. The native Mac 3.3.5a client is 32-bit and unusable on modern macOS.
@@ -40,6 +43,7 @@ Never write game data values (XP tables, creature ranks, quest rewards, spell va
 - For pre-2.3 values, the primary source is the **VMaNGOS world database** (1.12). Write a diff tool that compares VMaNGOS tables against AzerothCore's for the same entities (by entry ID) and generates the change set from the diff.
 - Secondary sources: AzerothCore's own SQL history and well-known wiki patch notes, cited in the change proposal.
 - If you cannot source a value, flag it in the proposal instead of guessing.
+- VMaNGOS is a read-only data reference for the era profile, never a codebase to adopt or a version to target.
 
 ## 9. The work loop
 

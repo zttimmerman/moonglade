@@ -1,0 +1,11 @@
+# Pinned upstreams. The "fork" = these SHAs + patches/core/*.patch + modules/*.
+# Bump deliberately; record why in the commit message.
+core_repo=https://github.com/mod-playerbots/azerothcore-wotlk.git
+core_branch=Playerbot
+core_sha=7f12e89ee5f467a50e62eba1d525eac7dc953d03
+playerbots_repo=https://github.com/mod-playerbots/mod-playerbots.git
+playerbots_branch=master
+playerbots_sha=7bae1b5c58c76a0aa20381155edc08096d1485b2
+client_data_url=https://github.com/wowgaming/client-data/releases/download/v20.0/Data.zip
+# VMaNGOS: read-only DATA reference for the era-profile diff (CLAUDE.md §7). Never built, never targeted.
+vmangos_db_url=https://github.com/vmangos/core/releases/download/db_latest/db-sqlite-4641790.zip
