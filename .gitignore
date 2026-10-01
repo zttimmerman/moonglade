@@ -1,0 +1,13 @@
+# build + runtime outputs
+/build/
+/env/
+/server/
+/data/
+/client/
+/vendor/
+harness/out/
+harness/results.json
+harness/summary.md
+*.log
+.DS_Store
+node_modules/
