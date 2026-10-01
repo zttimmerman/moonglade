@@ -67,7 +67,9 @@ def write_all(world_datadir: Path | None = None, extra_world: dict | None = None
             # M0 profile: small population. Defaults (500 random bots + 50 addclass accounts) are too heavy for
             # a 16 GB Mac and slow first boot (docs/research/playerbots-scripting.md §5). M2 sets the real budget.
             ov |= {"AiPlayerbot.MinRandomBots": "10", "AiPlayerbot.MaxRandomBots": "10",
-                   "AiPlayerbot.AddClassAccountPoolSize": "5"}
+                   "AiPlayerbot.AddClassAccountPoolSize": "5",
+                   # command server binds 0.0.0.0 with no address option (PlayerbotCommandServer.cpp:62); off.
+                   "AiPlayerbot.CommandServerPort": "0"}
         render(dist, dist.with_suffix(""), ov)
         rendered.append(dist.with_suffix("").name)
     return {"authserver.conf": auth, "worldserver.conf": world, "modules": rendered}

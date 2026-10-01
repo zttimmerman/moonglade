@@ -17,6 +17,16 @@ LOG = {
     "authserver": P.LOGS / "authserver.out",
     "worldserver": P.LOGS / "worldserver.out",
 }
+ERRLOG = {
+    "authserver": P.LOGS / "authserver.err",
+    "worldserver": P.LOGS / "worldserver.err",
+}
+
+
+def excerpt(name: str, n=40) -> str:
+    return tail(LOG[name], n) + f"\n----- {name} stderr -----\n" + tail(ERRLOG[name], 20)
+
+
 PIDFILE = {
     "mysqld": P.RUN / "mysqld.pid",
     "authserver": P.RUN / "authserver.pid",
@@ -166,9 +176,12 @@ def mysql_down(timeout=60):
 
 def _spawn(name: str):
     LOG[name].parent.mkdir(parents=True, exist_ok=True)
+    # stdout is block-buffered when not a tty while stderr is not, so sharing one file makes the tail of the
+    # log non-deterministic; keep them separate and always show both in failure excerpts.
     fh = open(LOG[name], "w")
+    eh = open(ERRLOG[name], "w")
     proc = subprocess.Popen([str(P.SERVER_BIN / name), "-c", str(P.SERVER_ETC / f"{name}.conf")],
-                            cwd=P.SERVER_BIN, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
+                            cwd=P.SERVER_BIN, stdin=subprocess.DEVNULL, stdout=fh, stderr=eh,
                             start_new_session=True)
     PIDFILE[name].write_text(str(proc.pid))
     return proc
@@ -201,8 +214,16 @@ def ensure_gm_account():
 
 
 def ensure_realmlist():
-    db.query("UPDATE realmlist SET address='127.0.0.1', localAddress='127.0.0.1', port=8085, gamebuild=12340 "
-             "WHERE id=1", "auth")
+    """Pin realm 1 to localhost/12340 and clear a stale VERSION_MISMATCH bit (0x01).
+
+    worldserver sets that bit at startup and clears it only once ready (worldserver/Main.cpp); a worldserver that
+    dies mid-startup leaves it set, and the next authserver start ORs in OFFLINE (authserver/Main.cpp) -> flag 3,
+    which authserver treats as "no valid realms" and exits. Safe: worldserver re-sets it on its own start."""
+    if not db_exists("auth"):
+        return False
+    db.query("UPDATE realmlist SET address='127.0.0.1', localAddress='127.0.0.1', port=8085, gamebuild=12340, "
+             "flag = flag & ~1 WHERE id=1", "auth")
+    return True
 
 
 def auth_up(timeout):
@@ -210,12 +231,16 @@ def auth_up(timeout):
     if procs:
         if _wait(lambda: port_open(P.AUTH_PORT), 15):
             return {"authserver": "already running", "pids": procs}
-        raise StackError(f"authserver running (pids {procs}) but port {P.AUTH_PORT} closed", tail(LOG["authserver"]))
+        raise StackError(f"authserver running (pids {procs}) but port {P.AUTH_PORT} closed", excerpt("authserver"))
     proc = _spawn("authserver")
     if not _wait(lambda: port_open(P.AUTH_PORT), timeout, watch_pid=proc.pid):
-        exc = tail(LOG["authserver"])
+        try:
+            rc = proc.wait(timeout=10)   # reap before reading the log so the final (stderr) lines are on disk
+        except subprocess.TimeoutExpired:
+            rc = None
+        exc = excerpt("authserver") + "\n----- Auth.log -----\n" + tail(P.LOGS / "Auth.log", 15)
         _kill(proc.pid)
-        raise StackError("authserver failed to become ready" + (" (process exited)" if not alive(proc.pid) else ""), exc)
+        raise StackError("authserver failed to become ready" + (f" (process exited, rc={rc})" if rc is not None else " (timeout)"), exc)
     return {"authserver": "started", "pid": proc.pid}
 
 
@@ -224,16 +249,19 @@ def world_up(timeout):
     if procs:
         if _wait(soap_ready, 30):
             return {"worldserver": "already running", "pids": procs}
-        raise StackError(f"worldserver running (pids {procs}) but SOAP not answering", tail(LOG["worldserver"]))
+        raise StackError(f"worldserver running (pids {procs}) but SOAP not answering", excerpt("worldserver"))
     proc = _spawn("worldserver")
     t0 = time.time()
     ok = _wait(soap_ready, timeout, interval=2.0, watch_pid=proc.pid)
     if not ok:
-        exited = not alive(proc.pid)
-        exc = tail(LOG["worldserver"])
+        try:
+            rc = proc.wait(timeout=10)   # reap before reading the log so the final (stderr) lines are on disk
+        except subprocess.TimeoutExpired:
+            rc = None
+        exc = excerpt("worldserver")
         _kill(proc.pid)
         raise StackError(f"worldserver failed to become ready after {time.time() - t0:.0f}s"
-                         + (" (process exited)" if exited else " (timeout)"), exc)
+                         + (f" (process exited, rc={rc})" if rc is not None else " (timeout)"), exc)
     return {"worldserver": "started", "pid": proc.pid, "ready_s": round(time.time() - t0, 1)}
 
 
@@ -253,8 +281,9 @@ def up(world_datadir: Path | None = None, timeout: int | None = None) -> dict:
     timeout = timeout or (1800 if first_run else 300)
     info = {"first_run": first_run, "config": list(config.write_all(world_datadir))}
     info |= mysql_up()
+    ensure_realmlist()          # before authserver: it refuses to start if every realm has flag 3
     info |= auth_up(timeout)
-    ensure_realmlist()
+    ensure_realmlist()          # first run: auth DB only exists once authserver created it
     info["gm_account_id"] = ensure_gm_account()
     info |= world_up(timeout)
     return info

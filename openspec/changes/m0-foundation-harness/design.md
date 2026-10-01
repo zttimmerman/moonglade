@@ -30,7 +30,7 @@ harness/results.schema.json
 
 **Fork mechanics (ADR-0001).** `hs build` makes `vendor/azerothcore-wotlk` exactly `core_sha` (`git checkout -f`, `git clean -fd` outside `modules/`), applies `patches/core/*.patch` in lexical order with `git apply --index`, then symlinks `vendor/mod-playerbots` and each `modules/*` into `vendor/azerothcore-wotlk/modules/`. Same pin enforcement for mod-playerbots.
 
-**Build.** cmake with Homebrew paths (`/opt/homebrew/opt/{mysql,openssl@3,readline}`), `CMAKE_CXX_COMPILER_LAUNCHER=ccache`, `TOOLS_BUILD=none`, `SCRIPTS=static`, `MODULES=static`, `CMAKE_BUILD_TYPE=RelWithDebInfo`, install prefix `server/`. Parallelism `-j8` (playerbots TUs are memory-heavy on 16 GB). `build.clean` builds in `build/` after wiping it. ccache keeps the clean build reasonably fast and is still a clean CMake tree.
+**Build.** cmake with Homebrew paths (`/opt/homebrew/opt/{mysql,openssl@3,readline}`), `CMAKE_CXX_COMPILER_LAUNCHER=ccache`, `TOOLS_BUILD=none`, `SCRIPTS=static`, `MODULES=static`, `CMAKE_BUILD_TYPE=Release` (RelWithDebInfo produced a 26 GB build dir on a disk with ~44 GB free), install prefix `server/`. Parallelism `-j8` (playerbots TUs are memory-heavy on 16 GB). `build.clean` builds in `build/` after wiping it. ccache keeps the clean build reasonably fast and is still a clean CMake tree.
 
 **MySQL.** `mysqld --initialize-insecure --datadir=data/mysql` on first run, then `mysqld --defaults-file=env/my.cnf` (port 3307, bind 127.0.0.1, socket `env/run/mysql.sock`). The harness creates user `acore`@`localhost`/`127.0.0.1` with full privileges. Databases `acore_auth`, `acore_world`, `acore_characters` (+ the playerbots DB) are created and populated by AC's built-in updater (`Updates.AutoSetup=1`, `Updates.EnableDatabases=` all).
 

@@ -1,3 +1,4 @@
+import re
 import shlex
 import subprocess
 import sys
@@ -23,9 +24,14 @@ def run(cmd, *, cwd=None, check=True, capture=False, env=None, timeout=None, inp
     )
 
 
+ANSI = re.compile(r"\x1b\[[0-9;]*m")
+
+
 def tail(path, n=40) -> str:
+    """Last n non-blank lines of a log, ANSI colour codes stripped."""
     try:
-        lines = open(path, errors="replace").read().splitlines()
+        lines = ANSI.sub("", open(path, errors="replace").read()).splitlines()
     except FileNotFoundError:
         return f"(no log at {path})"
+    lines = [l for l in lines if l.strip()]
     return "\n".join(lines[-n:])

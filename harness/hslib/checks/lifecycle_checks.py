@@ -22,8 +22,10 @@ def failfast(ctx):
     subprocess.run([HS, "down"], capture_output=True, text=True)
     require(r.returncode != 0, "hs up succeeded with a broken DataDir", **ev)
     require(dt < 300, "did not fail fast (>=300s with a 600s timeout)", **ev)
-    require("log excerpt" in r.stderr and re.search(r"(?i)dbc|data|map|nonexistent|directory", r.stderr.split("log excerpt", 1)[-1]),
-            "no log excerpt showing the cause", **ev)
+    excerpt = r.stderr.split("log excerpt", 1)[-1] if "log excerpt" in r.stderr else ""
+    # the cause worldserver reports for a missing DataDir (World.cpp, LOG_ERROR "server.loading")
+    require("Failed to find map files" in excerpt, "log excerpt does not show the cause", **ev)
+    require("rc=" in r.stderr, "failure message lacks the worldserver exit code", **ev)
     require(not procs["worldserver"], "worldserver still running after failed start", **ev)
     return ev
 

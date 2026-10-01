@@ -8,20 +8,27 @@ Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, desi
 ## Task board
 | Task | State | Notes |
 |---|---|---|
-| 1.1 Repo structure, fork.lock, ADRs | done | ADR-0001..0003 |
-| 1.2 harness skeleton + runner | in progress | `harness/hs`, `hslib/` |
-| 2.1 `hs build` | in progress | first native build running (MySQL 9.2 + Boost 1.92 configured OK) |
-| 3.x lifecycle | in progress | `hslib/stack.py` written, untested |
-| 4.x GM/SQL | in progress | `soap.py`, `db.py` written, untested |
-| 5.x protocol probe + fixtures | todo | builder B1 |
-| 6.1 client-config | todo | builder B2 |
-| 7.1 reporting completeness | todo | |
-| 8.1 playerbots scripting research | todo | builder B3, non-blocking |
-| 9.x verifier pass, human gate | todo | |
-| Gate 1 memo (era profile) | todo | builder B4; scoped per correction below |
+| 1.1 Repo structure, fork.lock, ADRs | done (pending verifier) | ADR-0001..0003 |
+| 1.2 harness skeleton + runner | done (pending verifier) | `harness/hs`, `hslib/` |
+| 2.1 `hs build` | in progress | switched to Release (RelWithDebInfo build/ = 26 GB); clean rebuild running |
+| 3.x lifecycle | done (pending verifier) | fixed: stale realm VERSION_MISMATCH flag after a crashed worldserver start made authserver exit; flaky failfast excerpt (stdout/stderr buffering) fixed by separate stderr logs |
+| 4.x GM/SQL, playerbots active | done (pending verifier) | |
+| 5.x protocol probe + fixtures (B1) | done (pending verifier) | badpass scenario wording clarified (logged in proposal) |
+| 6.1 client-config (B2) | done (pending verifier) | |
+| 7.1 reporting completeness | done (pending verifier) | |
+| 8.1 playerbots scripting research (B3) | done | `docs/research/playerbots-scripting.md` |
+| 9.1 verifier pass | todo | after Release rebuild + clean full run |
+| 9.2 human gate | blocked on Zach | needs client + CrossOver |
+| Gate 1 memo (B4) | ready for Zach | `docs/gate1-era-profile-memo.md`, tool `tools/era-diff/` |
 
 ## Last full harness result
-None yet.
+Run 2 (2026-10-01, RelWithDebInfo): 23 pass, 2 fail. `lifecycle.isolated` caught the playerbots command server listening on `*:8888` (now disabled), and `report.full_run` failed as a consequence. A rerun is pending after the Release rebuild.
+
+## Known issues / notes for later milestones
+- The playerbots command server (`AiPlayerbot.CommandServerPort`) binds 0.0.0.0 with no address option. It's disabled. If M2/M4 scripting wants it, it needs a module patch to bind 127.0.0.1, and an ADR.
+- M0 bot population is capped at 10 random bots (`config.py`). M2 must define the real budget (see research doc §5).
+- Probe logout takes about 20 s (logout timer, since the test account isn't GM). Warden packets are ignored, which is fine for short sessions.
+- The era-diff tool couldn't read VMaNGOS source to confirm what `RewXP` means, because a web fetch was denied. It's flagged in the memo.
 
 ## Correction log
 **2026-10-01, target correction from Zach.** The target is WotLK 3.3.5a (build 12340), all content through 80 (Outland, Northrend, DKs). The era profile adjusts 1–60 pacing and difficulty only. VMaNGOS is a read-only data reference. CLAUDE.md §1/§2/§7 updated.

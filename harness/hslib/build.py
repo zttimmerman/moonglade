@@ -100,7 +100,7 @@ def cmake_args() -> list[str]:
     b = P.BREW / "opt"
     return [
         f"-DCMAKE_INSTALL_PREFIX={P.SERVER}",
-        "-DCMAKE_BUILD_TYPE=RelWithDebInfo",
+        "-DCMAKE_BUILD_TYPE=Release",  # RelWithDebInfo build/ was 26 GB; disk is tight
         "-DCMAKE_C_COMPILER=clang", "-DCMAKE_CXX_COMPILER=clang++",
         "-DCMAKE_C_COMPILER_LAUNCHER=ccache", "-DCMAKE_CXX_COMPILER_LAUNCHER=ccache",
         "-DAPPS_BUILD=all", "-DTOOLS_BUILD=none", "-DSCRIPTS=static", "-DMODULES=static",
