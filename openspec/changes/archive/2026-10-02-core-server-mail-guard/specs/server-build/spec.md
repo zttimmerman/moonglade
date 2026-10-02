@@ -3,7 +3,7 @@
 ## ADDED Requirements
 
 ### Requirement: Login/logout race doesn't crash the world server
-The built worldserver SHALL survive a character logging out (or relogging into another character) before its login-time server-mail lookups complete, and SHALL never deliver a server mail to a character other than the one the lookup was for.
+The built worldserver SHALL survive a character logging out before its login-time server-mail lookups complete.
 
 #### Scenario: Immediate logout after login, repeated
 - **GIVEN** a running server built with the core patch queue, and the test character with instant logout

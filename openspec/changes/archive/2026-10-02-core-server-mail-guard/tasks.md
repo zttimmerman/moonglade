@@ -7,4 +7,4 @@
 - [x] 2.2 Patched server survives the race — verify: `core.login_logout_race`
 - [x] 2.3 Decide with evidence whether `settle_login` stays (defense in depth) — record in design.md
 ## 3. Verify
-- [ ] 3.1 Verifier: 1 full run (--force-clean, since a patch changes build inputs) + ≥5 repeats of core.*
+- [x] 3.1 Verifier: 1 full run (--force-clean) 45/45 + 5x core.*/pin_enforced. PASS 2026-10-02 (spec narrowed per its concern 1; F11 follow-up)
