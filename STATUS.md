@@ -11,7 +11,8 @@ M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01
 | M0 Foundation | **done / archived** | 4 verifier cycles (FAILs fixed: playerbots_active weak check; client.inspect ignored unrecorded binaries) |
 | Gate 1 | **signed 2026-10-01** | vanilla mode on by default, easily toggleable (memo) |
 | M1 `./play` | **done / archived** (verifier PASS cycle 2; Zach's Wi-Fi-off demo passed 2026-10-02) | personal account `PLAYER` (env/player.json), sandbox-exec offline proof, procs.py replaces ps |
-| Ghidra tooling + skills | built, awaiting full run + verifier | branch `change/re-tooling-and-skills` (rebase on main first) |
+| Ghidra tooling + skills | **done / archived** (verifier PASS cycle 2) | `hs re`, `hs ghidra-install`, 4 project skills; run budget: 2 full runs/change |
+| F9 re-tooling verifier nits | todo (low) | readonly path check: use resolved `is_relative_to`; JDK assertion `>=21` explicitly; harness check for wine no-adoption rule (needs scratch params like ghidra.install) |
 | Harness tiers | specced | branch `change/harness-tiers`, then a builder |
 | Login-screen spike | next after tiers | Q1: custom GlueXML from a patch MPQ with an unmodified Wow.exe? (Wow.exe has "GlueXML has corrupt signature" strings). Q2: are the TBC/Vanilla login backdrops and music in the 3.3.5a MPQs (background picker)? Needs an MPQ reader |
 | F8 M1 verifier nits | todo (low) | smoke picks `wow[0]` (pick the persistent/oldest pid); `play_processes()` matches any cmdline with 'hslib.play'; real Wow.exe exit path only human-verified |
@@ -26,7 +27,7 @@ M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01
 2026-10-02, HEAD `48cd8a9`: **27 pass / 0 fail**, exit 0 (mine, plus 2 verifier runs). About 7 min per full run. Disk free about 22 GB.
 
 ## North star (Zach, 2026-10-02)
-Offline WoW that feels like **one single-player app**, with many moving parts behind the scenes. Target front end: the **in-client modified login screen** (profiles/saves/options, auto-login, backdrop picker), reached via a launcher-side menu first. Client binary changes are expected over time, each with its own ADR and Zach's yes (§2/§11).
+Offline WoW that feels like **one single-player app**, with many moving parts behind the scenes. Target front end: the **in-client modified login screen** (profiles/saves/options, auto-login, backdrop picker), reached via a launcher-side menu first. Client binary changes are expected over time, each with its own ADR and Zach's yes (§2/§11). **If the launcher pre-screen (step 1) feels janky, reconvene with Zach about jumping straight to the exe-patched in-client screen (step 2).**
 
 ## Working conventions
 - One git branch per OpenSpec change (`change/<id>`), pushed to the private remote `origin` (github.com/zttimmerman/[redacted]). Each gets a PR, merged to `main` only after a verifier PASS and a green full run, with the verdict in the PR body. `main` = verified work.
