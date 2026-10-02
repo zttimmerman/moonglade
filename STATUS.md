@@ -1,8 +1,8 @@
 # STATUS
 
-_Last updated: 2026-10-02 (session 2): M1 verified, awaiting Zach's offline demo_
+_Last updated: 2026-10-02 (session 2): M1 done_
 
-## Current milestone: M1 Offline loop (`./play`)
+## Current milestone: M2 Living world (next), plus tooling/tiers/spike
 M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01, archived as `openspec/changes/archive/2026-10-02-m0-foundation-harness`, and its specs merged into `openspec/specs/`.
 
 ## Task board
@@ -10,7 +10,7 @@ M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01
 |---|---|---|
 | M0 Foundation | **done / archived** | 4 verifier cycles (FAILs fixed: playerbots_active weak check; client.inspect ignored unrecorded binaries) |
 | Gate 1 | **signed 2026-10-01** | vanilla mode on by default, easily toggleable (memo) |
-| M1 `./play` | **verifier PASS (cycle 2)**; merge to main; archive after Zach's Wi-Fi-off demo | personal account `PLAYER` (env/player.json), sandbox-exec offline proof, procs.py replaces ps |
+| M1 `./play` | **done / archived** (verifier PASS cycle 2; Zach's Wi-Fi-off demo passed 2026-10-02) | personal account `PLAYER` (env/player.json), sandbox-exec offline proof, procs.py replaces ps |
 | Ghidra tooling + skills | built, awaiting full run + verifier | branch `change/re-tooling-and-skills` (rebase on main first) |
 | Harness tiers | specced | branch `change/harness-tiers`, then a builder |
 | Login-screen spike | next after tiers | Q1: custom GlueXML from a patch MPQ with an unmodified Wow.exe? (Wow.exe has "GlueXML has corrupt signature" strings). Q2: are the TBC/Vanilla login backdrops and music in the 3.3.5a MPQs (background picker)? Needs an MPQ reader |
