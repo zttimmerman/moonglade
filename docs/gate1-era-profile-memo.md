@@ -1,6 +1,6 @@
 # Gate 1: era profile scope (decision memo)
 
-**For:** Zach. **Status:** awaiting signature. **Target:** WotLK 3.3.5a (12340) through level 80. The profile only touches 1–60 pacing and difficulty, and it is override-only: it deletes no TBC or WotLK content.
+**For:** Zach. **Status:** SIGNED by Zach, 2026-10-01 (see Decisions below). **Target:** WotLK 3.3.5a (12340) through level 80. The profile only touches 1–60 pacing and difficulty, and it is override-only: it deletes no TBC or WotLK content.
 
 **Evidence.** Every number below comes from `python3 tools/era-diff/era_diff.py`, which writes `tools/era-diff/out/{report,summary}.json` and `<category>.csv`. Sources are VMaNGOS `db-sqlite-4641790` (zip sha256 `bb2f1dd6…`, latest migration `20260913120518`, final 1.12 row per entry) and the AC world DB at core `7f12e89ee5f4` (ACDB 335.17-dev). The scope is entities present in both DBs, level ≤60, and no content on maps 530, 571 or 609. That covers 4,398 quests in scope out of 4,429 shared, and 5,960 shared creatures that spawn only in the open world.
 
@@ -22,14 +22,18 @@
 
 I'm not recommending it as the default for two reasons. It adds roughly 21% to the curve and cuts quest XP by up to about 33% at levels 41–60, and the combined effect on time-to-60 for 1 player plus bots hasn't been measured. Second, the mount changes reach TBC and WotLK play.
 
-## Decisions for Zach to sign
+## Decisions (signed by Zach, 2026-10-01)
 
-1. Include #1 XP curve, levels 11–59 only, leaving the L60 row at AC's 290000. ☐
-2. Include #2 quest XP via a module, ignoring rows within ±5%, with the 859 needs-review rows left as AC. ☐
-3. Include #3 elite flags only together with #4 HP modifiers. Damage and armor are deferred. ☐
-4. Include #5 mount and riding levels/prices, as their own sub-toggle. ☐
-5. Exclude #6 class mount quests, defer #7 quest levels, exclude #8 quest money. ☐
-6. Profile is a config toggle, default OFF. ☐
+"Era profile" = **vanilla mode**: 1–60 plays with pre-2.3 rules. Everything else stays WotLK.
+
+1. **XP curve:** vanilla (VMaNGOS 1.12) XP-per-level for levels 11–59. The L60 row stays at AC's value. ✅ Include
+2. **Quest XP:** vanilla, via an AzerothCore module (±5% rows ignored; unmappable rows stay WotLK). ✅ Include
+3. **Outdoor elites:** restored together with their elite HP. Damage and armor are deferred. ✅ Include
+4. **Mounts & riding:** vanilla (riding at 40/60, vanilla prices). ✅ Include, as part of vanilla mode. Zach was told this also applies to characters above 60. A separate mount switch can be split out later if wanted.
+5. **Descoped from v1, on the backlog for a later round:** class mount quests, vanilla quest levels, vanilla quest gold, creature damage & armor (needs a researched mapping). ✅
+6. **On by default, and easily toggleable.** Vanilla mode is ON when the server is set up, and switching it must be easy. ✅
+
+**Design consequences (orchestrator):** M3 stores vanilla values alongside WotLK values and applies them through an AzerothCore module that reads the mode at runtime. It does not rewrite world rows in place. That keeps "easily toggleable" cheap now (one setting) and makes Zach's backlog idea (an in-game single-player settings menu for pacing/difficulty, possibly per character, without SQL swaps or restarts) an extension rather than a rewrite. No VMaNGOS code is used; VMaNGOS is only read as data (CLAUDE.md §7).
 
 ## Unsourced / needs-review (§7)
 

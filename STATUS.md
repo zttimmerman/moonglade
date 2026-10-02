@@ -15,10 +15,10 @@ Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, desi
 | F4 `hs wine-install` (fetch + sha-verify pinned runtime from fork.lock) | todo | so a fresh checkout reproduces `env/wowsilicon-r17` |
 | F5 mtld3d shader cache written into `client/`; slight colour banding (HDR on) | todo (low) | |
 | F1 pin enforcement vs gitignored content | code done, untested | test needs the stack down, so it waits until Zach's session ends |
-| Gate 1 memo | **awaiting Zach's signature** | `docs/gate1-era-profile-memo.md` (6 checkboxes) |
+| Gate 1 | **SIGNED 2026-10-01** | vanilla XP curve, vanilla quest XP, elites + HP, vanilla mounts; vanilla mode ON by default and easily toggleable; descoped items backlogged |
 | F2 `report.full_run` proves files written only externally | todo (low) | verifier concern 2 |
 | M1 `./play` | spec written (`openspec/changes/m1-offline-play-loop`, 6 checks + 1 human) | implementation waits for Zach's session to end (it needs the stack) |
-| M3 | blocked on Gate 1 | |
+| M3 era profile (vanilla mode) | unblocked | build as a runtime module + side tables (see memo, Design consequences) |
 
 ## Last full harness result
 2026-10-01, HEAD `fbad133`, Release build: **25 pass / 0 fail**, exit 0. Three consecutive full runs by the verifier, plus my own runs. One `[human-verify]` scenario is pending (M0 gate). Disk free about 10 GB after the partial client install (15 GB in `client/`).
@@ -28,6 +28,13 @@ Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, desi
 - M0 bot population is capped at 10 random bots (`config.py`). M2 must define the real budget (see research doc §5).
 - Probe logout takes about 20 s (logout timer, since the test account isn't GM). Warden packets are ignored, which is fine for short sessions.
 - The era-diff tool couldn't read VMaNGOS source to confirm what `RewXP` means, because a web fetch was denied. It's flagged in the memo.
+
+## Backlog (later rounds)
+- In-game single-player settings menu: toggle leveling pace/difficulty (vanilla vs WotLK, per character?) without SQL swaps or restarts. Zach's idea from Gate 1.
+- Era profile extras descoped from v1: class mount quests, vanilla quest levels, vanilla quest gold, creature damage/armor (needs a researched mapping).
+- Separate mount switch (split mounts out of vanilla mode) if wanted.
+- WoWSilicon client perf patches (libSiliconPatch etc.): needs §2 opened via an ADR; FPS A/B test first. Tech-debt / M5.
+- Verify VMaNGOS `RewXP` semantics against VMaNGOS source (assumed in the memo).
 
 ## Correction log
 **2026-10-01, target correction from Zach.** The target is WotLK 3.3.5a (build 12340), all content through 80 (Outland, Northrend, DKs). The era profile adjusts 1–60 pacing and difficulty only. VMaNGOS is a read-only data reference. CLAUDE.md §1/§2/§7 updated.
