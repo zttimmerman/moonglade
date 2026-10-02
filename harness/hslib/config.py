@@ -55,6 +55,9 @@ def write_all(world_datadir: Path | None = None, extra_world: dict | None = None
         "Ra.Enable": "0",
         "Updates.EnableDatabases": "7",
         "RealmID": "1",
+        # Warden = anti-cheat that sends native code modules to the client. Pointless offline, and the prime
+        # suspect for the client's ILLEGAL_INSTRUCTION crash at a non-module EIP under Wine+Rosetta (2026-10-01).
+        "Warden.Enabled": "0",
     } | (extra_world or {})
     render(P.SERVER_ETC / "authserver.conf.dist", P.SERVER_ETC / "authserver.conf", auth)
     render(P.SERVER_ETC / "worldserver.conf.dist", P.SERVER_ETC / "worldserver.conf", world)
