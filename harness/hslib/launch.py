@@ -60,16 +60,10 @@ def wine_env() -> dict:
 # ---------------------------------------------------------------- process discovery
 
 def _ps_env() -> list[tuple[int, str]]:
-    """(pid, command+environment) for this user's processes. macOS `ps -E` appends each
-    process's environment, which lets us match WINEPREFIX exactly."""
-    out = subprocess.run(["ps", "-E", "-x", "-ww", "-o", "pid=,command="],
-                         capture_output=True, text=True).stdout
-    rows = []
-    for line in out.splitlines():
-        pid_s, _, rest = line.strip().partition(" ")
-        if pid_s.isdigit():
-            rows.append((int(pid_s), rest))
-    return rows
+    """(pid, command+environment) for this user's processes, like macOS `ps -E -x -ww`: the environment is
+    appended, which lets us match WINEPREFIX exactly. Read via procs (no /bin/ps: it can't run sandboxed)."""
+    from . import procs
+    return procs.table(with_env=True, own_only=True)
 
 
 def server_dir() -> Path | None:
@@ -211,11 +205,15 @@ def ensure_prefix() -> dict:
     return info
 
 
-def start_client() -> subprocess.Popen:
-    _stamp(f"start {P.CLIENT / 'Wow.exe'}")
+def start_client(args: list[str] | None = None, cwd: Path | None = None) -> subprocess.Popen:
+    """Start Wow.exe (default) or `args` (a Windows program + arguments, e.g. a `./play --client-cmd` test
+    stand-in) under the Wine layer, detached, logging to env/logs/wine.log."""
+    args = args or ["Wow.exe"]
+    cwd = cwd or P.CLIENT
+    _stamp(f"start {' '.join(args)} (cwd {cwd})")
     lf = _logf()
     try:
-        return subprocess.Popen([str(WINE), "Wow.exe"], cwd=P.CLIENT, env=wine_env(), stdout=lf,
+        return subprocess.Popen([str(WINE), *args], cwd=cwd, env=wine_env(), stdout=lf,
                                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
     finally:
         lf.close()
@@ -269,13 +267,18 @@ def onscreen_windows(pid: int) -> list[dict]:
             wins.append({"width": int(float(parts[1])), "height": int(float(parts[2])), "layer": int(parts[3])})
     return wins
 
-def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
+def prepare(say=log, world_datadir: Path | None = None, accounts=None) -> tuple[dict, dict]:
+    """Everything before starting the client, shared by `hs launch` and `./play`: stack up (if needed) →
+    client-config (+ Wine defaults) → accounts → Wine prefix → binaries match the manifest. `accounts` makes
+    sure the login exists (default: the harness fixtures, test account + character; `./play` passes its
+    player-account step). `say` reports each step. Raises stack.StackError / LaunchError / FixtureError.
+    Returns (manifest, ev)."""
     from . import fixtures, stack
     from .clientcfg import WINE_DEFAULTS, configure
 
     _require_wine()
     man = _installed_client()
-    ev: dict = {"mode": "smoke" if smoke else "normal", "client": str(P.CLIENT),
+    ev: dict = {"client": str(P.CLIENT),
                 "wine": str(WINE), "wineprefix": str(P.WINEPREFIX), "wine_log": str(P.WINE_LOG),
                 "env": {k: v for k, v in wine_env().items() if k.startswith("WINE")}}
 
@@ -287,13 +290,20 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     st = stack.stack_processes()
     if all(st.values()):
         ev["stack"] = "already up"
+        say("The game server is already running.")
     else:
-        log("stack not fully up; starting it")
-        ev["stack"] = {"up": stack.up()}
+        say("Starting the game server (database, login server, world server). This takes a minute or two...")
+        ev["stack"] = {"up": stack.up(world_datadir=world_datadir)}
+        say("The game server is ready.")
+    say("Pointing the game client at this computer (127.0.0.1)...")
     cfg = configure(P.CLIENT, defaults=WINE_DEFAULTS)
     ev["client_config"] = {"changed_files": cfg["changed_files"],
                            "config_wtf": next(c for c in cfg["changes"] if c["kind"] == "Config.wtf")}
-    ev["fixtures"] = fixtures.ensure()
+    if accounts is None:
+        say(f"Making sure the test account ({P.TEST_USER}) and character ({P.TEST_CHAR}) exist...")
+        ev["fixtures"] = fixtures.ensure()
+    else:
+        ev["accounts"] = accounts()
     ev["prefix"] = ensure_prefix()
 
     hashes_before = _binary_hashes(man)
@@ -301,6 +311,12 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     if not ev["binaries_match_manifest_before"]:
         raise LaunchError("client binaries no longer match env/client-manifest.json; "
                           "re-run `harness/hs client-install`", ev)
+    return man, ev
+
+
+def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
+    man, ev = prepare()
+    ev["mode"] = "smoke" if smoke else "normal"
 
     log_offset = P.WINE_LOG.stat().st_size if P.WINE_LOG.exists() else 0
     proc = start_client()
