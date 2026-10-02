@@ -1,6 +1,6 @@
-# Login-screen spike: findings (Phase A draft)
+# Login-screen spike: findings and recommendation
 
-Change: `openspec/changes/login-screen-spike/`. Status: **Phase A done (read-only); Phase B (launch test) and the recommendation are still open.**
+Change: `openspec/changes/login-screen-spike/`. Status: **Phase A (read-only analysis) and Phase B (controlled launches on a scratch copy of the client) done.** Jump to [Recommendation for Zach](#recommendation-for-zach) for the plain-language summary.
 
 Provenance: `Wow.exe` 3.3.5a (build 12340), SHA-256 `aa63a5750d60ef16746c686b3d5e26876d98953eab08b1c026cd0faf78e88cb8`, analyzed as a copy in `$HS_RE_DIR/bin` (ADR-0005). MPQ facts come from `harness/hs mpq` (stdlib reader, `harness/hslib/mpq.py`) on the installed client, read-only. Labels: **verified** means checked against bytes, code or a recomputed hash; **inferred** means read from disassembly or naming, not confirmed at runtime.
 
@@ -8,7 +8,7 @@ Tooling note: the pinned Ghidra 12.1.4 ships no `decompile` native for `mac_arm_
 
 ## Q1: can a patch MPQ change GlueXML with an unmodified Wow.exe?
 
-**Short answer (Phase A): no, not for anything GlueXML loads as code. Assets that GlueXML only references by name (models, textures, sounds, DBCs) are not covered by the check.** Phase B should confirm this at runtime.
+**Short answer: no, not for anything GlueXML loads as code. Assets that GlueXML only references by name (models, textures, sounds, DBCs) are not covered by the check.** Phase B confirmed both halves at runtime (runs 2 and 3 below).
 
 ### What is verified, and against what
 - **Signature file:** `<toc>.sig`, built with the format string `"%s.sig"` @0x00a44228, so `Interface\GlueXML\GlueXML.toc.sig`. It must be exactly 0x114 = 276 bytes. *(verified: disassembly @0x008165ff..0x00816633; every archive that has one stores a 276-byte `GLUEXML.TOC.SIG`)*
@@ -27,7 +27,7 @@ Tooling note: the pinned Ghidra 12.1.4 ships no `decompile` native for `mac_arm_
 | 0x008162b0 | `XML_HashFile` (recursive) | Loads a file through 0x00424e80, MD5-updates it, recurses for .toc/.xml |
 | 0x00779340 / 0x00779a30 / 0x00779ae0 | MD5 init / update / final | Constants 0x67452301… *(verified)* |
 | 0x00814340 | `XML_LoadToc` | Actually loads the UI while feeding a second MD5 context |
-| 0x004033c0 | `App_Quit(code)` | Stores the code in 0x00b2f9a4 and posts quit (the glue Lua `QuitGame` stub 0x004d8350 calls it with 0) |
+| 0x004033c0 | `App_Quit(code)` | Stores the code in 0x00b2f9a4 and posts quit (the glue Lua `QuitGame` stub 0x004d8350 calls it with 0). Phase B: the 9 is **not** the process exit status; Wow.exe exits with 0 |
 
 Pseudocode of the glue path (from the listing at 0x004da7c2..0x004da8eb):
 ```
@@ -51,13 +51,13 @@ Inside `XML_VerifyTocSignature`: load `.sig` (missing → 0); size ≠ 0x114 →
 - The whole tree is hashed **before** any GlueXML code runs, and hashed again during the real load. *(verified: call order)*
 
 ### Later-loaded patch MPQs, and what happens on failure
-- Files from a later patch MPQ **are** checked, because hashing uses the same file loader and the same priority chain as the real load. Proof: Blizzard's own `patch-enUS-3.MPQ` ships a new `GLUEXML.TOC.SIG` but no new toc, and the digest only matches when the -3 copies of the changed files are used. *(verified by recomputation)* The exe accepts `patch-4.MPQ`, `patch-%s-4.MPQ`, `patch-?.MPQ` and `patch-%s-?.MPQ` (strings @0x009e26d8..0x009e2710). *(verified: strings. inferred: their priority over -3.)*
-- On failure there is **no fallback to the stock UI**. The message goes into an error list whose destructor (0x004da2d0) writes it to `Logs\GlueXML.log` (handle opened @0x004da7a0), and `App_Quit(9)` ends the client. *(verified: control flow. inferred: that there is no modal dialog. Phase B should check for one.)*
+- Files from a later patch MPQ **are** checked, because hashing uses the same file loader and the same priority chain as the real load. Proof: Blizzard's own `patch-enUS-3.MPQ` ships a new `GLUEXML.TOC.SIG` but no new toc, and the digest only matches when the -3 copies of the changed files are used. *(verified by recomputation)* The exe accepts `patch-4.MPQ`, `patch-%s-4.MPQ`, `patch-?.MPQ` and `patch-%s-?.MPQ` (strings @0x009e26d8..0x009e2710). *(verified: strings; and at runtime in Phase B: `patch-enUS-4.MPQ`, `patch-enUS-H.MPQ` and `Data/patch-4.MPQ` all load and override files from `patch-enUS-3.MPQ` / `patch-enUS-2.MPQ`.)*
+- On failure there is **no fallback to the stock UI**. The message goes into an error list whose destructor (0x004da2d0) writes it to `Logs\GlueXML.log` (handle opened @0x004da7a0), and `App_Quit(9)` ends the client. *(verified: control flow; and at runtime in Phase B run 2: no dialog, the log line, process exit code 0.)*
 
 ### FrameXML, for comparison
 FUN_0052a980 does the same thing with `Interface\FrameXML\FrameXML.toc` @0x00a02fcc, adding `Interface\FrameXML\Bindings.xml` @0x00a02fec to the hash, and quits with code **10**. The messages are @0x00a02f70/90/b0, and the second, silent MD5 check is at 0x0052acaa..0x0052ad47. A third caller of the verifier, FUN_005f79a0 (`.\AddOns.cpp`, `Interface\AddOns\%s\%s.toc`), applies it to AddOns, presumably to mark Blizzard-signed addons as secure. *(verified: xrefs and strings. inferred: its purpose.)*
 
-**Confidence:** high that any edit to a GlueXML .lua/.xml/.toc in a patch MPQ makes the client quit (the digest recomputation leaves little room for doubt). Medium on the exact failure UX (log only, or log plus dialog) until Phase B.
+**Confidence:** high, now confirmed at runtime (Phase B run 2): a one-line edit to a GlueXML .lua in a patch MPQ makes the client quit, with no dialog.
 
 ## Q2: backdrops and music still in the 3.3.5a MPQs
 
@@ -90,25 +90,63 @@ Where GlueXML picks the backdrop and music (effective files from `patch-enUS-3.M
   and `AccountLogin_OnShow`, lines 42–43: `PlayGlueMusic(CurrentGlueMusic); PlayGlueAmbience(GlueAmbienceTracks["DARKPORTAL"], 4.0);`
 - `Interface\GlueXML\GlueParent.lua` (16897 bytes), line 2: `CurrentGlueMusic = "GS_LichKing";` and line 46: `GlueAmbienceTracks["DARKPORTAL"] = "GlueScreenIntro";`. The TBC model is not referenced by the stock 3.3.5a GlueXML at all.
 
-**Implication (inferred, to test in Phase B):** an in-client picker needs a GlueXML change, which Q1 rules out without an exe change. But because models, sounds and DBCs are not hashed, one backdrop and track per launch could be swapped **data-only**. A patch MPQ would place the chosen model (plus skins) at the Northrend path and/or change the `GS_LichKing` row of `SoundEntries.dbc`, and the launcher would pick which patch MPQ to install before starting the client.
+**Implication (confirmed in Phase B run 3):** an in-client picker needs a GlueXML change, which Q1 rules out without an exe change. But because models, sounds and DBCs are not hashed, one backdrop and track per launch could be swapped **data-only**. A patch MPQ would place the chosen model (plus skins) at the Northrend path and/or change the `GS_LichKing` row of `SoundEntries.dbc`, and the launcher would pick which patch MPQ to install before starting the client.
 
-## Phase B plan (proposed; recommendation left to the orchestrator)
 
-Setup, so the real `client/` is never written:
-- Make a scratch client with an APFS clone: `cp -cR client/ env/spike-client/`. This is copy-on-write, so it uses almost no extra space, and `client.inspect`/`re.mpq_readonly` keep proving `client/` unchanged. `hs launch`/`start_client` currently hard-code `P.CLIENT`, so Phase B needs a client-dir override (an env var or flag). The alternative, adding the MPQ to `client/Data` and removing it afterwards with `client.inspect` proving restoration, is the fallback.
-- Build the test archives with an MPQ **writer**, which A.1 deliberately doesn't have. Options: pinned StormLib (Homebrew `stormlib` 9.40, bottled) through a small ctypes helper, or a minimal stdlib writer (uncompressed files plus encrypted hash/block tables, reusing `mpq.py`'s crypto). Either way, read the archive back with `hs mpq list` before using it.
-- Name: `Data/enUS/patch-enUS-4.MPQ` (a pattern the exe accepts; see Q1).
+## Phase B: controlled launches (2026-10-02)
 
-Runs, each a fresh launch to the login screen with a screenshot plus `Logs/GlueXML.log`, the process exit status, and the Wine log:
-1. **Control:** the scratch copy without the extra MPQ boots to the normal Northrend login screen with an empty or clean `GlueXML.log`.
-2. **GlueXML edit (Q1 decisive):** `patch-enUS-4.MPQ` holds only `Interface\GlueXML\GlueStrings.lua` with one visible change (e.g. the login button label string). Prediction from RE: the client exits (code 9) and `Logs\GlueXML.log` contains "GlueXML is modified or corrupt", with no login screen. **This disproves the data-only route** for the front menu. If the login screen instead appears with the changed label, the RE is wrong and the data-only route is open.
-3. **Assets only (picker feasibility):** `patch-enUS-4.MPQ` holds the Dark Portal model saved under the Northrend path (`…\UI_MainMenu_Northrend\UI_MainMenu_Northrend.m2` + `00.skin`, `01.skin`; also `02/03.skin` copied from `01` in case the client asks for higher LODs, along with the textures it references) and a `SoundEntries.dbc` whose `GS_LichKing` row points at `wow_main_theme.mp3`. Prediction: no GlueXML error, Dark Portal backdrop plus the original theme. **This proves a launcher-side, data-only background/music choice.**
+### Setup
+- **Scratch client:** `cp -cR client/ env/spike-client/` (APFS clone, about zero extra disk). Every test archive went only into `env/spike-client/Data/...`. The real `client/` stayed untouched: `harness/hs run --only client.inspect` PASSed before and after, and a size+mtime listing of all 237 files under `client/` was identical before and after (`env/spike-b/client-snapshot-{before,after}.txt`). `Wow.exe` and every DLL in the scratch copy matched `env/client-manifest.json` before and after every run (`binaries_match_manifest_before/after: true` in each `result.json`).
+- **Launch path:** a new test-only override, `HS_CLIENT_DIR`, in `harness/hslib/launch.py` (`launch.client_dir()`; default = the real `client/`). It only changes which directory `hs launch` configures and starts. `client.inspect`, `re.*` and the manifest still describe the real `client/`, and the scratch binaries must still match that manifest.
+- **Test archives:** a new minimal stdlib MPQ writer, `harness/hslib/mpq.py` `write_archive()` / `hs mpq write` (format v1, 4 KiB sectors, zlib or stored, standard-key encrypted hash/block tables, a `(listfile)`). Every archive was read back byte-for-byte by the existing reader before use. New quick-tier check `re.mpq_write_roundtrip` (spec mapping left to the orchestrator).
+- **Driver and evidence:** a scratch script (`env/spike-b/drive.py`, not committed) ran `launch.prepare()` + `start_client()` with `HS_CLIENT_DIR=env/spike-client`, polled the Wine process list and on-screen windows once a second, then stopped the prefix (`wineserver -k`). Per run it saved `timeline.json`, `result.json` and the run's `wine.log` slice under `env/spike-b/<run>/`.
+- **Screenshots:** macOS `screencapture` is refused in this session ("could not create image from window"; no Screen Recording permission). Instead, a 2.5 KB helper (`env/spike-b/tools/k.c`, built with clang + lld-link, run inside the same Wine prefix) sends Print Screen to the WoW window, so **the client takes its own screenshot** (`Screenshots/WoWScrnShot_*.jpg`). A second helper (`tools/x.c`) runs Wow.exe and logs its real exit code, because the Wine launcher always returns 0.
+- Nothing typed into the GUI. The login screen is the evidence; no login with any account. Stack and Wine left down at the end.
 
-What would settle each question:
-- Q1 data-only front menu: run 2 shows the edit → feasible; run 2 quits with the logged message → not feasible without an exe change (that would need an ADR and Zach's yes).
-- Q2 background picker: run 3 shows the swapped backdrop/music → feasible as a pre-launch launcher choice (not inside the login screen); run 3 fails → only via an exe change.
+### Results
+| Run | Patch archive in the scratch client | What happened | Evidence |
+|---|---|---|---|
+| 1 control | none | Normal WotLK login screen (Arthas/Frostwyrm backdrop). Window up from t≈11 s to the end (45 s); no `GlueXML.log` written | `env/spike-b/run1-control/`; [screenshot](img/login-spike-run1-control.jpg) |
+| **2 Q1** | `Data/enUS/patch-enUS-4.MPQ` holding only `Interface\GlueXML\GlueStrings.lua` with one line changed (`LOGIN = "Login";` → `LOGIN = "HS Login";`) | **Client quits by itself.** Wow.exe started, a blank 1024×800 game window appeared at t≈6 s and was gone at t≈9.4 s. **No dialog, no crash reporter, no `Errors/` file.** `Logs\GlueXML.log`: `10/2 19:34:09.722  GlueXML is modified or corrupt`. Process exit code **0** (repeated under the exit-code helper: `[hs-exitcode] Wow.exe exit code 0`, same log line) | `env/spike-b/run2-gluexml-mod/`, `run2-gluexml-mod-exitcode/`, `run2-gluexml-mod-trace/` |
+| 2b control | same archive name, but `GlueStrings.lua` byte-identical to Blizzard's | Normal login screen. So the quit in run 2 is caused by the **changed content**, not by the extra archive or the writer | `env/spike-b/run2b-gluexml-identical/` |
+| **3 picker** | `patch-enUS-4.MPQ` holding the original Dark Portal model (`UI_MainMenu.m2` + `00/01.skin` from `locale-enUS.MPQ`) saved under the Northrend path (`…\UI_MainMenu_Northrend\UI_MainMenu_Northrend.m2`, `00–03.skin`), plus `SoundEntries.dbc` with the `GS_LichKing` row (12765) repointed from `WotLK_main_title.mp3` to `wow_main_theme.mp3` (a 4-byte change: the string offset GS_Retail already uses) | **Dark Portal login screen, no error**, no `GlueXML.log`. Login box, buttons and the WotLK logo unchanged (the logo is a separate texture) | `env/spike-b/run3-darkportal/`; [screenshot](img/login-spike-run3-darkportal.jpg) |
+| 3b | `patch-enUS-4.MPQ` holding only a `SoundEntries.dbc` with a deliberately broken header (29 columns instead of 30) | Client stops with `ERROR #121 (0x85100079) Version Mismatch: DBFilesClient\SoundEntries.dbc has wrong number of columns (found 29, expected 30)` (WowError dialog). This proves the client **reads `SoundEntries.dbc` from our patch archive**, and checks only its shape, not its content | `env/spike-b/run3b-bad-dbc/Error.txt` |
+| 3c | run 3's archive as `Data/patch-4.MPQ` | Dark Portal login screen | `env/spike-b/run3c-name-patch-4/` |
+| 3d | run 3's archive as `Data/enUS/patch-enUS-H.MPQ` | Dark Portal login screen | `env/spike-b/run3d-name-patch-enUS-H/` |
+
+### What this settles
+- **Q1 (custom login-screen UI with the stock Wow.exe): not possible.** Phase A's prediction holds: a one-line GlueXML edit in a patch MPQ makes the client close itself about 3 seconds after its window appears, with only a line in `Logs\GlueXML.log`. To the player it looks like the game opening and silently closing. Correction to Phase A: the "9" passed to `App_Quit` is internal; the process exit status is 0.
+- **Q2 (backdrop/music picker): feasible data-only, one choice per launch.** A patch MPQ of renamed models and an edited DBC row changes the login backdrop with no error (verified by the client's own screenshot). The music change is the same mechanism (run 3b proves the edited DBC is the copy the client uses), but it was **not heard**: no audio capture here. *[human-verify: Zach listens once.]*
+- **Archive names the client accepts (runtime-verified):** `Data/enUS/patch-enUS-4.MPQ`, `Data/enUS/patch-enUS-H.MPQ` (a letter works) and `Data/patch-4.MPQ`. All of them override files from the stock `patch-enUS-2/-3.MPQ`.
+
+## Recommendation for Zach
+
+**(a) Background and music picker: yes, without touching the game program.** The launcher can offer "WotLK / Burning Crusade / Original" for the login screen. Before it starts the game, it drops one small add-on file (under 1 MB for the Dark Portal) into the game's Data folder, or removes it for the default look. The test showed the classic Dark Portal backdrop with no errors. The music swap uses the same trick; it should play the original theme, but someone has to listen once to confirm. Limits:
+- The choice is made **in the launcher, before the game opens**, not on the login screen itself. Changing it means restarting the game.
+- Only the backdrop and music change. The WotLK logo, the buttons and the text stay as they are. The logo is probably swappable the same way (it's a texture, not code), but that's untested.
+- Burning Crusade should work the same way (its model is in the files, under another name). It wasn't tested separately.
+
+**(b) A real front menu inside the login screen (profiles, saves, options, auto-login) needs a change to Wow.exe.** The login screen's layout and logic (GlueXML) are signed by Blizzard. If even one word changes, the game quits silently (run 2). There's no way around this with data files. The smallest change would be to the game program's own check, two decision points in one function, using the addresses from Phase A:
+1. In `GlueMgr_LoadGlueXML` (0x004da5f0), after the signature check `XML_VerifyTocSignature` (0x008165e0): treat "modified" (result 2) as "OK" (result 3). The branch is in the listing at 0x004da7c2..0x004da835.
+2. In the same function, after the real load (`XML_LoadToc`): skip the second, silent MD5 comparison of the loaded files against the signed digest (the compare-and-quit after case 3, inside the listing range 0x004da835..0x004da8eb). Without this, step 1 alone would still quit.
+
+The exact bytes still need a read-only RE pass; none are proposed here. FrameXML (the in-game UI, FUN_0052a980) has its own copy of the check, but the front menu doesn't need it.
+
+Risks and costs:
+- It breaks the fixed rule "no client binary patching in v1" (CLAUDE.md §2), so it needs **your explicit yes plus an ADR** before anyone writes a byte. This spike doesn't do it.
+- We would ship a patched copy (e.g. `Wow-hs.exe`) next to the pristine `Wow.exe`, never overwrite it. `client.inspect` and the manifest would have to record the patched copy's hash.
+- A wrong byte means crashes at startup or on returning to the login screen. That's easy to detect with the existing launch smoke test, and easy to undo by using the original exe.
+- Offline there's no anti-cheat consequence: Warden is already disabled on our server. The signature check only protects Blizzard's UI integrity.
+- After the patch, the front menu itself is ordinary Lua/XML work in a patch MPQ, which is the approach the original UI uses.
+
+**Alternative if you'd rather not patch the program:** put profiles/saves/options in the macOS launcher and use the login screen as-is, with the data-only backdrop picker. You'd lose an in-game front menu and auto-login inside the client.
+
+**Decisions for you:** (1) build the launcher-side backdrop/music picker (no risk, no program change)? (2) open the Wow.exe signature-check patch (ADR + your approval) for the in-client front menu, or keep the menu in the launcher?
 
 ## Open questions
-- Does the failure show a modal dialog under Wine, or only log and quit? (Phase B run 2.)
-- `hs re decompile` doesn't work on Apple Silicon with the pinned Ghidra (no `mac_arm_64` decompiler native). Should we build the natives (needs a toolchain; changes `env/ghidra_*`), or add a disassembly mode to `HsReport.java`?
-- MPQ reader coverage: implode (PKWARE) and per-file encryption paths are implemented but none of the 656 files sampled across all 18 archives used them, so they are untested on real data. Huffman/ADPCM (WAV-only) are not implemented.
+- **Music by ear:** run 3's music change is proven by mechanism, not by sound. Zach (or a future audio-capture check) should confirm the original theme plays.
+- **Logo and TBC backdrop:** swapping the WotLK logo texture and the TBC model the same way is expected to work, but neither was tested.
+- **Screenshots in the harness:** this session has no macOS Screen Recording permission. The in-Wine Print Screen helper works and could become a harness feature (it needs a Windows cross-compile step, clang + Homebrew `lld-link`, or a prebuilt helper with a pinned hash). It's not added here.
+- **System stall during the first attempt:** the first run-1 attempt (17:54) started while the display was off. The driver then hung, and MySQL aborted with "Semaphore wait has lasted > 600 seconds" (`env/logs/mysqld.err`, 22:10Z). All later runs used `caffeinate -d -i -u` and behaved. The cause isn't proven; if unattended launches with the display off matter, it's worth a look.
+- `hs re decompile` doesn't work on Apple Silicon with the pinned Ghidra (no `mac_arm_64` decompiler native). Should we build the natives, or add a disassembly mode to `HsReport.java`? Relevant if the exe-patch ADR is opened.
+- MPQ reader coverage: the implode (PKWARE) and per-file encryption paths are implemented but untested on real data (none of the 656 sampled files used them). Huffman/ADPCM (WAV-only) are not implemented. The writer is intentionally minimal: neutral locale only, no `(attributes)`, no per-file encryption.

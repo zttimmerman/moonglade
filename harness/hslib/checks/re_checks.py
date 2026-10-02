@@ -109,7 +109,7 @@ def ghidra_refuses_mismatch(ctx):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-@check("re.mpq_readonly", order=222, capability="client-analysis", stack="any")
+@check("re.mpq_readonly", order=222, capability="client-analysis", stack="any", tier="quick")
 def mpq_readonly(ctx):
     """`hs mpq list Data/common.MPQ` has >1000 entries; one listed file extracted into env/re/ is nonempty; client/ unchanged."""
     before = _snapshot()
@@ -139,3 +139,60 @@ def mpq_readonly(ctx):
     require(str(ghidra.RE) in str(out), "extracted file not under env/re", **ev)
     require(not changed and not added and not removed, "client/ changed during MPQ list/extract", **ev)
     return ev
+
+
+@check("re.mpq_write_roundtrip", order=224, capability="client-analysis", stack="any", tier="quick")
+def mpq_write_roundtrip(ctx):
+    """`hs mpq write` builds archives (zlib and stored) that `hs mpq list|extract` read back byte-identical, with
+    standard-key encrypted tables; a destination under client/ is refused and nothing is created there."""
+    import os, struct, tempfile
+    from pathlib import Path
+    from .. import mpq
+    hs = str(P.HARNESS / "hs")
+    tmp = Path(tempfile.mkdtemp(prefix="hs-mpq-write-"))
+    try:
+        files = {"Interface\\GlueXML\\Test.lua": b"LOGIN = \"HS\";\n", "Empty\\zero.bin": b"",
+                 "Big\\random.bin": os.urandom(3 * 4096 + 123),           # incompressible: raw sectors
+                 "Big\\zeros.bin": b"\0" * (5 * 4096 + 7)}                # compressible: zlib sectors
+        srcs = []
+        for i, (name, data) in enumerate(files.items()):
+            f = tmp / f"src{i}"
+            f.write_bytes(data)
+            srcs.append(f"{name}={f}")
+        ev = {"files": {n: len(d) for n, d in files.items()}, "runs": {}}
+        for mode, extra in (("zlib", []), ("stored", ["--no-compress"])):
+            arc = tmp / f"patch-{mode}.MPQ"
+            w = subprocess.run([hs, "mpq", "write", str(arc), *srcs, *extra], capture_output=True, text=True, timeout=120)
+            lst = subprocess.run([hs, "mpq", "list", str(arc)], capture_output=True, text=True, timeout=120)
+            got, mism = {}, []
+            for name, data in files.items():
+                out = tmp / f"out-{mode}-{abs(hash(name))}"
+                x = subprocess.run([hs, "mpq", "extract", str(arc), name, str(out)], capture_output=True, text=True,
+                                   timeout=120)
+                got[name] = {"exit": x.returncode, "size": out.stat().st_size if out.is_file() else None}
+                if x.returncode != 0 or not out.is_file() or out.read_bytes() != data:
+                    mism.append(name)
+            raw = arc.read_bytes() if arc.is_file() else b""
+            hdr = struct.unpack_from("<4sIIHHIIII", raw, 0) if len(raw) >= 32 else None
+            ev["runs"][mode] = {"write_exit": w.returncode, "write_stderr": w.stderr[-400:], "list_exit": lst.returncode,
+                                "listed": [l for l in lst.stdout.splitlines() if l.strip()], "extract": got,
+                                "mismatched": mism, "header": [str(h) for h in hdr] if hdr else None}
+            require(w.returncode == 0, f"{mode}: hs mpq write failed", **ev)
+            require(hdr and hdr[0] == b"MPQ\x1a" and hdr[3] == 0 and hdr[2] == len(raw), f"{mode}: bad v1 header", **ev)
+            require(sorted(ev["runs"][mode]["listed"]) == sorted(files), f"{mode}: listing differs from the input", **ev)
+            require(not mism, f"{mode}: extracted bytes differ", **ev)
+        # The table keys are the published MoPaQ constants (StormLib MPQ_KEY_HASH_TABLE / MPQ_KEY_BLOCK_TABLE), so a
+        # writer/reader pair with matching but wrong crypto can't pass by agreeing with itself.
+        keys = {"hash": hex(mpq.hash_string("(hash table)", mpq.HASH_KEY)),
+                "block": hex(mpq.hash_string("(block table)", mpq.HASH_KEY))}
+        ev["table_keys"] = keys
+        require(keys == {"hash": "0xc3af3770", "block": "0xec83b3a3"}, "table keys differ from the MoPaQ constants", **ev)
+        bad = P.CLIENT / "Data" / "hs-mpq-write-check.MPQ"
+        r = subprocess.run([hs, "mpq", "write", str(bad), srcs[0]], capture_output=True, text=True, timeout=120)
+        ev["refuse_client"] = {"exit": r.returncode, "stderr": r.stderr[-300:], "created": bad.exists()}
+        require(r.returncode != 0 and not bad.exists() and "refusing" in r.stderr, "write under client/ not refused",
+                **ev)
+        return ev
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        (P.CLIENT / "Data" / "hs-mpq-write-check.MPQ").unlink(missing_ok=True)   # only exists if the guard broke

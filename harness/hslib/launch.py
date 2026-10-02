@@ -4,6 +4,9 @@ Wine layer: selected by HS_WINE (paths.WINE_LAYERS). Default `mtld3d` = WoWSilic
 mtld3d D3D9->Metal) in env/wowsilicon-r17; `whisky` = Whisky's Wine 7.7, read-only. Each layer has its own
 repo-local prefix; Whisky's own bottles and settings are never touched.
 No client binary is modified: the manifest's .exe/.dll hashes are compared before and after.
+Test-only: HS_CLIENT_DIR points the launch at a scratch copy of the client (e.g. an APFS clone in env/, login-screen
+spike B.1). It affects only what this module starts and configures; client.inspect and the manifest always describe
+the real client/ (paths.CLIENT), and the scratch copy's binaries must still match that manifest.
 
 Normal mode: stack up (if needed) → client-config (+ Wine defaults) → fixtures → start Wow.exe
 detached, logging to env/logs/wine.log, and print the login.
@@ -25,6 +28,12 @@ from .util import log, tail
 WINE = P.WINE_BIN / P.WINE_EXE
 WINESERVER = P.WINE_BIN / "wineserver"
 SMOKE_SECONDS = 30
+
+
+def client_dir() -> Path:
+    """The client directory to launch: HS_CLIENT_DIR (test-only scratch copy) or the real client/."""
+    v = os.environ.get("HS_CLIENT_DIR")
+    return Path(v).resolve() if v else P.CLIENT
 
 
 class LaunchError(RuntimeError):
@@ -169,15 +178,15 @@ def _require_wine():
 def _installed_client() -> dict:
     from .clientinst import load_manifest
     man = load_manifest()
-    if not man or not (P.CLIENT / "Wow.exe").is_file():
+    if not man or not (client_dir() / "Wow.exe").is_file():
         raise LaunchError("no installed client: run `harness/hs client-install <zip-or-dir>` first",
-                          {"manifest": str(P.CLIENT_MANIFEST), "client": str(P.CLIENT)})
+                          {"manifest": str(P.CLIENT_MANIFEST), "client": str(client_dir())})
     return man
 
 
 def _binary_hashes(man: dict) -> dict:
     from .clientinst import sha256_file
-    return {rel: sha256_file(P.CLIENT / rel) for rel in man["binaries_sha256"]}
+    return {rel: sha256_file(client_dir() / rel) for rel in man["binaries_sha256"]}
 
 
 def _logf():
@@ -220,7 +229,7 @@ def start_client(args: list[str] | None = None, cwd: Path | None = None) -> subp
     """Start Wow.exe (default) or `args` (a Windows program + arguments, e.g. a `./play --client-cmd` test
     stand-in) under the Wine layer, detached, logging to env/logs/wine.log."""
     args = args or ["Wow.exe"]
-    cwd = cwd or P.CLIENT
+    cwd = cwd or client_dir()
     _stamp(f"start {' '.join(args)} (cwd {cwd})")
     lf = _logf()
     try:
@@ -289,7 +298,7 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None) -> tuple[
 
     _require_wine()
     man = _installed_client()
-    ev: dict = {"client": str(P.CLIENT),
+    ev: dict = {"client": str(client_dir()),
                 "wine": str(WINE), "wineprefix": str(P.WINEPREFIX), "wine_log": str(P.WINE_LOG),
                 "env": {k: v for k, v in wine_env().items() if k.startswith("WINE")}}
 
@@ -307,7 +316,7 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None) -> tuple[
         ev["stack"] = {"up": stack.up(world_datadir=world_datadir)}
         say("The game server is ready.")
     say("Pointing the game client at this computer (127.0.0.1)...")
-    cfg = configure(P.CLIENT, defaults=WINE_DEFAULTS)
+    cfg = configure(client_dir(), defaults=WINE_DEFAULTS)
     ev["client_config"] = {"changed_files": cfg["changed_files"],
                            "config_wtf": next(c for c in cfg["changes"] if c["kind"] == "Config.wtf")}
     if accounts is None:
@@ -351,7 +360,7 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     t0 = time.time()
     samples, crashed = [], None
     wow_pid, t_seen = None, None
-    errors_dir = P.CLIENT / "Errors"
+    errors_dir = client_dir() / "Errors"
     errors_before = {p.name for p in errors_dir.iterdir()} if errors_dir.is_dir() else set()
     from .stack import alive
 

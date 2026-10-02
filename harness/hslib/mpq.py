@@ -1,6 +1,7 @@
-"""Read-only MPQ (MoPaQ) reader, stdlib only: `hs mpq list|extract` (login-screen spike, A.1).
+"""MPQ (MoPaQ) reader, stdlib only: `hs mpq list|extract` (login-screen spike, A.1), plus a minimal writer
+(`write_archive`, `hs mpq write`, spike B.1) for throwaway test patch archives.
 
-Archives are only ever opened with mode "rb"; extraction refuses any destination under client/.
+Existing archives are only ever opened with mode "rb"; extraction and writing refuse any destination under client/.
 
 Format sources (no code copied; written from the descriptions):
 - Justin Olbrantz (Quantam), "The MoPaQ Archive Format" (inside_mopaq), and Ladislav Zezula's StormLib format
@@ -52,6 +53,20 @@ def hash_string(s: str, kind: int) -> int:
         seed1 = (CRYPT[kind * 256 + ch] ^ (seed1 + seed2)) & M32
         seed2 = (ch + seed1 + seed2 + (seed2 << 5) + 3) & M32
     return seed1
+
+
+def encrypt(data: bytes, key: int) -> bytes:
+    """Inverse of decrypt (same key schedule; seed2 advances with the plaintext word)."""
+    n = len(data) // 4
+    words = struct.unpack(f"<{n}I", data[:n * 4])
+    out = [0] * n
+    seed2 = 0xEEEEEEEE
+    for i, v in enumerate(words):
+        seed2 = (seed2 + CRYPT[0x400 + (key & 0xFF)]) & M32
+        out[i] = (v ^ (key + seed2)) & M32
+        key = (((~key << 0x15) + 0x11111111) & M32) | (key >> 0x0B)
+        seed2 = (v + seed2 + (seed2 << 5) + 3) & M32
+    return struct.pack(f"<{n}I", *out) + data[n * 4:]
 
 
 def decrypt(data: bytes, key: int) -> bytes:
@@ -336,6 +351,84 @@ class Archive:
         if len(out) != fsize:
             raise MPQError(f"{name}: got {len(out)} bytes, block table says {fsize}")
         return bytes(out)
+
+
+# ---- writer -------------------------------------------------------------------------------------------------------
+def write_archive(dest, files: dict, compress: bool = True, sector_shift: int = 3) -> dict:
+    """Write a new format-v1 MPQ at `dest` holding `files` ({internal name: bytes}) plus a (listfile).
+
+    Minimal by design (test patch archives only): neutral locale, no (attributes), no per-file encryption,
+    no single-unit files. Each file is stored in sectors of 512 << sector_shift bytes; with `compress`, a sector is
+    zlib-compressed (mask byte 0x02) when that makes it smaller, else stored raw, behind a sector offset table.
+    Hash and block tables are encrypted with the standard keys. Refuses destinations under client/."""
+    dest = Path(dest)
+    if _under_client(dest) or _under_client(dest.parent):
+        raise MPQError(f"refusing to write under client/: {dest}")
+    norm = {}
+    for name, data in files.items():
+        name = name.replace("/", "\\")
+        if name.lower() in {n.lower() for n in norm} or name.lower() == "(listfile)":
+            raise MPQError(f"duplicate or reserved name {name!r}")
+        norm[name] = bytes(data)
+    norm["(listfile)"] = "\r\n".join(n for n in norm).encode("latin-1") + b"\r\n"
+    ssize = 512 << sector_shift
+    body, blocks = bytearray(), []
+    hdr_size = 0x20
+    for name, data in norm.items():
+        off = hdr_size + len(body)
+        if not data:
+            blocks.append((off, 0, 0, F_EXISTS))
+            continue
+        if compress:
+            secs = []
+            for i in range(0, len(data), ssize):
+                raw = data[i:i + ssize]
+                z = b"\x02" + zlib.compress(raw, 9)
+                secs.append(z if len(z) < len(raw) else raw)
+            table, pos = [], (len(secs) + 1) * 4
+            for sec in secs:
+                table.append(pos)
+                pos += len(sec)
+            table.append(pos)
+            blob = struct.pack(f"<{len(table)}I", *table) + b"".join(secs)
+            blocks.append((off, len(blob), len(data), F_EXISTS | F_COMPRESS))
+        else:
+            blob = data
+            blocks.append((off, len(data), len(data), F_EXISTS))
+        body += blob
+    ht_size = 16
+    while ht_size < 2 * len(norm):
+        ht_size *= 2
+    ht = [(M32, M32, 0xFFFF, 0xFFFF, M32)] * ht_size
+    for bi, name in enumerate(norm):
+        i = hash_string(name, HASH_OFFSET) % ht_size
+        while ht[i][4] != M32:
+            i = (i + 1) % ht_size
+        ht[i] = (hash_string(name, HASH_A), hash_string(name, HASH_B), 0, 0, bi)
+    ht_raw = b"".join(struct.pack("<IIHHI", *e) for e in ht)
+    bt_raw = b"".join(struct.pack("<IIII", *b) for b in blocks)
+    ht_pos = hdr_size + len(body)
+    bt_pos = ht_pos + len(ht_raw)
+    total = bt_pos + len(bt_raw)
+    header = struct.pack("<4sIIHHIIII", b"MPQ\x1a", hdr_size, total, 0, sector_shift, ht_pos, bt_pos,
+                         ht_size, len(blocks))
+    out = header + bytes(body) + encrypt(ht_raw, hash_string("(hash table)", HASH_KEY)) \
+        + encrypt(bt_raw, hash_string("(block table)", HASH_KEY))
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(out)
+    return {"archive": str(dest), "bytes": len(out), "files": [n for n in norm if n != "(listfile)"],
+            "hash_table_size": ht_size, "compress": compress}
+
+
+def verify_written(dest, files: dict) -> dict:
+    """Read `dest` back with the reader and require every file byte-identical and listed."""
+    with Archive(dest) as a:
+        names = a.names()
+        bad = [n for n, d in files.items() if a.read(n) != bytes(d)]
+    missing = sorted({n.replace("/", "\\").lower() for n in files} - {n.lower() for n in names})
+    if bad or missing:
+        raise MPQError(f"read-back mismatch: differing={bad} missing_from_listfile={missing}")
+    return {"read_back_ok": True, "listed": names}
 
 
 # ---- CLI helpers --------------------------------------------------------------------------------------------------

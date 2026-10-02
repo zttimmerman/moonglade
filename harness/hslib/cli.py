@@ -73,7 +73,7 @@ def main(argv=None) -> int:
     rp.add_argument("--name", default="Wow.exe", help="client binary to analyze (default Wow.exe)")
     rp.add_argument("--analyze", action="store_true", help="import: run full auto-analysis (slow; needed for decompile/xrefs)")
 
-    mp = sub.add_parser("mpq", help="read-only MPQ access: list files, extract one (never writes under client/)")
+    mp = sub.add_parser("mpq", help="MPQ access: list files, extract one, write a test archive (never under client/)")
     mps = mp.add_subparsers(dest="mpq_cmd", required=True)
     ml = mps.add_parser("list", help="list files in an archive (from its (listfile))")
     ml.add_argument("archive", help="path, or relative to client/ (e.g. Data/common.MPQ)")
@@ -83,6 +83,11 @@ def main(argv=None) -> int:
     me.add_argument("archive")
     me.add_argument("inside", help="path inside the archive, e.g. Interface\\GlueXML\\GlueXML.toc")
     me.add_argument("dest", type=Path, help="file path, or an existing directory")
+    mw = mps.add_parser("write", help="write a NEW minimal v1 archive (test patches; refuses paths under client/), "
+                                      "then verify it by reading it back")
+    mw.add_argument("dest", type=Path, help="archive to create (outside client/)")
+    mw.add_argument("files", nargs="+", metavar="INSIDE=SRC", help="internal name = local source file")
+    mw.add_argument("--no-compress", action="store_true", help="store sectors uncompressed")
 
     la = sub.add_parser("launch", help="stack up, client-config, fixtures, start Wow.exe under Wine (ADR-0004)")
     la.add_argument("--smoke", action="store_true",
@@ -240,6 +245,16 @@ def main(argv=None) -> int:
                 else:
                     print("\n".join(names))
                 log(f"{len(names)} entries")
+            elif a.mpq_cmd == "write":
+                files = {}
+                for spec in a.files:
+                    inside, sep, src = spec.partition("=")
+                    if not sep or not inside or not src:
+                        raise mpq.MPQError(f"expected INSIDE=SRC, got {spec!r}")
+                    files[inside] = Path(src).read_bytes()
+                res = mpq.write_archive(a.dest, files, compress=not a.no_compress)
+                res.update(mpq.verify_written(a.dest, files))
+                _print(res)
             else:
                 _print(mpq.extract(a.archive, a.inside, a.dest))
         except mpq.MPQError as e:
