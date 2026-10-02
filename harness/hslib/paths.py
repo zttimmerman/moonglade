@@ -1,4 +1,5 @@
 """Repo-relative paths, ports, and fork.lock parsing."""
+import os
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -26,10 +27,18 @@ SUMMARY = HARNESS / "summary.md"
 # Client install + Wine layer (ADR-0004)
 CLIENT = ROOT / "client"                              # installed 3.3.5a client (gitignored)
 CLIENT_MANIFEST = ENV / "client-manifest.json"        # written by `hs client-install`
-WINEPREFIX = ENV / "wineprefix"                       # repo-local Wine prefix, never a Whisky bottle
-WINE_LOG = LOGS / "wine.log"
 WHISKY_LIBS = Path.home() / "Library/Application Support/com.isaacmarovitz.Whisky/Libraries"
-WINE_BIN = WHISKY_LIBS / "Wine/bin"                   # Whisky's bundled Wine (used read-only)
+# Wine layers (ADR-0004). Each has its own repo-local prefix, never a Whisky bottle. Select with HS_WINE.
+WINE_LAYERS = {
+    "whisky": {"bin": WHISKY_LIBS / "Wine/bin", "exe": "wine64", "prefix": ENV / "wineprefix"},          # Wine 7.7, read-only
+    "wine11": {"bin": ENV / "wine-11/Wine Stable.app/Contents/Resources/wine/bin", "exe": "wine",
+               "prefix": ENV / "wineprefix-wine11"},                                                   # Gcenx wine-stable 11.0_1
+}
+WINE_LAYER = os.environ.get("HS_WINE", "whisky")
+WINE_BIN = WINE_LAYERS[WINE_LAYER]["bin"]
+WINE_EXE = WINE_LAYERS[WINE_LAYER]["exe"]
+WINEPREFIX = WINE_LAYERS[WINE_LAYER]["prefix"]
+WINE_LOG = LOGS / "wine.log"
 
 HOST = "127.0.0.1"
 MYSQL_PORT = 3307

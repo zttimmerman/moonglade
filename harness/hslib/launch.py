@@ -20,7 +20,7 @@ from pathlib import Path
 from . import paths as P
 from .util import log, tail
 
-WINE = P.WINE_BIN / "wine64"
+WINE = P.WINE_BIN / P.WINE_EXE
 WINESERVER = P.WINE_BIN / "wineserver"
 SMOKE_SECONDS = 30
 
@@ -40,7 +40,8 @@ def wine_env() -> dict:
            if not k.startswith(("WINE", "DXVK_", "MVK_", "MTL_", "D3DM_"))}
     env.update({
         "WINEPREFIX": str(P.WINEPREFIX),
-        "WINEDEBUG": "fixme-all",
+        # HS_WINEDEBUG overrides the channel spec for diagnosis (e.g. "fixme-all,fixme+d3d_shader,warn+d3d_shader")
+        "WINEDEBUG": os.environ.get("HS_WINEDEBUG", "fixme-all"),
         "WINEMSYNC": "1",
     })
     return env
