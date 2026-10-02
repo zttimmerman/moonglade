@@ -187,8 +187,10 @@ def settle_login(ws, guid: int) -> dict:
     Why: with instant logout the probe can log out within milliseconds of SMSG_LOGIN_VERIFY_WORLD. The core's
     ServerMailReward::OnPlayerLogin (src/server/scripts/World/server_mail.cpp) queues async SELECTs whose callbacks
     call SendServerMail(session->GetPlayer(), ...) without a null check; if they run after the logout, the
-    worldserver segfaults (seen 2026-10-02: ServerMailCondition::CheckCondition ← SendServerMail). A human client
-    can't log out that fast, so this is a probe-only window; we don't patch the core for it.
+    worldserver segfaulted (seen 2026-10-02: ServerMailCondition::CheckCondition ← SendServerMail). Since ADR-0006
+    the core is patched (patches/core/0001-server-mail-guard-async-player.patch) and core.login_logout_race proves
+    the no-settle path survives; this barrier stays as defense in depth for fixture logouts
+    (openspec/changes/core-server-mail-guard/design.md).
 
     Barrier: CharacterDatabase has one async worker (WorkerThreads = 1, asserted), so its queue is FIFO. The probe
     sends CMSG_UPDATE_ACCOUNT_DATA for a per-character type (data unchanged, a new timestamp); the server queues a

@@ -18,6 +18,9 @@ def main(argv=None) -> int:
     ap.add_argument("--create", metavar="NAME", help="create a character (human warrior) if it doesn't exist")
     ap.add_argument("--login", metavar="NAME", help="enter the world with this character, then log out")
     ap.add_argument("--no-logout", action="store_true", help="with --login: drop the socket instead of logging out")
+    ap.add_argument("--no-settle", action="store_true",
+                    help="with --login: request logout immediately after SMSG_LOGIN_VERIFY_WORLD, skipping the "
+                         "fixtures.settle_login barrier (reproduces the server-mail login race; core.login_logout_race)")
     a = ap.parse_args(argv)
 
     out = {"user": a.user.upper()}
@@ -43,7 +46,11 @@ def main(argv=None) -> int:
                 if not c:
                     raise C.ProbeError(f"no character named {a.login}")
                 out["login_verify_world"] = ws.player_login(c["guid"])
-                if not a.no_logout:
+                if a.no_logout:
+                    pass
+                elif a.no_settle:
+                    out["logout"] = ws.logout() | {"settle": None}
+                else:
                     from .. import fixtures   # settle_login: wait out the server's login work first (see there)
                     out["logout"] = fixtures.logout(ws, c["guid"])
     except (C.ProbeError, OSError) as e:

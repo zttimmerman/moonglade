@@ -34,7 +34,8 @@ def pin_enforced(ctx):
     rogue.mkdir(exist_ok=True)
     (rogue / "CMakeLists.txt").write_text("# rogue module\n")
     (P.BOTS_SRC / "hs_sabotage_ignored.log").write_text("x")
-    before = {"core": build.pin_state(P.CORE_SRC, lock["core_sha"], "modules/"),
+    patches = sorted(P.PATCHES.glob("*.patch"))     # the only uncommitted changes allowed in core (spec)
+    before = {"core": build.patched_pin_state(P.CORE_SRC, lock["core_sha"], patches, "modules/"),
               "playerbots": build.pin_state(P.BOTS_SRC, lock["playerbots_sha"])}
     before["core_stray_modules"] = build.stray_module_entries()
     require(before["core"] and before["playerbots"] and "mod-hs-rogue" in before["core_stray_modules"],
@@ -43,7 +44,7 @@ def pin_enforced(ctx):
     info = {"after": {"exit": r.returncode, "stderr_tail": r.stderr[-1000:]},
             "modules": sorted(e.name for e in (P.CORE_SRC / "modules").iterdir() if e.is_symlink())}
     require(r.returncode == 0, "`hs build` failed on a sabotaged vendor tree", **info)
-    after = {"core": build.pin_state(P.CORE_SRC, lock["core_sha"], "modules/"),
+    after = {"core": build.patched_pin_state(P.CORE_SRC, lock["core_sha"], patches, "modules/"),
              "playerbots": build.pin_state(P.BOTS_SRC, lock["playerbots_sha"])}
     ev = {"problems_before": before, "problems_after": after, "sync": info["after"], "modules": info["modules"]}
     require(not after["core"] and not after["playerbots"], "vendor not clean+pinned after sync", **ev)

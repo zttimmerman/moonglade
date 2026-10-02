@@ -286,21 +286,27 @@ def up(world_datadir: Path | None = None, timeout: int | None = None) -> dict:
     return info
 
 
+def stop_worldserver(pid: int) -> dict:
+    """Graceful worldserver shutdown (SOAP `server shutdown 1`), SIGTERM/SIGKILL fallback. Also used to swap in the
+    unpatched baseline worldserver (core.login_logout_race_baseline) while mysqld + authserver keep running."""
+    graceful = True
+    try:
+        soap.gm("server shutdown 1", timeout=10)
+    except OSError:
+        os.kill(pid, signal.SIGTERM)
+    if not _wait(lambda: not alive(pid), 90):
+        os.kill(pid, signal.SIGTERM)
+        if not _wait(lambda: not alive(pid), 30):
+            os.kill(pid, signal.SIGKILL)
+            graceful = False
+    return {"pid": pid, "graceful": graceful}
+
+
 def down() -> dict:
     info = {}
     procs = stack_processes()
     for pid in procs["worldserver"]:
-        graceful = True
-        try:
-            soap.gm("server shutdown 1", timeout=10)
-        except OSError:
-            os.kill(pid, signal.SIGTERM)
-        if not _wait(lambda: not alive(pid), 90):
-            os.kill(pid, signal.SIGTERM)
-            if not _wait(lambda: not alive(pid), 30):
-                os.kill(pid, signal.SIGKILL)
-                graceful = False
-        info["worldserver"] = {"pid": pid, "graceful": graceful}
+        info["worldserver"] = stop_worldserver(pid)
     for pid in procs["authserver"]:
         _kill(pid, grace=15)
         info["authserver"] = {"pid": pid}

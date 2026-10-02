@@ -1,0 +1,39 @@
+diff --git a/src/server/scripts/World/server_mail.cpp b/src/server/scripts/World/server_mail.cpp
+index 59d40372d..b03f6251d 100644
+--- a/src/server/scripts/World/server_mail.cpp
++++ b/src/server/scripts/World/server_mail.cpp
+@@ -35,7 +35,8 @@ public:
+         if (!session)
+             return;
+ 
+-        uint32 playerGUID = player->GetGUID().GetCounter();
++        ObjectGuid guid = player->GetGUID();
++        uint32 playerGUID = guid.GetCounter();
+         bool isAlliance = player->GetTeamId() == TEAM_ALLIANCE;
+ 
+         for (auto const& [mailId, servMail] : serverMailStore)
+@@ -45,8 +46,14 @@ public:
+             stmt->SetData(1, mailId);
+ 
+             // Capture servMail by value
+-            auto callback = [session, servMailWrapper = std::reference_wrapper<ServerMail const>(servMail), isAlliance](PreparedQueryResult result)
++            auto callback = [session, guid, servMailWrapper = std::reference_wrapper<ServerMail const>(servMail), isAlliance](PreparedQueryResult result)
+                 {
++                    // The player may have logged out (or relogged into another character on this session)
++                    // before this async callback ran; only deliver to the character the lookup was for.
++                    Player* player = session->GetPlayer();
++                    if (!player || player->GetGUID() != guid)
++                        return;
++
+                     ServerMail const& servMail = servMailWrapper.get();  // Dereference the wrapper to get the original object
+ 
+                     if (!result)
+@@ -56,7 +63,7 @@ public:
+                         std::vector<ServerMailCondition> const& conditions = servMail.conditions;
+ 
+                         sServerMailMgr->SendServerMail(
+-                            session->GetPlayer(),
++                            player,
+                             servMail.id,
+                             servMail.senderEntry,
+                             money,
