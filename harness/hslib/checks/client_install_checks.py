@@ -113,6 +113,10 @@ def launch_smoke(ctx):
     wow_end = sm.get("wow_at_end") or []
     require(sm.get("watched_seconds", 0) >= 30 and wow_end and all(w.get("alive") for w in wow_end),
             "Wow.exe was not alive at the end of a >= 30 s window", **ev)
+    # the window is measured from the first sighting of the real Wow.exe process, and it's the same pid at the end
+    require(sm.get("wow_pid") and [w.get("pid") for w in wow_end] == [sm["wow_pid"]]
+            and out.get("wow_first_seen", {}).get("pid") == sm["wow_pid"],
+            "the Wow.exe process alive at the end isn't the one first seen", **ev)
     require(not sm.get("new_error_reports"), "client wrote crash reports", **ev)
     require(out.get("remaining_prefix_processes") == [], "launcher reported leftover prefix processes", **ev)
     after = prefix_processes()          # independent re-check from this process

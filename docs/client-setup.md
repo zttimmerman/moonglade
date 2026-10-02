@@ -49,7 +49,27 @@ harness/hs client-config client
 - `hs launch` also adds `SET gxWindow "1"` (windowed) and `SET gxApi "d3d9"`, but only if those keys aren't set yet. Change them in-game and your choice is kept.
 - It backs up each changed file once, as `*.hs-bak`, and never touches `.exe`, `.dll`, or `.MPQ` files.
 
-## 3. Launch
+## Play
+
+Once the client is installed (step 1), this one command is all you need:
+
+```
+./play
+```
+
+It starts the game server (database, login server, world server), points the client at this Mac, makes sure your account exists, and opens the game. The terminal stays busy while you play. When you quit the game, it shuts everything down and prints `All stopped.` Nothing keeps running in the background afterwards. No internet connection is needed.
+
+- **Your login.** The first `./play` creates a personal account named `PLAYER` with a random password and prints both. They're saved in `env/player.json` (only readable by you, never committed). Look there if you forget the password. To pick your own name and password instead, create `env/player.json` *before* your first `./play`, containing `{"account": "NAME", "password": "secret"}` (letters and digits, up to 16 characters each). The account is created only if it doesn't exist yet, so editing the file later doesn't change an existing account. The account isn't a GM. You create your characters at character select as usual.
+- **Your progress is safe from the test harness.** The harness uses its own test account (`HSTEST`), which every full harness run deletes and recreates. Don't play on `HSTEST` (`./play` refuses `HSTEST` and `HS_GM` in `env/player.json`). Nothing in the harness touches your account; the checks `play.player_account` and `play.player_account_untouched` use throwaway accounts and a scratch file, never `env/player.json`.
+- **Stopping early.** Press Ctrl-C in the terminal (or send it SIGTERM). The game is closed and the server is shut down cleanly. Pressing Ctrl-C again during shutdown is ignored, so the shutdown can't be interrupted half-way.
+- **If the game crashes**, `./play` notices, still shuts the server down cleanly, and exits with an error that says the client crashed.
+- **If the server can't start**, `./play` shows the end of the server's log, doesn't open the game, and leaves nothing running.
+- **One at a time.** A second `./play` while one is running refuses straight away and tells you the pid of the running one. A leftover lock from a `./play` that was killed is cleaned up automatically.
+- Exit codes: `0` you quit normally; `1` startup problem; `2` already running; `3` the client crashed; `130`/`143` stopped with Ctrl-C/SIGTERM.
+
+Logs: server logs are in `env/logs/` (`Server.log`, `worldserver.out`), Wine/client output in `env/logs/wine.log`, and a record of the last run in `env/run/play-last.json`.
+
+## 3. Launch (harness / development)
 
 ```
 harness/hs launch

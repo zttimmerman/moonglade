@@ -6,7 +6,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import config, db, paths as P, soap, srp6
+from . import config, db, paths as P, procs, soap, srp6
 from .util import log, tail
 
 MYSQLD = P.BREW / "opt/mysql/bin/mysqld"
@@ -44,16 +44,15 @@ class StackError(RuntimeError):
 
 def stack_processes() -> dict[str, list[int]]:
     """All processes belonging to *this repo's* stack, found by command line (not just pidfiles)."""
-    out = subprocess.run(["ps", "-axo", "pid=,command="], capture_output=True, text=True).stdout
+    # procs.table() reads the kernel's process table directly: /bin/ps (setuid) can't run under sandbox-exec.
     found = {"mysqld": [], "authserver": [], "worldserver": []}
-    for line in out.splitlines():
-        pid_s, _, cmd = line.strip().partition(" ")
+    for pid, cmd in procs.table():
         if str(MY_CNF) in cmd and "mysqld" in cmd:
-            found["mysqld"].append(int(pid_s))
+            found["mysqld"].append(pid)
         elif cmd.startswith(str(P.SERVER_BIN / "authserver")):
-            found["authserver"].append(int(pid_s))
+            found["authserver"].append(pid)
         elif cmd.startswith(str(P.SERVER_BIN / "worldserver")):
-            found["worldserver"].append(int(pid_s))
+            found["worldserver"].append(pid)
     return found
 
 
@@ -64,9 +63,7 @@ def alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    # zombie check
-    st = subprocess.run(["ps", "-o", "stat=", "-p", str(pid)], capture_output=True, text=True).stdout.strip()
-    return bool(st) and not st.startswith("Z")
+    return not procs.is_zombie(pid)
 
 
 def port_open(port: int, host=P.HOST, timeout=0.5) -> bool:

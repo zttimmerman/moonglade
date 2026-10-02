@@ -60,16 +60,10 @@ def wine_env() -> dict:
 # ---------------------------------------------------------------- process discovery
 
 def _ps_env() -> list[tuple[int, str]]:
-    """(pid, command+environment) for this user's processes. macOS `ps -E` appends each
-    process's environment, which lets us match WINEPREFIX exactly."""
-    out = subprocess.run(["ps", "-E", "-x", "-ww", "-o", "pid=,command="],
-                         capture_output=True, text=True).stdout
-    rows = []
-    for line in out.splitlines():
-        pid_s, _, rest = line.strip().partition(" ")
-        if pid_s.isdigit():
-            rows.append((int(pid_s), rest))
-    return rows
+    """(pid, command+environment) for this user's processes, like macOS `ps -E -x -ww`: the environment is
+    appended, which lets us match WINEPREFIX exactly. Read via procs (no /bin/ps: it can't run sandboxed)."""
+    from . import procs
+    return procs.table(with_env=True, own_only=True)
 
 
 def server_dir() -> Path | None:
@@ -136,11 +130,22 @@ def prefix_processes() -> list[dict]:
     return found
 
 
+# The real client process only, never the launcher (observed with a 0.2 s trace, see the M1 change):
+#   mtld3d (Wine 11.13): launcher pid `.../bin/wine Wow.exe` -> `.../x86_64-unix/wine Wow.exe` -> `start.exe /exec`
+#                        (it waits); the client is a separate pid whose argv is the Windows path `Z:\...\Wow.exe`.
+#   whisky (Wine 7.7):   one pid: `.../wine64 Wow.exe` -> `.../wine64-preloader /.../wine64 Wow.exe` (still
+#                        loading) -> `.../wine64-preloader Wow.exe` (the client itself).
+_WOW_WINDOWS = re.compile(r"^(?:[a-z]:\\\S*\\)?wow\.exe(?:\s|$)", re.I)
+_WOW_PRELOADER = re.compile(r"/wine(?:64)?-preloader (?:[a-z]:\\\S*\\)?wow\.exe(?:\s|$)", re.I)
+
+
+def is_wow_client(cmd: str) -> bool:
+    return bool(_WOW_WINDOWS.match(cmd) or _WOW_PRELOADER.search(cmd))
+
+
 def wow_processes(procs=None) -> list[dict]:
     procs = prefix_processes() if procs is None else procs
-    # `wine64 Wow.exe` also spawns a `start.exe /exec Wow.exe` helper; that isn't the client.
-    return [p for p in procs if "wow.exe" in p["cmd"].lower() and "wowerror" not in p["cmd"].lower()
-            and "start.exe" not in p["cmd"].lower()]
+    return [p for p in procs if is_wow_client(p["cmd"])]
 
 
 def _ps_stats(pid: int) -> dict:
@@ -211,11 +216,15 @@ def ensure_prefix() -> dict:
     return info
 
 
-def start_client() -> subprocess.Popen:
-    _stamp(f"start {P.CLIENT / 'Wow.exe'}")
+def start_client(args: list[str] | None = None, cwd: Path | None = None) -> subprocess.Popen:
+    """Start Wow.exe (default) or `args` (a Windows program + arguments, e.g. a `./play --client-cmd` test
+    stand-in) under the Wine layer, detached, logging to env/logs/wine.log."""
+    args = args or ["Wow.exe"]
+    cwd = cwd or P.CLIENT
+    _stamp(f"start {' '.join(args)} (cwd {cwd})")
     lf = _logf()
     try:
-        return subprocess.Popen([str(WINE), "Wow.exe"], cwd=P.CLIENT, env=wine_env(), stdout=lf,
+        return subprocess.Popen([str(WINE), *args], cwd=cwd, env=wine_env(), stdout=lf,
                                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
     finally:
         lf.close()
@@ -269,13 +278,18 @@ def onscreen_windows(pid: int) -> list[dict]:
             wins.append({"width": int(float(parts[1])), "height": int(float(parts[2])), "layer": int(parts[3])})
     return wins
 
-def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
+def prepare(say=log, world_datadir: Path | None = None, accounts=None) -> tuple[dict, dict]:
+    """Everything before starting the client, shared by `hs launch` and `./play`: stack up (if needed) →
+    client-config (+ Wine defaults) → accounts → Wine prefix → binaries match the manifest. `accounts` makes
+    sure the login exists (default: the harness fixtures, test account + character; `./play` passes its
+    player-account step). `say` reports each step. Raises stack.StackError / LaunchError / FixtureError.
+    Returns (manifest, ev)."""
     from . import fixtures, stack
     from .clientcfg import WINE_DEFAULTS, configure
 
     _require_wine()
     man = _installed_client()
-    ev: dict = {"mode": "smoke" if smoke else "normal", "client": str(P.CLIENT),
+    ev: dict = {"client": str(P.CLIENT),
                 "wine": str(WINE), "wineprefix": str(P.WINEPREFIX), "wine_log": str(P.WINE_LOG),
                 "env": {k: v for k, v in wine_env().items() if k.startswith("WINE")}}
 
@@ -287,13 +301,20 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     st = stack.stack_processes()
     if all(st.values()):
         ev["stack"] = "already up"
+        say("The game server is already running.")
     else:
-        log("stack not fully up; starting it")
-        ev["stack"] = {"up": stack.up()}
+        say("Starting the game server (database, login server, world server). This takes a minute or two...")
+        ev["stack"] = {"up": stack.up(world_datadir=world_datadir)}
+        say("The game server is ready.")
+    say("Pointing the game client at this computer (127.0.0.1)...")
     cfg = configure(P.CLIENT, defaults=WINE_DEFAULTS)
     ev["client_config"] = {"changed_files": cfg["changed_files"],
                            "config_wtf": next(c for c in cfg["changes"] if c["kind"] == "Config.wtf")}
-    ev["fixtures"] = fixtures.ensure()
+    if accounts is None:
+        say(f"Making sure the test account ({P.TEST_USER}) and character ({P.TEST_CHAR}) exist...")
+        ev["fixtures"] = fixtures.ensure()
+    else:
+        ev["accounts"] = accounts()
     ev["prefix"] = ensure_prefix()
 
     hashes_before = _binary_hashes(man)
@@ -301,6 +322,12 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     if not ev["binaries_match_manifest_before"]:
         raise LaunchError("client binaries no longer match env/client-manifest.json; "
                           "re-run `harness/hs client-install`", ev)
+    return man, ev
+
+
+def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
+    man, ev = prepare()
+    ev["mode"] = "smoke" if smoke else "normal"
 
     log_offset = P.WINE_LOG.stat().st_size if P.WINE_LOG.exists() else 0
     proc = start_client()
@@ -318,32 +345,49 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
         print(f"\n  Account: {P.TEST_USER}\n  Password: {P.TEST_PASS}\n  Character: {P.TEST_CHAR}\n")
         return ev | {"login": login}
 
-    # --smoke: watch for crashes for smoke_seconds, sampling once a second.
+    # --smoke: wait for the real Wow.exe process (not the launcher), then require that same pid to stay alive
+    # for smoke_seconds measured from when it was first seen. Sampled once a second; a pid counts as gone only
+    # when two consecutive checks (0.5 s apart) find it dead.
     t0 = time.time()
     samples, crashed = [], None
-    seen_wow = False
+    wow_pid, t_seen = None, None
     errors_dir = P.CLIENT / "Errors"
     errors_before = {p.name for p in errors_dir.iterdir()} if errors_dir.is_dir() else set()
-    while time.time() - t0 < smoke_seconds:
+    from .stack import alive
+
+    def gone(pid):
+        if alive(pid):
+            return False
+        time.sleep(0.5)
+        return not alive(pid)
+
+    while True:
         time.sleep(1)
         procs = prefix_processes()
-        wow = wow_processes(procs)
-        seen_wow = seen_wow or bool(wow)
         if any("wowerror" in p["cmd"].lower() for p in procs):
             crashed = "WowError.exe (the client's crash reporter) started"
             break
-        if seen_wow and not wow:
-            crashed = "Wow.exe process exited"
+        if wow_pid is None:
+            wow = wow_processes(procs)
+            if wow:
+                wow_pid, t_seen = wow[0]["pid"], time.time()
+                ev["wow_first_seen"] = {"pid": wow_pid, "cmd": wow[0]["cmd"], "after_launch_s": round(t_seen - t0, 1)}
+            elif time.time() - t0 > 15:
+                crashed = "no Wow.exe process appeared within 15 s"
+                break
+            continue
+        if gone(wow_pid):
+            crashed = f"Wow.exe process (pid {wow_pid}) exited"
             break
-        if not seen_wow and time.time() - t0 > 15:
-            crashed = "no Wow.exe process appeared within 15 s"
+        if int(time.time() - t_seen) % 10 == 0:
+            samples.append({"t": round(time.time() - t_seen), **_ps_stats(wow_pid)})
+        if time.time() - t_seen >= smoke_seconds:
             break
-        if int(time.time() - t0) % 10 == 0 and wow:
-            samples.append({"t": round(time.time() - t0), **_ps_stats(wow[0]["pid"])})
-    elapsed = round(time.time() - t0, 1)
+    elapsed = round(time.time() - t_seen, 1) if t_seen else 0.0
     procs = prefix_processes()
-    wow = wow_processes(procs)
-    ev["smoke"] = {"watched_seconds": elapsed, "required_seconds": smoke_seconds,
+    wow = [p for p in wow_processes(procs) if p["pid"] == wow_pid]
+    ev["smoke"] = {"watched_seconds": elapsed, "watched_from": "first sighting of the real Wow.exe process",
+                   "required_seconds": smoke_seconds, "wow_pid": wow_pid,
                    "samples": samples, "prefix_processes_at_end": procs,
                    "wow_at_end": [_ps_stats(p["pid"]) | {"cmd": p["cmd"]} for p in wow]}
     errors_after = {p.name for p in errors_dir.iterdir()} if errors_dir.is_dir() else set()
