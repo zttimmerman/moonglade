@@ -51,13 +51,14 @@ class StandIn:
             "exit 0", ""]))
         self.proc: subprocess.Popen | None = None
 
-    def start_play(self, *extra: str, wrap: list[str] | None = None) -> subprocess.Popen:
-        fh = open(self.out, "w")
+    def start_play(self, *extra: str, wrap: list[str] | None = None, account: str = "test",
+                   env: dict | None = None, out: Path | None = None) -> subprocess.Popen:
+        fh = open(out or self.out, "w")
         # Own session/process group, like a terminal's foreground job, so the check can deliver a Ctrl-C to
         # the whole group (os.killpg) the way a terminal does.
-        self.proc = subprocess.Popen([*(wrap or []), PLAY, "--account", "test", "--client-cmd", str(self.bat), *extra],
+        self.proc = subprocess.Popen([*(wrap or []), PLAY, "--account", account, "--client-cmd", str(self.bat), *extra],
                                      cwd=P.ROOT, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
-                                     start_new_session=True)
+                                     start_new_session=True, env={**os.environ, **(env or {})})
         fh.close()
         return self.proc
 
@@ -564,3 +565,164 @@ def offline(ctx):
     finally:
         s.cleanup()
         shutil.rmtree(work, ignore_errors=True)
+
+
+# ---------------------------------------------------------------- personal player account
+
+SCRATCH_PLAYER = "HSPLAYTEST"        # scratch personal accounts: never the real env/player.json account
+SCRATCH_KEEP = "HSPCKEEP"
+SCRATCH_KEEP_CHAR = "Pckeeper"
+
+
+def _real_player_name() -> str | None:
+    try:
+        return json.loads(play.PLAYER_FILE.read_text())["account"].upper()
+    except (FileNotFoundError, ValueError, KeyError):
+        return None
+
+
+def _acct_rows(name: str) -> list:
+    from .. import db
+    return db.query(f"SELECT id, username FROM account WHERE username='{name.upper()}'", "auth")
+
+
+def _delete_scratch(name: str) -> dict:
+    """SOAP `account delete` for a scratch account (also deletes its characters). Refuses the real player's account."""
+    from .. import fixtures as F, soap
+    require(name.upper() != _real_player_name(), f"refusing to delete {name}: it is the real player account")
+    if not _acct_rows(name):
+        return {"account": name, "deleted": False, "reason": "absent"}
+    r = soap.gm(f"account delete {name}")
+    _, gone, _ = F.poll(lambda: _acct_rows(name), lambda v: not v, timeout=20)
+    return {"account": name, "deleted": gone, "gm": r.evidence()}
+
+
+@check("play.player_account", order=360, capability=CAP, stack="down")
+def player_account(ctx):
+    """Default (personal-account) path with a scratch player file: the first ./play writes the file (0600) and
+    creates exactly one non-GM account with no characters and prints the login; a second ./play creates nothing and
+    keeps the account id; the password is never in play-last.json; HSTEST / HS_GM in the file are refused."""
+    from .. import db
+    ev: dict = {"scratch_account": SCRATCH_PLAYER, "real_player_file": str(play.PLAYER_FILE),
+                "real_player_account": _real_player_name()}
+    require(SCRATCH_PLAYER != ev["real_player_account"], "scratch account name collides with the real player account", **ev)
+    real_before = play.PLAYER_FILE.read_bytes() if play.PLAYER_FILE.exists() else None
+    require_given_clear(ev)
+    s = StandIn("player")
+    pfile = s.dir / "player.json"
+    env = {"HS_PLAYER_FILE": str(pfile), "HS_PLAYER_DEFAULT_NAME": SCRATCH_PLAYER}
+    try:
+        runs = []
+        for i in (1, 2):
+            for f in (s.started, s.stop_file):
+                f.unlink(missing_ok=True)
+            out = s.dir / f"play{i}.out"
+            s.out = out
+            s.start_play(account="player", env=env, out=out)
+            up = s.wait_client_up()
+            run = {"client_up": up}
+            if up["up"]:
+                # observe the DB while the stack is up (it's down again after ./play exits)
+                run["account_rows"] = _acct_rows(SCRATCH_PLAYER)
+                aid = run["account_rows"][0][0] if run["account_rows"] else "-1"
+                run["account_access_rows"] = db.query(f"SELECT id, gmlevel, RealmID FROM account_access WHERE id={aid}", "auth")
+                run["characters"] = db.query(f"SELECT guid, name FROM characters WHERE account={aid}", "characters")
+                run["total_accounts"] = db.scalar("SELECT COUNT(*) FROM account", "auth")
+                run["file_mode"] = oct(pfile.stat().st_mode & 0o777) if pfile.exists() else None
+                run["file_bytes"] = pfile.read_text() if pfile.exists() else None
+                run["file_mtime_ns"] = pfile.stat().st_mtime_ns if pfile.exists() else None
+                s.stop_file.write_text("quit")
+            rc, _ = s.wait_exit(timeout=300)
+            rec = last_record(s.proc.pid)
+            last_text = play.LAST.read_text() if play.LAST.exists() else ""
+            run |= {"exit_code": rc, "output": out.read_text(errors="replace")[-2500:],
+                    "record_account": rec.get("account"), "record_prepare_accounts": (rec.get("prepare") or {}).get("accounts"),
+                    "outcome": rec.get("outcome"), "_last_text": last_text}
+            runs.append(run)
+            require(up["up"] and rc == 0, f"run {i}: ./play didn't complete normally", runs=runs, **ev)
+        pw = json.loads(pfile.read_text())["password"]
+        for r in runs:
+            r["password_in_play_last_json"] = pw in r.pop("_last_text")
+        r1, r2 = runs
+        ev["runs"] = runs
+        ev["remaining_after"] = remaining(s)
+        require(r1["file_mode"] == "0o600", "player file not mode 0600", **ev)
+        require(len(r1["account_rows"]) == 1, "first run: expected exactly one scratch account", **ev)
+        require(not any(int(row[1]) > 0 for row in r1["account_access_rows"]), "account has a GM security level", **ev)
+        require(r1["characters"] == [], "new personal account has characters", **ev)
+        require((r1["record_prepare_accounts"] or {}).get("created") is True
+                and (r1["record_account"] or {}).get("file_created") is True, "first run didn't record creating file + account", **ev)
+        require(SCRATCH_PLAYER in r1["output"] and pw in r1["output"], "first run didn't print the login", **ev)
+        require(r2["account_rows"] == r1["account_rows"], "second run: account id/rows changed", **ev)
+        require(r2["total_accounts"] == r1["total_accounts"], "second run created another account", **ev)
+        require(r2["file_bytes"] == r1["file_bytes"] and r2["file_mtime_ns"] == r1["file_mtime_ns"], "second run rewrote the player file", **ev)
+        require((r2["record_prepare_accounts"] or {}).get("created") is False
+                and (r2["record_account"] or {}).get("file_created") is False, "second run recorded creating something", **ev)
+        require(not any(r["password_in_play_last_json"] for r in runs), "the password appears in play-last.json", **ev)
+
+        # reserved names are refused (before anything starts)
+        ev["reserved"] = {}
+        for name in (P.TEST_USER, P.GM_USER):
+            bad = s.dir / f"reserved-{name}.json"
+            bad.write_text(json.dumps({"account": name, "password": "whatever1"}))
+            r = subprocess.run([PLAY, "--account", "player", "--client-cmd", str(s.bat)], cwd=P.ROOT,
+                               env={**os.environ, "HS_PLAYER_FILE": str(bad)}, capture_output=True, text=True, timeout=300)
+            ev["reserved"][name] = {"exit": r.returncode, "output": (r.stdout + r.stderr)[-800:]}
+            require(r.returncode != 0 and f"{name} is reserved for the test harness" in r.stdout, f"{name} in the player file wasn't refused", **ev)
+        require(is_clear(remaining(s)), "something from this repo is still running", **ev)
+        real_after = play.PLAYER_FILE.read_bytes() if play.PLAYER_FILE.exists() else None
+        require(real_after == real_before, "the real env/player.json changed", **ev)
+        ev["real_player_file_unchanged"] = True
+        return ev
+    finally:
+        s.kill_play()
+        try:
+            stack.up()
+            ev["scratch_cleanup"] = _delete_scratch(SCRATCH_PLAYER)
+        finally:
+            stack.down()
+            s.cleanup()
+
+
+def _snapshot(name: str) -> dict:
+    from .. import db
+    acct = db.query(f"SELECT id, username, HEX(salt), HEX(verifier), expansion, locked, joindate, last_login "
+                    f"FROM account WHERE username='{name.upper()}'", "auth")
+    aid = acct[0][0] if acct else "-1"
+    return {"account": acct,
+            "account_access": db.query(f"SELECT id, gmlevel, RealmID, comment FROM account_access WHERE id={aid} ORDER BY RealmID", "auth"),
+            "characters": db.query(f"SELECT * FROM characters WHERE account={aid} ORDER BY guid", "characters")}
+
+
+@check("play.player_account_untouched", order=370, capability=CAP, stack="up")
+def player_account_untouched(ctx):
+    """A personal account (scratch, created by ./play's own account step, with one character) is byte-identical —
+    auth row incl. salt/verifier, account_access, characters — before and after the fixture reset that
+    fixture.account_character runs (SOAP `account delete` + recreate of the test account)."""
+    from . import fixture_checks
+    from ..probe import client as probe
+    ev: dict = {"scratch_account": SCRATCH_KEEP, "real_player_account": _real_player_name()}
+    require(SCRATCH_KEEP != ev["real_player_account"], "scratch account name collides with the real player account", **ev)
+    login = {"account": SCRATCH_KEEP, "password": "keep1234"}
+    try:
+        ev["create"] = play.ensure_player_account(login)
+        lr, ws, _ = probe.open_world(login["account"], login["password"])
+        with ws:
+            if not any(c["name"].lower() == SCRATCH_KEEP_CHAR.lower() for c in ws.char_enum()):
+                ev["char_create"] = ws.char_create(SCRATCH_KEEP_CHAR, 1, 1)
+        from .. import fixtures as F
+        F.poll(lambda: _snapshot(SCRATCH_KEEP)["characters"], bool, timeout=15)
+        before = _snapshot(SCRATCH_KEEP)
+        ev["before"] = before
+        require(before["account"] and len(before["characters"]) == 1, "setup: scratch personal account/character missing", **ev)
+        ev["test_fixture_present"] = F.ensure()          # so the reset below really deletes + recreates HSTEST
+        test_id_before = F.account_id()
+        ev["fixture_reset_run"] = fixture_checks.account_character({})
+        ev["test_account_id_before_after"] = [test_id_before, F.account_id()]
+        after = _snapshot(SCRATCH_KEEP)
+        ev["after"] = after
+        require(ev["fixture_reset_run"]["reset"].get("deleted") is True, "the fixture reset didn't actually delete+recreate HSTEST", **ev)
+        require(after == before, "the personal account or its characters changed during the fixture reset", **ev)
+        return ev
+    finally:
+        ev["scratch_cleanup"] = _delete_scratch(SCRATCH_KEEP)

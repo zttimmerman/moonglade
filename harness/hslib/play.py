@@ -44,6 +44,16 @@ from . import launch, paths as P, stack
 LOCK = P.RUN / "play.lock"
 PLAYER_FILE = P.ENV / "player.json"
 DEFAULT_PLAYER = "PLAYER"
+
+
+def player_file() -> Path:
+    """env/player.json; HS_PLAYER_FILE overrides it (test-only: play.player_account uses a scratch file)."""
+    return Path(os.environ["HS_PLAYER_FILE"]) if os.environ.get("HS_PLAYER_FILE") else PLAYER_FILE
+
+
+def default_player() -> str:
+    """Account name for a newly written player file; HS_PLAYER_DEFAULT_NAME overrides it (test-only)."""
+    return os.environ.get("HS_PLAYER_DEFAULT_NAME") or DEFAULT_PLAYER
 _NAME_RE = re.compile(r"^[A-Za-z0-9]{1,16}$")          # AccountMgr: name < 17, password <= 16 chars
 LAST = P.RUN / "play-last.json"
 HANDLED = (signal.SIGINT, signal.SIGTERM, signal.SIGHUP)
@@ -120,24 +130,25 @@ class PlayerAccountError(Exception):
 
 def player_login() -> tuple[dict, bool]:
     """(login, newly_written) from env/player.json, writing defaults (PLAYER + random password) on first use."""
-    if PLAYER_FILE.exists():
+    pf = player_file()
+    if pf.exists():
         try:
-            d = json.loads(PLAYER_FILE.read_text())
+            d = json.loads(pf.read_text())
             login = {"account": str(d["account"]), "password": str(d["password"])}
         except (ValueError, KeyError, TypeError) as e:
-            raise PlayerAccountError(f"{PLAYER_FILE} is not valid ({e}); fix it or delete it to get a new login")
+            raise PlayerAccountError(f"{pf} is not valid ({e}); fix it or delete it to get a new login")
         new = False
     else:
         pw = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(10))
-        login, new = {"account": DEFAULT_PLAYER, "password": pw}, True
+        login, new = {"account": default_player(), "password": pw}, True
+    if login["account"].upper() in (P.TEST_USER.upper(), P.GM_USER.upper()):
+        raise PlayerAccountError(f"{pf}: {login['account']} is reserved for the test harness, pick another name")
     for k in ("account", "password"):
         if not _NAME_RE.match(login[k]):
-            raise PlayerAccountError(f"{PLAYER_FILE}: {k} must be 1-16 letters or digits")
-    if login["account"].upper() in (P.TEST_USER.upper(), P.GM_USER.upper()):
-        raise PlayerAccountError(f"{PLAYER_FILE}: {login['account']} is reserved for the test harness, pick another name")
+            raise PlayerAccountError(f"{pf}: {k} must be 1-16 letters or digits")
     if new:
-        P.ENV.mkdir(parents=True, exist_ok=True)
-        fd = os.open(PLAYER_FILE, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        pf.parent.mkdir(parents=True, exist_ok=True)
+        fd = os.open(pf, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
         with os.fdopen(fd, "w") as f:
             json.dump(login, f, indent=2)
             f.write("\n")
@@ -212,10 +223,10 @@ class Loop:
             self.rec["account"] = {"kind": "test", "account": P.TEST_USER}
         else:
             login, new = player_login()
-            self.rec["account"] = {"kind": "player", "account": login["account"].upper(), "file": str(PLAYER_FILE),
+            self.rec["account"] = {"kind": "player", "account": login["account"].upper(), "file": str(player_file()),
                                    "file_created": new}
             if new:
-                say("Created your personal login (saved in env/player.json, keep it):")
+                say(f"Created your personal login (saved in {player_file()}, keep it):")
                 print(f"\n      Account:  {login['account']}\n      Password: {login['password']}\n", flush=True)
 
             def accounts():
