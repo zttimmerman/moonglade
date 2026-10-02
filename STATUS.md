@@ -1,17 +1,16 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-02 ~10:45, session 2 (orchestrator context ~78%). Resumed. Core-guard **verifier running** (started on resume); then merge → spike Phase B._
+_Updated 2026-10-02 ~17:55: core server-mail guard merged (PR #6, ADR-0006). Spike Phase B running._
 
 **Cold start:** read this file, then `openspec list` (Node 20: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`), then `git -C <repo> worktree list`, `git branch -a`, `gh pr list`, then `harness/hs status`. The skills `.claude/skills/hs-*` hold the procedures (change loop, checks, client debugging, RE). User preferences and decisions are in the orchestrator memory notes (plain language for decisions, Gate 1, front-menu vision, logo).
 
 **In flight**
 | Work | Branch / checkout | State | If its agent is gone |
 |---|---|---|---|
-| Core server-mail guard (ADR-0006, M2 prerequisite) | `change/core-server-mail-guard`, **main checkout**, listed in `harness/active-changes` | **B10 done** (fc6df56, 764c38d): 6-line guard patch; unpatched baseline crashes on attempt 1–2 (frames SendServerMail→CheckCondition), patched survives 220 cycles; `build.pin_enforced` now accepts exactly core_sha + patch queue; full `--force-clean` 45/45. **Verifier running** (1 `--force-clean` full + ≥5× `core.*`); owns the stack |  re-brief a fresh builder from `openspec/changes/core-server-mail-guard/` + ADR-0006 + the branch's commits; then verifier (1 `--force-clean` full run + ≥5 repeats of `core.*`) |
-| Login-screen spike | `change/login-screen-spike`, worktree `.claude/worktrees/spike` | Phase A done (B8): GlueXML RSA/MD5-signed, client quits on mismatch; backdrops and music present and unsigned. **Phase B pending** (needs the stack): controlled tests on a scratch client copy | brief a builder from `docs/research/login-screen-spike.md` "Phase B plan" + tasks B.1/C.1 |
+| Login-screen spike Phase B | `change/login-screen-spike`, **main checkout**, active | builder B11: controlled launches on an APFS clone `env/spike-client/` (control, modified GlueXML, Dark Portal backdrop/music swap) + MPQ writer + report C.1. Owns stack + client | brief a builder from `docs/research/login-screen-spike.md` + tasks B.1/C.1; then verifier |
 
-**Next (in order):** finish and merge the core guard → spike Phase B → M2 living world (`openspec/changes/m2-living-world`) → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
+**Next (in order):** spike Phase B → M2 living world (`openspec/changes/m2-living-world`) → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
 
 **Decisions pending from Zach:** none blocking. Later: the patch ADR for the in-client front menu (step 2); light vs true save files; F-items as they come up.
 
@@ -33,7 +32,8 @@ M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01
 | F9 re-tooling verifier nits | todo (low) | readonly path check: use resolved `is_relative_to`; JDK assertion `>=21` explicitly; harness check for wine no-adoption rule (needs scratch params like ghidra.install) |
 | Harness tiers | **done / archived** (verifier PASS) | `hs run --tier quick` ~36 s (builders' loop); full ~9.5 min; `--force-clean` ~13 min (required once per merge); test logout ~20 s → <1 s |
 | F10 tiers verifier nits | todo | enforce force-clean at merge in the harness (e.g. a merge-gate flag/check), not just the verifier brief; keep the from-empty build log (don't let `build.clean_smart` overwrite it) |
-| Core server-mail guard (ADR-0006) | specced, next | M2 prerequisite; branch `change/core-server-mail-guard` (rebase on main) |
+| Core server-mail guard (ADR-0006) | **done / merged** (PR #6) | first core patch; M2 unblocked |
+| F11 server-mail relog misdelivery check | todo | behavioural check: second char on test account, A→B fast relog, no misdelivered mail (requirement narrowed in core-server-mail-guard, logged) |
 | Login-screen spike | next after tiers | Q1: custom GlueXML from a patch MPQ with an unmodified Wow.exe? (Wow.exe has "GlueXML has corrupt signature" strings). Q2: are the TBC/Vanilla login backdrops and music in the 3.3.5a MPQs (background picker)? Needs an MPQ reader |
 | F8 M1 verifier nits | todo (low) | smoke picks `wow[0]` (pick the persistent/oldest pid); `play_processes()` matches any cmdline with 'hslib.play'; real Wow.exe exit path only human-verified |
 | M2 living world | spec written | `openspec/changes/m2-living-world` |
