@@ -32,9 +32,9 @@
 - [x] 8.1 mod-playerbots scriptability for behavioral tests → `docs/research/playerbots-scripting.md` — verify: report exists, cites source files/commands it tested
 
 ## 10. Client install + launch (builder B5)
-- [ ] 10.1 `hs client-install`, manifest, `client.inspect` check — verify: `client.inspect`
-- [ ] 10.2 ADR-0004 Wine layer; repo-local prefix; `hs launch [--smoke]`; `client.launch_smoke` check — verify: `client.launch_smoke`
-- [ ] 10.3 Verifier pass on 10.x scenarios + full run
+- [x] 10.1 `hs client-install`, manifest, `client.inspect` check — verify: `client.inspect`
+- [x] 10.2 ADR-0004 Wine layer; repo-local prefix; `hs launch [--smoke]`; `client.launch_smoke` check — verify: `client.launch_smoke`
+- [x] 10.3 Verifier pass on 10.x scenarios + full run (cycle 3 FAIL: client.inspect ignored unrecorded binaries → fixed 48cd8a9; cycle 4 PASS, 2 full runs, 2026-10-02)
 
 ## 9. Verify + gate
 - [x] 9.1 Verifier pass over all M0 scenarios (full `hs run`) — PASS required (cycle 1 FAIL on build.playerbots_active, fixed in fbad133; cycle 2 PASS, 3 full runs, 2026-10-01)
