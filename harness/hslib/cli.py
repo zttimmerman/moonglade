@@ -57,6 +57,14 @@ def main(argv=None) -> int:
     wi = sub.add_parser("wine-install", help="fetch + SHA-256-verify the pinned Wine runtime (fork.lock) into env/")
     wi.add_argument("--force", action="store_true", help="re-download even if the pinned runtime is present")
 
+    gi = sub.add_parser("ghidra-install", help="fetch + SHA-256-verify the pinned Ghidra (fork.lock) into env/ (ADR-0005)")
+    gi.add_argument("--force", action="store_true")
+    rp = sub.add_parser("re", help="read-only Ghidra analysis of a COPY of a client binary (env/re/)")
+    rp.add_argument("mode", choices=["import", "entry", "strings", "decompile", "xrefs"])
+    rp.add_argument("arg", nargs="?", help="strings: text to find; decompile/xrefs: address (e.g. 0x00401000)")
+    rp.add_argument("--name", default="Wow.exe", help="client binary to analyze (default Wow.exe)")
+    rp.add_argument("--analyze", action="store_true", help="import: run full auto-analysis (slow; needed for decompile/xrefs)")
+
     la = sub.add_parser("launch", help="stack up, client-config, fixtures, start Wow.exe under Wine (ADR-0004)")
     la.add_argument("--smoke", action="store_true",
                     help="launch, require Wow.exe alive after 30 s, then stop it and every prefix process")
@@ -166,6 +174,25 @@ def main(argv=None) -> int:
             _print(wine_install(force=a.force))
         except WineInstallError as e:
             log(f"WINE-INSTALL FAILED: {e}")
+            return 1
+        return 0
+
+    if a.cmd in ("ghidra-install", "re"):
+        from . import ghidra
+        try:
+            if a.cmd == "ghidra-install":
+                _print(ghidra.install(force=a.force))
+            elif a.mode == "import":
+                _print(ghidra.analyze(a.name) if a.analyze else ghidra.run_report("entry", name=a.name, fresh_import=True))
+            else:
+                mode = {"strings": "findascii"}.get(a.mode, a.mode)
+                if a.mode in ("strings", "decompile", "xrefs") and not a.arg:
+                    log(f"`hs re {a.mode}` needs an argument")
+                    return 2
+                res = ghidra.run_report(mode, a.arg, name=a.name)
+                print("\n".join(res["lines"]))
+        except ghidra.GhidraError as e:
+            log(f"RE FAILED: {e}")
             return 1
         return 0
 

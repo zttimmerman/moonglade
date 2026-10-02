@@ -3,7 +3,7 @@
 /env/
 /server/
 /data/
-/client/
+/client
 /vendor/
 harness/out/
 harness/results.json
