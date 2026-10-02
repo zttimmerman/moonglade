@@ -144,11 +144,13 @@ def mpq_readonly(ctx):
 @check("re.mpq_write_roundtrip", order=224, capability="client-analysis", stack="any", tier="quick")
 def mpq_write_roundtrip(ctx):
     """`hs mpq write` builds archives (zlib and stored) that `hs mpq list|extract` read back byte-identical, with
-    standard-key encrypted tables; a destination under client/ is refused and nothing is created there."""
+    standard-key encrypted tables; a write into a scratch stand-in client dir is refused with nothing created; the
+    real client/ is never a write target (its snapshot outside game-written paths is unchanged)."""
     import os, struct, tempfile
     from pathlib import Path
     from .. import mpq
     hs = str(P.HARNESS / "hs")
+    before = _snapshot()                       # real client/, same rule as re.ghidra_readonly
     tmp = Path(tempfile.mkdtemp(prefix="hs-mpq-write-"))
     try:
         files = {"Interface\\GlueXML\\Test.lua": b"LOGIN = \"HS\";\n", "Empty\\zero.bin": b"",
@@ -187,12 +189,31 @@ def mpq_write_roundtrip(ctx):
                 "block": hex(mpq.hash_string("(block table)", mpq.HASH_KEY))}
         ev["table_keys"] = keys
         require(keys == {"hash": "0xc3af3770", "block": "0xec83b3a3"}, "table keys differ from the MoPaQ constants", **ev)
-        bad = P.CLIENT / "Data" / "hs-mpq-write-check.MPQ"
-        r = subprocess.run([hs, "mpq", "write", str(bad), srcs[0]], capture_output=True, text=True, timeout=120)
-        ev["refuse_client"] = {"exit": r.returncode, "stderr": r.stderr[-300:], "created": bad.exists()}
-        require(r.returncode != 0 and not bad.exists() and "refusing" in r.stderr, "write under client/ not refused",
-                **ev)
+        # Refusal, tested on a scratch stand-in client (never the real client/): the guard's root is injectable.
+        standin = tmp / "standin-client"
+        (standin / "Data").mkdir(parents=True)
+        refused = {}
+        for label, dest in (("in_data", standin / "Data" / "hs-mpq-write-check.MPQ"),
+                            ("new_subdir", standin / "Data" / "enUS" / "patch-enUS-9.MPQ")):
+            try:
+                mpq.write_archive(dest, files, client_root=standin)
+                refused[label] = {"refused": False}
+            except mpq.MPQError as e:
+                refused[label] = {"refused": True, "message": str(e)}
+            refused[label]["created"] = dest.exists()
+        stray = sorted(str(f.relative_to(standin)) for f in standin.rglob("*") if f.is_file())
+        ev["refuse_standin"] = {"standin": str(standin), "attempts": refused, "files_in_standin": stray}
+        # the default guard root is the real client (pure path test, nothing is written)
+        ev["default_root_is_client"] = mpq._under_client(P.CLIENT / "Data" / "x.MPQ") and \
+            not mpq._under_client(tmp / "x.MPQ")
+        after = _snapshot()
+        changed = sorted(k for k in before if k in after and before[k] != after[k])
+        added, removed = sorted(set(after) - set(before)), sorted(set(before) - set(after))
+        ev["real_client"] = {"files_checked": len(before), "changed": changed, "added": added, "removed": removed}
+        require(all(a["refused"] and not a["created"] for a in refused.values()) and not stray,
+                "write into the stand-in client dir was not refused (or created a file)", **ev)
+        require(ev["default_root_is_client"], "the writer's default guard root is not client/", **ev)
+        require(not changed and not added and not removed, "real client/ changed during the check", **ev)
         return ev
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
-        (P.CLIENT / "Data" / "hs-mpq-write-check.MPQ").unlink(missing_ok=True)   # only exists if the guard broke

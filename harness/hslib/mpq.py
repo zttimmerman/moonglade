@@ -354,15 +354,16 @@ class Archive:
 
 
 # ---- writer -------------------------------------------------------------------------------------------------------
-def write_archive(dest, files: dict, compress: bool = True, sector_shift: int = 3) -> dict:
+def write_archive(dest, files: dict, compress: bool = True, sector_shift: int = 3, client_root=None) -> dict:
     """Write a new format-v1 MPQ at `dest` holding `files` ({internal name: bytes}) plus a (listfile).
 
     Minimal by design (test patch archives only): neutral locale, no (attributes), no per-file encryption,
     no single-unit files. Each file is stored in sectors of 512 << sector_shift bytes; with `compress`, a sector is
     zlib-compressed (mask byte 0x02) when that makes it smaller, else stored raw, behind a sector offset table.
-    Hash and block tables are encrypted with the standard keys. Refuses destinations under client/."""
+    Hash and block tables are encrypted with the standard keys. Refuses destinations under client/ (`client_root`,
+    default paths.CLIENT; a check passes a scratch stand-in so the refusal is never tested against the real client)."""
     dest = Path(dest)
-    if _under_client(dest) or _under_client(dest.parent):
+    if _under_client(dest, client_root) or _under_client(dest.parent, client_root):
         raise MPQError(f"refusing to write under client/: {dest}")
     norm = {}
     for name, data in files.items():
@@ -441,9 +442,10 @@ def resolve_archive(arg) -> Path:
     return p
 
 
-def _under_client(p: Path) -> bool:
+def _under_client(p: Path, client_root=None) -> bool:
+    root0 = Path(client_root) if client_root is not None else P.CLIENT
     real = Path(os.path.realpath(p))
-    for root in {Path(os.path.realpath(P.CLIENT)), P.CLIENT.absolute()}:
+    for root in {Path(os.path.realpath(root0)), root0.absolute()}:
         try:
             real.relative_to(root)
             return True
