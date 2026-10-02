@@ -19,7 +19,9 @@ CLAUDE.md §4/§6/§9 are the rules; this is the practiced procedure.
 - A builder's report is not evidence (§10).
 
 ## Verify
-- Use the `verifier` agent type and give it only: spec deltas, `git diff <last-verified>..HEAD -- harness/ …`, and the harness command. Require ≥2 full runs (flakiness), counterexamples showing each new check can fail, and independent checks outside the harness.
+- Use the `verifier` agent type and give it only: spec deltas, `git diff <last-verified>..HEAD -- harness/ …`, and the harness command.
+- **Run budget (agreed with Zach, 2026-10-02): 2 full runs per change.** My pre-check is 1 full run (the quick tier once tiers land); the verifier does **1 full run** plus **≥5 repeats of only the checks the change adds or touches** (flakiness where it changed), plus counterexamples showing each new check can fail, plus independent checks outside the harness.
+- **Harness-wide flakiness:** a separate "full ×3" before each milestone gate or about weekly, not per change. A failure in any run is P0.
 - On FAIL: fix, run the full harness, then a **fresh** verifier (new context). After 3 failed cycles on one task, mark it blocked in STATUS.md and move on.
 - Weakened checks count as FAIL. Spec changes need a dated entry in the proposal's "Spec-change log" with the reason; tightenings and clarifications are fine, loosenings get reviewed at the next human gate.
 
