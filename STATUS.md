@@ -1,6 +1,6 @@
 # STATUS
 
-_Last updated: 2026-10-01 (session 1, end: stopped at M0 human gate + Gate 1)_
+_Last updated: 2026-10-02 (session 2)_
 
 ## Current milestone: M0 Foundation
 Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, design, tasks).
@@ -12,16 +12,22 @@ Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, desi
 | 10.1/10.2 client install + Wine launch (B5) | done, awaiting verifier | zip repaired by Zach; installed (manifest written, Wow.exe 3.3.5.12340). `client.inspect` + `client.launch_smoke` PASS (smoke now also requires an on-screen ≥640×480 window). Screenshot confirmed the WotLK intro cinematic renders under Whisky's Wine |
 | 9.2 M0 human gate | **PASSED 2026-10-01** | Zach: logged in under Whisky's Wine, walked around Goldshire, "Game works". Fixes on the way: Warden disabled (ILLEGAL_INSTRUCTION crash at login); EULA must be scrolled to enable Accept |
 | F3 red/blue smears in world | **fixed, pending verifier** | Root cause: a Wine 7.7 wined3d bug (clip-plane GLSL emits undeclared `ps_link`). Default layer is now WoWSilicon's Wine runtime r17 + mtld3d (D3D9→Metal), with no client patching (ADR-0004 rev). Zach confirmed in-game: no smears, faster |
-| F4 `hs wine-install` (fetch + sha-verify pinned runtime from fork.lock) | todo | so a fresh checkout reproduces `env/wowsilicon-r17` |
+| F4 `hs wine-install` | done | adopt/idempotent paths tested; download-from-scratch path not exercised (64 MB) |
 | F5 mtld3d shader cache written into `client/`; slight colour banding (HDR on) | todo (low) | |
-| F1 pin enforcement vs gitignored content | code done, untested | test needs the stack down, so it waits until Zach's session ends |
+| F1 pin enforcement vs gitignored content | done | rogue module dir + ignored files now removed; sabotage via empty commit (check 326 s → 11 s) |
 | Gate 1 | **SIGNED 2026-10-01** | vanilla XP curve, vanilla quest XP, elites + HP, vanilla mounts; vanilla mode ON by default and easily toggleable; descoped items backlogged |
 | F2 `report.full_run` proves files written only externally | todo (low) | verifier concern 2 |
-| M1 `./play` | spec written (`openspec/changes/m1-offline-play-loop`, 6 checks + 1 human) | implementation waits for Zach's session to end (it needs the stack) |
-| M3 era profile (vanilla mode) | unblocked | build as a runtime module + side tables (see memo, Design consequences) |
+| M1 `./play` | spec written (`openspec/changes/m1-offline-play-loop`) | next after M0 archives |
+| M2 living world | spec written (`openspec/changes/m2-living-world`) | population, companions, perf budget |
+| M3 vanilla mode | spec written (`openspec/changes/m3-vanilla-mode`) | module + side tables per signed Gate 1 |
+| F6 setup reproducibility | todo | Brewfile, `hs bootstrap`, `docs/setup.md`; private GitHub remote only if Zach says yes |
 
 ## Last full harness result
 2026-10-01, HEAD `fbad133`, Release build: **25 pass / 0 fail**, exit 0. Three consecutive full runs by the verifier, plus my own runs. One `[human-verify]` scenario is pending (M0 gate). Disk free about 10 GB after the partial client install (15 GB in `client/`).
+
+## Working conventions
+- One git branch per OpenSpec change (`change/<id>`). It merges to `main` only after a verifier PASS and a green full run. `main` = verified work. No remote yet (Zach decides).
+- `harness/active-changes` lists the changes being built or verified; only those (plus archived specs) gate `report.coverage` / `report.full_run`.
 
 ## Known issues / notes for later milestones
 - The playerbots command server (`AiPlayerbot.CommandServerPort`) binds 0.0.0.0 with no address option. It's disabled. If M2/M4 scripting wants it, it needs a module patch to bind 127.0.0.1, and an ADR.
