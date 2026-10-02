@@ -7,4 +7,4 @@
 ## 3. Instant logout (builder)
 - [x] 3.1 Grant only the instant-logout permission to the test account; probe/fixture logouts get faster — verify: `fixture.instant_logout`
 ## 4. Verify
-- [ ] 4.1 Verifier: ≥2 full runs, one with `--force-clean`; quick-tier timing; counterexamples
+- [x] 4.1 Verifier (per the 2-full-runs budget): 1 full run with `--force-clean` (42/42), 2 quick runs (exit 0, ~36 s), ≥5 repeats of changed checks, counterexamples. PASS 2026-10-02

@@ -13,7 +13,9 @@ M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01
 | M1 `./play` | **done / archived** (verifier PASS cycle 2; Zach's Wi-Fi-off demo passed 2026-10-02) | personal account `PLAYER` (env/player.json), sandbox-exec offline proof, procs.py replaces ps |
 | Ghidra tooling + skills | **done / archived** (verifier PASS cycle 2) | `hs re`, `hs ghidra-install`, 4 project skills; run budget: 2 full runs/change |
 | F9 re-tooling verifier nits | todo (low) | readonly path check: use resolved `is_relative_to`; JDK assertion `>=21` explicitly; harness check for wine no-adoption rule (needs scratch params like ghidra.install) |
-| Harness tiers | built (B9), awaiting verifier | quick 36 s (exit 0), full ~9.5 min (verified-current build), --force-clean ~12.7 min; test logout ~20 s → <1 s |
+| Harness tiers | **done / archived** (verifier PASS) | `hs run --tier quick` ~36 s (builders' loop); full ~9.5 min; `--force-clean` ~13 min (required once per merge); test logout ~20 s → <1 s |
+| F10 tiers verifier nits | todo | enforce force-clean at merge in the harness (e.g. a merge-gate flag/check), not just the verifier brief; keep the from-empty build log (don't let `build.clean_smart` overwrite it) |
+| Core server-mail guard (ADR-0006) | specced, next | M2 prerequisite; branch `change/core-server-mail-guard` (rebase on main) |
 | Login-screen spike | next after tiers | Q1: custom GlueXML from a patch MPQ with an unmodified Wow.exe? (Wow.exe has "GlueXML has corrupt signature" strings). Q2: are the TBC/Vanilla login backdrops and music in the 3.3.5a MPQs (background picker)? Needs an MPQ reader |
 | F8 M1 verifier nits | todo (low) | smoke picks `wow[0]` (pick the persistent/oldest pid); `play_processes()` matches any cmdline with 'hslib.play'; real Wow.exe exit path only human-verified |
 | M2 living world | spec written | `openspec/changes/m2-living-world` |
