@@ -10,6 +10,7 @@ import secrets
 import socket
 import struct
 import time
+import zlib
 
 from .. import paths as P, srp6
 from . import proto as W
@@ -276,6 +277,14 @@ class WorldSession:
         self.player_guid = guid
         return {"map": r.u32(), "x": round(r.f32(), 3), "y": round(r.f32(), 3), "z": round(r.f32(), 3),
                 "o": round(r.f32(), 3)}
+
+    def update_account_data(self, data_type: int, timestamp: int, text: str) -> None:
+        """CMSG_UPDATE_ACCOUNT_DATA (HandleUpdateAccountData: u32 type, u32 time, u32 decompressed size, zlib data
+        = the text as a C string) → SMSG_UPDATE_ACCOUNT_DATA_COMPLETE. The server stores it with an async
+        REPLACE INTO character_account_data (per-character types)."""
+        raw = text.encode() + b"\x00"
+        self.send(W.CMSG_UPDATE_ACCOUNT_DATA, struct.pack("<III", data_type, timestamp, len(raw)) + zlib.compress(raw))
+        self.wait_for(W.SMSG_UPDATE_ACCOUNT_DATA_COMPLETE)
 
     def logout(self, timeout=45) -> dict:
         """CMSG_LOGOUT_REQUEST → SMSG_LOGOUT_RESPONSE (u32 result, u8 instant) → SMSG_LOGOUT_COMPLETE.

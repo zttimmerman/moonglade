@@ -13,7 +13,7 @@ WRAPPER_GLOBS = ["d3d8.dll", "d3d9.dll", "d3d10*.dll", "d3d11.dll", "dxgi.dll", 
                  "dsound.dll", "version.dll", "winmm.dll"]
 
 
-@check("client.inspect", order=205, capability="client-connectivity", stack="any")
+@check("client.inspect", order=205, capability="client-connectivity", stack="any", tier="quick")
 def inspect(ctx):
     """Installed client: Wow.exe is 3.3.5.12340, no wrapper DLLs, binaries match the manifest, source untouched."""
     from ..clientinst import load_manifest, sha256_file, source_stat
@@ -90,7 +90,7 @@ def inspect(ctx):
     return ev
 
 
-@check("client.launch_smoke", order=210, capability="client-connectivity", stack="up")
+@check("client.launch_smoke", order=210, capability="client-connectivity", stack="up", tier="full")
 def launch_smoke(ctx):
     """`hs launch --smoke`: Wine Wow.exe still running after 30 s, then nothing from this prefix remains."""
     from ..launch import prefix_processes

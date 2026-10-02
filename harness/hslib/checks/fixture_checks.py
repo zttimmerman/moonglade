@@ -1,8 +1,10 @@
 """harness-control fixtures, client-connectivity protocol probe, and lifecycle.persist."""
 import random
+import re
 import subprocess
+import time
 
-from .. import db, fixtures as F, paths as P, stack
+from .. import db, fixtures as F, paths as P, soap, stack
 from ..probe import client as probe
 from ..registry import check, require
 
@@ -17,7 +19,7 @@ def _fx(fn, *a):
         require(False, str(e), **e.evidence)
 
 
-@check("fixture.account_character", order=100, capability="harness-control", stack="up")
+@check("fixture.account_character", order=100, capability="harness-control", stack="up", tier="quick")
 def account_character(ctx):
     """Fixture setup run twice leaves exactly one test account and one test character, both server-created.
     The account is first deleted through the server (SOAP `account delete`) so this run's evidence shows the
@@ -44,7 +46,7 @@ def account_character(ctx):
     return ev
 
 
-@check("fixture.level", order=110, capability="harness-control", stack="up")
+@check("fixture.level", order=110, capability="harness-control", stack="up", tier="quick")
 def level(ctx):
     """Harness sets the test character to level 10 → characters.level is 10."""
     if F.char_state(F.char_guid() or 0).get("level") == F.LEVEL:
@@ -57,7 +59,7 @@ def level(ctx):
     return ev
 
 
-@check("fixture.teleport", order=111, capability="harness-control", stack="up")
+@check("fixture.teleport", order=111, capability="harness-control", stack="up", tier="quick")
 def teleport(ctx):
     """Harness teleports the test character to Goldshire → saved map/coords within 50 yd of its game_tele row."""
     ev = _fx(F.teleport, F.TELE_NAME)
@@ -70,7 +72,7 @@ def teleport(ctx):
     return ev
 
 
-@check("fixture.add_item", order=112, capability="harness-control", stack="up")
+@check("fixture.add_item", order=112, capability="harness-control", stack="up", tier="quick")
 def add_item(ctx):
     """Harness gives the test character an item by entry → the entry is owned by it (inventory or mail) in the DB."""
     ev = _fx(F.add_item, F.ITEM_ENTRY)
@@ -81,7 +83,7 @@ def add_item(ctx):
     return ev
 
 
-@check("fixture.start_quest", order=113, capability="harness-control", stack="up")
+@check("fixture.start_quest", order=113, capability="harness-control", stack="up", tier="quick")
 def start_quest(ctx):
     """Harness starts a quest by ID → character_queststatus has it for the character with an incomplete status (3)."""
     q = _fx(F.describe_quest, F.QUEST_ID)
@@ -98,7 +100,7 @@ def start_quest(ctx):
     return ev
 
 
-@check("client.protocol_probe", order=120, capability="client-connectivity", stack="up")
+@check("client.protocol_probe", order=120, capability="client-connectivity", stack="up", tier="quick")
 def protocol_probe(ctx):
     """Probe: SRP6 logon proof OK, realm list has localhost, world auth OK, enum lists the test character,
     player login yields SMSG_LOGIN_VERIFY_WORLD with the character's map and position."""
@@ -124,7 +126,7 @@ def protocol_probe(ctx):
         lvw = ws.player_login(guid)
         ev["login_verify_world"] = lvw
         ev["db_saved_position"] = db_before
-        ev["logout"] = ws.logout()
+        ev["logout"] = _fx(F.logout, ws, guid)
         ev["trail"] = ws.log[:40]
     d = ((lvw["x"] - db_before["x"]) ** 2 + (lvw["y"] - db_before["y"]) ** 2 + (lvw["z"] - db_before["z"]) ** 2) ** 0.5
     ev["verify_world_vs_db_distance"] = round(d, 3)
@@ -133,7 +135,7 @@ def protocol_probe(ctx):
     return ev
 
 
-@check("client.protocol_badpass", order=121, capability="client-connectivity", stack="up")
+@check("client.protocol_badpass", order=121, capability="client-connectivity", stack="up", tier="quick")
 def protocol_badpass(ctx):
     """Wrong password: challenge accepted (account exists) but the logon proof is rejected with AC's
     proof rejection (WOW_FAIL_UNKNOWN_ACCOUNT 0x04 after a successful challenge), no session key is issued, and the world server refuses a session."""
@@ -177,7 +179,80 @@ def protocol_badpass(ctx):
     return ev
 
 
-@check("lifecycle.persist", order=150, capability="server-lifecycle", stack="up")
+INSTANT_LOGOUT_MAX_S = 5.0   # request → SMSG_LOGOUT_COMPLETE; the non-instant path waits the server's 20 s timer
+
+
+def _others_snapshot(test_id: int) -> dict:
+    """rbac + account_access rows of every account except the test account (must not change)."""
+    return {"rbac": db.query(f"SELECT accountId, permissionId, granted, realmId FROM rbac_account_permissions "
+                             f"WHERE accountId<>{int(test_id)} ORDER BY 1, 2, 4", "auth"),
+            "account_access": db.query(f"SELECT id, gmlevel, RealmID FROM account_access WHERE id<>{int(test_id)} "
+                                       f"ORDER BY 1, 3", "auth")}
+
+
+def _rbac_list(output: str) -> dict:
+    """Parse `.rbac account list` (acore_string 65/66/67/71). The "granted" section lists the account's own grants
+    plus those inherited from its security level, so own grants = granted - inherited."""
+    sec = re.search(r"inherited permissions by sec level (\d+) \((\w+)\)", output)
+    granted_part, _, rest = output.partition("denied permissions:")
+    denied_part, _, inherited_part = rest.partition("inherited permissions")
+    ids = lambda t: [int(x) for x in re.findall(r"^- (\d+) \(", t, re.M)]
+    g, inh = ids(granted_part), ids(inherited_part)
+    return {"granted": g, "denied": ids(denied_part), "inherited": inh, "own_grants": sorted(set(g) - set(inh)),
+            "sec_level": int(sec.group(1)) if sec else None, "sec_name": sec.group(2) if sec else None}
+
+
+@check("fixture.instant_logout", order=122, capability="harness-control", stack="up", tier="quick")
+def instant_logout(ctx):
+    """Probe logout of the test character (not resting) is instant (SMSG_LOGOUT_RESPONSE instant=1, completes in
+    < 5 s, no 20 s timer); the test account holds only the instant-logout permission and is still security level 0."""
+    _fx(F.ensure)
+    acct = F.account_id()
+    others_before = _others_snapshot(acct)
+    # Re-run the grant inside this check: revoke through the server, then the fixture grants it again.
+    ev = {"revoke": soap.gm(f"rbac account revoke {P.TEST_USER} {F.INSTANT_LOGOUT_PERM}").evidence()}
+    F.poll(lambda: F.rbac_rows(acct), lambda v: not v, timeout=15)
+    ev["rows_after_revoke"] = F.rbac_rows(acct)
+    ev["fixture"] = _fx(F.ensure)
+    ev["others_unchanged"] = _others_snapshot(acct) == others_before
+    guid = F.char_guid()
+    _fx(F._require_offline, guid)
+    lr, ws, _ = probe.open_world(P.TEST_USER, P.TEST_PASS)
+    with ws:
+        ws.char_enum()
+        ev["login_verify_world"] = ws.player_login(guid)
+        ev["settle"] = _fx(F.settle_login, ws, guid)   # see fixtures.settle_login (core race on instant logout)
+        t0 = time.time()
+        ev["logout"] = ws.logout(timeout=30)
+        ev["logout_request_to_complete_s"] = round(time.time() - t0, 2)
+    st, offline, _ = F.poll(lambda: F.char_state(guid), lambda s: s.get("online") == 0, timeout=15)
+    rest = db.scalar(f"SELECT is_logout_resting FROM characters WHERE guid={guid}", "characters")
+    rbac_list = soap.gm(f"rbac account list {P.TEST_USER}")
+    ev |= {"saved_offline": offline, "is_logout_resting": rest, "rbac_rows": F.rbac_rows(acct),
+           "account_access_rows": F.access_rows(acct), "rbac_list": rbac_list.evidence(),
+           "rbac_list_parsed": _rbac_list(rbac_list.output),
+           "perm_1_linked_children": db.query(f"SELECT linkedId FROM rbac_linked_permissions WHERE id={F.INSTANT_LOGOUT_PERM}", "auth"),
+           "note": "is_logout_resting is PLAYER_FLAGS_RESTING when the server saved the character on logout "
+                   "(Player::SaveToDB): 0 means the instant logout came from the permission, not a rest area"}
+    require(ev["fixture"]["account"]["instant_logout"].get("granted_now") is True,
+            "fixture did not grant instant logout after the revoke", **ev)
+    require(ev["others_unchanged"], "rbac/account_access rows of another account changed", **ev)
+    require(ev["logout"]["logout_result"] == 0, "logout refused", **ev)
+    require(rest == "0", "character was resting at logout (rest area); the test is not valid there", **ev)
+    require(ev["logout"]["instant"] is True, "SMSG_LOGOUT_RESPONSE did not flag an instant logout", **ev)
+    require(ev["logout_request_to_complete_s"] < INSTANT_LOGOUT_MAX_S,
+            f"logout took {ev['logout_request_to_complete_s']} s (>= {INSTANT_LOGOUT_MAX_S} s)", **ev)
+    require(offline, "character not saved offline after logout", **ev)
+    require(ev["rbac_rows"] == F.INSTANT_ONLY, "test account rbac rows are not exactly [instant logout]", **ev)
+    require(ev["perm_1_linked_children"] == [], "permission 1 links other permissions", **ev)
+    require(all(r[0] == "0" for r in ev["account_access_rows"]), "test account has a security level above 0", **ev)
+    p = ev["rbac_list_parsed"]
+    require(rbac_list.ok and p["own_grants"] == [F.INSTANT_LOGOUT_PERM] and p["denied"] == [] and p["sec_level"] == 0,
+            "server's `.rbac account list` does not show exactly [1] granted beyond sec level 0's defaults", **ev)
+    return ev
+
+
+@check("lifecycle.persist", order=150, capability="server-lifecycle", stack="up", tier="full")
 def persist(ctx):
     """Level changed via the harness survives `hs down` + `hs up`."""
     guid_ev = _fx(F.ensure)

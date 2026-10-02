@@ -42,7 +42,7 @@ def _set_lines(text: str) -> dict[str, list[str]]:
     return keys
 
 
-@check("client.config_gen", order=200, capability="client-connectivity", stack="any")
+@check("client.config_gen", order=200, capability="client-connectivity", stack="any", tier="quick")
 def config_gen(ctx):
     """`hs client-config` on a mock 3.3.5a tree writes realmlist/patchlist, keeps other keys, leaves Wow.exe intact."""
     with tempfile.TemporaryDirectory(prefix="hs-mockclient-") as td:

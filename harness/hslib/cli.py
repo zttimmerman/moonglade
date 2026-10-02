@@ -19,7 +19,10 @@ def main(argv=None) -> int:
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     b = sub.add_parser("build", help="sync pinned vendor trees and build/install the server")
-    b.add_argument("--clean", action="store_true", help="wipe build/ first")
+    b.add_argument("--clean", action="store_true",
+                   help="clean build: from-empty if the build inputs changed since the last passing from-empty build "
+                        "(or no stamp), else prove the install is current (stamp + no-op incremental build)")
+    b.add_argument("--force-clean", action="store_true", help="always wipe build/ and build from empty")
     b.add_argument("-j", "--jobs", type=int, default=8)
 
     u = sub.add_parser("up", help="start mysqld, authserver, worldserver; wait for readiness")
@@ -38,7 +41,12 @@ def main(argv=None) -> int:
     r = sub.add_parser("run", help="run checks; write harness/results.json + summary.md")
     r.add_argument("--only", action="append", help="glob of check ids (repeatable)")
     r.add_argument("--leave-up", action="store_true", help="don't shut the stack down at the end")
-    sub.add_parser("list", help="list registered checks")
+    r.add_argument("--tier", choices=["quick", "full", "slow"], default="full",
+                   help="quick: quick checks only; full (default, the merge gate): quick+full; slow: everything")
+    r.add_argument("--force-clean", action="store_true", help="build.clean always does a from-empty build")
+    r.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)   # nested runs (report.tiers) write here
+    ls = sub.add_parser("list", help="list registered checks")
+    ls.add_argument("--json", action="store_true", help="machine-readable: id, order, capability, stack, tier")
 
     pr = sub.add_parser("probe", help="headless 3.3.5a protocol probe (logon, realm list, world, char enum/login)",
                         add_help=False)
@@ -75,9 +83,11 @@ def main(argv=None) -> int:
     if a.cmd == "build":
         from .build import build, BuildError
         try:
-            _print(build(clean=a.clean, jobs=a.jobs))
+            _print(build(clean=a.clean, jobs=a.jobs, force_clean=a.force_clean))
         except BuildError as e:
             log(f"BUILD FAILED: {e}")
+            if e.info:
+                _print(e.info)
             return 1
         return 0
 
@@ -120,13 +130,23 @@ def main(argv=None) -> int:
         return 0
 
     if a.cmd == "run":
+        from . import paths as P
         from .runner import run
-        return run(only=a.only, leave_up=a.leave_up)
+        if a.results_dir:
+            a.results_dir.mkdir(parents=True, exist_ok=True)
+            P.RESULTS, P.SUMMARY = a.results_dir.resolve() / "results.json", a.results_dir.resolve() / "summary.md"
+        return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean)
 
     if a.cmd == "list":
         from .registry import load_all
-        for c in sorted(load_all().values(), key=lambda c: (c.order, c.id)):
-            print(f"{c.order:4} {c.id:32} [{c.capability}] stack={c.stack}  {c.doc.splitlines()[0] if c.doc else ''}")
+        checks = sorted(load_all().values(), key=lambda c: (c.order, c.id))
+        if a.json:
+            _print([{"id": c.id, "order": c.order, "capability": c.capability, "stack": c.stack, "tier": c.tier,
+                     "tier_declared": c.tier_declared} for c in checks])
+            return 0
+        for c in checks:
+            t = c.tier if c.tier_declared else f"{c.tier}(undeclared)"
+            print(f"{c.order:4} {c.id:32} [{c.capability}] stack={c.stack} tier={t}  {c.doc.splitlines()[0] if c.doc else ''}")
         return 0
 
     if a.cmd == "probe":

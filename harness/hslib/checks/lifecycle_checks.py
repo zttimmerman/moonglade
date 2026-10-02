@@ -9,7 +9,7 @@ from ..registry import check, require
 HS = str(P.HARNESS / "hs")
 
 
-@check("lifecycle.failfast", order=30, capability="server-lifecycle", stack="down")
+@check("lifecycle.failfast", order=30, capability="server-lifecycle", stack="down", tier="full")
 def failfast(ctx):
     """With an unusable worldserver DataDir, `hs up` fails fast with a log excerpt and leaves no worldserver."""
     t0 = time.time()
@@ -30,7 +30,7 @@ def failfast(ctx):
     return ev
 
 
-@check("lifecycle.up", order=40, capability="server-lifecycle", stack="down")
+@check("lifecycle.up", order=40, capability="server-lifecycle", stack="down", tier="quick")
 def up(ctx):
     """Cold `hs up` exits 0, then SOAP `.server info` succeeds and 3724 accepts."""
     t0 = time.time()
@@ -45,7 +45,7 @@ def up(ctx):
     return ev
 
 
-@check("lifecycle.idempotent", order=45, capability="server-lifecycle", stack="up")
+@check("lifecycle.idempotent", order=45, capability="server-lifecycle", stack="up", tier="quick")
 def idempotent(ctx):
     """Second `hs up` exits 0 and leaves exactly one of each process."""
     before = stack.stack_processes()
@@ -58,7 +58,7 @@ def idempotent(ctx):
     return ev
 
 
-@check("lifecycle.isolated", order=50, capability="server-lifecycle", stack="up")
+@check("lifecycle.isolated", order=50, capability="server-lifecycle", stack="up", tier="quick")
 def isolated(ctx):
     """mysqld datadir is in-repo on port 3307; every stack listener is bound to 127.0.0.1."""
     datadir = db.scalar("SELECT @@datadir", root=True)
@@ -74,7 +74,7 @@ def isolated(ctx):
     return ev
 
 
-@check("lifecycle.down", order=190, capability="server-lifecycle", stack="up")
+@check("lifecycle.down", order=190, capability="server-lifecycle", stack="up", tier="quick")
 def down(ctx):
     """`hs down` exits 0, nothing remains, ports are free, worldserver logged a graceful halt."""
     r = subprocess.run([HS, "down"], capture_output=True, text=True, timeout=600)
