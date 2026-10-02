@@ -17,7 +17,7 @@ This is a **personal project**. Nothing it produces (client binaries, patched fi
 - **Bots:** mod-playerbots. Scaling: a SoloCraft-style module (evaluate the existing one before writing new).
 - **Client:** the Windows 3.3.5a (build 12340) client, run under CrossOver/Wine. The native Mac 3.3.5a client is 32-bit and unusable on modern macOS.
 - **Host:** macOS ARM64. Docker is acceptable for MySQL and/or the server if native builds fight you; record the choice in an ADR.
-- **No client binary patching in v1.** Ghidra work is out of scope until a human explicitly opens it. Use config (`Config.wtf`, `realmlist.wtf`) and a launcher script instead.
+- **No client binary patching in v1.** Use config (`Config.wtf`, `realmlist.wtf`) and a launcher script instead. **Read-only** Ghidra analysis of the client is open (Zach, 2026-10-02, ADR-0005): analyze copies under `env/re/`, never modify `client/`. Any binary change still needs an ADR and Zach's explicit yes.
 
 ## 4. Methodology: OpenSpec (brownfield)
 

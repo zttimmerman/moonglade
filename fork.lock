@@ -12,3 +12,7 @@ vmangos_db_url=https://github.com/vmangos/core/releases/download/db_latest/db-sq
 # Wine layer (ADR-0004): WoWSilicon Wine runtime r17 = Wine 11.13 macOS + mtld3d v0.7.0. Runtime only; no client patching.
 wowsilicon_runtime_url=https://github.com/WoWSilicon/WoWSilicon/releases/download/wine-runtime-r17/WoWSilicon-WineRuntime-r17.tar.xz
 wowsilicon_runtime_sha256=dc67cf0c2dd1e4c1cfaffe924f4737aaa594645b135a7973ac3505c83c70f882
+# Read-only client analysis (ADR-0005). JDK: Homebrew openjdk@21 (keg-only).
+ghidra_version=12.1.4
+ghidra_url=https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip
+ghidra_sha256=ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db
