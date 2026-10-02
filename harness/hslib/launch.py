@@ -130,11 +130,22 @@ def prefix_processes() -> list[dict]:
     return found
 
 
+# The real client process only, never the launcher (observed with a 0.2 s trace, see the M1 change):
+#   mtld3d (Wine 11.13): launcher pid `.../bin/wine Wow.exe` -> `.../x86_64-unix/wine Wow.exe` -> `start.exe /exec`
+#                        (it waits); the client is a separate pid whose argv is the Windows path `Z:\...\Wow.exe`.
+#   whisky (Wine 7.7):   one pid: `.../wine64 Wow.exe` -> `.../wine64-preloader /.../wine64 Wow.exe` (still
+#                        loading) -> `.../wine64-preloader Wow.exe` (the client itself).
+_WOW_WINDOWS = re.compile(r"^(?:[a-z]:\\\S*\\)?wow\.exe(?:\s|$)", re.I)
+_WOW_PRELOADER = re.compile(r"/wine(?:64)?-preloader (?:[a-z]:\\\S*\\)?wow\.exe(?:\s|$)", re.I)
+
+
+def is_wow_client(cmd: str) -> bool:
+    return bool(_WOW_WINDOWS.match(cmd) or _WOW_PRELOADER.search(cmd))
+
+
 def wow_processes(procs=None) -> list[dict]:
     procs = prefix_processes() if procs is None else procs
-    # `wine64 Wow.exe` also spawns a `start.exe /exec Wow.exe` helper; that isn't the client.
-    return [p for p in procs if "wow.exe" in p["cmd"].lower() and "wowerror" not in p["cmd"].lower()
-            and "start.exe" not in p["cmd"].lower()]
+    return [p for p in procs if is_wow_client(p["cmd"])]
 
 
 def _ps_stats(pid: int) -> dict:
@@ -334,32 +345,49 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
         print(f"\n  Account: {P.TEST_USER}\n  Password: {P.TEST_PASS}\n  Character: {P.TEST_CHAR}\n")
         return ev | {"login": login}
 
-    # --smoke: watch for crashes for smoke_seconds, sampling once a second.
+    # --smoke: wait for the real Wow.exe process (not the launcher), then require that same pid to stay alive
+    # for smoke_seconds measured from when it was first seen. Sampled once a second; a pid counts as gone only
+    # when two consecutive checks (0.5 s apart) find it dead.
     t0 = time.time()
     samples, crashed = [], None
-    seen_wow = False
+    wow_pid, t_seen = None, None
     errors_dir = P.CLIENT / "Errors"
     errors_before = {p.name for p in errors_dir.iterdir()} if errors_dir.is_dir() else set()
-    while time.time() - t0 < smoke_seconds:
+    from .stack import alive
+
+    def gone(pid):
+        if alive(pid):
+            return False
+        time.sleep(0.5)
+        return not alive(pid)
+
+    while True:
         time.sleep(1)
         procs = prefix_processes()
-        wow = wow_processes(procs)
-        seen_wow = seen_wow or bool(wow)
         if any("wowerror" in p["cmd"].lower() for p in procs):
             crashed = "WowError.exe (the client's crash reporter) started"
             break
-        if seen_wow and not wow:
-            crashed = "Wow.exe process exited"
+        if wow_pid is None:
+            wow = wow_processes(procs)
+            if wow:
+                wow_pid, t_seen = wow[0]["pid"], time.time()
+                ev["wow_first_seen"] = {"pid": wow_pid, "cmd": wow[0]["cmd"], "after_launch_s": round(t_seen - t0, 1)}
+            elif time.time() - t0 > 15:
+                crashed = "no Wow.exe process appeared within 15 s"
+                break
+            continue
+        if gone(wow_pid):
+            crashed = f"Wow.exe process (pid {wow_pid}) exited"
             break
-        if not seen_wow and time.time() - t0 > 15:
-            crashed = "no Wow.exe process appeared within 15 s"
+        if int(time.time() - t_seen) % 10 == 0:
+            samples.append({"t": round(time.time() - t_seen), **_ps_stats(wow_pid)})
+        if time.time() - t_seen >= smoke_seconds:
             break
-        if int(time.time() - t0) % 10 == 0 and wow:
-            samples.append({"t": round(time.time() - t0), **_ps_stats(wow[0]["pid"])})
-    elapsed = round(time.time() - t0, 1)
+    elapsed = round(time.time() - t_seen, 1) if t_seen else 0.0
     procs = prefix_processes()
-    wow = wow_processes(procs)
-    ev["smoke"] = {"watched_seconds": elapsed, "required_seconds": smoke_seconds,
+    wow = [p for p in wow_processes(procs) if p["pid"] == wow_pid]
+    ev["smoke"] = {"watched_seconds": elapsed, "watched_from": "first sighting of the real Wow.exe process",
+                   "required_seconds": smoke_seconds, "wow_pid": wow_pid,
                    "samples": samples, "prefix_processes_at_end": procs,
                    "wow_at_end": [_ps_stats(p["pid"]) | {"cmd": p["cmd"]} for p in wow]}
     errors_after = {p.name for p in errors_dir.iterdir()} if errors_dir.is_dir() else set()

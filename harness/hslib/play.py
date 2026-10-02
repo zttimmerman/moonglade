@@ -252,13 +252,15 @@ class Loop:
         # Windows exit code; then make sure no client process outlived it.
         while proc.poll() is None:
             time.sleep(0.5)
-        seen = []
-        while True:
+        seen, misses = [], 0
+        while misses < 2:                  # debounce: absent in two consecutive samples, 1 s apart
             left = client_processes(name)
-            if not left:
-                break
-            seen = left
-            time.sleep(1)
+            if left:
+                seen, misses = left, 0
+            else:
+                misses += 1
+            if misses < 2:
+                time.sleep(1)
         rc = proc.returncode
         self.rec["client_exit"] = {"code": rc, "at": _now(), "outlived_launcher": seen}
         self.step("client_exited", code=rc)
