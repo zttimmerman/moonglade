@@ -1,9 +1,23 @@
-# ADR-0004: Wine layer: Whisky's bundled Wine with a repo-local prefix
+# ADR-0004: Wine layer: WoWSilicon's Wine runtime + mtld3d (D3D9→Metal), repo-local prefixes
 
-- Status: proposed (the launch path is built. A clean `client.launch_smoke` PASS is still blocked on a damaged client source; see Consequences.)
+- Status: accepted (revised 2026-10-01 after F3; the original Whisky decision is kept below as history)
 - Date: 2026-10-01
 
-## Context
+## Revision 2026-10-01 — default layer is `mtld3d`
+
+**Why.** Under Whisky's Wine 7.7, the world draws fixed red/blue smears (F3). Root cause, from a `fixme+d3d_shader` run: wined3d's clip-plane emulation emits `vec4 planes_distance = ps_link[7];` into GLSL-1.50 interface-block pixel shaders, where `ps_link` is undeclared. The program fails to link (466 failed programs in about 10 s in the world), and those draws use stale state. Client settings can't fix it: the client's own OpenGL path fails on winemac (`SetupPixelFormatWGL(): pixelFormat does not match requested` → "no output device"). Plain Wine 11.0 (Gcenx) crashes about 7 s after start in its 32-bit bridge.
+
+**Decision.** The default layer (`HS_WINE` unset, or `mtld3d`) is WoWSilicon's Wine runtime **r17**: Wine 11.13 (WineAndAqua `wine-11.13-macos`, commit 37540b5), with **mtld3d v0.7.0** (zlib) built in as the 32-bit `d3d9.dll`, so D3D9 goes straight to Metal. It's pinned in `fork.lock` (`wowsilicon_runtime_url`, `wowsilicon_runtime_sha256`, matching WoWSilicon's `artifact-lock.json`) and unpacked into `env/wowsilicon-r17/` with its own prefix `env/wineprefix-mtld3d`. Environment, taken from WoWSilicon's `LaunchService`/`BundledWineRuntime`: `WINEDLLOVERRIDES=d3d9=b` (plus `mscoree,mshtml,winemenubuilder.exe=d` for every layer), `WINE_LARGE_ADDRESS_AWARE=1`, `DYLD_LIBRARY_PATH=<runtime>/lib/external`.
+
+**Not adopted.** Nothing from WoWSilicon that modifies the client: the `DivxDecoder.dll`/`DivxTac.dll` loader patch, `libSiliconPatch` (37 WotLK hooks), `winerosetta`, the x87 accelerators, `Wow_tweaked.exe`. Those are client binary modification, which §2/§11 reserve for Zach. `client.inspect` keeps proving that every client `.exe`/`.dll` matches its install hash.
+
+**Evidence.** Zach played on it (2026-10-01): no smears after moving around, and it felt faster. Screenshot taken in Goldshire. Wine logged 0 `err:d3d`.
+
+**Kept.** `HS_WINE=whisky` (Wine 7.7) and `HS_WINE=wine11` (Gcenx 11.0) stay available for A/B testing, each with its own prefix.
+
+**Open.** mtld3d writes a shader cache `mtld3d_shaders.bin` into `client/` (data, not a binary; it can be relocated later). There's slight colour banding in some textures, and mtld3d runs with `color.hdr.enable=true`; tune it if Zach sees it in play. mtld3d trades exact D3D9 conformance for speed, so new visual bugs are possible, and `client.launch_smoke` fails on any Wine graphics errors.
+
+## Context (original decision: Whisky)
 CLAUDE.md §2 fixes the client as the Windows 3.3.5a (12340) client "run under CrossOver/Wine". CrossOver isn't installed on this Mac, and it's paid. Whisky.app 2.3.4 is installed. Whisky is a free Wine front-end, and upstream no longer maintains it. It downloaded its own Wine build to `~/Library/Application Support/com.isaacmarovitz.Whisky/Libraries/Wine/`: `bin/wine64`, `bin/wineserver`, `wine64 --version` = `wine-7.7`, `WhiskyWineVersion.plist` = 2.4.5. This is a CrossOver-derived Wine with 32-on-64 support (`lib/wine/x86_32on64-unix`, `i386-windows`). It also contains `lib/external/D3DMetal.framework`. Zach has two Whisky bottles of his own under `~/Library/Containers/com.isaacmarovitz.Whisky/Bottles/`. Those count as user data (§11).
 
 The binaries are x86_64 and run under Rosetta 2 (`arch -x86_64 /usr/bin/true` works).

@@ -44,6 +44,14 @@ def wine_env() -> dict:
         "WINEDEBUG": os.environ.get("HS_WINEDEBUG", "fixme-all"),
         "WINEMSYNC": "1",
     })
+    # No Mono/Gecko install prompts (they block wineboot on a new prefix) and no macOS menu entries.
+    overrides = ["mscoree=d", "mshtml=d", "winemenubuilder.exe=d"]
+    for k, v in P.WINE_LAYERS[P.WINE_LAYER].get("env", {}).items():
+        if k == "WINEDLLOVERRIDES":
+            overrides += v.split(";")
+        else:
+            env[k] = v
+    env["WINEDLLOVERRIDES"] = ";".join(overrides)
     return env
 
 
@@ -79,6 +87,23 @@ def _lsof_pids(d: Path) -> set[int]:
     return {int(x) for x in out.split() if x.isdigit()}
 
 
+def _pids_with_open_files_under(*roots: Path) -> set[int]:
+    """Processes holding any open file whose path starts with one of roots. Wine 11 (msync over Mach ports)
+    processes hold no file in the wineserver dir, but always hold files under their prefix (drive_c/...) or the
+    server dir's tmpmap-* files; this also catches orphans of an earlier prefix at the same path."""
+    # trailing "/" = path boundary: env/wineprefix must not match env/wineprefix-mtld3d
+    prefixes = tuple({str(r).rstrip("/") + "/" for r in roots}
+                     | {"/private" + str(r).rstrip("/") + "/" for r in roots if str(r).startswith("/tmp/")})
+    out = subprocess.run(["lsof", "-nP", "-Fpn"], capture_output=True, text=True).stdout
+    pids, pid = set(), None
+    for line in out.splitlines():
+        if line.startswith("p"):
+            pid = int(line[1:])
+        elif line.startswith("n") and pid is not None and line[1:].startswith(prefixes):
+            pids.add(pid)
+    return pids
+
+
 def prefix_processes() -> list[dict]:
     """Processes belonging to this repo's prefix, found three ways:
     1. holding a file in this prefix's wineserver dir (lsof; covers all Windows processes),
@@ -87,13 +112,13 @@ def prefix_processes() -> list[dict]:
     Processes of other prefixes ([redacted]) have a different server dir and WINEPREFIX."""
     tag = f"WINEPREFIX={P.WINEPREFIX}"
     sd = server_dir()
-    by_lsof = _lsof_pids(sd) if sd else set()
+    by_lsof = (_lsof_pids(sd) if sd else set()) | _pids_with_open_files_under(P.WINEPREFIX, *([sd] if sd else []))
     found = []
     for pid, rest in _ps_env():
         if pid == os.getpid():
             continue
         cmd = rest.split(" WINEPREFIX=")[0]
-        is_wine = rest.startswith(str(P.WINE_BIN))
+        is_wine = str(P.WINE_BIN.parent) in rest.split(" ")[0] or rest.startswith(str(P.WINE_BIN))
         idx = rest.find(tag)
         env_match = idx >= 0 and rest[idx + len(tag): idx + len(tag) + 1] in ("", " ")
         wow_match = is_wine and "wow.exe" in rest.lower()
@@ -158,9 +183,15 @@ def _stamp(msg: str):
         f.write(f"\n===== [hs launch] {time.strftime('%Y-%m-%d %H:%M:%S')} {msg} =====\n".encode())
 
 
+def _prefix_complete() -> bool:
+    """system.reg appears early in wineboot; Wow.exe (32-bit) needs the WoW64 side, so require syswow64's kernel32.
+    A half-built prefix otherwise fails later with "could not load kernel32.dll, status c0000135"."""
+    return (P.WINEPREFIX / "system.reg").exists() and (P.WINEPREFIX / "drive_c/windows/syswow64/kernel32.dll").exists()
+
+
 def ensure_prefix() -> dict:
     """Create env/wineprefix on first use (`wineboot --init`). Never touches any other prefix."""
-    if (P.WINEPREFIX / "system.reg").exists():
+    if _prefix_complete():
         return {"prefix": str(P.WINEPREFIX), "created": False}
     P.WINEPREFIX.mkdir(parents=True, exist_ok=True)
     _stamp("wineboot --init (new prefix)")
@@ -170,7 +201,7 @@ def ensure_prefix() -> dict:
                            stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, timeout=600)
         subprocess.run([str(WINESERVER), "-w"], env=wine_env(), stdout=lf, stderr=subprocess.STDOUT,
                        timeout=300)
-    ok = (P.WINEPREFIX / "system.reg").exists()
+    ok = _prefix_complete()
     info = {"prefix": str(P.WINEPREFIX), "created": True, "wineboot_exit": r.returncode,
             "seconds": round(time.time() - t0, 1)}
     if not ok:

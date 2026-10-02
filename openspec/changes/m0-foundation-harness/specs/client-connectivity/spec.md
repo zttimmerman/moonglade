@@ -52,7 +52,7 @@ Zach SHALL be able to log in with the real client under CrossOver and walk aroun
 - **GIVEN** a client installed with `harness/hs client-install`
 - **WHEN** the harness inspects `client/`
 - **THEN** `Wow.exe`'s PE version resource reads 3.3.5.12340, the client root contains no Direct3D/DXGI/DirectInput wrapper DLLs (`d3d8.dll`, `d3d9.dll`, `d3d10*.dll`, `d3d11.dll`, `dxgi.dll`, `dinput8.dll`, `dsound.dll`, `version.dll`, `winmm.dll`), and every `.exe`/`.dll` hash still matches the install manifest
-- **AND** the source zip/dir is byte-identical in size and mtime to before the install
+- **AND** the install did not modify the source zip/dir (size and mtime recorded before and after the install are identical), and if the source still exists it still matches
 - Check: `client.inspect`
 
 ### Requirement: Client launch under Wine

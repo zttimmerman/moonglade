@@ -33,8 +33,14 @@ WINE_LAYERS = {
     "whisky": {"bin": WHISKY_LIBS / "Wine/bin", "exe": "wine64", "prefix": ENV / "wineprefix"},          # Wine 7.7, read-only
     "wine11": {"bin": ENV / "wine-11/Wine Stable.app/Contents/Resources/wine/bin", "exe": "wine",
                "prefix": ENV / "wineprefix-wine11"},                                                   # Gcenx wine-stable 11.0_1
+    # WoWSilicon Wine runtime r17 (Wine 11.13, WineAndAqua macOS branch) with mtld3d v0.7.0 as builtin d3d9
+    # (D3D9 -> Metal). Runtime only; none of WoWSilicon's client patching (ADR-0004). Env per WoWSilicon's
+    # LaunchService/BundledWineRuntime (mtld3d backend).
+    "mtld3d": {"bin": ENV / "wowsilicon-r17/.wine-runtime/bin", "exe": "wine", "prefix": ENV / "wineprefix-mtld3d",
+               "env": {"WINEDLLOVERRIDES": "d3d9=b", "WINE_LARGE_ADDRESS_AWARE": "1",
+                       "DYLD_LIBRARY_PATH": str(ENV / "wowsilicon-r17/.wine-runtime/lib/external")}},
 }
-WINE_LAYER = os.environ.get("HS_WINE", "whisky")
+WINE_LAYER = os.environ.get("HS_WINE", "mtld3d")   # default since F3 (ADR-0004); whisky kept for A/B
 WINE_BIN = WINE_LAYERS[WINE_LAYER]["bin"]
 WINE_EXE = WINE_LAYERS[WINE_LAYER]["exe"]
 WINEPREFIX = WINE_LAYERS[WINE_LAYER]["prefix"]

@@ -73,8 +73,12 @@ def inspect(ctx):
     ev["source"] = {"path": src["path"], "kind": src["kind"], "before_install": before, "after_install": after}
     require((before["size"], before["mtime_ns"]) == (after["size"], after["mtime_ns"]),
             "source size/mtime changed during the install", **ev)
+    # The install-time before/after pair is the proof the install didn't modify the source. Afterwards the source
+    # belongs to Zach: if he removed it, record that; if it still exists, it must still match.
     sp = Path(src["path"])
-    require(sp.exists(), f"source {sp} no longer exists; can't confirm it's unchanged", **ev)
+    if not sp.exists():
+        ev["source"]["now"] = "removed by its owner after install (not an install effect)"
+        return ev
     fresh = source_stat(sp)
     ev["source"]["now"] = fresh
     require((fresh["size"], fresh["mtime_ns"]) == (before["size"], before["mtime_ns"]),
