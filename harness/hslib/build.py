@@ -53,6 +53,49 @@ def pin_state(repo_dir, sha, ignore_untracked_prefix=None) -> list[str]:
     return problems
 
 
+def expected_patched_tree(repo_dir, sha, patches) -> tuple[str | None, list[str]]:
+    """Tree id of `sha` with every patch applied, built in a throwaway index (GIT_INDEX_FILE in a temp dir) so the
+    real index and working tree are untouched. Returns (tree id or None, problems)."""
+    import tempfile
+    with tempfile.TemporaryDirectory(prefix="hs-pin-") as td:
+        env = os.environ | {"GIT_INDEX_FILE": os.path.join(td, "index")}
+
+        def g(*a):
+            return subprocess.run(["git", "-C", str(repo_dir), *a], capture_output=True, text=True, env=env)
+        r = g("read-tree", sha)
+        if r.returncode != 0:
+            return None, [f"{repo_dir.name}: cannot read {sha[:12]}: {r.stderr.strip()}"]
+        for p in patches:
+            r = g("apply", "--cached", "--whitespace=nowarn", str(p))
+            if r.returncode != 0:
+                return None, [f"{repo_dir.name}: {p.name} does not apply to {sha[:12]}: {r.stderr.strip()[:300]}"]
+        return g("write-tree").stdout.strip(), []
+
+
+def patched_pin_state(repo_dir, sha, patches, ignore_untracked_prefix=None) -> list[str]:
+    """Like pin_state, for a tree that should be `sha` + exactly `patches` (server-build "Unpinned or dirty vendor
+    tree is rejected": the only allowed uncommitted changes are those from patches/core/). Problems if HEAD != sha,
+    the index's tree != sha + patches, or the working tree differs from the index (incl. untracked files)."""
+    problems = []
+    head = _head(repo_dir)
+    if head != sha:
+        problems.append(f"{repo_dir.name}: HEAD {head[:12]} != pinned {sha[:12]}")
+    want, probs = expected_patched_tree(repo_dir, sha, patches)
+    problems += probs
+    have = _git(repo_dir, "write-tree", check=False).stdout.strip()
+    if want and have != want:
+        changed = _git(repo_dir, "diff", "--name-only", want, have, check=False).stdout.split()
+        problems.append(f"{repo_dir.name}: index differs from {sha[:12]} + {len(patches)} patch(es) "
+                        f"({len(changed)} paths, e.g. {changed[:3]})")
+    st = _git(repo_dir, "status", "--porcelain", "--ignored=no").stdout.splitlines()
+    unstaged = [l for l in st if l[1] != " " or l.startswith("??")]
+    if ignore_untracked_prefix:
+        unstaged = [l for l in unstaged if not l[3:].startswith(ignore_untracked_prefix)]
+    if unstaged:
+        problems.append(f"{repo_dir.name}: working tree differs from index ({len(unstaged)} entries, e.g. {unstaged[0].strip()})")
+    return problems
+
+
 def _expected_links() -> dict:
     links = {"mod-playerbots": P.BOTS_SRC}
     for m in sorted(P.MODULES.iterdir()) if P.MODULES.exists() else []:
@@ -125,10 +168,11 @@ def sync_vendor() -> dict:
         "playerbots_ok": _head(P.BOTS_SRC) == lock["playerbots_sha"] and not pin_state(P.BOTS_SRC, lock["playerbots_sha"]),
     }
     if patches:
-        # with patches applied, the tree differs from HEAD by exactly the patches' index state
         after["patches_applied"] = [p.name for p in patches]
-    elif pin_state(P.CORE_SRC, lock["core_sha"], "modules/"):
-        raise BuildError("core tree still dirty after sync: " + "; ".join(pin_state(P.CORE_SRC, lock["core_sha"], "modules/")))
+    # the tree must be core_sha + exactly the patch queue (equals pin_state's check when there are no patches)
+    dirty = patched_pin_state(P.CORE_SRC, lock["core_sha"], patches, "modules/")
+    if dirty:
+        raise BuildError("core tree is not core_sha + patches/core after sync: " + "; ".join(dirty))
     after["core_stray_modules"] = stray_module_entries()
     if after["core_stray_modules"]:
         raise BuildError(f"stray entries remain in core modules/: {after['core_stray_modules']}")
