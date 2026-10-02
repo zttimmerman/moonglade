@@ -38,4 +38,4 @@
 
 ## 9. Verify + gate
 - [x] 9.1 Verifier pass over all M0 scenarios (full `hs run`) — PASS required (cycle 1 FAIL on build.playerbots_active, fixed in fbad133; cycle 2 PASS, 3 full runs, 2026-10-01)
-- [ ] 9.2 Human gate: Zach logs in under CrossOver and walks around
+- [x] 9.2 Human gate: Zach logs in and walks around (2026-10-01, Whisky's Wine per ADR-0004)
