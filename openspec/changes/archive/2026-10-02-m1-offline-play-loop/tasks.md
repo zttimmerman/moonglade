@@ -10,4 +10,4 @@
 
 ## 3. Verify
 - [x] 3.1 Verifier pass + full harness (cycle 1 FAIL: client.launch_smoke flaky (launcher counted as client) → fixed ef2d800; cycle 2 PASS, 3 full runs + 11 smoke runs, 2026-10-02) run
-- [ ] 3.2 Human: Zach plays offline (Wi-Fi off)
+- [x] 3.2 Human: Zach plays offline (Wi-Fi off). Done 2026-10-02: `./play` exit 0, outcome client_exit, graceful halt, nothing left running
