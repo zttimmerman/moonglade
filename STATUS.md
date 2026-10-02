@@ -9,12 +9,12 @@ Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, desi
 | Task | State | Notes |
 |---|---|---|
 | M0 tasks 1.1–8.1 | **done, verifier PASS** | cycle 1 FAIL (`build.playerbots_active` couldn't fail) → fixed `fbad133` → cycle 2 PASS |
-| 10.1/10.2 client install + Wine launch (B5) | **blocked on Zach** | code written, not yet verified. Source zip `~/Downloads/[redacted]_3.3.5a.zip` has 2 bad torrent pieces (`Data/enUS/locale-enUS.MPQ`, `Data/expansion.MPQ` fail CRC; confirmed with `unzip -t`). Zach: Transmission → Verify Local Data, then `harness/hs client-install ~/Downloads/[redacted]_3.3.5a.zip` |
-| 9.2 M0 human gate | blocked on 10.x | Wine layer = Whisky's bundled Wine, repo-local prefix (ADR-0004, proposed). Whether it renders the login screen is still unknown |
+| 10.1/10.2 client install + Wine launch (B5) | done, awaiting verifier | zip repaired by Zach; installed (manifest written, Wow.exe 3.3.5.12340). `client.inspect` + `client.launch_smoke` PASS (smoke now also requires an on-screen ≥640×480 window). Screenshot confirmed the WotLK intro cinematic renders under Whisky's Wine |
+| 9.2 M0 human gate | **in progress (Zach playing)** | login HSTEST/hstest → Hstester (Goldshire) |
+| F1 pin enforcement vs gitignored content | code done, untested | test needs the stack down, so it waits until Zach's session ends |
 | Gate 1 memo | **awaiting Zach's signature** | `docs/gate1-era-profile-memo.md` (6 checkboxes) |
-| F1 pin enforcement misses gitignored content | todo (before M2) | verifier concern: a real dir dropped in `vendor/azerothcore-wotlk/modules/` isn't removed (`git clean` w/o `-x`, `/modules/*` ignored) and would compile in. Fix: remove non-symlink, untracked entries under core `modules/`; `-x` clean for playerbots tree; extend `build.pin_enforced` |
 | F2 `report.full_run` proves files written only externally | todo (low) | verifier concern 2 |
-| M1 planning (`./play`) | todo | after M0 gate |
+| M1 `./play` | spec written (`openspec/changes/m1-offline-play-loop`, 6 checks + 1 human) | implementation waits for Zach's session to end (it needs the stack) |
 | M3 | blocked on Gate 1 | |
 
 ## Last full harness result

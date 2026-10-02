@@ -20,9 +20,16 @@ def pin_enforced(ctx):
     (P.CORE_SRC / "AUTHORS").open("a").write("\nharness-sabotage\n")
     (P.CORE_SRC / "hs_sabotage_untracked.txt").write_text("x")
     (P.BOTS_SRC / "hs_sabotage_untracked.txt").write_text("x")
+    # gitignored sabotage: a real (non-symlink) module dir in core modules/ (would compile in), an ignored file in bots
+    rogue = P.CORE_SRC / "modules" / "mod-hs-rogue"
+    rogue.mkdir(exist_ok=True)
+    (rogue / "CMakeLists.txt").write_text("# rogue module\n")
+    (P.BOTS_SRC / "hs_sabotage_ignored.log").write_text("x")
     before = {"core": build.pin_state(P.CORE_SRC, lock["core_sha"], "modules/"),
               "playerbots": build.pin_state(P.BOTS_SRC, lock["playerbots_sha"])}
-    require(before["core"] and before["playerbots"], "sabotage did not register as unpinned/dirty", before=before)
+    before["core_stray_modules"] = build.stray_module_entries()
+    require(before["core"] and before["playerbots"] and "mod-hs-rogue" in before["core_stray_modules"],
+            "sabotage did not register as unpinned/dirty/stray", before=before)
     r = subprocess.run([str(P.HARNESS / "hs"), "build"], capture_output=True, text=True)
     info = {"after": {"exit": r.returncode, "stderr_tail": r.stderr[-1000:]},
             "modules": sorted(e.name for e in (P.CORE_SRC / "modules").iterdir() if e.is_symlink())}
@@ -32,6 +39,9 @@ def pin_enforced(ctx):
     ev = {"problems_before": before, "problems_after": after, "sync": info["after"], "modules": info["modules"]}
     require(not after["core"] and not after["playerbots"], "vendor not clean+pinned after sync", **ev)
     require(not (P.CORE_SRC / "hs_sabotage_untracked.txt").exists(), "untracked sabotage file survived", **ev)
+    require(not rogue.exists(), "rogue (gitignored, non-symlink) module dir survived in core modules/", **ev)
+    require(not (P.BOTS_SRC / "hs_sabotage_ignored.log").exists(), "ignored sabotage file survived in playerbots tree", **ev)
+    require(not build.stray_module_entries(), "stray entries in core modules/ after build", **ev)
     link = P.CORE_SRC / "modules" / "mod-playerbots"
     require(link.is_symlink() and os.readlink(link) == str(P.BOTS_SRC), "mod-playerbots not linked into core", **ev)
     return ev
