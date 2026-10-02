@@ -44,3 +44,22 @@ Zach SHALL be able to log in with the real client under CrossOver and walk aroun
 - **WHEN** Zach launches Wow.exe under CrossOver and logs in with the account the harness printed
 - **THEN** they reach character select, enter the world, and can move around
 - [human-verify] Needs the licensed GUI client running under CrossOver, which the harness can't drive. This is the M0 human gate.
+
+### Requirement: Client install and integrity
+`harness/hs client-install <zip-or-dir>` SHALL install a 3.3.5a client into the repo's gitignored `client/` directory without modifying or deleting the source, and SHALL record a manifest (`env/client-manifest.json`: SHA-256 of every `.exe`/`.dll` and the MPQ file list) at install time. The harness SHALL then verify the installed client is build 12340 and hasn't been modified since install.
+
+#### Scenario: Installed client is build 12340 and unmodified
+- **GIVEN** a client installed with `harness/hs client-install`
+- **WHEN** the harness inspects `client/`
+- **THEN** `Wow.exe`'s PE version resource reads 3.3.5.12340, the client root contains no Direct3D/DXGI/DirectInput wrapper DLLs (`d3d8.dll`, `d3d9.dll`, `d3d10*.dll`, `d3d11.dll`, `dxgi.dll`, `dinput8.dll`, `dsound.dll`, `version.dll`, `winmm.dll`), and every `.exe`/`.dll` hash still matches the install manifest
+- **AND** the source zip/dir is byte-identical in size and mtime to before the install
+- Check: `client.inspect`
+
+### Requirement: Client launch under Wine
+`harness/hs launch` SHALL bring the stack up (if needed), run `client-config`, ensure the test fixtures exist, and start `Wow.exe` under the project's Wine layer (ADR-0004) using a repo-local Wine prefix under `env/`, without modifying any client binary.
+
+#### Scenario: Client launch smoke test
+- **GIVEN** an installed client and the Wine layer from ADR-0004
+- **WHEN** the harness runs `harness/hs launch --smoke`
+- **THEN** a Wine `Wow.exe` process starts and is still running after 30 seconds (it has reached the login screen without crashing), and it is then terminated so that no Wine or `Wow.exe` process from this repo's prefix remains
+- Check: `client.launch_smoke`

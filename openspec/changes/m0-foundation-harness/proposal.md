@@ -30,3 +30,5 @@ New dirs: `harness/`, `docs/`, `patches/`, `modules/`. Gitignored runtime dirs: 
 Any later change to a scenario is recorded here with a reason, per CLAUDE.md §10.
 
 - 2026-10-01 · `client.protocol_badpass`: "incorrect-password result" replaced with the server's actual observable behavior. AzerothCore never sends `WOW_FAIL_INCORRECT_PASSWORD` (0x05). For a wrong password it accepts the challenge and rejects the proof with `WOW_FAIL_UNKNOWN_ACCOUNT` (0x04) (`vendor/azerothcore-wotlk/src/server/apps/authserver/Server/AuthSession.cpp` HandleLogonProof, SRP6 verify-fail branch). This is a clarification, not a loosening: the check also asserts that no session key is issued and that world auth is refused. Raised by builder B1. To be reviewed at the M0 gate.
+- 2026-10-01 · Added scenarios `client.inspect` and `client.launch_smoke` (client install/integrity and Wine launch) after Zach supplied the [redacted] "clean 3.3.5a" client (no upstream checksums, so integrity is pinned at install time). This adds coverage and loosens nothing. The previous verifier PASS covers the other 25 scenarios; these two need their own verifier pass.
+

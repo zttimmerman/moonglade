@@ -31,6 +31,11 @@
 ## 8. Research (builder B3, non-blocking)
 - [x] 8.1 mod-playerbots scriptability for behavioral tests → `docs/research/playerbots-scripting.md` — verify: report exists, cites source files/commands it tested
 
+## 10. Client install + launch (builder B5)
+- [ ] 10.1 `hs client-install`, manifest, `client.inspect` check — verify: `client.inspect`
+- [ ] 10.2 ADR-0004 Wine layer; repo-local prefix; `hs launch [--smoke]`; `client.launch_smoke` check — verify: `client.launch_smoke`
+- [ ] 10.3 Verifier pass on 10.x scenarios + full run
+
 ## 9. Verify + gate
 - [x] 9.1 Verifier pass over all M0 scenarios (full `hs run`) — PASS required (cycle 1 FAIL on build.playerbots_active, fixed in fbad133; cycle 2 PASS, 3 full runs, 2026-10-01)
 - [ ] 9.2 Human gate: Zach logs in under CrossOver and walks around
