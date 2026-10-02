@@ -22,4 +22,4 @@ Zach wants the 3.3.5a login screen to become the game's front menu: profiles/sav
 Research only. If Q1's answer is "an exe change is needed", the report says so and stops: any binary change needs an ADR and Zach's yes.
 
 ## Spec-change log
-(none yet)
+- 2026-10-02 · Added requirement and scenario `re.mpq_write_roundtrip` for the MPQ writer that Phase B needed. Its refusal test must use a stand-in client directory: B11's first version aimed at the real `client/`, so a sabotaged guard briefly wrote a file there (deleted at once; `client.inspect` still passed). This is a tightening.

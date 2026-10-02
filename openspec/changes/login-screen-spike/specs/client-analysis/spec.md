@@ -11,6 +11,15 @@
 - **THEN** the listing has more than 1000 entries, the extracted file exists with nonzero size, and every file under `client/` outside the game-written paths is unchanged (same snapshot rule as `re.ghidra_readonly`)
 - Check: `re.mpq_readonly`
 
+### Requirement: MPQ writing never targets the client
+`harness/hs mpq write` SHALL write archives that the read-only reader reads back identically, and SHALL refuse any destination under the client directory.
+
+#### Scenario: Round trip, and refusal tested without touching the real client
+- **GIVEN** a scratch directory standing in for the client, plus a scratch output directory
+- **WHEN** the harness writes an archive with a few files (stored and zlib) to the output directory, reads it back, and then attempts a write into the stand-in client directory
+- **THEN** every file reads back byte-identical, the write into the stand-in client is refused with nothing created, and the real `client/` is never a write target at any point in the check (its snapshot outside game-written paths is unchanged, including when the refusal guard is sabotaged in a counterexample)
+- Check: `re.mpq_write_roundtrip`
+
 ### Requirement: Spike findings for the front menu
 The spike SHALL answer Q1 and Q2 with evidence: Ghidra addresses and behaviour for the GlueXML verification; MPQ listings and paths for the backdrops; and the result of a controlled launch test, with screenshots and log excerpts. It SHALL end with a recommendation and any decisions Zach must make.
 
