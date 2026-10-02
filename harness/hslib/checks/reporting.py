@@ -1,15 +1,20 @@
 """harness-reporting meta-checks. These run after all other checks, over the results document."""
+import fnmatch
 import json
 import re
+import subprocess
 import time
 
 from .. import paths as P
-from ..registry import REGISTRY
+from ..registry import REGISTRY, TIERS, check, require, tiers_for
 
 SCENARIO_RE = re.compile(r"^#### Scenario:\s*(.+)$", re.M)
 CHECK_RE = re.compile(r"Check:\s*`([^`]+)`")
 HUMAN_RE = re.compile(r"\[human-verify\]\s*(\S.{10,})")
-POST_IDS = ("report.coverage", "report.schema", "report.full_run")
+POST_IDS = ("report.coverage", "report.schema", "report.full_run", "report.tiers")
+QUICK_BUDGET_S = 180          # spec: the quick tier finishes in under 3 minutes on the target Mac
+NOT_QUICK = ("build.clean", "client.launch_smoke", "lifecycle.persist")   # named by the spec
+QUICK_DIR = P.OUT / "quick-tier"   # where report.tiers' nested quick run writes its results
 
 
 ACTIVE_FILE = P.HARNESS / "active-changes"
@@ -100,13 +105,125 @@ def _validate(inst, schema, path="$"):
     return errs
 
 
-def post_run(doc, selected_ids):
+# ----------------------------------------------------------------------------- tiers
+
+def tier_problems(listing: list[dict]) -> list[str]:
+    """Problems with a `hs list --json` listing: each check needs exactly one declared tier from TIERS, and the
+    spec-named expensive checks must not be quick."""
+    probs = []
+    seen = {}
+    for c in listing:
+        seen[c["id"]] = seen.get(c["id"], 0) + 1
+        t = c.get("tier")
+        if not isinstance(t, str) or t not in TIERS:
+            probs.append(f"{c['id']}: tier {t!r} not one of {TIERS}")
+        if not c.get("tier_declared"):
+            probs.append(f"{c['id']}: no tier declared (relies on the default)")
+    probs += [f"{i}: listed {n} times" for i, n in seen.items() if n != 1]
+    for i in NOT_QUICK:
+        if i not in seen:
+            probs.append(f"{i}: not registered")
+        elif any(c["id"] == i and c.get("tier") == "quick" for c in listing):
+            probs.append(f"{i}: must not be quick")
+    return probs
+
+
+@check("report.tiers_declared", order=1, capability="harness-reporting", stack="any", tier="quick")
+def tiers_declared(ctx):
+    """`hs list` shows every registered check with exactly one declared tier from {quick, full, slow};
+    build.clean, client.launch_smoke and lifecycle.persist are not quick."""
+    r = subprocess.run([str(P.HARNESS / "hs"), "list", "--json"], capture_output=True, text=True, timeout=120)
+    require(r.returncode == 0, "`hs list --json` failed", exit=r.returncode, stderr=r.stderr[-1500:])
+    listing = json.loads(r.stdout)
+    by_tier = {t: sorted(c["id"] for c in listing if c.get("tier") == t) for t in TIERS}
+    probs = tier_problems(listing)
+    ev = {"cmd": "harness/hs list --json", "checks_listed": len(listing), "by_tier": by_tier,
+          "registered_in_process": len(REGISTRY), "problems": probs,
+          "not_quick_required": {i: next((c["tier"] for c in listing if c["id"] == i), None) for i in NOT_QUICK}}
+    require(len(listing) == len(REGISTRY), "`hs list` count differs from the registry", **ev)
+    require(not probs, f"{len(probs)} tier problem(s)", **ev)
+    return ev
+
+
+def _tier_problems_for_run(doc: dict, wall_s: float, full_run_rec: dict | None) -> tuple[list, dict]:
+    """Check a quick-tier results document against the quick-tier scenario's THEN."""
+    expected = sorted(i for i, c in REGISTRY.items() if c.tier == "quick")
+    executed = sorted(r["id"] for r in doc["checks"] if r["id"] not in POST_IDS)
+    non_quick = sorted(i for i in executed if i not in REGISTRY or REGISTRY[i].tier != "quick")
+    missing = sorted(set(expected) - set(executed))
+    failing = sorted(r["id"] for r in doc["checks"] if r["id"] in executed and r["status"] != "pass")
+    ev = {"tier_recorded": doc["meta"].get("tier"), "filter": doc["meta"].get("filter"),
+          "full_run_flag": doc["meta"].get("full_run"), "wall_s": round(wall_s, 1), "budget_s": QUICK_BUDGET_S,
+          "quick_checks_expected": len(expected), "executed": executed, "missing_quick": missing,
+          "non_quick_executed": non_quick, "failing_quick_checks": failing,
+          "report_full_run": None if full_run_rec is None else
+          {"status": full_run_rec.get("status"), "message": full_run_rec.get("message")}}
+    probs = []
+    if doc["meta"].get("tier") != "quick":
+        probs.append("results.json does not record tier: quick")
+    if doc["meta"].get("filter"):
+        probs.append("quick run was filtered")
+    if missing:
+        probs.append(f"quick checks not executed: {missing}")
+    if non_quick:
+        probs.append(f"full/slow checks executed: {non_quick}")
+    if failing:
+        probs.append(f"quick checks not passing: {failing}")
+    if wall_s >= QUICK_BUDGET_S:
+        probs.append(f"took {wall_s:.0f} s (budget < {QUICK_BUDGET_S} s)")
+    if doc["meta"].get("full_run") is not False:
+        probs.append("quick run marked as a full run")
+    if full_run_rec is None or full_run_rec.get("status") != "skip" or "not a full run" not in (full_run_rec.get("message") or ""):
+        probs.append("report.full_run did not report skip ('not a full run')")
+    others = sorted(r["id"] for r in doc["checks"] if r["id"] != "report.full_run" and r["status"] != "pass")
+    if others:
+        probs.append(f"non-passing checks besides report.full_run: {others}")
+    return probs, ev
+
+
+def _tiers_record(probs, ev, t0):
+    ok = not probs
+    return {"id": "report.tiers", "capability": "harness-reporting", "status": "pass" if ok else "fail",
+            "evidence": ev | {"problems": probs}, "duration_s": round(time.time() - t0, 2),
+            **({} if ok else {"message": "; ".join(probs)[:300]})}
+
+
+def tiers_nested(leave_up: bool) -> dict:
+    """Run `harness/hs run --tier quick` as a subprocess (results under harness/out/quick-tier/) and check it."""
+    t0 = time.time()
+    cmd = [str(P.HARNESS / "hs"), "run", "--tier", "quick", "--results-dir", str(QUICK_DIR)] + (["--leave-up"] if leave_up else [])
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
+    wall = time.time() - t0
+    (QUICK_DIR / "stderr.log").write_text(r.stderr)
+    ev = {"mode": "nested quick-tier run", "cmd": " ".join(cmd[1:]).replace(str(P.ROOT) + "/", ""),
+          "exit": r.returncode, "results": str((QUICK_DIR / "results.json").relative_to(P.ROOT))}
+    try:
+        doc = json.loads((QUICK_DIR / "results.json").read_text())
+    except (OSError, ValueError) as e:
+        return _tiers_record([f"nested quick run wrote no readable results.json: {e}"], ev | {"stderr_tail": r.stderr[-1500:]}, t0)
+    fr = next((x for x in doc["checks"] if x["id"] == "report.full_run"), None)
+    probs, tev = _tier_problems_for_run(doc, wall, fr)
+    ev["other_checks_all_pass"] = not any(x["status"] != "pass" for x in doc["checks"] if x["id"] != "report.full_run")
+    if r.returncode != (0 if ev["other_checks_all_pass"] else 1):
+        probs.append(f"nested quick run exit {r.returncode}: must be 0 iff every check but report.full_run passed")
+    return _tiers_record(probs, ev | tev, t0)
+
+
+def post_run(doc, selected_ids, t_start=None, leave_up=False):
     out = []
     t0 = time.time()
     ok, ev = coverage()
     out.append({"id": "report.coverage", "capability": "harness-reporting",
                 "status": "pass" if ok else "fail", "evidence": ev, "duration_s": round(time.time() - t0, 2),
                 **({} if ok else {"message": f"{len(ev['incomplete'])} scenario(s) without a valid check mapping"})})
+
+    # report.tiers: an unfiltered quick run checks itself (after report.full_run, whose verdict it reads); any
+    # other run that selects it (every unfiltered full/slow run, or --only matching it) runs a nested quick tier.
+    m = doc["meta"]
+    self_mode = m.get("tier") == "quick" and not m.get("filter")
+    nested = not self_mode and (not m.get("filter") or any(fnmatch.fnmatch("report.tiers", g) for g in m["filter"]))
+    if nested:
+        out.append(tiers_nested(leave_up))
 
     t0 = time.time()
     schema = json.loads((P.HARNESS / "results.schema.json").read_text())
@@ -123,11 +240,23 @@ def post_run(doc, selected_ids):
     executed = {r["id"] for r in doc["checks"]}
     not_run = sorted(referenced - executed)
     failing = sorted(r["id"] for r in doc["checks"] + out if r["status"] != "pass")
-    ok = doc["meta"]["full_run"] and not not_run and not failing
-    out.append({"id": "report.full_run", "capability": "harness-reporting", "status": "pass" if ok else "fail",
-                "evidence": {"full_run": doc["meta"]["full_run"], "spec_ids_not_executed": not_run,
+    full = doc["meta"]["full_run"]
+    ok = full and not not_run and not failing
+    # Not a full run (quick tier or --only): skip, which only for this record and only then doesn't fail the run
+    # (runner.tolerated_skip). A full run must pass; it can never be skipped.
+    status = "pass" if ok else ("fail" if full else "skip")
+    why = [] if full else [f"not a full run (tier {m.get('tier')}{', filtered' if m.get('filter') else ''})"]
+    out.append({"id": "report.full_run", "capability": "harness-reporting", "status": status,
+                "evidence": {"full_run": full, "tier": m.get("tier"), "filter": m.get("filter"),
+                             "spec_ids_not_executed": not_run,
                              "non_passing": failing, "checks_executed": len(executed),
                              "outputs": [str(P.RESULTS.relative_to(P.ROOT)), str(P.SUMMARY.relative_to(P.ROOT))]},
                 "duration_s": 0.0,
-                **({} if ok else {"message": "not a clean full run: " + ", ".join((["filtered"] if not doc["meta"]["full_run"] else []) + not_run + failing)[:300]})})
+                **({} if ok else {"message": (why[0] if not full else
+                                              "not a clean full run: " + ", ".join(not_run + failing))[:300]})})
+    if self_mode:
+        t0 = time.time()
+        wall = time.time() - (t_start or time.time())
+        probs, tev = _tier_problems_for_run(doc, wall, out[-1])
+        out.append(_tiers_record(probs, {"mode": "this run (unfiltered quick tier)"} | tev, t0))
     return out

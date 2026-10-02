@@ -6,14 +6,21 @@ Build the pinned AzerothCore (Playerbot fork) server and its modules from source
 ## Requirements
 
 ### Requirement: Clean build from pinned sources
-The harness SHALL build authserver and worldserver from an empty build directory using the core and module SHAs pinned in `fork.lock`, applying every patch in `patches/core/` and linking every module in `modules/`.
+The harness SHALL build authserver and worldserver using the core and module SHAs pinned in `fork.lock`, applying every patch in `patches/core/` and linking every module in `modules/`. A full run SHALL perform a from-empty build whenever the build-input hash (the server-build pins in fork.lock, i.e. core and playerbots repo/branch/SHA; `patches/core/`; `modules/` contents; cmake arguments and dependency links; compiler identity) differs from the hash recorded by the last passing from-empty build, or when `--force-clean` is given. Otherwise it SHALL prove the installed binaries were built from the current input hash and that an incremental build is a no-op.
 
 #### Scenario: Clean build succeeds
-- **GIVEN** an empty build directory
+- **GIVEN** an empty build directory (from-empty mode)
 - **WHEN** `harness/hs build --clean` runs
 - **THEN** it exits 0 and executable `authserver` and `worldserver` binaries exist in the install dir
 - **AND** the core checkout in `vendor/` is at exactly `core_sha` and mod-playerbots at exactly `playerbots_sha`
 - Check: `build.clean`
+
+#### Scenario: Unchanged inputs skip the from-empty build only with proof
+- **GIVEN** a previous passing from-empty build recorded input hash H, and the current inputs hash to H
+- **WHEN** a full run executes `build.clean` without `--force-clean`
+- **THEN** it records mode "verified-current", the installed binaries' stamp equals H, an incremental build makes no changes to the installed binaries, and the evidence states that no from-empty build was done
+- **AND** when any input changes (e.g. a byte appended to a file under `modules/` in a sandbox copy), the computed hash differs from H and the check switches to from-empty mode
+- Check: `build.clean_smart`
 
 #### Scenario: Unpinned or dirty vendor tree is rejected
 - **GIVEN** the vendor core checkout is at a SHA other than `core_sha`, or has uncommitted changes that aren't from `patches/core/`

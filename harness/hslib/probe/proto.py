@@ -41,6 +41,8 @@ SMSG_CHARACTER_LOGIN_FAILED = 0x041
 CMSG_LOGOUT_REQUEST = 0x04B
 SMSG_LOGOUT_RESPONSE = 0x04C
 SMSG_LOGOUT_COMPLETE = 0x04D
+CMSG_UPDATE_ACCOUNT_DATA = 0x20B
+SMSG_UPDATE_ACCOUNT_DATA_COMPLETE = 0x463
 CMSG_PING = 0x1DC
 SMSG_PONG = 0x1DD
 SMSG_AUTH_CHALLENGE = 0x1EC
@@ -49,6 +51,9 @@ SMSG_AUTH_RESPONSE = 0x1EE
 SMSG_LOGIN_VERIFY_WORLD = 0x236
 
 OPCODE_NAMES = {v: k for k, v in list(globals().items()) if k.startswith(("CMSG_", "SMSG_")) and isinstance(v, int)}
+
+# AccountDataType (src/server/game/Server/WorldSession.h); 6 is per-character (PER_CHARACTER_CACHE_MASK 0xEA)
+PER_CHARACTER_LAYOUT_CACHE = 6
 
 # --- ResponseCodes: src/server/shared/SharedDefines.h
 AUTH_OK = 0x0C

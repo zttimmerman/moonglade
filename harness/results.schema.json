@@ -6,14 +6,16 @@
   "properties": {
     "meta": {
       "type": "object",
-      "required": ["started", "finished", "repo_sha", "fork_lock", "host", "full_run"],
+      "required": ["started", "finished", "repo_sha", "fork_lock", "host", "full_run", "tier"],
       "properties": {
         "started": {"type": "string"},
         "finished": {"type": "string"},
         "repo_sha": {"type": "string"},
         "fork_lock": {"type": "object", "required": ["core_sha", "playerbots_sha"]},
         "host": {"type": "object", "required": ["platform", "machine"]},
-        "full_run": {"type": "boolean"}
+        "full_run": {"type": "boolean"},
+        "tier": {"enum": ["quick", "full", "slow"]},
+        "force_clean": {"type": "boolean"}
       }
     },
     "checks": {

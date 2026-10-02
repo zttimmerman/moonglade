@@ -1,14 +1,26 @@
-"""Vendor sync (pin + patches + module links) and cmake build/install. ADR-0001."""
+"""Vendor sync (pin + patches + module links) and cmake build/install. ADR-0001.
+
+Clean builds are input-hash aware (openspec/changes/harness-tiers, server-build "Clean build from pinned
+sources"): a passing from-empty build writes a stamp of the build-input hash to build/.hs-input-hash and next
+to the installed binaries. `--clean` then does a from-empty build only when the inputs hash differs from that
+stamp (or there is no valid stamp); otherwise it runs mode "verified-current": the installed stamp must equal
+the current hash and an incremental build must leave the installed binaries byte-identical.
+`--force-clean` always builds from empty."""
+import hashlib
+import json
 import os
 import shutil
 import subprocess
+import time
 
 from . import paths as P
 from .util import log, run
 
 
 class BuildError(RuntimeError):
-    pass
+    def __init__(self, msg: str, info: dict | None = None):
+        super().__init__(msg)
+        self.info = info or {}
 
 
 def _git(repo, *args, capture=True, check=True):
@@ -146,14 +158,200 @@ def cmake_args() -> list[str]:
     ]
 
 
-def build(clean=False, jobs=8) -> dict:
+# ----------------------------------------------------------------------------- build-input hash + stamps
+
+STAMP_NAME = ".hs-input-hash"
+IGNORED_NAMES = {".DS_Store"}     # Finder metadata; never a build input
+
+
+def build_stamp_path():
+    return P.BUILD / STAMP_NAME
+
+
+def install_stamp_path():
+    return P.SERVER_BIN / STAMP_NAME
+
+
+def _sha256_file(path) -> str:
+    h = hashlib.sha256()
+    with open(path, "rb") as fh:
+        for chunk in iter(lambda: fh.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def tree_digest(root) -> dict:
+    """{relative path: sha256 of contents | 'symlink:<target>'} for every file under root (contents, not mtimes)."""
+    out = {}
+    if not root.exists():
+        return out
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        dirnames.sort()
+        for name in sorted(filenames) + sorted(d for d in dirnames if os.path.islink(os.path.join(dirpath, d))):
+            if name in IGNORED_NAMES:
+                continue
+            full = os.path.join(dirpath, name)
+            rel = os.path.relpath(full, root)
+            out[rel] = f"symlink:{os.readlink(full)}" if os.path.islink(full) else _sha256_file(full)
+    return out
+
+
+def compiler_identity() -> dict:
+    """Toolchain identity: `--version` of the compilers and cmake named in cmake_args()."""
+    ident = {}
+    for tool in ("clang", "clang++", "cmake"):
+        r = subprocess.run([tool, "--version"], capture_output=True, text=True)
+        ident[tool] = (r.stdout or r.stderr).strip()
+    return ident
+
+
+def _resolved_deps() -> dict:
+    """Where the Homebrew opt/ links in cmake_args() point (opt/boost -> Cellar/boost/<version>): a dependency
+    upgrade changes the libraries the binaries link against, so it counts as a cmake-argument change."""
+    b = P.BREW / "opt"
+    return {n: os.path.realpath(b / n) for n in ("mysql", "readline", "openssl@3", "boost")}
+
+
+# fork.lock keys that determine the server build. The other pins (Ghidra, Wine runtime, client data, VMaNGOS)
+# don't affect authserver/worldserver, so bumping them must not force a from-empty build.
+BUILD_PINS = ("core_repo", "core_branch", "core_sha", "playerbots_repo", "playerbots_branch", "playerbots_sha")
+
+
+def build_pins(path=None) -> dict:
+    """The server-build pins of a fork.lock file (same parsing as paths.fork_lock); missing keys map to None."""
+    lock = {}
+    for line in (path or (P.ROOT / "fork.lock")).read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            lock[k.strip()] = v.strip()
+    return {k: lock.get(k) for k in BUILD_PINS}
+
+
+def input_manifest(*, fork_lock_path=None, patches_dir=None, modules_dir=None, cmake=None, compiler=None) -> dict:
+    """Everything a build's output depends on that the harness controls. Keyword overrides exist so checks
+    can show a changed input changes the hash without touching the real inputs (sandbox copies)."""
+    fl = fork_lock_path or (P.ROOT / "fork.lock")
+    return {
+        "fork_lock_build_pins": build_pins(fl),
+        "patches_core": tree_digest(patches_dir or P.PATCHES),
+        "modules": tree_digest(modules_dir or P.MODULES),
+        "cmake_args": cmake if cmake is not None else [str(a) for a in cmake_args()] + [f"dep:{k}={v}" for k, v in sorted(_resolved_deps().items())],
+        "compiler": compiler if compiler is not None else compiler_identity(),
+    }
+
+
+def input_hash(manifest: dict | None = None) -> str:
+    m = manifest if manifest is not None else input_manifest()
+    return hashlib.sha256(json.dumps(m, sort_keys=True).encode()).hexdigest()
+
+
+def read_stamp(path) -> str | None:
+    try:
+        return json.loads(path.read_text())["input_hash"]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def _write_stamps(h: str, manifest: dict):
+    doc = json.dumps({"input_hash": h, "written": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+                      "by": "passing from-empty build (harness/hslib/build.py)", "manifest": manifest}, indent=2)
+    for p in (build_stamp_path(), install_stamp_path()):
+        p.write_text(doc)
+
+
+def _drop_stamps() -> list[str]:
+    gone = []
+    for p in (install_stamp_path(), build_stamp_path()):
+        if p.exists():
+            p.unlink()
+            gone.append(str(p))
+    return gone
+
+
+def decide_mode(current: str, build_stamp: str | None, install_stamp: str | None, force: bool) -> tuple[str, str]:
+    """('from-empty' | 'verified-current', reason)."""
+    if force:
+        return "from-empty", "--force-clean"
+    if not build_stamp:
+        return "from-empty", "no stamp from a passing from-empty build in build/"
+    if build_stamp != current:
+        return "from-empty", f"build inputs changed (stamp {build_stamp[:12]} != current {current[:12]})"
+    if install_stamp != current:
+        return "from-empty", f"installed binaries not stamped with the current input hash ({str(install_stamp)[:12]})"
+    return "verified-current", "inputs hash equals the last passing from-empty build's stamp"
+
+
+def installed_digest() -> dict:
+    """sha256 of every installed artifact cmake --install writes: bin/* (minus the stamp) and etc/**/*.dist."""
+    d = {f"bin/{k}": v for k, v in tree_digest(P.SERVER_BIN).items() if k != STAMP_NAME}
+    d |= {f"etc/{k}": v for k, v in tree_digest(P.SERVER_ETC).items() if k.endswith(".dist")}
+    return d
+
+
+def build(clean=False, jobs=8, force_clean=False) -> dict:
     info = {"sync": sync_vendor()}
-    if clean and P.BUILD.exists():
-        log(f"removing {P.BUILD}")
-        shutil.rmtree(P.BUILD)
+    manifest = input_manifest()
+    h = input_hash(manifest)
+    stamps = {"build": read_stamp(build_stamp_path()), "install": read_stamp(install_stamp_path())}
+    if clean or force_clean:
+        mode, reason = decide_mode(h, stamps["build"], stamps["install"], force_clean)
+    else:
+        mode, reason = "incremental", "plain `hs build`"
+    info["clean"] = {"mode": mode, "reason": reason, "input_hash": h, "stamps_before": stamps,
+                     "from_empty_build_done": mode == "from-empty"}
+    log(f"build mode: {mode} ({reason}); input hash {h[:12]}")
+    if mode == "from-empty":
+        info["clean"]["stamps_dropped"] = _drop_stamps()
+        if P.BUILD.exists():
+            log(f"removing {P.BUILD}")
+            shutil.rmtree(P.BUILD)
     P.BUILD.mkdir(exist_ok=True)
+    if mode == "from-empty":
+        info["clean"]["build_dir_entries_before_configure"] = sorted(os.listdir(P.BUILD))
+        if info["clean"]["build_dir_entries_before_configure"]:
+            raise BuildError(f"build dir not empty before a from-empty build: {P.BUILD}")
+    before = installed_digest() if mode == "verified-current" else None
+    if mode == "incremental" and (stamps["build"] != h or stamps["install"] != h):
+        # an incremental build from inputs no passing from-empty build vouched for: the install stops matching
+        # any stamp, so the next --clean must build from empty
+        info["clean"]["stamps_dropped"] = _drop_stamps()
     P.OUT.mkdir(parents=True, exist_ok=True)
     blog = P.OUT / "build.log"
+    try:
+        _run_steps(blog, jobs)
+    except BuildError:
+        if mode == "verified-current":
+            _drop_stamps()     # a failed rebuild may have replaced installed files
+        raise
+    bins = {n: (P.SERVER_BIN / n) for n in ("authserver", "worldserver")}
+    info["binaries"] = {n: str(p) for n, p in bins.items()}
+    missing = [n for n, p in bins.items() if not (p.exists() and os.access(p, os.X_OK))]
+    if missing:
+        raise BuildError(f"missing binaries after install: {missing}")
+    info["log"] = str(blog)
+    c = info["clean"]
+    if mode == "from-empty":
+        _write_stamps(h, manifest)
+        c["stamp_written"] = {"build": read_stamp(build_stamp_path()), "install": read_stamp(install_stamp_path())}
+    elif mode == "verified-current":
+        after = installed_digest()
+        changed = sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k))
+        c |= {"installed_digest_before": before, "installed_digest_after": after, "changed_files": changed,
+              "installed_stamp": read_stamp(install_stamp_path()),
+              "note": "no from-empty build was done: the install is proven current by its input-hash stamp "
+                      "and a no-op incremental build"}
+        if changed:
+            c["stamps_dropped"] = _drop_stamps()   # the next --clean builds from empty
+            raise BuildError(f"verified-current: the incremental build changed installed files {changed}; the "
+                             f"install did not match the stamped inputs (stamps dropped; rerun, or use --force-clean)",
+                             info)
+        if c["installed_stamp"] != h:
+            raise BuildError(f"verified-current: installed stamp {c['installed_stamp']} != input hash {h}", info)
+    return info
+
+
+def _run_steps(blog, jobs):
     with open(blog, "w") as fh:
         for step in (
             ["cmake", "-S", P.CORE_SRC, "-B", P.BUILD, *cmake_args()],
@@ -166,10 +364,4 @@ def build(clean=False, jobs=8) -> dict:
             r = subprocess.run(step, stdout=fh, stderr=subprocess.STDOUT)
             if r.returncode != 0:
                 raise BuildError(f"build step failed (exit {r.returncode}): {' '.join(step)}; see {blog}")
-    bins = {n: (P.SERVER_BIN / n) for n in ("authserver", "worldserver")}
-    info["binaries"] = {n: str(p) for n, p in bins.items()}
-    missing = [n for n, p in bins.items() if not (p.exists() and os.access(p, os.X_OK))]
-    if missing:
-        raise BuildError(f"missing binaries after install: {missing}")
-    info["log"] = str(blog)
-    return info
+

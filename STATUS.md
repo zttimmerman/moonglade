@@ -13,7 +13,9 @@ M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01
 | M1 `./play` | **done / archived** (verifier PASS cycle 2; Zach's Wi-Fi-off demo passed 2026-10-02) | personal account `PLAYER` (env/player.json), sandbox-exec offline proof, procs.py replaces ps |
 | Ghidra tooling + skills | **done / archived** (verifier PASS cycle 2) | `hs re`, `hs ghidra-install`, 4 project skills; run budget: 2 full runs/change |
 | F9 re-tooling verifier nits | todo (low) | readonly path check: use resolved `is_relative_to`; JDK assertion `>=21` explicitly; harness check for wine no-adoption rule (needs scratch params like ghidra.install) |
-| Harness tiers | specced | branch `change/harness-tiers`, then a builder |
+| Harness tiers | **done / archived** (verifier PASS) | `hs run --tier quick` ~36 s (builders' loop); full ~9.5 min; `--force-clean` ~13 min (required once per merge); test logout ~20 s → <1 s |
+| F10 tiers verifier nits | todo | enforce force-clean at merge in the harness (e.g. a merge-gate flag/check), not just the verifier brief; keep the from-empty build log (don't let `build.clean_smart` overwrite it) |
+| Core server-mail guard (ADR-0006) | specced, next | M2 prerequisite; branch `change/core-server-mail-guard` (rebase on main) |
 | Login-screen spike | next after tiers | Q1: custom GlueXML from a patch MPQ with an unmodified Wow.exe? (Wow.exe has "GlueXML has corrupt signature" strings). Q2: are the TBC/Vanilla login backdrops and music in the 3.3.5a MPQs (background picker)? Needs an MPQ reader |
 | F8 M1 verifier nits | todo (low) | smoke picks `wow[0]` (pick the persistent/oldest pid); `play_processes()` matches any cmdline with 'hslib.play'; real Wow.exe exit path only human-verified |
 | M2 living world | spec written | `openspec/changes/m2-living-world` |
@@ -34,6 +36,7 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 - `harness/active-changes` lists the changes being built or verified; only those (plus archived specs) gate `report.coverage` / `report.full_run`.
 
 ## Known issues / notes for later milestones
+- **Upstream core crash (found by B9, 2026-10-02):** a logout within milliseconds of login segfaults worldserver. `src/server/scripts/World/server_mail.cpp:29` `OnPlayerLogin` queues async SELECTs whose callbacks call `SendServerMail(session->GetPlayer(), …)` (line 58) with no null check. The harness works around it (`fixtures.settle_login`). **M2 prerequisite:** an ADR plus a minimal core patch (null-guard) before scaling the bot population, since bots log in and out often.
 - The playerbots command server (`AiPlayerbot.CommandServerPort`) binds 0.0.0.0 with no address option. It's disabled. If M2/M4 scripting wants it, it needs a module patch to bind 127.0.0.1, and an ADR.
 - M0 bot population is capped at 10 random bots (`config.py`). M2 must define the real budget (see research doc §5).
 - Probe logout takes about 20 s (logout timer, since the test account isn't GM). Warden packets are ignored, which is fine for short sessions.

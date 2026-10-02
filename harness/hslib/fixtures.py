@@ -10,6 +10,7 @@ Drivers (see design.md "Fixture state drivers"):
             logout (the server saves the quest log). The offline form of `.quest add` is NOT used: it
             writes character_queststatus.status = 1 (QUEST_STATUS_COMPLETE), see cs_quest.cpp.
 """
+import re
 import time
 
 from . import db, paths as P, soap
@@ -23,6 +24,13 @@ TELE_NAME = "Goldshire"
 ITEM_ENTRY = 2589          # validated in item_template at runtime
 QUEST_ID = 7               # validated in quest_template at runtime (must have a kill/collect objective)
 LEVEL = 10
+
+# Instant logout for the test account only (harness-control "Test account logs out instantly"). Permission id 1 is
+# rbac::RBAC_PERM_INSTANT_LOGOUT (vendor core src/server/game/Accounts/RBAC.h; auth rbac_permissions row
+# (1,'Instant logout'), no rbac_linked_permissions children), checked in WorldSession::HandleLogoutRequestOpcode.
+# Granted with the server's own console command `.rbac account grant` (cs_rbac.cpp), which writes
+# auth.rbac_account_permissions (accountId, 1, granted=1, realmId=-1). The security level stays 0.
+INSTANT_LOGOUT_PERM = 1
 
 
 class FixtureError(Exception):
@@ -87,15 +95,47 @@ def char_state(guid: int) -> dict:
 
 # ----------------------------------------------------------------------------- account + character
 
+def rbac_rows(acct: int) -> list[list[str]]:
+    """auth.rbac_account_permissions rows (permissionId, granted, realmId) for an account id."""
+    return db.query(f"SELECT permissionId, granted, realmId FROM rbac_account_permissions WHERE accountId={int(acct)} "
+                    f"ORDER BY permissionId, realmId", "auth")
+
+
+def access_rows(acct: int) -> list[list[str]]:
+    """auth.account_access rows (gmlevel, RealmID) for an account id; none = security level 0."""
+    return db.query(f"SELECT gmlevel, RealmID FROM account_access WHERE id={int(acct)} ORDER BY RealmID", "auth")
+
+
+INSTANT_ONLY = [[str(INSTANT_LOGOUT_PERM), "1", "-1"]]
+
+
+def ensure_instant_logout() -> dict:
+    """Grant the test account (and only it) the instant-logout permission via `.rbac account grant`, if missing.
+    Never applied to any other account: the account name is the harness's own TEST_USER constant."""
+    acct = account_id()
+    if acct is None:
+        raise FixtureError("no test account to grant instant logout to")
+    before = rbac_rows(acct)
+    if before == INSTANT_ONLY:
+        return {"granted_now": False, "rows": before}
+    r = gm(f"rbac account grant {P.TEST_USER} {INSTANT_LOGOUT_PERM}")
+    rows, ok, dt = poll(lambda: rbac_rows(acct), lambda v: [str(INSTANT_LOGOUT_PERM), "1", "-1"] in v, timeout=15)
+    if not ok:
+        raise FixtureError("instant-logout permission not in rbac_account_permissions after `rbac account grant`",
+                           gm=r.evidence(), rows=rows)
+    return {"granted_now": True, "rows_before": before, "rows": rows, "gm": r.evidence(), "wait_s": dt}
+
+
 def ensure_account() -> dict:
-    """Create the test account via SOAP `account create` if it doesn't exist."""
+    """Create the test account via SOAP `account create` if it doesn't exist; grant it instant logout."""
     if account_id():
-        return {"account": P.TEST_USER, "created": False, "id": account_id()}
+        return {"account": P.TEST_USER, "created": False, "id": account_id(), "instant_logout": ensure_instant_logout()}
     r = gm(f"account create {P.TEST_USER} {P.TEST_PASS}")
     acct, ok, dt = poll(account_id, bool, timeout=15)
     if not ok:
         raise FixtureError("account not visible in auth.account after `account create`", gm=r.evidence())
-    return {"account": P.TEST_USER, "created": True, "id": acct, "gm": r.evidence()}
+    return {"account": P.TEST_USER, "created": True, "id": acct, "gm": r.evidence(),
+            "instant_logout": ensure_instant_logout()}
 
 
 def ensure_character() -> dict:
@@ -136,6 +176,49 @@ def reset() -> dict:
         raise FixtureError("test account/character still present after `account delete`", gm=r.evidence(),
                            account=account_rows(), chars=char_rows())
     return {"deleted": True, "gm": r.evidence()}
+
+
+LOGIN_SETTLE_MARGIN_S = 0.25   # after the barrier: lets a session update run the ready login callbacks
+
+
+def settle_login(ws, guid: int) -> dict:
+    """Wait until the server has finished the character-DB work it queued at login, before a probe logout.
+
+    Why: with instant logout the probe can log out within milliseconds of SMSG_LOGIN_VERIFY_WORLD. The core's
+    ServerMailReward::OnPlayerLogin (src/server/scripts/World/server_mail.cpp) queues async SELECTs whose callbacks
+    call SendServerMail(session->GetPlayer(), ...) without a null check; if they run after the logout, the
+    worldserver segfaults (seen 2026-10-02: ServerMailCondition::CheckCondition ← SendServerMail). A human client
+    can't log out that fast, so this is a probe-only window; we don't patch the core for it.
+
+    Barrier: CharacterDatabase has one async worker (WorkerThreads = 1, asserted), so its queue is FIFO. The probe
+    sends CMSG_UPDATE_ACCOUNT_DATA for a per-character type (data unchanged, a new timestamp); the server queues a
+    REPLACE INTO character_account_data after the login SELECTs. When that row shows the new timestamp, the login
+    queries have completed; a short margin lets the session's next update run their callbacks."""
+    conf = (P.SERVER_ETC / "worldserver.conf").read_text()
+    m = re.search(r"^CharacterDatabase\.WorkerThreads\s*=\s*(\d+)", conf, re.M)
+    workers = int(m.group(1)) if m else None
+    if workers != 1:
+        raise FixtureError("login barrier needs CharacterDatabase.WorkerThreads = 1 (FIFO async queue)", workers=workers)
+    t = probe.W.PER_CHARACTER_LAYOUT_CACHE
+    rows = db.query(f"SELECT time, HEX(data) FROM character_account_data WHERE guid={int(guid)} AND type={t}", "characters")
+    old_time = int(rows[0][0]) if rows else 0
+    text = bytes.fromhex(rows[0][1]).decode("utf-8", "replace") if rows else ""
+    stamp = max(int(time.time()), old_time + 1)
+    t0 = time.time()
+    ws.update_account_data(t, stamp, text)
+    v, ok, dt = poll(lambda: db.scalar(f"SELECT time FROM character_account_data WHERE guid={int(guid)} AND type={t}",
+                                       "characters"), lambda x: x == str(stamp), timeout=30, interval=0.05)
+    if not ok:
+        raise FixtureError("login barrier: character_account_data timestamp never appeared", expected=stamp, got=v)
+    time.sleep(LOGIN_SETTLE_MARGIN_S)
+    return {"barrier": f"character_account_data type {t} time {old_time} -> {stamp}", "db_seen_after_s": dt,
+            "settle_s": round(time.time() - t0, 2)}
+
+
+def logout(ws, guid: int, timeout=45) -> dict:
+    """settle_login, then the probe's CMSG_LOGOUT_REQUEST; returns both."""
+    settle = settle_login(ws, guid)
+    return ws.logout(timeout=timeout) | {"settle": settle}
 
 
 def _require_offline(guid: int):
@@ -254,7 +337,7 @@ def start_quest(qid: int = QUEST_ID) -> dict:
             _, ev["removed_saved"], _ = poll(lambda: quest_status(guid, qid), lambda rows: not rows, timeout=15)
         r = gm(f"quest add {int(qid)} {P.TEST_CHAR}")
         ev["gm_add"] = r.evidence()
-        ev["logout"] = ws.logout()
+        ev["logout"] = logout(ws, guid)
     ev["after"], ok, ev["wait_s"] = poll(lambda: quest_status(guid, qid), lambda rows: bool(rows) and rows[0][1] == "3")
     ev["saved_incomplete"] = ok
     return ev

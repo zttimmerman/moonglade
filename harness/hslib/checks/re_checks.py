@@ -29,7 +29,7 @@ def _snapshot() -> dict:
     return snap
 
 
-@check("re.ghidra_installed", order=220, capability="client-analysis", stack="any")
+@check("re.ghidra_installed", order=220, capability="client-analysis", stack="any", tier="quick")
 def ghidra_installed(ctx):
     """`hs ghidra-install` on an installed tree: exit 0, no download, pinned version, JDK 21+, marker = pinned SHA."""
     r = subprocess.run([str(P.HARNESS / "hs"), "ghidra-install"], capture_output=True, text=True, timeout=600)
@@ -45,7 +45,7 @@ def ghidra_installed(ctx):
     return ev
 
 
-@check("re.ghidra_readonly", order=221, capability="client-analysis", stack="any")
+@check("re.ghidra_readonly", order=221, capability="client-analysis", stack="any", tier="full")
 def ghidra_readonly(ctx):
     """Headless import + report on a copy of Wow.exe: entry point and a string match reported; client/ unchanged."""
     before = _snapshot()
@@ -74,7 +74,7 @@ def ghidra_readonly(ctx):
     return ev
 
 
-@check("re.ghidra_refuses_mismatch", order=223, capability="client-analysis", stack="any")
+@check("re.ghidra_refuses_mismatch", order=223, capability="client-analysis", stack="any", tier="quick")
 def ghidra_refuses_mismatch(ctx):
     """install refuses (a) a download whose SHA-256 differs from the pin and (b) an existing tree with no marker."""
     import tempfile, zipfile as zf

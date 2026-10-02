@@ -44,10 +44,18 @@ def main(argv=None) -> int:
                     raise C.ProbeError(f"no character named {a.login}")
                 out["login_verify_world"] = ws.player_login(c["guid"])
                 if not a.no_logout:
-                    out["logout"] = ws.logout()
+                    from .. import fixtures   # settle_login: wait out the server's login work first (see there)
+                    out["logout"] = fixtures.logout(ws, c["guid"])
     except (C.ProbeError, OSError) as e:
         out["error"] = f"{type(e).__name__}: {e}"
         out |= getattr(e, "info", {})
+        print(json.dumps(out, indent=2, default=str))
+        return 1
+    except Exception as e:  # fixtures.FixtureError from the login barrier
+        if type(e).__name__ != "FixtureError":
+            raise
+        out["error"] = f"{type(e).__name__}: {e}"
+        out |= getattr(e, "evidence", {})
         print(json.dumps(out, indent=2, default=str))
         return 1
     print(json.dumps(out, indent=2, default=str))
