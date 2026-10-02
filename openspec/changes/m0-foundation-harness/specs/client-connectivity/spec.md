@@ -61,6 +61,6 @@ Zach SHALL be able to log in with the real client under CrossOver and walk aroun
 #### Scenario: Client launch smoke test
 - **GIVEN** an installed client and the Wine layer from ADR-0004
 - **WHEN** the harness runs `harness/hs launch --smoke`
-- **THEN** a Wine `Wow.exe` process starts, is still running after 30 seconds without writing a crash report, and owns an on-screen window of at least 640×480 (per the macOS window server); it is then terminated so that no Wine or `Wow.exe` process from this repo's prefix remains
+- **THEN** a Wine `Wow.exe` process starts, is still running after 30 seconds without writing a crash report, and owns an on-screen window of at least 640×480 (per the macOS window server), and Wine logs no graphics errors (`err:d3d`/`err:opengl`) during the run; it is then terminated so that no Wine or `Wow.exe` process from this repo's prefix remains
 - Note: whether the window shows the login screen can't be verified headlessly (screen capture is denied to the harness); the M0 human gate confirms it
 - Check: `client.launch_smoke`

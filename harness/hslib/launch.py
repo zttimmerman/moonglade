@@ -268,6 +268,7 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
         raise LaunchError("client binaries no longer match env/client-manifest.json; "
                           "re-run `harness/hs client-install`", ev)
 
+    log_offset = P.WINE_LOG.stat().st_size if P.WINE_LOG.exists() else 0
     proc = start_client()
     ev["launcher_pid"] = proc.pid
     login = {"account": P.TEST_USER, "password": P.TEST_PASS, "character": P.TEST_CHAR,
@@ -314,6 +315,14 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     errors_after = {p.name for p in errors_dir.iterdir()} if errors_dir.is_dir() else set()
     ev["smoke"]["new_error_reports"] = sorted(errors_after - errors_before)
     alive_ok = crashed is None and bool(wow) and elapsed >= smoke_seconds
+    # graphics-translation errors logged by Wine during this run only (log offset recorded at launch)
+    try:
+        with open(P.WINE_LOG, errors="replace") as fh:
+            fh.seek(log_offset)
+            gfx_errors = [l.rstrip() for l in fh if "err:d3d" in l or "err:opengl" in l]
+    except FileNotFoundError:
+        gfx_errors = []
+    ev["smoke"]["graphics_errors"] = {"count": len(gfx_errors), "first": gfx_errors[:5]}
     # A live process alone could be hung before creating its window; require a real on-screen game window.
     ev["smoke"]["windows"] = onscreen_windows(wow[0]["pid"]) if wow else []
     window_ok = any(w["layer"] == 0 and w["width"] >= 640 and w["height"] >= 480 for w in ev["smoke"]["windows"])
@@ -332,6 +341,8 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     if not alive_ok:
         raise LaunchError(f"smoke: {crashed or 'Wow.exe not running at the end of the window'} "
                           f"after {elapsed}s", ev)
+    if gfx_errors:
+        raise LaunchError(f"smoke: Wine logged {len(gfx_errors)} graphics errors (err:d3d/err:opengl) during the run", ev)
     if not window_ok:
         raise LaunchError("smoke: Wow.exe has no on-screen window of at least 640x480", ev)
     if ev["smoke"]["new_error_reports"]:

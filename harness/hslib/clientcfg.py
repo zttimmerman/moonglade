@@ -19,7 +19,10 @@ LOCALE_RE = re.compile(r"^[a-z]{2}[A-Z]{2}$")          # enUS, enGB, deDE, ...
 CONFIG_KEYS = {"realmlist": LOCALHOST, "patchlist": LOCALHOST}
 # Wine-stability defaults (ADR-0004), used by `hs launch`. Unlike CONFIG_KEYS they're only
 # added when the key is absent, so a setting Zach changes in-game later is never overridden.
-WINE_DEFAULTS = {"gxWindow": "1", "gxApi": "d3d9"}
+# gxApi opengl: the client's native OpenGL renderer. Its D3D9 path goes through Wine's wined3d, whose GLSL programs
+# fail on macOS GL (tens of thousands of "GL_INVALID_OPERATION from glUseProgram" errors in wine.log), which draws
+# fixed red/blue smears over the scene (F3, 2026-10-01). Added only when absent, so a player's own choice wins.
+WINE_DEFAULTS = {"gxWindow": "1", "gxApi": "opengl"}
 
 
 class ClientConfigError(Exception):
