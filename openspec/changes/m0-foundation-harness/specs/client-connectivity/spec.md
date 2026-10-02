@@ -1,7 +1,7 @@
 # Spec Delta: client-connectivity
 
 ## Purpose
-Make the 3.3.5a (build 12340) Windows client, run under CrossOver, able to log in to the localhost server, and prove protocol-level connectivity headlessly.
+Make the 3.3.5a (build 12340) Windows client, run under Wine (layer per ADR-0004), able to log in to the localhost server, and prove protocol-level connectivity headlessly.
 
 ## ADDED Requirements
 
@@ -37,13 +37,13 @@ The harness SHALL include a headless client that speaks the 3.3.5a build 12340 p
 - Check: `client.config_gen`
 
 ### Requirement: Human login gate
-Zach SHALL be able to log in with the real client under CrossOver and walk around.
+Zach SHALL be able to log in with the real client under Wine (ADR-0004) and walk around.
 
 #### Scenario: Zach logs in and walks around
 - **GIVEN** the stack is up and Zach's client is configured with `harness/hs client-config`
-- **WHEN** Zach launches Wow.exe under CrossOver and logs in with the account the harness printed
+- **WHEN** Zach launches Wow.exe under the project's Wine layer and logs in with the account the harness printed
 - **THEN** they reach character select, enter the world, and can move around
-- [human-verify] Needs the licensed GUI client running under CrossOver, which the harness can't drive. This is the M0 human gate.
+- [human-verify] Needs the licensed GUI client running under Wine, which the harness can't drive. This is the M0 human gate.
 
 ### Requirement: Client install and integrity
 `harness/hs client-install <zip-or-dir>` SHALL install a 3.3.5a client into the repo's gitignored `client/` directory without modifying or deleting the source, and SHALL record a manifest (`env/client-manifest.json`: SHA-256 of every `.exe`/`.dll` and the MPQ file list) at install time. The harness SHALL then verify the installed client is build 12340 and hasn't been modified since install.
@@ -61,6 +61,6 @@ Zach SHALL be able to log in with the real client under CrossOver and walk aroun
 #### Scenario: Client launch smoke test
 - **GIVEN** an installed client and the Wine layer from ADR-0004
 - **WHEN** the harness runs `harness/hs launch --smoke`
-- **THEN** a Wine `Wow.exe` process starts, is still running after 30 seconds without writing a crash report, and owns an on-screen window of at least 640×480 (per the macOS window server), and Wine logs no graphics errors (`err:d3d`/`err:opengl`) during the run; it is then terminated so that no Wine or `Wow.exe` process from this repo's prefix remains
+- **THEN** a Wine `Wow.exe` process starts, is still running after 30 seconds without writing a crash report, and owns an on-screen window of at least 640×480 (per the macOS window server), and the Wine log shows no graphics errors during the run (Wine's `err:d3d`/`err:opengl`, or mtld3d's `ERROR mtld3d`); it is then terminated so that no Wine or `Wow.exe` process from this repo's prefix remains
 - Note: whether the window shows the login screen can't be verified headlessly (screen capture is denied to the harness); the M0 human gate confirms it
 - Check: `client.launch_smoke`
