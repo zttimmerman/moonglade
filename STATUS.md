@@ -1,14 +1,14 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-02 ~10:45, session 2 (orchestrator context ~78%). **Paused cleanly** (B10 finished; stack down). On resume: start the core-guard verifier, then merge → spike Phase B._
+_Updated 2026-10-02 ~10:45, session 2 (orchestrator context ~78%). Resumed. Core-guard **verifier running** (started on resume); then merge → spike Phase B._
 
 **Cold start:** read this file, then `openspec list` (Node 20: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`), then `git -C <repo> worktree list`, `git branch -a`, `gh pr list`, then `harness/hs status`. The skills `.claude/skills/hs-*` hold the procedures (change loop, checks, client debugging, RE). User preferences and decisions are in the orchestrator memory notes (plain language for decisions, Gate 1, front-menu vision, logo).
 
 **In flight**
 | Work | Branch / checkout | State | If its agent is gone |
 |---|---|---|---|
-| Core server-mail guard (ADR-0006, M2 prerequisite) | `change/core-server-mail-guard`, **main checkout**, listed in `harness/active-changes` | **B10 done** (fc6df56, 764c38d): 6-line guard patch; unpatched baseline crashes on attempt 1–2 (frames SendServerMail→CheckCondition), patched survives 220 cycles; `build.pin_enforced` now accepts exactly core_sha + patch queue; full `--force-clean` 45/45. Stack DOWN. **Next: verifier** (1 `--force-clean` full + ≥5× `core.*`, ~1 min each) |  re-brief a fresh builder from `openspec/changes/core-server-mail-guard/` + ADR-0006 + the branch's commits; then verifier (1 `--force-clean` full run + ≥5 repeats of `core.*`) |
+| Core server-mail guard (ADR-0006, M2 prerequisite) | `change/core-server-mail-guard`, **main checkout**, listed in `harness/active-changes` | **B10 done** (fc6df56, 764c38d): 6-line guard patch; unpatched baseline crashes on attempt 1–2 (frames SendServerMail→CheckCondition), patched survives 220 cycles; `build.pin_enforced` now accepts exactly core_sha + patch queue; full `--force-clean` 45/45. **Verifier running** (1 `--force-clean` full + ≥5× `core.*`); owns the stack |  re-brief a fresh builder from `openspec/changes/core-server-mail-guard/` + ADR-0006 + the branch's commits; then verifier (1 `--force-clean` full run + ≥5 repeats of `core.*`) |
 | Login-screen spike | `change/login-screen-spike`, worktree `.claude/worktrees/spike` | Phase A done (B8): GlueXML RSA/MD5-signed, client quits on mismatch; backdrops and music present and unsigned. **Phase B pending** (needs the stack): controlled tests on a scratch client copy | brief a builder from `docs/research/login-screen-spike.md` "Phase B plan" + tasks B.1/C.1 |
 
 **Next (in order):** finish and merge the core guard → spike Phase B → M2 living world (`openspec/changes/m2-living-world`) → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
