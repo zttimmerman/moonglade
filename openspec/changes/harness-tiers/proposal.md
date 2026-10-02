@@ -26,3 +26,5 @@ A full run takes about 7 minutes: 3.5–5 min is the clean rebuild, about 55 s i
 
 ## Spec-change log
 - 2026-10-02 · `build.clean`: a full run no longer always wipes `build/`. **This is a deliberate relaxation, recorded for Zach's review at the next gate.** Reason: a from-empty build only proves something new when its inputs changed. The input-hash stamp plus a no-op incremental build proves the binaries match the pinned inputs. Merges keep the full guarantee, because the verifier's brief requires at least one `--force-clean` run.
+- 2026-10-02 · `report.full_run` on non-full runs: `skip` instead of `fail`, excluded from the exit code. Before this, every quick or `--only` run exited 1 by design, which made the builders' inner loop and scripted repeats awkward (raised by B9 and several verifiers). The merge guarantee is unchanged: a full run still requires `report.full_run` to pass.
+- 2026-10-02 · The build-input hash covers only the server-build pins of fork.lock (core, playerbots), not unrelated pins (Ghidra, Wine runtime, data URLs), so bumping those doesn't force a from-empty build. This narrows the scope precisely; no build-relevant input is dropped.

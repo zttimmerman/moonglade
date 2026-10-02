@@ -3,7 +3,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Clean build from pinned sources
-The harness SHALL build authserver and worldserver using the core and module SHAs pinned in `fork.lock`, applying every patch in `patches/core/` and linking every module in `modules/`. A full run SHALL perform a from-empty build whenever the build-input hash (fork.lock, `patches/core/`, `modules/` contents, cmake arguments, compiler identity) differs from the hash recorded by the last passing from-empty build, or when `--force-clean` is given. Otherwise it SHALL prove the installed binaries were built from the current input hash and that an incremental build is a no-op.
+The harness SHALL build authserver and worldserver using the core and module SHAs pinned in `fork.lock`, applying every patch in `patches/core/` and linking every module in `modules/`. A full run SHALL perform a from-empty build whenever the build-input hash (the server-build pins in fork.lock, i.e. core and playerbots repo/branch/SHA; `patches/core/`; `modules/` contents; cmake arguments and dependency links; compiler identity) differs from the hash recorded by the last passing from-empty build, or when `--force-clean` is given. Otherwise it SHALL prove the installed binaries were built from the current input hash and that an incremental build is a no-op.
 
 #### Scenario: Clean build succeeds
 - **GIVEN** an empty build directory (from-empty mode)
