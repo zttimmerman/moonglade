@@ -32,3 +32,4 @@ CLAUDE.md §4/§6/§9 are the rules; this is the practiced procedure.
 - `report.coverage` fails if a change has ticked tasks but isn't in `harness/active-changes`.
 - macOS `sed` lacks GNU `0,/re/`; use Python for scripted edits.
 - `git stash` is shared across worktrees; prefer WIP commits.
+- With several worktrees open, never rely on the shell's cwd for git writes: use `git -C <path>` (the cwd can reset to the main checkout between commands). A commit once landed on a branch mid-verification this way.

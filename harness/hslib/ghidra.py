@@ -47,20 +47,26 @@ def java_info() -> dict:
     return {"java_home": str(JAVA_HOME), "version": first}
 
 
-def install(force: bool = False) -> dict:
-    lock = P.fork_lock()
-    home, want = ghidra_home(), lock["ghidra_sha256"]
+def install(force: bool = False, lock: dict | None = None, home: Path | None = None, env_dir: Path | None = None) -> dict:
+    """Install the pinned Ghidra. A tree without our marker is never trusted: the marker is written only after a
+    download whose SHA-256 matched the pin. `lock`/`home`/`env_dir` exist so checks can exercise the refusal
+    paths against scratch locations."""
+    lock = lock or P.fork_lock()
+    env_dir = env_dir or P.ENV
+    home = home or (env_dir / f"ghidra_{lock['ghidra_version']}_PUBLIC")
+    want = lock["ghidra_sha256"]
     marker = home / ".hs-sha256"
     jinfo = java_info()
-    if not force and (home / "support/analyzeHeadless").exists():
-        if not marker.exists():
-            marker.write_text(want + "\n")          # unpacked by hand from the verified zip before this command existed
-        if marker.read_text().strip() == want:
+    if not force and home.exists():
+        if marker.exists() and marker.read_text().strip() == want and (home / "support/analyzeHeadless").exists():
             return {"ghidra": str(home), "version": lock["ghidra_version"], "installed": False,
                     "reason": "already installed at pinned hash", "java": jinfo}
-    if shutil.disk_usage(P.ROOT).free < 2 * 2**30:
+        raise GhidraError(f"{home} exists but isn't a verified install of the pinned build "
+                          f"(marker missing or different); re-run with --force to reinstall")
+    env_dir.mkdir(parents=True, exist_ok=True)
+    if shutil.disk_usage(env_dir).free < 2 * 2**30:
         raise GhidraError("need about 2 GB free to download and unpack Ghidra")
-    tmp = P.ENV / "ghidra.zip.part"
+    tmp = env_dir / "ghidra.zip.part"
     log(f"downloading {lock['ghidra_url']}")
     with urllib.request.urlopen(lock["ghidra_url"], timeout=300) as r, open(tmp, "wb") as fh:
         shutil.copyfileobj(r, fh)
@@ -71,12 +77,10 @@ def install(force: bool = False) -> dict:
     if home.exists():
         shutil.rmtree(home)
     with zipfile.ZipFile(tmp) as z:
-        z.extractall(P.ENV)
+        z.extractall(env_dir)
     tmp.unlink()
-    for f in (home / "support").glob("*"):          # zipfile drops exec bits
-        f.chmod(0o755)
-    for f in home.rglob("*"):
-        if f.is_file() and (f.suffix in ("", ".sh") and f.parent.name in ("support", "os", "mac_arm_64", "mac_x86_64")):
+    for f in home.rglob("*"):                         # zipfile drops exec bits
+        if f.is_file() and f.parent.name in ("support", "os", "mac_arm_64", "mac_x86_64"):
             f.chmod(0o755)
     marker.write_text(want + "\n")
     return {"ghidra": str(home), "version": lock["ghidra_version"], "installed": True, "sha256": got, "java": jinfo}
@@ -128,7 +132,9 @@ def run_report(mode: str, arg: str | None = None, name: str = "Wow.exe", analyze
     text = out.read_text() if out.exists() else ""
     if r.returncode != 0 or not text:
         raise GhidraError(f"analyzeHeadless failed (exit {r.returncode}); tail:\n" + "\n".join(r.stdout.splitlines()[-25:]))
-    return {"mode": mode, "binary_copy": str(copy), "report": str(out), "lines": text.splitlines()}
+    opened = next((l.split("\t", 1)[1] for l in text.splitlines() if l.startswith("exepath\t")), None)
+    return {"mode": mode, "binary_copy": str(copy), "report": str(out), "lines": text.splitlines(),
+            "ghidra_opened": opened}
 
 
 def analyze(name: str = "Wow.exe") -> dict:

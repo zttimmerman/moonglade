@@ -18,6 +18,7 @@ public class HsReport extends GhidraScript {
         String mode = a[0];
         try (PrintWriter out = new PrintWriter(new FileWriter(a[1], true))) {
             out.println("program\t" + currentProgram.getName() + "\t" + currentProgram.getExecutableSHA256());
+            out.println("exepath\t" + currentProgram.getExecutablePath());
             switch (mode) {
                 case "entry": {
                     out.println("imagebase\t" + currentProgram.getImageBase());

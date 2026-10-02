@@ -31,12 +31,10 @@ def install(force: bool = False) -> dict:
     wine = RUNTIME_DIR / ".wine-runtime/bin/wine"
     if not force and wine.exists() and MARKER.exists() and MARKER.read_text().strip() == want:
         return {"runtime": str(RUNTIME_DIR), "installed": False, "reason": "already installed at pinned hash"}
-    if not force and wine.exists() and not MARKER.exists():
-        # unpacked by hand before this command existed: adopt it only if the binary runs
-        r = subprocess.run([str(wine), "--version"], capture_output=True, text=True)
-        if r.returncode == 0:
-            MARKER.write_text(want + "\n")
-            return {"runtime": str(RUNTIME_DIR), "installed": False, "adopted": r.stdout.strip()}
+    if not force and RUNTIME_DIR.exists():
+        # Never adopt an unverified tree: the marker is written only after a SHA-256-verified download.
+        raise WineInstallError(f"{RUNTIME_DIR} exists but isn't a verified install of the pinned runtime "
+                               f"(marker missing or different); re-run with --force to reinstall")
     free_gb = shutil.disk_usage(P.ROOT).free / 2**30
     if free_gb < 1.0:
         raise WineInstallError(f"only {free_gb:.1f} GB free; need about 1 GB to download and unpack the runtime")

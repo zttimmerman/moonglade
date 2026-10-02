@@ -8,7 +8,7 @@ description: Diagnose the WoW 3.3.5a client under Wine on macOS — crashes, ren
 ## Where to look
 - **Crash reports:** `client/Errors/<date> Crash.txt` (exception code, EIP, registers, per-thread stacks, loaded modules). Map EIP to a module with the `DBG-MODULE<base size "name">` lines. An EIP in no module means dynamically loaded code (e.g. Warden modules → disabled server-side) or Wine thunks.
 - **Wine log:** `env/logs/wine.log`; each launch is stamped `===== [hs launch] … start`. Wine errors look like `err:<channel>`; mtld3d logs `INFO/WARN/ERROR mtld3d::…`.
-- **Client logs:** `client/Logs/gx.log` (renderer and pixel-format selection), `FrameXML.log`.
+- **Client logs:** `client/Logs/` (e.g. `FrameXML.log`, `connection.log`; `gx.log` with renderer/pixel-format details appears for some renderer runs, e.g. `gxApi opengl`).
 - **Server side:** `env/logs/Server.log`, `Errors.log`, `worldserver.err`.
 
 ## Tools

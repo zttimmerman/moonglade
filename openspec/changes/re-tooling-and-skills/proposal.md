@@ -23,4 +23,4 @@ Zach opened read-only Ghidra analysis (ADR-0005), and asked for it to become sta
 New `harness/hslib/ghidra.py`, CLI subcommands, and one check. About 1 GB of tools under `env/`. Skills are docs only.
 
 ## Spec-change log
-(none yet)
+- 2026-10-02 · Verifier fixes (all tightenings). `re.ghidra_installed` can no longer pass on a self-written marker (the install refuses unmarked trees); new scenario `re.ghidra_refuses_mismatch`; `re.ghidra_readonly` also requires the file Ghidra reports opening to be the env/re copy. `wine-install` got the same no-adoption rule.

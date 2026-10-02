@@ -64,7 +64,47 @@ def ghidra_readonly(ctx):
           "changed": changed, "added": added, "removed": removed}
     require(entries, "no entry point reported", **ev)
     require(matches, "no 'GlueXML' string match reported", **ev)
+    ev["ghidra_opened"] = [entry.get("ghidra_opened"), strings.get("ghidra_opened")]
     require(str(ghidra.RE) in entry["binary_copy"] and str(ghidra.RE) in str(scratch),
             "analysis copy/project not under env/re", **ev)
+    # what Ghidra itself reports it opened (not just the path we computed)
+    require(all(o and str(ghidra.RE) in o and str(P.CLIENT) not in o for o in ev["ghidra_opened"]),
+            "Ghidra opened a file outside env/re", **ev)
     require(not changed and not added and not removed, "client/ changed during analysis", **ev)
     return ev
+
+
+@check("re.ghidra_refuses_mismatch", order=223, capability="client-analysis", stack="any")
+def ghidra_refuses_mismatch(ctx):
+    """install refuses (a) a download whose SHA-256 differs from the pin and (b) an existing tree with no marker."""
+    import tempfile, zipfile as zf
+    from pathlib import Path
+    tmp = Path(tempfile.mkdtemp(prefix="hs-ghidra-refuse-"))
+    try:
+        fake = tmp / "fake.zip"
+        with zf.ZipFile(fake, "w") as z:
+            z.writestr("ghidra_0.0_PUBLIC/support/analyzeHeadless", "#!/bin/sh\n")
+        lock = {"ghidra_version": "0.0", "ghidra_url": fake.as_uri(), "ghidra_sha256": "0" * 64}
+        env_a = tmp / "env-a"
+        try:
+            ghidra.install(lock=lock, env_dir=env_a)
+            a = {"refused": False}
+        except ghidra.GhidraError as e:
+            a = {"refused": True, "message": str(e)}
+        a["unpacked"] = (env_a / "ghidra_0.0_PUBLIC").exists()
+        env_b = tmp / "env-b"
+        (env_b / "ghidra_0.0_PUBLIC/support").mkdir(parents=True)
+        (env_b / "ghidra_0.0_PUBLIC/support/analyzeHeadless").write_text("#!/bin/sh\n")
+        try:
+            ghidra.install(lock=lock, env_dir=env_b)
+            b = {"refused": False}
+        except ghidra.GhidraError as e:
+            b = {"refused": True, "message": str(e)}
+        b["marker_written"] = (env_b / "ghidra_0.0_PUBLIC/.hs-sha256").exists()
+        ev = {"mismatch_download": a, "unmarked_tree": b}
+        require(a["refused"] and "SHA-256 mismatch" in a.get("message", "") and not a["unpacked"],
+                "a download with the wrong SHA-256 wasn't refused (or was unpacked)", **ev)
+        require(b["refused"] and not b["marker_written"], "an unverified existing tree was trusted", **ev)
+        return ev
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
