@@ -213,6 +213,28 @@ def stop_prefix(timeout: float = 30) -> dict:
 
 # ---------------------------------------------------------------- entry point
 
+
+_JXA_WINDOWS = """
+ObjC.import("CoreGraphics");
+var l = ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0));
+var out = [];
+for (var i = 0; i < l.count; i++) { var w = l.objectAtIndex(i), b = w.objectForKey("kCGWindowBounds");
+  out.push([ObjC.unwrap(w.objectForKey("kCGWindowOwnerPID")), ObjC.unwrap(b.objectForKey("Width")),
+            ObjC.unwrap(b.objectForKey("Height")), ObjC.unwrap(w.objectForKey("kCGWindowLayer"))].join(" ")); }
+out.join("\\n")
+"""
+
+
+def onscreen_windows(pid: int) -> list[dict]:
+    """On-screen windows owned by pid, via the window server (no Screen Recording permission needed)."""
+    r = subprocess.run(["osascript", "-l", "JavaScript", "-e", _JXA_WINDOWS], capture_output=True, text=True, timeout=20)
+    wins = []
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 4 and parts[0] == str(pid):
+            wins.append({"width": int(float(parts[1])), "height": int(float(parts[2])), "layer": int(parts[3])})
+    return wins
+
 def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     from . import fixtures, stack
     from .clientcfg import WINE_DEFAULTS, configure
@@ -292,6 +314,9 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     errors_after = {p.name for p in errors_dir.iterdir()} if errors_dir.is_dir() else set()
     ev["smoke"]["new_error_reports"] = sorted(errors_after - errors_before)
     alive_ok = crashed is None and bool(wow) and elapsed >= smoke_seconds
+    # A live process alone could be hung before creating its window; require a real on-screen game window.
+    ev["smoke"]["windows"] = onscreen_windows(wow[0]["pid"]) if wow else []
+    window_ok = any(w["layer"] == 0 and w["width"] >= 640 and w["height"] >= 480 for w in ev["smoke"]["windows"])
 
     ev["stop"] = stop_prefix()
     try:
@@ -307,6 +332,8 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     if not alive_ok:
         raise LaunchError(f"smoke: {crashed or 'Wow.exe not running at the end of the window'} "
                           f"after {elapsed}s", ev)
+    if not window_ok:
+        raise LaunchError("smoke: Wow.exe has no on-screen window of at least 640x480", ev)
     if ev["smoke"]["new_error_reports"]:
         raise LaunchError("smoke: the client wrote a crash report to client/Errors/", ev)
     if ev["remaining_prefix_processes"]:
