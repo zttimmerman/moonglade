@@ -108,3 +108,34 @@ def ghidra_refuses_mismatch(ctx):
         return ev
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
+
+@check("re.mpq_readonly", order=222, capability="client-analysis", stack="any")
+def mpq_readonly(ctx):
+    """`hs mpq list Data/common.MPQ` has >1000 entries; one listed file extracted into env/re/ is nonempty; client/ unchanged."""
+    before = _snapshot()
+    hs = str(P.HARNESS / "hs")
+    lst = subprocess.run([hs, "mpq", "list", "Data/common.MPQ"], capture_output=True, text=True, timeout=600)
+    names = [l for l in lst.stdout.splitlines() if l.strip()]
+    pick = next((n for n in names if n.lower().endswith(".blp")), names[0] if names else None)
+    dest_dir = ghidra.RE / "mpq-check"
+    if dest_dir.exists():
+        shutil.rmtree(dest_dir)
+    dest_dir.mkdir(parents=True)
+    ext = subprocess.run([hs, "mpq", "extract", "Data/common.MPQ", pick or "", str(dest_dir)],
+                         capture_output=True, text=True, timeout=600) if pick else None
+    out = dest_dir / pick.replace("/", "\\").rsplit("\\", 1)[-1] if pick else None
+    after = _snapshot()
+    changed = sorted(k for k in before if k in after and before[k] != after[k])
+    added, removed = sorted(set(after) - set(before)), sorted(set(before) - set(after))
+    ev = {"list_cmd": "harness/hs mpq list Data/common.MPQ", "list_exit": lst.returncode, "entries": len(names),
+          "first_entries": names[:3], "list_stderr": lst.stderr[-500:], "extracted": pick,
+          "extract_exit": ext.returncode if ext else None, "extract_stdout": ext.stdout[-800:] if ext else None,
+          "extract_stderr": ext.stderr[-500:] if ext else None, "dest": str(out),
+          "dest_size": out.stat().st_size if out and out.is_file() else None,
+          "client_files_checked": len(before), "changed": changed, "added": added, "removed": removed}
+    require(lst.returncode == 0 and len(names) > 1000, "listing failed or has <= 1000 entries", **ev)
+    require(ext is not None and ext.returncode == 0, "extract failed", **ev)
+    require(ev["dest_size"], "extracted file missing or empty", **ev)
+    require(str(ghidra.RE) in str(out), "extracted file not under env/re", **ev)
+    require(not changed and not added and not removed, "client/ changed during MPQ list/extract", **ev)
+    return ev
