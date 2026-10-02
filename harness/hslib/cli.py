@@ -50,6 +50,15 @@ def main(argv=None) -> int:
     c = sub.add_parser("client-config", help="point a 3.3.5a client dir at localhost (no binary changes)")
     c.add_argument("client_dir", type=Path)
 
+    ci = sub.add_parser("client-install",
+                        help="install a 3.3.5a client (zip or folder, read-only) into client/ + manifest")
+    ci.add_argument("source", type=Path)
+
+    la = sub.add_parser("launch", help="stack up, client-config, fixtures, start Wow.exe under Wine (ADR-0004)")
+    la.add_argument("--smoke", action="store_true",
+                    help="launch, require Wow.exe alive after 30 s, then stop it and every prefix process")
+    la.add_argument("--smoke-seconds", type=int, default=30, help=argparse.SUPPRESS)
+
     a = ap.parse_args(argv)
 
     if a.cmd == "build":
@@ -135,5 +144,27 @@ def main(argv=None) -> int:
         except ClientConfigError as e:
             log(f"CLIENT-CONFIG FAILED: {e}")
             return 1
+        return 0
+
+    if a.cmd == "client-install":
+        from .clientinst import install, ClientInstallError
+        from .clientcfg import ClientConfigError
+        try:
+            res = install(a.source)
+        except (ClientInstallError, ClientConfigError) as e:
+            log(f"CLIENT-INSTALL FAILED: {e}")
+            return 1
+        _print(res)
+        return 0 if res.get("version_ok", True) else 1
+
+    if a.cmd == "launch":
+        from . import launch
+        try:
+            res = launch.run(smoke=a.smoke, smoke_seconds=a.smoke_seconds)
+        except launch.LaunchError as e:
+            log(f"LAUNCH FAILED: {e}")
+            _print(e.evidence)
+            return 1
+        _print(res)
         return 0
     return 2

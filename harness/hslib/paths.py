@@ -23,6 +23,14 @@ OUT = HARNESS / "out"
 RESULTS = HARNESS / "results.json"
 SUMMARY = HARNESS / "summary.md"
 
+# Client install + Wine layer (ADR-0004)
+CLIENT = ROOT / "client"                              # installed 3.3.5a client (gitignored)
+CLIENT_MANIFEST = ENV / "client-manifest.json"        # written by `hs client-install`
+WINEPREFIX = ENV / "wineprefix"                       # repo-local Wine prefix, never a Whisky bottle
+WINE_LOG = LOGS / "wine.log"
+WHISKY_LIBS = Path.home() / "Library/Application Support/com.isaacmarovitz.Whisky/Libraries"
+WINE_BIN = WHISKY_LIBS / "Wine/bin"                   # Whisky's bundled Wine (used read-only)
+
 HOST = "127.0.0.1"
 MYSQL_PORT = 3307
 AUTH_PORT = 3724

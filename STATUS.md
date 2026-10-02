@@ -9,7 +9,8 @@ Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, desi
 | Task | State | Notes |
 |---|---|---|
 | M0 tasks 1.1–8.1 | **done, verifier PASS** | cycle 1 FAIL (`build.playerbots_active` couldn't fail) → fixed `fbad133` → cycle 2 PASS |
-| 9.2 M0 human gate | **blocked on Zach** | needs 3.3.5a enUS client + CrossOver; see `docs/client-setup.md` |
+| 10.1/10.2 client install + Wine launch (B5) | **blocked on Zach** | code written, not yet verified. Source zip `~/Downloads/[redacted]_3.3.5a.zip` has 2 bad torrent pieces (`Data/enUS/locale-enUS.MPQ`, `Data/expansion.MPQ` fail CRC; confirmed with `unzip -t`). Zach: Transmission → Verify Local Data, then `harness/hs client-install ~/Downloads/[redacted]_3.3.5a.zip` |
+| 9.2 M0 human gate | blocked on 10.x | Wine layer = Whisky's bundled Wine, repo-local prefix (ADR-0004, proposed). Whether it renders the login screen is still unknown |
 | Gate 1 memo | **awaiting Zach's signature** | `docs/gate1-era-profile-memo.md` (6 checkboxes) |
 | F1 pin enforcement misses gitignored content | todo (before M2) | verifier concern: a real dir dropped in `vendor/azerothcore-wotlk/modules/` isn't removed (`git clean` w/o `-x`, `/modules/*` ignored) and would compile in. Fix: remove non-symlink, untracked entries under core `modules/`; `-x` clean for playerbots tree; extend `build.pin_enforced` |
 | F2 `report.full_run` proves files written only externally | todo (low) | verifier concern 2 |
@@ -17,7 +18,7 @@ Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, desi
 | M3 | blocked on Gate 1 | |
 
 ## Last full harness result
-2026-10-01, HEAD `fbad133`, Release build: **25 pass / 0 fail**, exit 0. Three consecutive full runs by the verifier, plus my own runs. One `[human-verify]` scenario is pending (M0 gate). Disk free about 44 GB.
+2026-10-01, HEAD `fbad133`, Release build: **25 pass / 0 fail**, exit 0. Three consecutive full runs by the verifier, plus my own runs. One `[human-verify]` scenario is pending (M0 gate). Disk free about 10 GB after the partial client install (15 GB in `client/`).
 
 ## Known issues / notes for later milestones
 - The playerbots command server (`AiPlayerbot.CommandServerPort`) binds 0.0.0.0 with no address option. It's disabled. If M2/M4 scripting wants it, it needs a module patch to bind 127.0.0.1, and an ADR.

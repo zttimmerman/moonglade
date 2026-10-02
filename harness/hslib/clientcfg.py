@@ -17,6 +17,9 @@ BACKUP_SUFFIX = ".hs-bak"
 FORBIDDEN_SUFFIXES = {".exe", ".dll", ".mpq"}
 LOCALE_RE = re.compile(r"^[a-z]{2}[A-Z]{2}$")          # enUS, enGB, deDE, ...
 CONFIG_KEYS = {"realmlist": LOCALHOST, "patchlist": LOCALHOST}
+# Wine-stability defaults (ADR-0004), used by `hs launch`. Unlike CONFIG_KEYS they're only
+# added when the key is absent, so a setting Zach changes in-game later is never overridden.
+WINE_DEFAULTS = {"gxWindow": "1", "gxApi": "d3d9"}
 
 
 class ClientConfigError(Exception):
@@ -123,7 +126,22 @@ def _update_config(data: bytes, keys: dict[str, str]) -> tuple[bytes, dict]:
                            "line_ending": "CRLF" if eol == b"\r\n" else "LF"}
 
 
-def configure(client_dir: Path) -> dict:
+def _add_defaults(data: bytes, defaults: dict[str, str]) -> tuple[bytes, list[str]]:
+    """Append `SET <key> "<value>"` for each default whose key isn't set yet (case-insensitive)."""
+    present = {m.group(1).decode("latin-1").lower()
+               for m in re.finditer(rb"^\s*SET\s+(\S+)", data, re.IGNORECASE | re.MULTILINE)}
+    eol = _eol_of(data)
+    if data and not data.endswith((b"\n", b"\r")):
+        data += eol
+    added = []
+    for k, v in defaults.items():
+        if k.lower() not in present:
+            data += f'SET {k} "{v}"'.encode() + eol
+            added.append(k)
+    return data, added
+
+
+def configure(client_dir: Path, defaults: dict[str, str] | None = None) -> dict:
     client_dir = Path(client_dir).expanduser()
     if not client_dir.is_dir():
         raise ClientConfigError(f"not a directory: {client_dir}")
@@ -150,6 +168,8 @@ def configure(client_dir: Path) -> dict:
     cfg = (_child_ci(wtf, "Config.wtf") if wtf.is_dir() else None) or (wtf / "Config.wtf")
     old = cfg.read_bytes() if cfg.exists() else b""
     new, detail = _update_config(old, CONFIG_KEYS)
+    if defaults:
+        new, detail["defaults_added"] = _add_defaults(new, defaults)
     changes.append({"kind": "Config.wtf", **_write_if_changed(cfg, new), **detail})
 
     sha_after = _sha256(wow)
