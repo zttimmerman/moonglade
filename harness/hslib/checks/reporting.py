@@ -12,15 +12,32 @@ HUMAN_RE = re.compile(r"\[human-verify\]\s*(\S.{10,})")
 POST_IDS = ("report.coverage", "report.schema", "report.full_run")
 
 
-def spec_files():
-    roots = [P.ROOT / "openspec" / "specs"] + [d / "specs" for d in (P.ROOT / "openspec" / "changes").iterdir()
-                                                if d.is_dir() and d.name != "archive"]
+ACTIVE_FILE = P.HARNESS / "active-changes"
+
+
+def active_changes() -> list[str]:
+    """Changes being built or verified (one id per line in harness/active-changes). Drafted-but-unstarted
+    changes are planning only: reported, but they don't fail coverage/full_run until listed here."""
+    if not ACTIVE_FILE.exists():
+        return []
+    return [l.strip() for l in ACTIVE_FILE.read_text().splitlines() if l.strip() and not l.startswith("#")]
+
+
+def _change_dirs():
+    return [d for d in (P.ROOT / "openspec" / "changes").iterdir() if d.is_dir() and d.name != "archive"]
+
+
+def spec_files(include_planned=False):
+    """Archived specs + active changes' spec deltas (+ planned changes when include_planned)."""
+    active = set(active_changes())
+    roots = [P.ROOT / "openspec" / "specs"] + [d / "specs" for d in _change_dirs()
+                                                if include_planned or d.name in active]
     return sorted(f for r in roots if r.exists() for f in r.rglob("spec.md"))
 
 
-def scenarios():
+def scenarios(include_planned=False):
     """Yield (file, scenario name, check ids, human reason)."""
-    for f in spec_files():
+    for f in spec_files(include_planned):
         text = f.read_text()
         heads = list(SCENARIO_RE.finditer(text))
         for i, m in enumerate(heads):
@@ -44,8 +61,22 @@ def coverage() -> tuple[bool, dict]:
         else:
             bad.append({"file": f, "scenario": name, "check_ids": ids, "unregistered": unknown,
                         "problem": "unregistered check id" if unknown else "no Check: id and no [human-verify] reason"})
-    return not bad, {"scenarios_mapped": mapped, "human_verify": human, "incomplete": bad,
-                     "referenced_ids": sorted(referenced), "spec_files": [str(f.relative_to(P.ROOT)) for f in spec_files()]}
+    active = set(active_changes())
+    planned = sorted(d.name for d in _change_dirs() if d.name not in active)
+    # A change with any ticked task has started; it must be listed as active so its scenarios gate the run.
+    started_unlisted = []
+    for d in _change_dirs():
+        t = d / "tasks.md"
+        if d.name not in active and t.exists() and re.search(r"^\s*- \[[xX]\]", t.read_text(), re.M):
+            started_unlisted.append(d.name)
+    for name in started_unlisted:
+        bad.append({"file": f"openspec/changes/{name}/tasks.md", "scenario": "(change)", "check_ids": [],
+                    "unregistered": [], "problem": "change has completed tasks but isn't listed in harness/active-changes"})
+    planned_unimpl = sorted({i for _, _, ids, _ in scenarios(include_planned=True) for i in ids} - known - referenced)
+    return not bad, {"started_but_unlisted": started_unlisted, "scenarios_mapped": mapped, "human_verify": human, "incomplete": bad,
+                     "referenced_ids": sorted(referenced), "spec_files": [str(f.relative_to(P.ROOT)) for f in spec_files()],
+                     "active_changes": sorted(active), "planned_changes": planned,
+                     "planned_checks_not_yet_registered": planned_unimpl}
 
 
 def _validate(inst, schema, path="$"):

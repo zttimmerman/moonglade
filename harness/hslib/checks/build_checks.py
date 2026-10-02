@@ -15,7 +15,10 @@ def pin_enforced(ctx):
     """`hs build` on dirty + unpinned vendor trees forces them back to fork.lock before building."""
     lock = P.fork_lock()
     # sabotage: move core HEAD off the pin, modify a tracked file, add an untracked file; dirty playerbots too
-    r = _git(P.CORE_SRC, "checkout", "-q", "--detach", "HEAD~1")
+    # Move HEAD off the pin with an empty commit: a different SHA with no file changes, so restoring the pin
+    # doesn't force a rebuild (HEAD~1 here is a 148-file merge; restoring it cost ~5 min of compile).
+    r = _git(P.CORE_SRC, "-c", "user.name=hs-sabotage", "-c", "user.email=hs@localhost",
+             "commit", "-q", "--allow-empty", "-m", "hs sabotage: unpinned HEAD")
     require(r.returncode == 0, "could not move core HEAD for the test", stderr=r.stderr)
     (P.CORE_SRC / "AUTHORS").open("a").write("\nharness-sabotage\n")
     (P.CORE_SRC / "hs_sabotage_untracked.txt").write_text("x")

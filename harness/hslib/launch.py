@@ -1,7 +1,8 @@
 """`hs launch [--smoke]`: start the installed 3.3.5a client under the Wine layer (ADR-0004).
 
-Wine layer: Whisky's bundled Wine binaries, used read-only from Whisky's Libraries folder,
-with a repo-local prefix `env/wineprefix`. Whisky's own bottles and settings are never touched.
+Wine layer: selected by HS_WINE (paths.WINE_LAYERS). Default `mtld3d` = WoWSilicon runtime r17 (Wine 11.13 +
+mtld3d D3D9->Metal) in env/wowsilicon-r17; `whisky` = Whisky's Wine 7.7, read-only. Each layer has its own
+repo-local prefix; Whisky's own bottles and settings are never touched.
 No client binary is modified: the manifest's .exe/.dll hashes are compared before and after.
 
 Normal mode: stack up (if needed) → client-config (+ Wine defaults) → fixtures → start Wow.exe
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import os
 import signal
+import re
 import subprocess
 import time
 from pathlib import Path
@@ -32,10 +34,10 @@ class LaunchError(RuntimeError):
 
 
 def wine_env() -> dict:
-    """Environment for every Wine call. Mirrors only what Whisky sets for a default bottle
-    (see ADR-0004 for sources): WINEPREFIX, WINEDEBUG=fixme-all, and msync (Whisky's default
-    `enhancedSync`). DXVK is off in Whisky's defaults and WoW 3.3.5a is D3D9, so no
-    WINEDLLOVERRIDES are set: d3d9 is Wine's builtin wined3d."""
+    """Environment for every Wine call (ADR-0004): WINEPREFIX of the selected layer, WINEDEBUG=fixme-all
+    (HS_WINEDEBUG overrides), msync, no Mono/Gecko/menu builder, plus the layer's own variables. For the
+    default `mtld3d` layer that's d3d9=b (builtin mtld3d, D3D9->Metal), large-address-aware, and the
+    runtime's external dylib path."""
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("WINE", "DXVK_", "MVK_", "MTL_", "D3DM_"))}
     env.update({
@@ -351,7 +353,9 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     try:
         with open(P.WINE_LOG, errors="replace") as fh:
             fh.seek(log_offset)
-            gfx_errors = [l.rstrip() for l in fh if "err:d3d" in l or "err:opengl" in l]
+            # wined3d/opengl32 log Wine-style ("err:d3d"); mtld3d logs Rust-style ("ERROR mtld3d::...", may be ANSI-coloured)
+            gfx_errors = [l.rstrip() for l in fh
+                          if "err:d3d" in l or "err:opengl" in l or re.search(r"ERROR\W*(\x1b\[[0-9;]*m)*\s*mtld3d", l)]
     except FileNotFoundError:
         gfx_errors = []
     ev["smoke"]["graphics_errors"] = {"count": len(gfx_errors), "first": gfx_errors[:5]}

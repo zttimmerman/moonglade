@@ -62,6 +62,10 @@ def inspect(ctx):
                       "on_disk_not_in_manifest": [r for r in on_disk if r not in recorded]}
     require(recorded and any(r.lower() == "wow.exe" for r in recorded),
             "manifest has no binary hashes (or no Wow.exe entry)", **ev)
+    # An executable or DLL that wasn't there at install time is a client modification (e.g. a patcher's
+    # Wow_patched.exe, libDllLdr.dll, mods/*.dll), even though it has no manifest hash to mismatch.
+    require(not ev["binaries"]["on_disk_not_in_manifest"],
+            "client has .exe/.dll files that weren't present at install time", **ev)
     require(not missing, f"binaries from the manifest are missing: {missing}", **ev)
     require(not mismatched, f"{len(mismatched)} binary hash(es) differ from the manifest", **ev)
     ev["mpq_list"] = {"manifest": [m["path"] for m in man.get("mpqs", [])],

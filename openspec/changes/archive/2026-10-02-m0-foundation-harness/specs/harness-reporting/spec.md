@@ -6,7 +6,7 @@ One headless command runs every check and produces a machine-readable result and
 ## ADDED Requirements
 
 ### Requirement: Single-command full run
-`harness/hs run` SHALL run every registered check (optionally filtered by `--only <glob>`), bring the stack up as needed, and exit 0 only if every executed check passed. A full run (no filter) SHALL include every check referenced by any scenario in active changes and specs.
+`harness/hs run` SHALL run every registered check (optionally filtered by `--only <glob>`), bring the stack up as needed, and exit 0 only if every executed check passed. A full run (no filter) SHALL include every check referenced by any scenario in the archived specs and in the active changes, which are the changes listed in `harness/active-changes` (those being built or verified). Drafted changes not yet listed are reported but don't gate the run.
 
 #### Scenario: Full run produces reports
 - **GIVEN** a built server
@@ -15,7 +15,7 @@ One headless command runs every check and produces a machine-readable result and
 - Check: `report.full_run`
 
 #### Scenario: Every spec scenario maps to a check
-- **GIVEN** the specs under `openspec/specs/` and `openspec/changes/*/specs/`
+- **GIVEN** the specs under `openspec/specs/` and the spec deltas of every change listed in `harness/active-changes`
 - **WHEN** the harness runs its coverage self-check
 - **THEN** every scenario has either a `Check: <id>` naming a registered check, or a `[human-verify]` tag with a reason; any other scenario makes this check fail and is listed
 - Check: `report.coverage`
