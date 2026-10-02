@@ -35,9 +35,52 @@ I'm not recommending it as the default for two reasons. It adds roughly 21% to t
 
 **Design consequences (orchestrator):** M3 stores vanilla values alongside WotLK values and applies them through an AzerothCore module that reads the mode at runtime. It does not rewrite world rows in place. That keeps "easily toggleable" cheap now (one setting) and makes Zach's backlog idea (an in-game single-player settings menu for pacing/difficulty, possibly per character, without SQL swaps or restarts) an extension rather than a rewrite. No VMaNGOS code is used; VMaNGOS is only read as data (CLAUDE.md §7).
 
+## RewXP semantics (verified)
+
+M3 task 1.1. Read from source code, not recall (CLAUDE.md §7). VMaNGOS was read only, in a throwaway clone outside the repo. No VMaNGOS code is copied here; the snippets below are paraphrased formulas with citations.
+
+- **VMaNGOS:** `https://github.com/vmangos/core` at commit `4b3d241cffe245a1f68da11380bce96c23db48c0` (shallow clone of the default branch, 2026-10-01).
+- **AzerothCore:** `vendor/azerothcore-wotlk` at `7f12e89ee5f467a50e62eba1d525eac7dc953d03` (the `core_sha` pinned in `fork.lock`; repo `https://github.com/mod-playerbots/azerothcore-wotlk`, branch `Playerbot`).
+
+**1. How VMaNGOS computes quest XP. Verified.**
+- `RewXP` is loaded as-is from `quest_template` into `Quest::RewXP` (`src/game/QuestDef.cpp:112`, field declared at `src/game/QuestDef.h:358`). `QuestLevel` comes from `src/game/QuestDef.cpp:37`.
+- The only consumer is `Quest::XPValue(uint32 playerLevel)` (`src/game/QuestDef.cpp:180-202`). The only caller is `Player::RewardQuest` (`src/game/Objects/Player.cpp:13136`): `xp = uint32(pQuest->XPValue(GetLevel()) * Rate.XP.Quest)`. That XP goes to `GiveXP(xp, nullptr)` if the player is below max level (`Player.cpp:13138-13139`). At max level the player gets `GetRewMoneyMaxLevelAtComplete()` instead (`Player.cpp:13140-13141`). A repo-wide grep for `XPValue|GetRewXP|RewXP` finds no other use.
+- `GiveXP` (`src/game/Objects/Player.cpp:3008-3045`) then applies only account play-time flags (halved or zeroed, `:3010-3016`), an optional per-player rate (`m_personalXpRate`, default `-1.0f` = disabled, `Player.cpp:113`, used at `:3018-3019`), and no rested bonus, because rested XP applies only when `victim` is set and quests pass `nullptr` (`:3037`).
+
+**2. RewXP at quest level, the over-level reduction, and config. Verified, but the reduction is "equal multipliers, different rounding".**
+- `XPValue` (`src/game/QuestDef.cpp:180-202`), with `fullxp = float(RewXP)` and `d = playerLevel − QuestLevel`:
+  - d ≤ 5 → `ceil(RewXP)`, i.e. **`RewXP` exactly**. So `RewXP` is the full XP at quest level, and up to 5 levels above it.
+  - d = 6 → `ceil(RewXP × 0.8f)`; d = 7 → `× 0.6f`; d = 8 → `× 0.4f`; d = 9 → `× 0.2f`; d ≥ 10 → `× 0.1f`.
+  - `RewXP = 0` → 0 XP at any level (`:182`, `:201`).
+  - There is no quest-level −1 (level-scaling) handling. `QuestLevel` is an unsigned field.
+- Rounding: `ceilf` on a **single-precision float** product. Because `0.6f`, `0.8f`, etc. aren't exact in binary, the float product sometimes lands just above an integer, and ceil then adds 1. Example: `25 × 0.6f` = 15.00000095f → 16, not 15. I checked every `RewXP` in 1..30000 × the 5 factors with IEEE-754 float32 emulation, and 2,724 of those 150,000 combinations differ from exact rational ceil.
+- Config: `Rate.XP.Quest`, default `1.0` (`src/game/World.cpp:508`; `src/mangosd/mangosd.conf.dist.in:2811` ships `Rate.XP.Quest = 1`). It is applied once, after `XPValue`, with truncation to `uint32` (`Player.cpp:13136`).
+
+**3. Comparison with AzerothCore. The penalty thresholds and multipliers are identical. The rounding and the post-multipliers are not.**
+- AC `Quest::XPValue(uint8 playerLevel)` (`src/server/game/Quests/QuestDef.cpp:199-237`): `quest_level = (Level == -1 ? playerLevel : Level)` (`:201`). `diffFactor = clamp(2 × (quest_level − playerLevel) + 20, 1, 10)` (`:208-216`). `xp = diffFactor × QuestXP.dbc[quest_level].Exp[RewardXPDifficulty] / 10` (integer division, `:218`). The result is then rounded to the nearest 5 (≤100), 10 (≤500), 25 (≤1000) or 50 (`:219-234`).
+- diffFactor by d = player − quest: d ≤ 5 → 10 (×1.0); 6 → 8 (×0.8); 7 → 6 (×0.6); 8 → 4 (×0.4); 9 → 2 (×0.2); d ≥ 10 → clamped to 1 (×0.1). **That is the same table as VMaNGOS**, so the memo's assumption about the over-level penalty holds for thresholds and factors.
+- They differ in four ways:
+  1. **Rounding.** AC: integer truncation, then round to the nearest 5/10/25/50, applied after the penalty. VMaNGOS: float32 `ceil`, no step rounding. Example (19 Tharil'zun, VMaNGOS RewXP 2550, which equals an AC ladder value): at d = 6, VMaNGOS gives 2040 and AC gives 2050. At d ≥ 10, VMaNGOS gives 255 and AC gives 260. At quest level both give 2550.
+  2. **Level-scaling quests** (`Level = −1`) exist only in AC.
+  3. **Post-multipliers in AC:** `Player::CalculateQuestRewardXP` (`src/server/game/Entities/Player/PlayerQuest.cpp:1475-1487`) applies the `OnPlayerBeforeGetLevelForXPGain` level hook (`:1478`), then `GetQuestRate` (`Rate.XP.Quest` or `Rate.XP.Quest.DF`, both default 1.0 at `src/server/game/World/WorldConfig.cpp:62-63`, with the `OnPlayerGetQuestRate` hook at `Player.cpp:16607-16614`), with truncation to `uint32` (`PlayerQuest.cpp:1481`). It then multiplies by the `SPELL_AURA_MOD_XP_QUEST_PCT` aura multiplier (`:1484`). `GiveXP` (`src/server/game/Entities/Player/Player.cpp:2404-2427`) adds +5% Thrallmar's/Honor Hold's Favor in Hellfire (Outland only, so it doesn't matter for 1–60), plus RaF and play-time handling.
+  4. **Repeatables:** AC gives 0 XP on repeat completions of non-daily/weekly/monthly quests (`PlayerQuest.cpp:759-762`). VMaNGOS awards `XPValue` on every completion (`Player.cpp:13136`, no such guard). This is out of scope for the module; AC's behaviour stays.
+- **Hook semantics (matters for the module):** `OnPlayerQuestComputeXP(player, quest, uint32& xp)` gets the **already-computed AC XP** (after rate and aura) at `PlayerQuest.cpp:764` (award) and at `src/server/game/Entities/Creature/GossipDef.cpp:473` and `:725` (the XP shown in quest-details and offer-reward windows). The max-level money conversion `Quest::GetRewMoneyMaxLevel` (`QuestDef.cpp:265`) calls AC `XPValue` directly and does **not** go through the hook, so vanilla quest XP doesn't change level-80 quest gold. That's acceptable: quest gold is descoped, Decision 5. The LFG reward packet (`src/server/game/Handlers/LFGHandler.cpp:198,495`) also bypasses the hook, but Dungeon Finder quests aren't in VMaNGOS anyway.
+
+**How the vanilla-XP module must compute XP to reproduce VMaNGOS** (only for quests with a vanilla `RewXP` row; every other quest keeps AC's value untouched):
+1. `level` = the player level after `OnPlayerBeforeGetLevelForXPGain` (as in AC). `d = level − QuestLevel`, where QuestLevel is AC's (equal to VMaNGOS's for every row the tool emits as an absolute override; see 4).
+2. `base = RewXP` if d ≤ 5. Otherwise `base = uint32(ceilf(float(RewXP) * F))` with `F` = `0.8f`/`0.6f`/`0.4f`/`0.2f` for d = 6/7/8/9 and `0.1f` for d ≥ 10. Use C++ `float` literals and `ceilf` so the float32 rounding matches. No step rounding to 5/10/25/50.
+3. `xp = uint32(base * player->GetQuestRate(false))`, then `xp *= player->GetTotalAuraMultiplier(SPELL_AURA_MOD_XP_QUEST_PCT)`. This keeps AC's rate and aura semantics, and both default to 1.0. Note that VMaNGOS applies its rate with the same truncation.
+4. **Replace** the hook's `xp` argument with this value. Don't scale the AC value, because the incoming number has already been step-rounded and penalised by AC. If AC's incoming `xp` is 0 because the quest is a repeat (`rewarded`) or the player gets money instead of XP, leave it at 0 so AC's repeat and max-level rules stay intact.
+
+**4. era-diff mapping. Correct for the at-level comparison, with two caveats for the change set.**
+- `cat_quest_xp` (`tools/era-diff/era_diff.py:421-475`) compares VMaNGOS `RewXP` against `ac_round_quest_xp(QuestXP[AC QuestLevel].Exp[RewardXPDifficulty])` (`:440-441`, helper at `:140-149`). At quest level, AC's diffFactor is 10, so AC full XP = step-rounded `Exp[d]` exactly, which matches the helper. VMaNGOS full XP = `RewXP` exactly (finding 2). **The comparison is correct.** Level-scaling quests and quest-level mismatches are routed to needs-review (`:434-438`, `:451-455`). That's also correct, because the penalty depends on quest level.
+- **Caveat A, the "exact" rows (56 quests, mechanism `sql:UPDATE quest_template.RewardXPDifficulty (exact)`, `:466-469`).** These give identical XP at d ≤ 5, but not when the player is over-level: AC step-rounding vs VMaNGOS float ceil (e.g. 2050 vs 2040 above). The difference is small, at most about one rounding step. **Fix needed (not applied in this task):** route these rows through the same module override as the absolute rows (emit `RewXP(absolute)`/`module:OnPlayerQuestComputeXP` for them too, or keep the SQL label but have the module also cover them). Then vanilla mode reproduces VMaNGOS at every player level, and the world rows stay unmodified, per the Decisions' "store vanilla values alongside" design.
+- **Caveat B, the ±5% filter (Decision 2).** This is a scope choice, not a semantics error. Those quests keep AC's XP, including AC's rounding.
+- The docstring's claim "diffFactor clamps to 10" is correct (AC `QuestDef.cpp:213-216`).
+
 ## Unsourced / needs-review (§7)
 
-- **What VMaNGOS `RewXP` means:** I assumed it is the full XP at quest level and that VMaNGOS applies the same over-level penalty as AC. I didn't read the VMaNGOS core to confirm this.
+- **What VMaNGOS `RewXP` means:** RESOLVED. See "RewXP semantics (verified)" above. `RewXP` is the full XP at quest level (and up to 5 levels above it). VMaNGOS's over-level thresholds and factors match AC's. The two cores round differently, and AC applies its rate and aura after `XPValue`. The module must compute XP itself as described above, not rescale AC's value. One open item: era-diff's 56 "exact" `RewardXPDifficulty` rows differ slightly from VMaNGOS when the player is over-level (Caveat A). The tool change is pending.
 - **Creature damage:** there is no data mapping between VMaNGOS `melee_damage`×`damage_multiplier` and AC `damage_base`/AP×`DamageModifier`, so 3,155 rows are unsourced.
 - **Kill XP formula and rest XP:** both live in core code or config, not the world DB, so the diff can't see them.
 - **Base armor:** 180 class/level rows differ in a table shared by every exp=0 creature.
