@@ -23,31 +23,34 @@ def render(dist: Path, out: Path, overrides: dict[str, str]) -> None:
     out.write_text(text)
 
 
-def common() -> dict:
+def common(logs: Path = P.LOGS, tmp: Path = P.ENV / "tmp", source: Path = P.CORE_SRC) -> dict:
     return {
-        "LogsDir": f'"{P.LOGS}"',
-        "TempDir": f'"{P.ENV / "tmp"}"',
-        "SourceDirectory": f'"{P.CORE_SRC}"',
+        "LogsDir": f'"{logs}"',
+        "TempDir": f'"{tmp}"',
+        "SourceDirectory": f'"{source}"',
         "MySQLExecutable": f'"{P.BREW / "opt/mysql/bin/mysql"}"',
         "BindIP": '"127.0.0.1"',
         "Updates.AutoSetup": "1",
     }
 
 
-def write_all(world_datadir: Path | None = None, extra_world: dict | None = None) -> dict:
-    for d in (P.LOGS, P.ENV / "tmp"):
+def write_all(world_datadir: Path | None = None, extra_world: dict | None = None, *, etc: Path = P.SERVER_ETC,
+              logs: Path = P.LOGS, run: Path = P.RUN, tmp: Path = P.ENV / "tmp", source: Path = P.CORE_SRC) -> dict:
+    """Render authserver/worldserver/module confs into `etc`. The keyword paths default to the real stack; the
+    unpatched baseline worldserver (core.login_logout_race_baseline) renders its own install's confs with them."""
+    for d in (logs, tmp, run):
         d.mkdir(parents=True, exist_ok=True)
-    auth = common() | {
+    auth = common(logs, tmp, source) | {
         "LoginDatabaseInfo": _dbinfo("auth"),
-        "PidFile": f'"{P.RUN / "authserver.pid"}"',
+        "PidFile": f'"{run / "authserver.pid"}"',
         "Updates.EnableDatabases": "1",
     }
-    world = common() | {
+    world = common(logs, tmp, source) | {
         "LoginDatabaseInfo": _dbinfo("auth"),
         "WorldDatabaseInfo": _dbinfo("world"),
         "CharacterDatabaseInfo": _dbinfo("characters"),
         "DataDir": f'"{world_datadir or P.CLIENT_DATA}"',
-        "PidFile": f'"{P.RUN / "worldserver.pid"}"',
+        "PidFile": f'"{run / "worldserver.pid"}"',
         "Console.Enable": "0",
         "SOAP.Enabled": "1",
         "SOAP.IP": '"127.0.0.1"',
@@ -59,9 +62,9 @@ def write_all(world_datadir: Path | None = None, extra_world: dict | None = None
         # suspect for the client's ILLEGAL_INSTRUCTION crash at a non-module EIP under Wine+Rosetta (2026-10-01).
         "Warden.Enabled": "0",
     } | (extra_world or {})
-    render(P.SERVER_ETC / "authserver.conf.dist", P.SERVER_ETC / "authserver.conf", auth)
-    render(P.SERVER_ETC / "worldserver.conf.dist", P.SERVER_ETC / "worldserver.conf", world)
-    mods = P.SERVER_ETC / "modules"
+    render(etc / "authserver.conf.dist", etc / "authserver.conf", auth)
+    render(etc / "worldserver.conf.dist", etc / "worldserver.conf", world)
+    mods = etc / "modules"
     rendered = []
     for dist in sorted(mods.glob("*.conf.dist")) if mods.exists() else []:
         ov = {}

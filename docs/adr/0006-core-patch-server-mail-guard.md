@@ -1,6 +1,6 @@
 # ADR-0006: Core patch: guard ServerMailReward's async login callback
 
-- Status: proposed (implementation pending; first core patch)
+- Status: accepted (2026-10-02). Patch: `patches/core/0001-server-mail-guard-async-player.patch` (first core patch); checks `core.patch_applied`, `core.login_logout_race`, `core.login_logout_race_baseline`
 - Date: 2026-10-02
 
 ## Context
