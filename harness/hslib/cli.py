@@ -54,6 +54,9 @@ def main(argv=None) -> int:
                         help="install a 3.3.5a client (zip or folder, read-only) into client/ + manifest")
     ci.add_argument("source", type=Path)
 
+    wi = sub.add_parser("wine-install", help="fetch + SHA-256-verify the pinned Wine runtime (fork.lock) into env/")
+    wi.add_argument("--force", action="store_true", help="re-download even if the pinned runtime is present")
+
     la = sub.add_parser("launch", help="stack up, client-config, fixtures, start Wow.exe under Wine (ADR-0004)")
     la.add_argument("--smoke", action="store_true",
                     help="launch, require Wow.exe alive after 30 s, then stop it and every prefix process")
@@ -156,6 +159,15 @@ def main(argv=None) -> int:
             return 1
         _print(res)
         return 0 if res.get("version_ok", True) else 1
+
+    if a.cmd == "wine-install":
+        from .wineinst import install as wine_install, WineInstallError
+        try:
+            _print(wine_install(force=a.force))
+        except WineInstallError as e:
+            log(f"WINE-INSTALL FAILED: {e}")
+            return 1
+        return 0
 
     if a.cmd == "launch":
         from . import launch
