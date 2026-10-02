@@ -20,13 +20,13 @@ Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, desi
 | M1 `./play` | spec written (`openspec/changes/m1-offline-play-loop`) | next after M0 archives |
 | M2 living world | spec written (`openspec/changes/m2-living-world`) | population, companions, perf budget |
 | M3 vanilla mode | spec written (`openspec/changes/m3-vanilla-mode`) | module + side tables per signed Gate 1 |
-| F6 setup reproducibility | todo | Brewfile, `hs bootstrap`, `docs/setup.md`; private GitHub remote only if Zach says yes |
+| F6 setup reproducibility | todo | Brewfile, `hs bootstrap`, `docs/setup.md`. Private GitHub remote: done 2026-10-02 |
 
 ## Last full harness result
 2026-10-01, HEAD `fbad133`, Release build: **25 pass / 0 fail**, exit 0. Three consecutive full runs by the verifier, plus my own runs. One `[human-verify]` scenario is pending (M0 gate). Disk free about 10 GB after the partial client install (15 GB in `client/`).
 
 ## Working conventions
-- One git branch per OpenSpec change (`change/<id>`). It merges to `main` only after a verifier PASS and a green full run. `main` = verified work. No remote yet (Zach decides).
+- One git branch per OpenSpec change (`change/<id>`), pushed to the private remote `origin` (github.com/zttimmerman/[redacted]). Each gets a PR, merged to `main` only after a verifier PASS and a green full run, with the verdict in the PR body. `main` = verified work.
 - `harness/active-changes` lists the changes being built or verified; only those (plus archived specs) gate `report.coverage` / `report.full_run`.
 
 ## Known issues / notes for later milestones
