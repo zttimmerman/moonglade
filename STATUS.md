@@ -11,7 +11,9 @@ Change: `openspec/changes/m0-foundation-harness/` (proposal, 5 spec deltas, desi
 | M0 tasks 1.1–8.1 | **done, verifier PASS** | cycle 1 FAIL (`build.playerbots_active` couldn't fail) → fixed `fbad133` → cycle 2 PASS |
 | 10.1/10.2 client install + Wine launch (B5) | done, awaiting verifier | zip repaired by Zach; installed (manifest written, Wow.exe 3.3.5.12340). `client.inspect` + `client.launch_smoke` PASS (smoke now also requires an on-screen ≥640×480 window). Screenshot confirmed the WotLK intro cinematic renders under Whisky's Wine |
 | 9.2 M0 human gate | **PASSED 2026-10-01** | Zach: logged in under Whisky's Wine, walked around Goldshire, "Game works". Fixes on the way: Warden disabled (ILLEGAL_INSTRUCTION crash at login); EULA must be scrolled to enable Accept |
-| F3 red/blue smears in world | **root-caused, decision needed** | Wine 7.7 (Whisky) wined3d bug: clip-plane emulation emits `ps_link[7]` in GLSL-150 interface-block shaders → link fails (466 failed programs in a 10 s session) → stale shader state on alpha-tested, fogged draws (foliage). Not fixable by client settings: the client's OpenGL path fails WGL pixel format. Wine 11.0 (Gcenx, `HS_WINE=wine11`) crashes ~7 s after start in a 32-bit thunk region (new WoW64). Options: CrossOver trial; patch wined3d 7.7 ourselves |
+| F3 red/blue smears in world | **fixed, pending verifier** | Root cause: a Wine 7.7 wined3d bug (clip-plane GLSL emits undeclared `ps_link`). Default layer is now WoWSilicon's Wine runtime r17 + mtld3d (D3D9→Metal), with no client patching (ADR-0004 rev). Zach confirmed in-game: no smears, faster |
+| F4 `hs wine-install` (fetch + sha-verify pinned runtime from fork.lock) | todo | so a fresh checkout reproduces `env/wowsilicon-r17` |
+| F5 mtld3d shader cache written into `client/`; slight colour banding (HDR on) | todo (low) | |
 | F1 pin enforcement vs gitignored content | code done, untested | test needs the stack down, so it waits until Zach's session ends |
 | Gate 1 memo | **awaiting Zach's signature** | `docs/gate1-era-profile-memo.md` (6 checkboxes) |
 | F2 `report.full_run` proves files written only externally | todo (low) | verifier concern 2 |
