@@ -37,6 +37,12 @@ def is_full_run(tier: str, only: list[str] | None) -> bool:
     return not only and tier in ("full", "slow")
 
 
+def tolerated_skip(rec: dict, meta: dict) -> bool:
+    """The only non-pass status that doesn't fail a run: report.full_run = skip on a run that isn't full
+    (harness-reporting "Single-command full run"). Any other skip, and any skip on a full run, fails."""
+    return rec["id"] == "report.full_run" and rec["status"] == "skip" and meta.get("full_run") is False
+
+
 def select(reg: dict, tier: str, only: list[str] | None) -> list:
     tiers = tiers_for(tier)
     return sorted(
@@ -92,7 +98,7 @@ def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full
     doc["meta"]["finished"] = _now()      # after the post-run checks (report.tiers may run a nested quick tier)
     doc["meta"]["wall_s"] = round(time.time() - t_start, 1)
     doc["meta"]["counts"] = {s: sum(1 for r in doc["checks"] if r["status"] == s) for s in ("pass", "fail", "error", "skip")}
-    doc["meta"]["ok"] = all(r["status"] == "pass" for r in doc["checks"])
+    doc["meta"]["ok"] = all(r["status"] == "pass" or tolerated_skip(r, doc["meta"]) for r in doc["checks"])
     P.RESULTS.write_text(json.dumps(doc, indent=2, default=str))
     P.SUMMARY.write_text(summary_md(doc))
     log(f"wrote {P.RESULTS} and {P.SUMMARY}")

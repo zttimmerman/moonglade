@@ -212,12 +212,28 @@ def _resolved_deps() -> dict:
     return {n: os.path.realpath(b / n) for n in ("mysql", "readline", "openssl@3", "boost")}
 
 
+# fork.lock keys that determine the server build. The other pins (Ghidra, Wine runtime, client data, VMaNGOS)
+# don't affect authserver/worldserver, so bumping them must not force a from-empty build.
+BUILD_PINS = ("core_repo", "core_branch", "core_sha", "playerbots_repo", "playerbots_branch", "playerbots_sha")
+
+
+def build_pins(path=None) -> dict:
+    """The server-build pins of a fork.lock file (same parsing as paths.fork_lock); missing keys map to None."""
+    lock = {}
+    for line in (path or (P.ROOT / "fork.lock")).read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, v = line.split("=", 1)
+            lock[k.strip()] = v.strip()
+    return {k: lock.get(k) for k in BUILD_PINS}
+
+
 def input_manifest(*, fork_lock_path=None, patches_dir=None, modules_dir=None, cmake=None, compiler=None) -> dict:
     """Everything a build's output depends on that the harness controls. Keyword overrides exist so checks
     can show a changed input changes the hash without touching the real inputs (sandbox copies)."""
     fl = fork_lock_path or (P.ROOT / "fork.lock")
     return {
-        "fork_lock": _sha256_file(fl),
+        "fork_lock_build_pins": build_pins(fl),
         "patches_core": tree_digest(patches_dir or P.PATCHES),
         "modules": tree_digest(modules_dir or P.MODULES),
         "cmake_args": cmake if cmake is not None else [str(a) for a in cmake_args()] + [f"dep:{k}={v}" for k, v in sorted(_resolved_deps().items())],

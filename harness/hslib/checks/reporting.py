@@ -173,8 +173,11 @@ def _tier_problems_for_run(doc: dict, wall_s: float, full_run_rec: dict | None) 
         probs.append(f"took {wall_s:.0f} s (budget < {QUICK_BUDGET_S} s)")
     if doc["meta"].get("full_run") is not False:
         probs.append("quick run marked as a full run")
-    if full_run_rec is None or full_run_rec.get("status") != "fail" or "not a full run" not in (full_run_rec.get("message") or ""):
-        probs.append("report.full_run did not report fail ('not a full run')")
+    if full_run_rec is None or full_run_rec.get("status") != "skip" or "not a full run" not in (full_run_rec.get("message") or ""):
+        probs.append("report.full_run did not report skip ('not a full run')")
+    others = sorted(r["id"] for r in doc["checks"] if r["id"] != "report.full_run" and r["status"] != "pass")
+    if others:
+        probs.append(f"non-passing checks besides report.full_run: {others}")
     return probs, ev
 
 
@@ -200,8 +203,9 @@ def tiers_nested(leave_up: bool) -> dict:
         return _tiers_record([f"nested quick run wrote no readable results.json: {e}"], ev | {"stderr_tail": r.stderr[-1500:]}, t0)
     fr = next((x for x in doc["checks"] if x["id"] == "report.full_run"), None)
     probs, tev = _tier_problems_for_run(doc, wall, fr)
-    if r.returncode == 0:
-        probs.append("nested quick run exited 0 although report.full_run must fail in it")
+    ev["other_checks_all_pass"] = not any(x["status"] != "pass" for x in doc["checks"] if x["id"] != "report.full_run")
+    if r.returncode != (0 if ev["other_checks_all_pass"] else 1):
+        probs.append(f"nested quick run exit {r.returncode}: must be 0 iff every check but report.full_run passed")
     return _tiers_record(probs, ev | tev, t0)
 
 
@@ -238,14 +242,18 @@ def post_run(doc, selected_ids, t_start=None, leave_up=False):
     failing = sorted(r["id"] for r in doc["checks"] + out if r["status"] != "pass")
     full = doc["meta"]["full_run"]
     ok = full and not not_run and not failing
+    # Not a full run (quick tier or --only): skip, which only for this record and only then doesn't fail the run
+    # (runner.tolerated_skip). A full run must pass; it can never be skipped.
+    status = "pass" if ok else ("fail" if full else "skip")
     why = [] if full else [f"not a full run (tier {m.get('tier')}{', filtered' if m.get('filter') else ''})"]
-    out.append({"id": "report.full_run", "capability": "harness-reporting", "status": "pass" if ok else "fail",
+    out.append({"id": "report.full_run", "capability": "harness-reporting", "status": status,
                 "evidence": {"full_run": full, "tier": m.get("tier"), "filter": m.get("filter"),
                              "spec_ids_not_executed": not_run,
                              "non_passing": failing, "checks_executed": len(executed),
                              "outputs": [str(P.RESULTS.relative_to(P.ROOT)), str(P.SUMMARY.relative_to(P.ROOT))]},
                 "duration_s": 0.0,
-                **({} if ok else {"message": ("not a clean full run: " + ", ".join(why + not_run + failing))[:300]})})
+                **({} if ok else {"message": (why[0] if not full else
+                                              "not a clean full run: " + ", ".join(not_run + failing))[:300]})})
     if self_mode:
         t0 = time.time()
         wall = time.time() - (t_start or time.time())

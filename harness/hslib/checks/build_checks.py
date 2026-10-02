@@ -1,5 +1,6 @@
 """server-build checks."""
 import json
+import re
 import os
 import secrets
 import shutil
@@ -224,13 +225,31 @@ def clean_smart(ctx):
             flips[name] = {"changed": what, "hash": h2, "differs_from_H": h2 != H, "mode": mode, "reason": reason}
 
         for name, key in (("modules/ (byte appended to a file)", "modules_dir"),
-                          ("patches/core/ (byte appended to a file)", "patches_dir"),
-                          ("fork.lock (byte appended)", "fork_lock_path")):
+                          ("patches/core/ (byte appended to a file)", "patches_dir")):
             ov = sandbox()
-            target = ov[key] if key == "fork_lock_path" else first_file(ov[key])
+            target = first_file(ov[key])
             with open(target, "ab") as fh:
                 fh.write(b"\0")
             flip(name, ov, str(target.relative_to(td)))
+
+        def edit_pin(key):
+            """Change one key's value in the sandbox fork.lock (the line must exist)."""
+            ov = sandbox()
+            text = ov["fork_lock_path"].read_text()
+            new, n = re.subn(rf"^({re.escape(key)}\s*=\s*)(.*)$", lambda m: m.group(1) + m.group(2) + "-hs-sandbox",
+                             text, count=1, flags=re.M)
+            require(n == 1, f"sandbox fork.lock has no {key} line", **ev)
+            ov["fork_lock_path"].write_text(new)
+            return ov
+
+        for key in ("core_sha", "playerbots_sha", "core_branch"):
+            flip(f"fork.lock build pin {key} (changed)", edit_pin(key), f"{key} += '-hs-sandbox'")
+        # an unrelated pin must NOT change the hash (no from-empty build for a Ghidra/Wine bump)
+        unrelated = {}
+        for key in ("ghidra_version", "wowsilicon_runtime_sha256"):
+            h3 = build.input_hash(build.input_manifest(**edit_pin(key)))
+            unrelated[key] = {"changed": f"{key} += '-hs-sandbox'", "hash": h3, "equals_H": h3 == H,
+                              "mode": build.decide_mode(h3, H, H, force=False)[0]}
         ov = sandbox()
         ov["cmake"] = base["cmake_args"] + ["-DHS_SANDBOX_EXTRA=1"]
         flip("cmake arguments (one appended)", ov, "-DHS_SANDBOX_EXTRA=1")
@@ -239,10 +258,13 @@ def clean_smart(ctx):
         flip("compiler identity (changed)", ov, "clang --version + ' (sandbox)'")
     real_after = {"modules": build.tree_digest(P.MODULES), "patches": build.tree_digest(P.PATCHES),
                   "fork_lock": build._sha256_file(P.ROOT / "fork.lock")}
-    ev |= {"input_change_cases": flips, "real_inputs_unchanged": real_before == real_after}
+    ev |= {"input_change_cases": flips, "unrelated_pin_cases": unrelated,
+           "real_inputs_unchanged": real_before == real_after}
     require(real_before == real_after, "the real build inputs changed during the check", **ev)
     bad = [n for n, f in flips.items() if not f["differs_from_H"] or f["mode"] != "from-empty"]
     require(not bad, f"input change did not flip to from-empty: {bad}", **ev)
+    bad_u = [k for k, u in unrelated.items() if not u["equals_H"] or u["mode"] != "verified-current"]
+    require(not bad_u, f"an unrelated fork.lock pin changed the build-input hash: {bad_u}", **ev)
     require(build.decide_mode(H, H, H, force=True)[0] == "from-empty", "--force-clean does not force from-empty", **ev)
     return ev
 
