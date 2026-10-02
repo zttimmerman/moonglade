@@ -25,6 +25,9 @@ M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01
 ## Last full harness result
 2026-10-02, HEAD `48cd8a9`: **27 pass / 0 fail**, exit 0 (mine, plus 2 verifier runs). About 7 min per full run. Disk free about 22 GB.
 
+## North star (Zach, 2026-10-02)
+Offline WoW that feels like **one single-player app**, with many moving parts behind the scenes. Target front end: the **in-client modified login screen** (profiles/saves/options, auto-login, backdrop picker), reached via a launcher-side menu first. Client binary changes are expected over time, each with its own ADR and Zach's yes (§2/§11).
+
 ## Working conventions
 - One git branch per OpenSpec change (`change/<id>`), pushed to the private remote `origin` (github.com/zttimmerman/[redacted]). Each gets a PR, merged to `main` only after a verifier PASS and a green full run, with the verdict in the PR body. `main` = verified work.
 - `harness/active-changes` lists the changes being built or verified; only those (plus archived specs) gate `report.coverage` / `report.full_run`.
@@ -36,7 +39,7 @@ M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01
 - The era-diff tool couldn't read VMaNGOS source to confirm what `RewXP` means, because a web fetch was denied. It's flagged in the memo.
 
 ## Backlog (later rounds)
-- **Front menu** (Zach's vision): login screen becomes profile/save select + game options, original animations kept; auto-login per profile; optional background picker (WotLK/TBC/Vanilla). Depends on the login-screen spike. Saves: light (per account) vs true save files (separate DBs), to decide later.
+- **Front menu** (target state, see North star). Step 1: a launcher-side menu (`.app`: profiles/saves/options, the launcher types the login, backdrop/music swap via a data-only patch MPQ). Step 2: the in-client screen, which needs a Wow.exe signature-check patch on a copy (ADR when we get there). Spike phase A: GlueXML is RSA/MD5-signed and verified each load; backdrops (WotLK/TBC/Dark Portal) and music are present and unsigned. Saves: light (per account) vs true save files (separate DBs), to decide later.
 - Mac `.app` launcher for `./play` (right after the spike); optional stopgap where the launcher types the login.
 - F6 setup reproducibility: Brewfile, `hs bootstrap`, docs/setup.md.
 - In-game single-player settings menu: toggle leveling pace/difficulty (vanilla vs WotLK, per character?) without SQL swaps or restarts. Zach's idea from Gate 1.
