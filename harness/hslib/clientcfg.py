@@ -19,9 +19,7 @@ LOCALE_RE = re.compile(r"^[a-z]{2}[A-Z]{2}$")          # enUS, enGB, deDE, ...
 CONFIG_KEYS = {"realmlist": LOCALHOST, "patchlist": LOCALHOST}
 # Wine-stability defaults (ADR-0004), used by `hs launch`. Unlike CONFIG_KEYS they're only
 # added when the key is absent, so a setting Zach changes in-game later is never overridden.
-# ffxGlow: the full-screen glow pass renders as red/blue vertical smears under Whisky's Wine d3d9
-# (seen 2026-10-01 in Goldshire, F3). Added only when absent, so a player's own setting wins.
-WINE_DEFAULTS = {"gxWindow": "1", "gxApi": "d3d9", "ffxGlow": "0"}
+WINE_DEFAULTS = {"gxWindow": "1", "gxApi": "d3d9"}
 
 
 class ClientConfigError(Exception):
