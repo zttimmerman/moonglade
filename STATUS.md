@@ -1,16 +1,18 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-03: M2 part 1 done; part 2 (companions) in flight._
+_Updated 2026-10-03 (orchestrator context ~91%; compaction expected). After compaction or a fresh session: follow this section; the memory notes hold Zach's preferences and decisions._
 
 **Cold start:** read this file, then `openspec list` (Node 20: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`), then `git -C <repo> worktree list`, `git branch -a`, `gh pr list`, then `harness/hs status`. The skills `.claude/skills/hs-*` hold the procedures (change loop, checks, client debugging, RE). User preferences and decisions are in the orchestrator memory notes (plain language for decisions, Gate 1, front-menu vision, logo).
 
 **In flight**
 | Work | Branch / checkout | State | If its agent is gone |
 |---|---|---|---|
-| M2 living world | `change/m2-living-world`, **main checkout**, active | **Part 1 done** (B12; 1.0/1.1/2.1/2.2/4.1 ticked): 500 bots default, `hs world-size small|normal|large`, `./play` starts the living world, fresh bot world each boot; slow run green except comp.*-related (zones ≥19, capitals ≥4, server 4.8 GB, stack 5.5 GB). **Part 2 (B13):** probe chat done; `comp.follows`/`comp.assists` pass. `comp.add_remove`/`comp.quest_shared` fail on two real bugs → B13 fixing: core patch 0002 (playerbots OnPacketReceived hook gets a moved-from empty packet for typed handlers → bots never see quest share; ADR-0007 + opcode audit) and a new `patches/playerbots/` queue + patch 0001 (`bot remove` leaves an offline party member; ADR-0008). Owns the stack | re-brief part 2 from `specs/companion-bots/spec.md` + design; then verifier (unfiltered `--tier slow` required) |
+| M2 living world | `change/m2-living-world`, **main checkout**, listed in `harness/active-changes` | Part 1 done (500 bots, world-size setting, `./play` = living world, budget). Part 2: probe chat done; `comp.follows`/`comp.assists` pass. **Builder B13 is fixing two upstream bugs** (no upstream issue/fix exists, searched 2026-10-03): core patch 0002 (playerbots `OnPacketReceived` hook receives a moved-from empty packet for typed handlers, so bots never see quest share; ADR-0007 + opcode audit) and a new `patches/playerbots/` queue + patch 0001 (`bot remove` leaves an offline party member; ADR-0008). B13 also adds `caffeinate -s` (F12). Owns the stack | Check the branch for B13's commits; re-brief a fresh builder from M2 tasks 3.3/3.4 + `design.md` ("Builder notes … B13", "Open: two scenarios fail") + B13's commits. Done when `comp.add_remove` and `comp.quest_shared` pass unmodified, each fails without its patch, and the quick tier + ONE unfiltered `--tier slow` run are green |
 
-**Next (in order):** M2 part 1 → M2 part 2 (companions) → verifier (needs an unfiltered `--tier slow` run) → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
+**Next after B13:** M2 verifier (fresh). Budget: 1 unfiltered **`--tier slow --force-clean`** run (patches changed build inputs) + ≥5 repeats of `comp.*` and `core.*`. Ask it to judge the capital margin (≥3 required; observed 4–6) for flakiness, review both new patches and ADR-0007/0008, and confirm PLAYER, `env/player.json` and `env/settings.json` are untouched. Then archive, PR, merge; set ADR-0007/0008 to accepted.
+
+**Next (in order):** M2 finish + verify → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
 
 **Decisions pending from Zach:** none blocking. Later: the patch ADR for the in-client front menu (step 2); light vs true save files; F-items as they come up.
 
