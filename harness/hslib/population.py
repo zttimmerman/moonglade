@@ -352,6 +352,7 @@ def run_session(warmup_s: int = WARMUP_S, window_s: int = SAMPLE_WINDOW_S, gap_s
         # non-bot data and DB size before the population exists in this run (mysqld only)
         stack.mysql_up()
         ev["non_bot_before"] = non_bot_digest()
+        ev["targets"] = targets()     # the zone set every check of this session evaluates against
         ev["db_before"] = db_sizes_mb()
         t0 = time.time()
         r = subprocess.run([HS, "up", "--profile", "population"], capture_output=True, text=True, timeout=3600)
@@ -430,7 +431,7 @@ def session(ctx: dict) -> dict:
 def brief(s: dict) -> dict:
     """Session reduced to what the tuning record and a human need (full session JSON is kept separately)."""
     from .checks.population_checks import activity, zone_coverage
-    rows, probs = zone_coverage(s["s0"], targets())
+    rows, probs = zone_coverage(s["s0"], s.get("targets") or targets())
     return {"n": s["n"], "up_s": s["up"]["elapsed_s"], "online_s0": len(s["s0"]["bots"]),
             "online_s1": len(s["s1"]["bots"]), "zone_problems": probs,
             "zones": {f"{r['zone_id']} {r['name']}": r["bots"] for r in rows},

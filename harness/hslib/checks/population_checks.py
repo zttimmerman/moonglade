@@ -49,7 +49,7 @@ def zones_covered(ctx):
     """After the warm-up, each of the 8 race starting zones and 8 capitals (from DBC/playercreateinfo) has >= 3 online
     random bots; evidence lists per-zone counts and each zone ID's source."""
     s = pop.session(ctx)
-    tg = pop.targets()
+    tg = s["targets"]
     rows, probs = zone_coverage(s["s0"], tg)
     saveall_at = s["s0"]["save"]["gm_at"] - s["t0"]
     areas = pop.dbc.area_table()
@@ -159,8 +159,9 @@ TUNING_BLOCK_RE = re.compile(r"```json tuning-runs\n(.*?)\n```", re.S)
 
 
 def tuning_runs(text: str) -> list[dict]:
-    """The machine-readable runs block of the tuning record: a ```json tuning-runs fence holding a list of
-    {"n", "summary": population.summarize(...) output, "source"}; plus "chosen_n" and optional "config_ceiling"."""
+    """The machine-readable block of the tuning record: a ```json tuning-runs fence holding an object
+    {"chosen_n", "runs": [{"n", "summary": population.summarize(...) output, "source"}], optional "config_ceiling":
+    {"n", "reason"}}."""
     m = TUNING_BLOCK_RE.search(text)
     if not m:
         raise ValueError("no ```json tuning-runs block")
