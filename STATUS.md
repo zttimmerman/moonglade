@@ -14,7 +14,7 @@ _Updated 2026-10-03: M2 part 1 done; part 2 (companions) in flight._
 
 **Decisions pending from Zach:** none blocking. Later: the patch ADR for the in-client front menu (step 2); light vs true save files; F-items as they come up.
 
-**Conventions:** branch per change, PR + merge after a verifier PASS. Run budget: 2 full runs per change (my pre-check, quick tier OK; verifier: 1 full run, `--force-clean` when build inputs change, + ≥5 targeted repeats), plus a periodic full ×3. **STATUS.md is edited only on `main`** (status-only commits go straight to main; branches don't touch it). Every git write uses `git -C <path>`.
+**Conventions:** **Before writing any core or module patch, search upstream issues and PRs and check newer versions** (see the hs-change-loop skill); prefer pin bump > cherry-pick > own patch. branch per change, PR + merge after a verifier PASS. Run budget: 2 full runs per change (my pre-check, quick tier OK; verifier: 1 full run, `--force-clean` when build inputs change, + ≥5 targeted repeats), plus a periodic full ×3. **STATUS.md is edited only on `main`** (status-only commits go straight to main; branches don't touch it). Every git write uses `git -C <path>`.
 
 
 _Last updated: 2026-10-02 (session 2): M1 done_
@@ -33,6 +33,7 @@ M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01
 | Harness tiers | **done / archived** (verifier PASS) | `hs run --tier quick` ~36 s (builders' loop); full ~9.5 min; `--force-clean` ~13 min (required once per merge); test logout ~20 s → <1 s |
 | F10 tiers verifier nits | todo | enforce force-clean at merge in the harness (e.g. a merge-gate flag/check), not just the verifier brief; keep the from-empty build log (don't let `build.clean_smart` overwrite it) |
 | Core server-mail guard (ADR-0006) | **done / merged** (PR #6) | first core patch; M2 unblocked |
+| F14 `hs upstream-check` | todo | list new commits, issues and PRs in the core fork, upstream AzerothCore and mod-playerbots since our `fork.lock` pins (esp. fixes for our patches/known issues). Run periodically and before writing any patch |
 | F13 MPQ guard hard-link edge | todo (low) | refuse an existing destination with link count > 1; NFD fallback for a missing non-ASCII root (unreachable today) |
 | F12 keep the Mac awake during harness runs | partly in M2 (B13 adds `caffeinate -s`); **a closed lid still sleeps the Mac: keep the lid open during long runs** | a mysqld abort ("Semaphore wait > 600 s") happened while the display slept during spike Phase B; B11's later runs under `caffeinate -d -i -u` were clean. Wrap `hs run`/`./play`/long builder runs in caffeinate (or `IOPMAssertion`); add a check |
 | F11 server-mail relog misdelivery check | todo | behavioural check: second char on test account, A→B fast relog, no misdelivered mail (requirement narrowed in core-server-mail-guard, logged) |
