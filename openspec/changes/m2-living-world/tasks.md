@@ -11,6 +11,10 @@
 ## 3. Companions (builder)
 - [x] 3.1 Probe chat send/receive (AC-source cited) — verified through comp.follows / comp.assists (chat commands, system-message parsing, party state)
 - [ ] 3.2 Checks `comp.add_remove`, `comp.follows`, `comp.assists`, `comp.quest_shared`
+## 3b. Gap fixes (builder B13)
+- [ ] 3.3 Core patch 0002: playerbots OnPacketReceived hook gets an intact packet for typed handlers (ADR-0007) + opcode audit. Verify: `comp.quest_shared`, patch-applied coverage
+- [ ] 3.4 Playerbots patch queue (`patches/playerbots/`) + patch 0001: `bot remove` removes the bot from the group (ADR-0008). Verify: `comp.add_remove`, pin/hash coverage
+
 ## 4. Budget (builder)
 - [x] 4.1 `perf.server_budget` sampler + `perf.population_tuned`; tuning record `docs/research/m2-population-tuning.md`
 ## 5. Verify + human
