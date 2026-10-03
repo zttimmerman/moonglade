@@ -49,7 +49,7 @@ The knobs are set F plus capital weights Stormwind, Orgrimmar and Silvermoon 2, 
 | 500 | G final, slow run 4 | 4.81 | 5.57 | 0.75 | 8 / 2 | 2.67 | 14 / 5 (Undercity) | 95% / 59% |
 
 - **Memory grows slowly with N:** about 0.5 MB per bot from 500 to 1500. The fixed playerbots cost dominates. Even N=1500 is inside every revised limit, with 0.67 GB of headroom on worldserver, 0.9 GB on stack total, and p95 at 26 ms.
-- **No measured larger population breaks a limit.** Extrapolating linearly, stack total would reach 7.0 GB at about N=3100. That exceeds the `world_size` sanity cap (2000) and would add about 1600 more bot characters to the DB, so it wasn't measured. As a result `perf.population_tuned` **fails**: the record shows no larger run that broke a limit, and 500 is not a playerbots config ceiling (there is none). The default of 500 is Zach's choice for the world's feel, not the largest size that fits. Raising the default, or rewording the scenario to "the default fits, and a larger preset was measured", is the orchestrator's call.
+- **Largest size measured: N=1500, and it fit** every revised limit. Extrapolating linearly, stack total would reach 7.0 GB at about N=3100. That wasn't measured: it's above the 2000 `world_size` cap. The default of 500 is Zach's choice for the world's feel, and it leaves about 1.2 GB of worldserver headroom and 1.4 GB of stack headroom (performance-budget scenario "The default fits and the headroom is measured", revised 2026-10-03).
 - **Presets** (`config.WORLD_SIZES`):
   - **small = 150:** measured 4.50 GB worldserver. Starting zones held 5 or more bots, but one capital had 2, so small trades capital coverage for about 0.3 GB.
   - **normal = 500:** the default.
@@ -61,11 +61,16 @@ Against the original limits, worldserver memory was above 4.0 GB at every N (4.2
 
 ## Machine-readable runs
 
-`summary` is `population.summarize()` output, copied from the session files `harness/out/pop-session-N*-*.json` (not committed; `hs pop-session` regenerates them). `perf.population_tuned` recomputes which limits each run broke from these numbers.
+`largest_measured` states the largest size measured and whether it fit; `perf.population_tuned` checks both against the runs. `summary` is `population.summarize()` output, copied from the session files `harness/out/pop-session-N*-*.json` (not committed; `hs pop-session` regenerates them). `perf.population_tuned` recomputes which limits each run broke from these numbers.
 
 ```json tuning-runs
 {
  "chosen_n": 500,
+ "largest_measured": {
+  "n": 1500,
+  "fit": true,
+  "note": "every revised limit held at N=1500 (worst: worldserver 5.34 GB, stack 6.09 GB, mysqld 0.75 GB, p95 26 ms, median 4 ms)"
+ },
  "runs": [
   {
    "n": 500,

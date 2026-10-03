@@ -165,8 +165,8 @@ TUNING_BLOCK_RE = re.compile(r"```json tuning-runs\n(.*?)\n```", re.S)
 
 def tuning_runs(text: str) -> list[dict]:
     """The machine-readable block of the tuning record: a ```json tuning-runs fence holding an object
-    {"chosen_n", "runs": [{"n", "summary": population.summarize(...) output, "source"}], optional "config_ceiling":
-    {"n", "reason"}}."""
+    {"chosen_n", "largest_measured": {"n", "fit"}, "runs": [{"n", "summary": population.summarize(...) output,
+    "source"}]}."""
     m = TUNING_BLOCK_RE.search(text)
     if not m:
         raise ValueError("no ```json tuning-runs block")
@@ -186,28 +186,48 @@ def run_exceeds(summary: dict) -> list[str]:
     return out
 
 
+def worst_values(summary: dict) -> dict:
+    """Per budget limit, the run's worst sample (max for <= limits, min for >= limits); None when not measured."""
+    return {k: (summary.get(k, {}).get("max") if op == "<=" else summary.get(k, {}).get("min"))
+            for k, (op, _lim) in pop.LIMITS.items()}
+
+
 def tuning_problems(doc: dict, n: int) -> list[str]:
+    """performance-budget "The default fits and the headroom is measured": runs at N and at least one larger size,
+    each with a worst value for every limit, and a statement of the largest size measured and whether it fit
+    (checked against that run's numbers)."""
     probs = []
     runs = doc.get("runs", [])
     if doc.get("chosen_n") != n:
         probs.append(f"record's chosen_n {doc.get('chosen_n')} != the population profile's N {n}")
     at_n = [r for r in runs if r.get("n") == n]
+    larger = [r for r in runs if r.get("n", 0) > n]
     if not at_n:
         probs.append(f"no measured run at N={n}")
-    elif all(run_exceeds(r["summary"]) for r in at_n):
-        probs.append(f"every recorded run at N={n} exceeds a limit")
-    larger = [r for r in runs if r.get("n", 0) > n and run_exceeds(r["summary"])]
-    ceiling = doc.get("config_ceiling")
-    if not larger and not (ceiling and ceiling.get("n") == n and ceiling.get("reason")):
-        probs.append(f"no measured run above N={n} that exceeded a limit, and no config-ceiling statement for N={n}")
+    if not larger:
+        probs.append(f"no measured run at a size larger than N={n}")
+    for r in at_n + larger:
+        missing = [k for k, v in worst_values(r.get("summary", {})).items() if v is None]
+        if missing:
+            probs.append(f"run at N={r.get('n')} ({r.get('source')}) lacks worst values for {missing}")
+    lm = doc.get("largest_measured")
+    top = max((r.get("n", 0) for r in runs), default=0)
+    if not isinstance(lm, dict) or "n" not in lm or "fit" not in lm:
+        probs.append("no largest_measured {n, fit} statement")
+    else:
+        if lm["n"] != top:
+            probs.append(f"largest_measured n {lm['n']} != largest run in the record {top}")
+        fit = not any(run_exceeds(r.get("summary", {})) for r in runs if r.get("n") == top)
+        if bool(lm["fit"]) != fit:
+            probs.append(f"largest_measured says fit={lm['fit']}, the numbers say fit={fit}")
     return probs
 
 
 @check("perf.population_tuned", order=411, capability="performance-budget", stack="any", tier="slow",
        profile="population")
 def population_tuned(ctx):
-    """Given perf.server_budget passed at N this run, the tuning record shows a measured larger population that broke
-    a limit (recomputed from its numbers), or states N is the playerbots config ceiling."""
+    """Given perf.server_budget passed at the default N this run, the tuning record has measured runs at N and at a
+    larger size, each with per-limit worst values, and states the largest size measured and whether it fit."""
     s = pop.session(ctx)
     n = s["n"]
     budget_bad = pop.violations(s["samples"])
@@ -221,9 +241,9 @@ def population_tuned(ctx):
         doc = tuning_runs(TUNING_DOC.read_text())
     except ValueError as e:
         require(False, f"tuning record unreadable: {e}", **ev)
-    ev["runs"] = [{"n": r.get("n"), "exceeds": run_exceeds(r.get("summary", {})), "source": r.get("source")}
-                  for r in doc.get("runs", [])]
-    ev["chosen_n"], ev["config_ceiling"] = doc.get("chosen_n"), doc.get("config_ceiling")
+    ev["runs"] = [{"n": r.get("n"), "worst": worst_values(r.get("summary", {})), "exceeds": run_exceeds(r.get("summary", {})),
+                   "source": r.get("source")} for r in doc.get("runs", [])]
+    ev["chosen_n"], ev["largest_measured"] = doc.get("chosen_n"), doc.get("largest_measured")
     probs = tuning_problems(doc, n)
     ev["problems"] = probs
     require(not probs, "; ".join(probs), **ev)
@@ -298,19 +318,29 @@ def size_setting(ctx):
 @check("pop.fresh_start_scope", order=403, capability="world-population", stack="any", tier="slow",
        profile="population")
 def fresh_start_scope(ctx):
-    """The population start's fresh-world reset put every random-bot character at the reset level with no
-    randomize/teleport timers left, and checksums of all non-bot accounts and characters are identical before and
-    after the reset (and after the whole session)."""
+    """Every random-bot character online in the session was either reset by the population start's fresh-world step
+    (all reset characters at the reset level, no randomize/teleport timer rows left) or created after it (a new
+    character: level 1, no timers); non-bot account/character checksums are identical across the reset and the
+    session."""
     s = pop.session(ctx)
     fs = s["up"].get("fresh_start") or {}
-    ev = {"fresh_start": fs, "session_non_bot_before": s["non_bot_before"], "session_non_bot_after": s["non_bot_after"]}
+    ev = {k: v for k, v in fs.items() if k != "reset_guids"}
+    ev |= {"session_non_bot_before": s["non_bot_before"], "session_non_bot_after": s["non_bot_after"]}
     require(fs, "no fresh-start record in the population start", **ev)
-    n = fs.get("random_bot_characters_reset", 0)
-    require(n >= s["n"], f"{n} random-bot characters reset, fewer than N={s['n']}", **ev)
-    require(fs.get("bot_levels_after") == {str(fs.get("reset_level")): n} or
-            fs.get("bot_levels_after") == {fs.get("reset_level"): n},
-            f"bot levels after reset {fs.get('bot_levels_after')}, want all {n} at {fs.get('reset_level')}", **ev)
+    reset = set(fs.get("reset_guids") or [])
+    top = max(reset) if reset else 0
+    online = sorted(set(s["s0"]["bots"]) | set(s["s1"]["bots"]))
+    was_reset = [g for g in online if int(g) in reset]
+    created_after = [g for g in online if int(g) not in reset and int(g) > top]
+    neither = [g for g in online if int(g) not in reset and int(g) <= top]
+    ev |= {"online_bots": len(online), "online_reset": len(was_reset), "online_created_after_reset": len(created_after),
+           "online_neither": neither[:20]}
+    levels = {int(k): int(v) for k, v in (fs.get("bot_levels_after") or {}).items()}
+    lvl = fs.get("reset_level")
+    require(levels and set(levels) == {lvl} and sum(levels.values()) == len(reset),
+            f"bot levels after reset {levels}, want all {len(reset)} reset characters at {lvl}", **ev)
     require(fs.get("timer_rows_left") == 0, f"{fs.get('timer_rows_left')} randomize/teleport timer rows left", **ev)
+    require(not neither, f"{len(neither)} online bot(s) existed before the reset but were not reset", **ev)
     require(fs.get("non_bot_before") == fs.get("non_bot_after"), "non-bot data changed during the reset", **ev)
     require(s["non_bot_before"] == s["non_bot_after"], "non-bot data changed during the session", **ev)
     return ev

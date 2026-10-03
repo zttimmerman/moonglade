@@ -133,6 +133,7 @@ def fresh_start() -> dict:
     left = int(db.scalar(f"SELECT COUNT(*) FROM playerbots_random_bots WHERE owner = 0 AND event IN "
                          f"('randomize', 'teleport') AND bot IN ({','.join(ids)})", "playerbots") or 0) if ids else 0
     return {"random_bot_characters_reset": n, "timer_rows_deleted": deleted, "reset_level": FRESH_LEVEL,
+            "reset_guids": sorted(int(g) for g in ids),
             "bot_levels_after": {int(lv): int(c) for lv, c in levels}, "timer_rows_left": left,
             "non_bot_before": before, "non_bot_after": non_bot_digest()}
 
