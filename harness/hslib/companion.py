@@ -203,24 +203,43 @@ def creature_candidates(level: int = LEVEL, tele: str = START_TELE, n: int = 10)
              "distance_from_start_yd": round(float(d), 1)} for g, e, nm, mn, mx, fac, x, y, z, d in rows]
 
 
-FOLLOW_RULE = ("two game_tele rows on the start point's map, 100-200 yd apart (2D), height difference < 10 yd, "
-               "both within 1000 yd of the start point; the closest such pair to the start point, start point first if "
-               "it is one of them")
+FOLLOW_RULE = ("two game_tele rows on the start point's map, 100-200 yd apart (2D), height difference < 10 yd, with no "
+               "hostile-to-players spawn (FactionTemplate.dbc rule above) within 40 yd of the straight path between them "
+               "(a companion that gets pulled into a fight on the way stops following: seen in a slow run on the "
+               "ElwynnForest-CrystalLake pair, 7 hostile spawns near the path); the pair whose points are closest to "
+               "the start point, the start point first if it is one of them")
+FOLLOW_CLEAR_YD = 40
+
+
+def _seg_dist(px, py, ax, ay, bx, by) -> float:
+    vx, vy = bx - ax, by - ay
+    u = max(0.0, min(1.0, ((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy)))
+    return math.hypot(ax + u * vx - px, ay + u * vy - py)
 
 
 def pick_follow_points(tele: str = START_TELE) -> tuple[dict, dict]:
     t = F.tele_row(tele)
+    recs, _ = dbc.read_dbc("FactionTemplate.dbc")
+    fac = ",".join(str(r[0]) for r in recs if r[FT_HOSTILE_MASK] & FACTION_MASK_PLAYER)
     near = (f"SQRT(POW({{a}}.position_x-({t['x']}),2)+POW({{a}}.position_y-({t['y']}),2))")
     rows = db.query(
-        f"SELECT a.name, b.name, SQRT(POW(a.position_x-b.position_x,2)+POW(a.position_y-b.position_y,2)) d, "
+        f"SELECT a.name, b.name, a.position_x, a.position_y, b.position_x, b.position_y, "
         f"{near.format(a='a')} + {near.format(a='b')} s FROM game_tele a JOIN game_tele b ON a.id <> b.id "
         f"AND a.map = b.map WHERE a.map = {t['map']} "
         f"AND SQRT(POW(a.position_x-b.position_x,2)+POW(a.position_y-b.position_y,2)) BETWEEN 100 AND 200 "
-        f"AND ABS(a.position_z-b.position_z) < 10 AND {near.format(a='a')} < 1000 AND {near.format(a='b')} < 1000 "
-        f"ORDER BY s, (a.name <> '{_q(t['name'])}'), a.id LIMIT 1", "world")
-    if not rows:
-        raise CompanionError("no game_tele pair matches the rule", rule=FOLLOW_RULE)
-    return F.tele_row(rows[0][0]), F.tele_row(rows[0][1])
+        f"AND ABS(a.position_z-b.position_z) < 10 "
+        f"ORDER BY s, (a.name <> '{_q(t['name'])}'), a.id", "world")
+    c = FOLLOW_CLEAR_YD
+    for an, bn, ax, ay, bx, by, _s in rows:
+        ax, ay, bx, by = map(float, (ax, ay, bx, by))
+        spawns = db.query(
+            f"SELECT c.position_x, c.position_y FROM creature c JOIN creature_template ct ON ct.entry = c.id "
+            f"WHERE c.map = {t['map']} AND ct.faction IN ({fac}) "
+            f"AND c.position_x BETWEEN {min(ax, bx) - c} AND {max(ax, bx) + c} "
+            f"AND c.position_y BETWEEN {min(ay, by) - c} AND {max(ay, by) + c}", "world")
+        if not any(_seg_dist(float(x), float(y), ax, ay, bx, by) < c for x, y in spawns):
+            return F.tele_row(an), F.tele_row(bn)
+    raise CompanionError("no game_tele pair matches the rule", rule=FOLLOW_RULE)
 
 
 # ----------------------------------------------------------------------------- the session
