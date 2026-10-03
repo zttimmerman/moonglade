@@ -150,7 +150,33 @@ def parse_report(path: Path) -> dict:
         img = imgs[f["imageIndex"]].get("name", "?") if "imageIndex" in f and f["imageIndex"] < len(imgs) else "?"
         frames.append(f"{img} {f.get('symbol', '?')}"[:300])
     return {"file": path.name, "app": json.loads(hdr).get("app_name"), "pid": d.get("pid"),
-            "exception": d.get("exception"), "top_frames": frames}
+            "exception": d.get("exception"), "top_frames": frames,
+            "binary_uuid": (imgs[0].get("uuid") or "").lower() if imgs else None}
+
+
+def binary_uuid(path: Path) -> str | None:
+    """LC_UUID of a Mach-O binary (`dwarfdump --uuid`), lower-case, as .ips usedImages report it."""
+    r = subprocess.run(["dwarfdump", "--uuid", str(path)], capture_output=True, text=True)
+    m = re.search(r"UUID: ([0-9A-Fa-f-]{36})", r.stdout)
+    return m.group(1).lower() if m else None
+
+
+def coalesced_reports_for(uuid: str | None, before: dict) -> list[dict]:
+    """Existing reports macOS re-touched instead of writing a new one. Seen 2026-10-03: when the same binary crashes
+    the same way again (the baseline binary is unchanged between runs), ReportCrash updates the mtime of the earlier
+    report for that binary and writes no new file. A report counts only if its mtime moved past `before` and its
+    main image UUID is this binary's."""
+    out = []
+    for name, mt in crash_reports().items():
+        if name not in before or before[name] == mt:
+            continue
+        try:
+            r = parse_report(DIAG / name)
+        except (OSError, ValueError, KeyError, IndexError):
+            continue
+        if uuid and r.get("binary_uuid") == uuid:
+            out.append(r | {"coalesced": True, "mtime_before": before[name], "mtime_after": mt})
+    return out
 
 
 def new_reports_for(pid: int | None, before: dict) -> list[dict]:
@@ -274,9 +300,12 @@ def login_logout_race_baseline(ctx):
         if crashed:
             ev["baseline_returncode"] = proc.wait(timeout=30)
             deadline = time.time() + CRASH_REPORT_WAIT_S
+            ev["baseline_binary_uuid"] = binary_uuid(B.SERVER_BIN / "worldserver")
             while not reports and time.time() < deadline:
                 time.sleep(2)
                 reports = new_reports_for(proc.pid, reports_before)
+            if not reports:     # macOS coalesced it into the earlier report for this exact binary
+                reports = coalesced_reports_for(ev["baseline_binary_uuid"], reports_before)
             ev["crash_report_wait_s"] = round(CRASH_REPORT_WAIT_S - max(0, deadline - time.time()), 1)
         ev["crash_reports"] = reports
     finally:
