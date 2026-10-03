@@ -37,7 +37,7 @@ A worldserver with playerbots disabled (`AiPlayerbot.Enabled = 0`, otherwise m0)
 
 ## Round 2 (task 2.2): default about 500, revised budget
 
-The knobs are set F plus capital weights Stormwind, Orgrimmar and Silvermoon 2, and Thunder Bluff 4 (set **G**, final). With equal weight, Thunder Bluff's intake 60 s after start was 11 bots against 17-25 for the other Horde capitals, and it held 2 bots in slow run 3. Each run is a fresh-world start; samples are the worst of 61.
+The knobs are set F plus capital weights Stormwind, Orgrimmar and Silvermoon 2, and Thunder Bluff 4 (set **G**; superseded by set H, Round 3 below). With equal weight, Thunder Bluff's intake 60 s after start was 11 bots against 17-25 for the other Horde capitals, and it held 2 bots in slow run 3. Each run is a fresh-world start; samples are the worst of 61.
 
 | N | knobs | worldserver GB | stack total GB | mysqld GB | p95 / median ms | host free+inactive min (recorded) | min starting zone / min capital | moved / progressed |
 |---|---|---|---|---|---|---|---|---|
@@ -47,6 +47,9 @@ The knobs are set F plus capital weights Stormwind, Orgrimmar and Silvermoon 2, 
 | 500 | G, TB weight 2 (slow run 3) | 4.78 | 5.54 | 0.75 | 9 / 2 | 2.61 | 17 / **2** (Thunder Bluff) | 96% / 67% |
 | 500 | G final (TB weight 4), session b | 4.80 | 5.56 | 0.75 | 8 / 2 | (in session file) | 22 / 6 (Undercity, Silvermoon) | 95% / 63% |
 | 500 | G final, slow run 4 | 4.81 | 5.57 | 0.75 | 8 / 2 | 2.67 | 14 / 5 (Undercity) | 95% / 59% |
+| 500 | **H** (UC 4, TB 3), B14 session 1 | 4.79 | 5.56 | 0.76 | 11 / 2 | 3.09 | 15 / 8 (Orgrimmar) | 96% / 66% |
+| 500 | **H** (UC 4, TB 3), B14 session 2 | 4.77 | 5.54 | 0.79 | 10 / 2 | 2.27 | 14 / 7 (Stormwind) | 97% / 66% |
+| 500 | **H** (UC 4, TB 3), B14 session 3 | 4.83 | 5.60 | 0.79 | 7 / 2 | 3.22 | 18 / 6 (Orgrimmar) | 98% / 68% |
 
 - **Memory grows slowly with N:** about 0.5 MB per bot from 500 to 1500. The fixed playerbots cost dominates. Even N=1500 is inside every revised limit, with 0.67 GB of headroom on worldserver, 0.9 GB on stack total, and p95 at 26 ms.
 - **Largest size measured: N=1500, and it fit** every revised limit. Extrapolating linearly, stack total would reach 7.0 GB at about N=3100. That wasn't measured: it's above the 2000 `world_size` cap. The default of 500 is Zach's choice for the world's feel, and it leaves about 1.2 GB of worldserver headroom and 1.4 GB of stack headroom (performance-budget scenario "The default fits and the headroom is measured", revised 2026-10-03).
@@ -55,6 +58,19 @@ The knobs are set F plus capital weights Stormwind, Orgrimmar and Silvermoon 2, 
   - **normal = 500:** the default.
   - **large = 1000:** between two measured passing points (750 and 1500). It stays below 1500 to leave room for the client, whose smoothness is the human check.
 - **Disk:** the bot pool is now 1500 characters on 150 RNDBOT accounts (they are kept; smaller sizes use a subset). The MySQL datadir grew from 1154 MB to 1327 MB across all of M2's sessions.
+
+### Round 3 (B14, 2026-10-03): Undercity weight
+With set G (Undercity 2, Thunder Bluff 4), Undercity was the weakest capital at the warm-up snapshot (S0, which `pop.zones_covered` reads) in every one of the 12 N=500 session files: 3 to 9 bots. Thunder Bluff held 9 to 27. Set **H** changes two Horde weights, Undercity 2 → 4 and Thunder Bluff 4 → 3, and leaves the other six as they were. Measured with `harness/hs run --tier slow --only pop.zones_covered --only pop.size_stable --only perf.server_budget`, three fresh-start sessions in a row (each run passed all three checks, 500 bots online at S0 and at S1). Counts are online random bots per capital, at S0 and then at S1 (5 minutes later):
+
+| session | UC | SW | IF | Org | TB | Darn | SMC | Exo | min capital S0 / S1 |
+|---|---|---|---|---|---|---|---|---|---|
+| 1 (`pop-session-N500-1791050426`) | 13 / 5 | 15 / 10 | 18 / 10 | 8 / 9 | 11 / 4 | 12 / 12 | 9 / 7 | 15 / 12 | **8** / 4 |
+| 2 (`pop-session-N500-1791051606`) | 11 / 12 | 7 / 8 | 10 / 8 | 10 / 6 | 8 / 10 | 16 / 19 | 15 / 9 | 10 / 9 | **7** / 6 |
+| 3 (`pop-session-N500-1791052786`) | 15 / 11 | 12 / 11 | 13 / 8 | 6 / 7 | 17 / 12 | 14 / 15 | 10 / 10 | 9 / 8 | **6** / 7 |
+
+- At S0, the snapshot the check reads, every capital held at least 5 bots in all three sessions (minimums 8, 7 and 6). The 12 G sessions had S0 minimums of 2 to 9; the two at 2 were from the TB-weight-2 era. Undercity went from 3-9 to 11-15 at S0. Orgrimmar and Silvermoon lost a little share (from 2/10 to 2/11 of Horde city teleports) and held 6-10 and 9-15.
+- At S1, the snapshot `pop.zones_covered` doesn't read, the minimum was 4 once (Thunder Bluff, session 1). Capital counts swing within minutes (inflow × residence time; see design.md "Population profile knobs"), so the ≥3 check keeps a margin but not a guarantee.
+- Starting zones held 14 or more bots in every session. Replaying the saved sessions through `pop.bots_active`, `pop.fresh_start_scope` and `perf.population_tuned` gives PASS for all three (moved 96-98%, progressed 66-68%). The budget held in all three (`perf.server_budget` PASS): worst worldserver 4.83 GB, stack total 5.60 GB, mysqld 0.79 GB, p95 11 ms, median 2 ms.
 
 ## Round 1 finding (superseded by the budget revision)
 Against the original limits, worldserver memory was above 4.0 GB at every N (4.21 GB at N=50), and host free + inactive depended on other apps. That led to the 2026-10-03 spec revision.
@@ -72,6 +88,135 @@ Against the original limits, worldserver memory was above 4.0 GB at every N (4.2
   "note": "every revised limit held at N=1500 (worst: worldserver 5.34 GB, stack 6.09 GB, mysqld 0.75 GB, p95 26 ms, median 4 ms)"
  },
  "runs": [
+  {
+   "n": 500,
+   "knobs": "H (UC 4, TB 3; final), B14 session 1",
+   "source": "harness/out/pop-session-N500-1791050426.json",
+   "summary": {
+    "worldserver_mem_gb": {
+     "min": 4.695,
+     "median": 4.769,
+     "max": 4.789,
+     "n": 61
+    },
+    "mysqld_mem_gb": {
+     "min": 0.758,
+     "median": 0.758,
+     "max": 0.758,
+     "n": 61
+    },
+    "stack_total_gb": {
+     "min": 5.465,
+     "median": 5.538,
+     "max": 5.558,
+     "n": 61
+    },
+    "update_p95_ms": {
+     "min": 5,
+     "median": 6,
+     "max": 11,
+     "n": 61
+    },
+    "update_median_ms": {
+     "min": 2,
+     "median": 2,
+     "max": 2,
+     "n": 61
+    },
+    "host_free_inactive_gb": {
+     "min": 3.09,
+     "median": 3.311,
+     "max": 3.475,
+     "n": 61
+    }
+   }
+  },
+  {
+   "n": 500,
+   "knobs": "H (UC 4, TB 3; final), B14 session 2",
+   "source": "harness/out/pop-session-N500-1791051606.json",
+   "summary": {
+    "worldserver_mem_gb": {
+     "min": 4.627,
+     "median": 4.743,
+     "max": 4.771,
+     "n": 61
+    },
+    "mysqld_mem_gb": {
+     "min": 0.757,
+     "median": 0.757,
+     "max": 0.786,
+     "n": 61
+    },
+    "stack_total_gb": {
+     "min": 5.426,
+     "median": 5.513,
+     "max": 5.539,
+     "n": 61
+    },
+    "update_p95_ms": {
+     "min": 5,
+     "median": 6,
+     "max": 10,
+     "n": 61
+    },
+    "update_median_ms": {
+     "min": 2,
+     "median": 2,
+     "max": 2,
+     "n": 61
+    },
+    "host_free_inactive_gb": {
+     "min": 2.272,
+     "median": 3.371,
+     "max": 3.636,
+     "n": 61
+    }
+   }
+  },
+  {
+   "n": 500,
+   "knobs": "H (UC 4, TB 3; final), B14 session 3",
+   "source": "harness/out/pop-session-N500-1791052786.json",
+   "summary": {
+    "worldserver_mem_gb": {
+     "min": 4.733,
+     "median": 4.796,
+     "max": 4.83,
+     "n": 61
+    },
+    "mysqld_mem_gb": {
+     "min": 0.758,
+     "median": 0.785,
+     "max": 0.785,
+     "n": 61
+    },
+    "stack_total_gb": {
+     "min": 5.532,
+     "median": 5.584,
+     "max": 5.601,
+     "n": 61
+    },
+    "update_p95_ms": {
+     "min": 5,
+     "median": 6,
+     "max": 7,
+     "n": 61
+    },
+    "update_median_ms": {
+     "min": 2,
+     "median": 2,
+     "max": 2,
+     "n": 61
+    },
+    "host_free_inactive_gb": {
+     "min": 3.216,
+     "median": 3.535,
+     "max": 3.741,
+     "n": 61
+    }
+   }
+  },
   {
    "n": 500,
    "knobs": "G (final), slow run 4",
