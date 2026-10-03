@@ -22,3 +22,8 @@ Ship `patches/core/0001-server-mail-guard-async-player.patch`, applied by `hs bu
 ## Consequences
 - The first entry in `patches/core/`. `build.pin_enforced` and the build-input hash already cover the patch queue (a patch change forces a from-empty build).
 - The harness's `settle_login` workaround stays as defense in depth, unless the change decides otherwise with evidence.
+
+## Upstream status (checked 2026-10-03)
+- **Fixed upstream** in AzerothCore PR #27827 ("fix(Scripts/World): guard server mail login callback against logged-o…"), merged 2026-09-27, commit `3d28fa72d742`. It uses the same approach as our patch (capture the player GUID; skip unless `session->GetPlayer()` exists and matches).
+- Our pinned core (`mod-playerbots/azerothcore-wotlk@7f12e89`, 2026-09-20) predates it, and the fork's last upstream sync (PR #257, 2026-09-24) also predates it. As of 2026-10-03 the fork's Playerbot branch is still 70 upstream commits behind that fix.
+- **Retirement:** when `core_sha` is bumped to a fork commit that contains `3d28fa7`, drop `patches/core/0001-…`. Its `git apply` will fail and the build stops loudly, which is the intended signal.
