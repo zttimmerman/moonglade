@@ -13,6 +13,13 @@ CLAUDE.md §4/§6/§9 are the rules; this is the practiced procedure.
 3. `openspec validate <id>`.
 4. `git checkout -b change/<id>` from `main`; add `<id>` to `harness/active-changes`; commit; `git push -u origin change/<id>`.
 
+## Before any core or module patch (Zach, 2026-10-03)
+Patches cost hours, so check upstream first:
+1. Search issues **and PRs** in upstream `azerothcore/azerothcore-wotlk`, the playerbots core fork `mod-playerbots/azerothcore-wotlk` (branch `Playerbot`; our `core_repo`), and `mod-playerbots/mod-playerbots`, plus the relevant module repo for other modules. Use `gh search issues|prs "<terms>" --repo <owner/repo>`.
+2. Check whether a newer version fixes it: `gh api repos/mod-playerbots/azerothcore-wotlk/compare/<fix-sha>...Playerbot` (behind_by > 0 means not synced yet), and compare our `fork.lock` pins with the latest heads.
+3. Prefer, in order: (a) bump the pin to a version containing the fix; (b) cherry-pick the upstream commit into `patches/…`, citing it; (c) write our own patch. Record which, and the search results, in the ADR (e.g. ADR-0006's "Upstream status" section).
+Lesson: the server-mail crash we spent ~1 h patching was already fixed upstream (AzerothCore #27827, merged 3 days after our pin).
+
 ## Delegate
 - One builder per task group, with clean context. The brief names the spec files, the files it may edit, and the stack rules: who owns the stack, never run `hs down/build` unless it owns it, use `--leave-up` when sharing. It must not edit specs, must commit on the branch, and must not merge or push.
 - Builders that need runtime (server, client, Wine) work in the main checkout; only one agent owns the stack at a time. Research or docs builders can use `isolation: "worktree"`.

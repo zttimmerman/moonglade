@@ -1,20 +1,24 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-02 ~17:55: core server-mail guard merged (PR #6, ADR-0006). Spike Phase B running._
+_Updated 2026-10-03 (orchestrator context ~91%; compaction expected). After compaction or a fresh session: follow this section; the memory notes hold Zach's preferences and decisions._
 
 **Cold start:** read this file, then `openspec list` (Node 20: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`), then `git -C <repo> worktree list`, `git branch -a`, `gh pr list`, then `harness/hs status`. The skills `.claude/skills/hs-*` hold the procedures (change loop, checks, client debugging, RE). User preferences and decisions are in the orchestrator memory notes (plain language for decisions, Gate 1, front-menu vision, logo).
 
 **In flight**
 | Work | Branch / checkout | State | If its agent is gone |
 |---|---|---|---|
-| Login-screen spike Phase B | `change/login-screen-spike`, **main checkout**, active | B11 done with runs + report (688da96, 2db2a01): modified GlueXML → client silently closes (exit 0, GlueXML.log); Dark Portal backdrop + classic music work data-only (music proven streaming via a file probe; hearing it = human-verify). Now fixing `re.mpq_write_roundtrip` so its refusal test uses a stand-in client (it briefly wrote into real client/). Then verifier | brief a builder from `docs/research/login-screen-spike.md` + tasks B.1/C.1; then verifier |
+| M2 living world | `change/m2-living-world`, **main checkout**, listed in `harness/active-changes` | Part 1 done (500 bots, world-size setting, `./play` = living world, budget). Part 2: probe chat done; `comp.follows`/`comp.assists` pass. **Builder B13 is fixing two upstream bugs** (no upstream issue/fix exists, searched 2026-10-03): core patch 0002 (playerbots `OnPacketReceived` hook receives a moved-from empty packet for typed handlers, so bots never see quest share; ADR-0007 + opcode audit) and a new `patches/playerbots/` queue + patch 0001 (`bot remove` leaves an offline party member; ADR-0008). B13 also adds `caffeinate -s` (F12). Owns the stack | Check the branch for B13's commits; re-brief a fresh builder from M2 tasks 3.3/3.4 + `design.md` ("Builder notes … B13", "Open: two scenarios fail") + B13's commits. Done when `comp.add_remove` and `comp.quest_shared` pass unmodified, each fails without its patch, and the quick tier + ONE unfiltered `--tier slow` run are green |
 
-**Next (in order):** spike Phase B → M2 living world (`openspec/changes/m2-living-world`) → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
+**Next after B13:** M2 verifier (fresh). Budget: 1 unfiltered **`--tier slow --force-clean`** run (patches changed build inputs) + ≥5 repeats of `comp.*` and `core.*`. Ask it to judge the capital margin (≥3 required; observed 4–6) for flakiness, review both new patches and ADR-0007/0008, and confirm PLAYER, `env/player.json` and `env/settings.json` are untouched. Then archive, PR, merge; set ADR-0007/0008 to accepted.
+
+**Next (in order):** M2 finish + verify → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
 
 **Decisions pending from Zach:** none blocking. Later: the patch ADR for the in-client front menu (step 2); light vs true save files; F-items as they come up.
 
-**Conventions:** branch per change, PR + merge after a verifier PASS. Run budget: 2 full runs per change (my pre-check, quick tier OK; verifier: 1 full run, `--force-clean` when build inputs change, + ≥5 targeted repeats), plus a periodic full ×3. **STATUS.md is edited only on `main`** (status-only commits go straight to main; branches don't touch it). Every git write uses `git -C <path>`.
+**Compaction hooks (PR #8):** `.claude/settings.json` runs `.claude/hooks/session-context.sh` on compact/clear/resume (injects this handoff + a context-survival checklist) and `precompact-check.sh` before compaction (warns if a change/* branch is newer than this handoff). The main checkout is on `change/m2-living-world`, which predates them, so a temporary **`.claude/settings.local.json` in the main checkout** points at the main-status worktree copies. **Delete it once that branch has main merged in**, or the hooks fire twice.
+
+**Conventions:** **Before writing any core or module patch, search upstream issues and PRs and check newer versions** (see the hs-change-loop skill); prefer pin bump > cherry-pick > own patch. branch per change, PR + merge after a verifier PASS. Run budget: 2 full runs per change (my pre-check, quick tier OK; verifier: 1 full run, `--force-clean` when build inputs change, + ≥5 targeted repeats), plus a periodic full ×3. **STATUS.md is edited only on `main`** (status-only commits go straight to main; branches don't touch it). Every git write uses `git -C <path>`.
 
 
 _Last updated: 2026-10-02 (session 2): M1 done_
@@ -33,9 +37,12 @@ M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01
 | Harness tiers | **done / archived** (verifier PASS) | `hs run --tier quick` ~36 s (builders' loop); full ~9.5 min; `--force-clean` ~13 min (required once per merge); test logout ~20 s → <1 s |
 | F10 tiers verifier nits | todo | enforce force-clean at merge in the harness (e.g. a merge-gate flag/check), not just the verifier brief; keep the from-empty build log (don't let `build.clean_smart` overwrite it) |
 | Core server-mail guard (ADR-0006) | **done / merged** (PR #6) | first core patch; M2 unblocked |
-| F12 keep the Mac awake during harness runs | todo (important) | a mysqld abort ("Semaphore wait > 600 s") happened while the display slept during spike Phase B; B11's later runs under `caffeinate -d -i -u` were clean. Wrap `hs run`/`./play`/long builder runs in caffeinate (or `IOPMAssertion`); add a check |
+| F14 `hs upstream-check` | todo | list new commits, issues and PRs in the core fork, upstream AzerothCore and mod-playerbots since our `fork.lock` pins (esp. fixes for our patches/known issues). Run periodically and before writing any patch |
+| F13 MPQ guard hard-link edge | todo (low) | refuse an existing destination with link count > 1; NFD fallback for a missing non-ASCII root (unreachable today) |
+| F12 keep the Mac awake during harness runs | partly in M2 (B13 adds `caffeinate -s`); **a closed lid still sleeps the Mac: keep the lid open during long runs** | a mysqld abort ("Semaphore wait > 600 s") happened while the display slept during spike Phase B; B11's later runs under `caffeinate -d -i -u` were clean. Wrap `hs run`/`./play`/long builder runs in caffeinate (or `IOPMAssertion`); add a check |
 | F11 server-mail relog misdelivery check | todo | behavioural check: second char on test account, A→B fast relog, no misdelivered mail (requirement narrowed in core-server-mail-guard, logged) |
-| Login-screen spike | next after tiers | Q1: custom GlueXML from a patch MPQ with an unmodified Wow.exe? (Wow.exe has "GlueXML has corrupt signature" strings). Q2: are the TBC/Vanilla login backdrops and music in the 3.3.5a MPQs (background picker)? Needs an MPQ reader |
+| Login-screen spike | **done / merged** (PR #7) | report: docs/research/login-screen-spike.md |
+| Login-screen spike (old row) | superseded | Q1: custom GlueXML from a patch MPQ with an unmodified Wow.exe? (Wow.exe has "GlueXML has corrupt signature" strings). Q2: are the TBC/Vanilla login backdrops and music in the 3.3.5a MPQs (background picker)? Needs an MPQ reader |
 | F8 M1 verifier nits | todo (low) | smoke picks `wow[0]` (pick the persistent/oldest pid); `play_processes()` matches any cmdline with 'hslib.play'; real Wow.exe exit path only human-verified |
 | M2 living world | spec written | `openspec/changes/m2-living-world` |
 | M3 vanilla mode | spec written; task 1.1 done (RewXP verified) | branch `change/m3-vanilla-mode` |
@@ -62,7 +69,8 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 - The era-diff tool couldn't read VMaNGOS source to confirm what `RewXP` means, because a web fetch was denied. It's flagged in the memo.
 
 ## Backlog (later rounds)
-- **Front menu** (target state, see North star). Step 1: a launcher-side menu (`.app`: profiles/saves/options, the launcher types the login, backdrop/music swap via a data-only patch MPQ). Step 2: the in-client screen, which needs a Wow.exe signature-check patch on a copy (ADR when we get there). Spike phase A: GlueXML is RSA/MD5-signed and verified each load; backdrops (WotLK/TBC/Dark Portal) and music are present and unsigned. Saves: light (per account) vs true save files (separate DBs), to decide later.
+- **Transmog spike** (Zach, 2026-10-03): evaluate `azerothcore/mod-transmog` (AGPL-3.0, Rochet2-based; catalogue id 74011079). **Target = as modern-retail as possible:** account-wide appearance collection, and **outfits saved independently of items (Midnight-style)**, applied on top of current gear. Questions: what the module does vs the target; configure/extend vs our own module (ADR if core); a retail-like wardrobe UI via a normal AddOn + addon messages (confirm with read-only RE that AddOns aren't blocked by the FrameXML/AddOn signature path); interplay with bots and vanilla mode. Don't assume module features; establish them.
+- **Front menu** (target state, see North star). Options include world size (population presets). Step 1: a launcher-side menu (`.app`: profiles/saves/options, the launcher types the login, backdrop/music swap via a data-only patch MPQ). Step 2: the in-client screen, which needs a Wow.exe signature-check patch on a copy (ADR when we get there). Spike phase A: GlueXML is RSA/MD5-signed and verified each load; backdrops (WotLK/TBC/Dark Portal) and music are present and unsigned. Saves: light (per account) vs true save files (separate DBs), to decide later.
 - Mac `.app` launcher for `./play` (right after the spike); optional stopgap where the launcher types the login.
 - F6 setup reproducibility: Brewfile, `hs bootstrap`, docs/setup.md.
 - In-game single-player settings menu: toggle leveling pace/difficulty (vanilla vs WotLK, per character?) without SQL swaps or restarts. Zach's idea from Gate 1.
