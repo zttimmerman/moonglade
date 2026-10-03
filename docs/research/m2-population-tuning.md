@@ -45,7 +45,8 @@ The knobs are set F plus capital weights Stormwind, Orgrimmar and Silvermoon 2, 
 | 750 | G | 4.94 | 5.67 | 0.73 | 10 / 2 | 2.71 | 27 / 12 (Undercity) | 97% / 62% |
 | 1500 | G | 5.34 | 6.09 | 0.75 | 26 / 4 | 2.61 | (all ≥ 3) | 97% / 56% |
 | 500 | G, TB weight 2 (slow run 3) | 4.78 | 5.54 | 0.75 | 9 / 2 | 2.61 | 17 / **2** (Thunder Bluff) | 96% / 67% |
-| 500 | G final (TB weight 4) | see the JSON block | | | | | 22 / 6 (Undercity, Silvermoon) | 95% / 63% |
+| 500 | G final (TB weight 4), session b | 4.80 | 5.56 | 0.75 | 8 / 2 | (in session file) | 22 / 6 (Undercity, Silvermoon) | 95% / 63% |
+| 500 | G final, slow run 4 | 4.81 | 5.57 | 0.75 | 8 / 2 | 2.67 | 14 / 5 (Undercity) | 95% / 59% |
 
 - **Memory grows slowly with N:** about 0.5 MB per bot from 500 to 1500. The fixed playerbots cost dominates. Even N=1500 is inside every revised limit, with 0.67 GB of headroom on worldserver, 0.9 GB on stack total, and p95 at 26 ms.
 - **No measured larger population breaks a limit.** Extrapolating linearly, stack total would reach 7.0 GB at about N=3100. That exceeds the `world_size` sanity cap (2000) and would add about 1600 more bot characters to the DB, so it wasn't measured. As a result `perf.population_tuned` **fails**: the record shows no larger run that broke a limit, and 500 is not a playerbots config ceiling (there is none). The default of 500 is Zach's choice for the world's feel, not the largest size that fits. Raising the default, or rewording the scenario to "the default fits, and a larger preset was measured", is the orchestrator's call.
@@ -66,6 +67,49 @@ Against the original limits, worldserver memory was above 4.0 GB at every N (4.2
 {
  "chosen_n": 500,
  "runs": [
+  {
+   "n": 500,
+   "knobs": "G (final), slow run 4",
+   "source": "harness/out/pop-session-N500-1791013968.json",
+   "summary": {
+    "worldserver_mem_gb": {
+     "min": 4.685,
+     "median": 4.785,
+     "max": 4.814,
+     "n": 61
+    },
+    "mysqld_mem_gb": {
+     "min": 0.746,
+     "median": 0.746,
+     "max": 0.746,
+     "n": 61
+    },
+    "stack_total_gb": {
+     "min": 5.442,
+     "median": 5.542,
+     "max": 5.571,
+     "n": 61
+    },
+    "update_p95_ms": {
+     "min": 6,
+     "median": 7,
+     "max": 8,
+     "n": 61
+    },
+    "update_median_ms": {
+     "min": 2,
+     "median": 2,
+     "max": 2,
+     "n": 61
+    },
+    "host_free_inactive_gb": {
+     "min": 2.674,
+     "median": 2.938,
+     "max": 3.128,
+     "n": 61
+    }
+   }
+  },
   {
    "n": 500,
    "knobs": "G (final, TB weight 4)",
