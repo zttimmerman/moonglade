@@ -71,6 +71,7 @@ SMSG_TIME_SYNC_REQ = 0x390
 CMSG_TIME_SYNC_RESP = 0x391
 SMSG_GM_MESSAGECHAT = 0x3B3
 CMSG_KEEP_ALIVE = 0x407
+MSG_MOVE_HEARTBEAT = 0x0EE
 
 OPCODE_NAMES = {v: k for k, v in list(globals().items()) if k.startswith(("CMSG_", "SMSG_")) and isinstance(v, int)}
 

@@ -9,7 +9,7 @@
 - [x] 2.2 World-size setting (presets, gitignored settings file, `./play` default population), retune to ~500, `pop.size_setting`, `pop.fresh_start_scope`; re-measure the budget at the new limits
 
 ## 3. Companions (builder)
-- [ ] 3.1 Probe chat send/receive (AC-source cited)
+- [x] 3.1 Probe chat send/receive (AC-source cited) — verified through comp.follows / comp.assists (chat commands, system-message parsing, party state)
 - [ ] 3.2 Checks `comp.add_remove`, `comp.follows`, `comp.assists`, `comp.quest_shared`
 ## 4. Budget (builder)
 - [x] 4.1 `perf.server_budget` sampler + `perf.population_tuned`; tuning record `docs/research/m2-population-tuning.md`

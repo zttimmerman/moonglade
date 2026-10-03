@@ -36,6 +36,7 @@ ADDCLASS_ACCOUNT_TYPE = 2   # playerbots_account_type.account_type of the addcla
 FACTION_MASK_PLAYER = 1     # DBCEnums.h; FactionTemplateEntry::IsHostileToPlayers = hostileMask & FACTION_MASK_PLAYER
 FT_HOSTILE_MASK = 5         # FactionTemplate.dbc field 5 = hostileMask (DBCStructure.h FactionTemplateEntry)
 QUEST_FLAGS_SHARABLE = 0x8  # QuestDef.h; Player::CanShareQuest requires it
+ISOLATION_YD = 30           # creature rule: no other hostile spawn this close (adds made comp.assists racy)
 
 
 class CompanionError(Exception):
@@ -175,26 +176,31 @@ def pick_quest() -> dict:
 CREATURE_RULE = ("hostile creature near the master: creature_template.faction's FactionTemplate.dbc hostileMask has "
                  "FACTION_MASK_PLAYER; rank 0 (normal); npcflag 0; maxlevel in [master level - 3, master level - 1]; "
                  "no unit_flags 0x2|0x100|0x2000000 (non-attackable, immune to PC, not selectable) and no "
-                 "flags_extra 0x2 (civilian); the spawn on the master's map nearest the master's start point")
+                 "flags_extra 0x2 (civilian); no other hostile spawn within 30 yd (2D), so one creature fights the master; "
+                 "the spawn on the master's map nearest the master's start point that is alive "
+                 "and at full health right now (`.npc info <spawn>`), so an earlier kill doesn't block the check")
 
 
-def pick_creature(level: int = LEVEL, tele: str = START_TELE) -> dict:
+def creature_candidates(level: int = LEVEL, tele: str = START_TELE, n: int = 10) -> list[dict]:
     recs, _ = dbc.read_dbc("FactionTemplate.dbc")
     hostile = sorted(r[0] for r in recs if r[FT_HOSTILE_MASK] & FACTION_MASK_PLAYER)
     t = F.tele_row(tele)
+    fac = ",".join(map(str, hostile))
     rows = db.query(
         f"SELECT c.guid, c.id, ct.name, ct.minlevel, ct.maxlevel, ct.faction, c.position_x, c.position_y, "
         f"c.position_z, SQRT(POW(c.position_x-({t['x']}),2)+POW(c.position_y-({t['y']}),2)+POW(c.position_z-({t['z']}),2)) d "
         f"FROM creature c JOIN creature_template ct ON ct.entry = c.id WHERE c.map = {t['map']} AND ct.rank = 0 "
         f"AND ct.npcflag = 0 AND ct.maxlevel BETWEEN {level - 3} AND {level - 1} "
         f"AND (ct.unit_flags & {0x2 | 0x100 | 0x2000000}) = 0 AND (ct.flags_extra & 2) = 0 "
-        f"AND ct.faction IN ({','.join(map(str, hostile))}) ORDER BY d LIMIT 1", "world")
+        f"AND ct.faction IN ({fac}) AND NOT EXISTS (SELECT 1 FROM creature o JOIN creature_template ot ON ot.entry = o.id "
+        f"WHERE o.map = c.map AND o.guid <> c.guid AND ot.faction IN ({fac}) "
+        f"AND SQRT(POW(o.position_x-c.position_x,2)+POW(o.position_y-c.position_y,2)) < {ISOLATION_YD}) "
+        f"ORDER BY d, c.guid LIMIT {int(n)}", "world")
     if not rows:
         raise CompanionError("no creature matches the rule", rule=CREATURE_RULE)
-    g, e, n, mn, mx, fac, x, y, z, d = rows[0]
-    return {"spawn_id": int(g), "entry": int(e), "name": n, "minlevel": int(mn), "maxlevel": int(mx),
-            "faction": int(fac), "spawn": {"x": float(x), "y": float(y), "z": float(z)},
-            "distance_from_start_yd": round(float(d), 1), "rule": CREATURE_RULE}
+    return [{"spawn_id": int(g), "entry": int(e), "name": nm, "minlevel": int(mn), "maxlevel": int(mx),
+             "faction": int(fac), "spawn": {"x": float(x), "y": float(y), "z": float(z)},
+             "distance_from_start_yd": round(float(d), 1)} for g, e, nm, mn, mx, fac, x, y, z, d in rows]
 
 
 FOLLOW_RULE = ("two game_tele rows on the start point's map, 100-200 yd apart (2D), height difference < 10 yd, "
@@ -236,12 +242,16 @@ def parse_gps(lines: list[str]) -> dict:
 
 def parse_npc_info(lines: list[str]) -> dict:
     """`.npc info` (cs_npc.cpp HandleNpcInfoCommandShowCreature): LANG_NPCINFO_CHAR 'current GUID: GUID Full: 0x..'
-    (ObjectGuid::ToString) and LANG_NPCINFO_HEALTH 'Health (base): b. (max): m. (current): c.'."""
+    (ObjectGuid::ToString), LANG_NPCINFO_HEALTH 'Health (base): b. (max): m. (current): c.' and
+    LANG_NPCINFO_POSITION 'Position: x y z.'."""
     text = "\n".join(lines)
     g = re.search(r"current GUID: GUID Full: 0x([0-9a-fA-F]+)", text)
     h = re.search(r"\(max\): (\d+)\. \(current\): (\d+)\.", text)
+    p = re.search(rf"Position: {NUM} {NUM} {NUM}\.", text)      # LANG_NPCINFO_POSITION (acore_string 544)
     return {"guid": int(g.group(1), 16) if g else None, "max_health": int(h.group(1)) if h else None,
-            "health": int(h.group(2)) if h else None, "raw": lines[:6]}
+            "health": int(h.group(2)) if h else None,
+            "pos": {"x": float(p.group(1)), "y": float(p.group(2)), "z": float(p.group(3))} if p else None,
+            "raw": lines[:6]}
 
 
 class Session:
@@ -271,6 +281,7 @@ class Session:
             self.ev["settle"] = F.settle_login(ws, self.guid)
             ws.start_pump()
             self.ev["gm_off"] = ws.command(".gm off")
+            self.ev["revive"] = self.revive_if_dead()
             self.ev["stale_group"] = self.leave_stale_group()
         except Exception:
             ws.close()
@@ -282,17 +293,37 @@ class Session:
             return
         try:
             for name in list(self.companions):
+                if not bot_info(self.companions[name]["guid"]).get("online"):
+                    continue           # already logged out (e.g. removed, still an offline party member)
                 try:
                     self.remove(name)
                 except Exception as e:  # cleanup is best-effort; logout below logs remaining bots out anyway
                     self.ev.setdefault("cleanup_errors", []).append(f"{name}: {e}")
             self.ev["left_group_at_exit"] = self.leave_stale_group()
+            # logout is refused in combat (a creature may still be on us after comp.assists): stop it first
+            self.ev["combatstop"] = self.ws.command(".combatstop", settle=0.3, timeout=3)
             self.ev["logout"] = self.ws.logout_pumped()
         finally:
             self.ev["ignored_opcodes"] = dict(self.ws.ignored)
             self.ws.close()
 
     # -- helpers
+    def revive_if_dead(self) -> dict:
+        """An earlier session may have left the master dead (a ghost is never attacked, and can't share quests).
+        `.pinfo` (cs_misc.cpp HandlePInfoCommand, LANG_PINFO_CHR_ALIVE 'Alive ?: Yes/No'); if dead, `.revive` on self
+        (HandleReviveCommand: ResurrectPlayer at 100% health for a non-player security level)."""
+        pinfo = soap.gm(f"pinfo {P.COMP_CHAR}").output
+        alive = re.search(r"Alive \?: (\w+)", pinfo)
+        ev = {"alive_before": alive.group(1) if alive else None}
+        if alive and alive.group(1) != "Yes":
+            ev["revive"] = self.ws.command(".revive", settle=0.5, timeout=5)
+            pinfo = soap.gm(f"pinfo {P.COMP_CHAR}").output
+            alive = re.search(r"Alive \?: (\w+)", pinfo)
+            ev["alive_after"] = alive.group(1) if alive else None
+            if ev["alive_after"] != "Yes":
+                raise CompanionError("master is dead and `.revive` didn't bring it back", **ev)
+        return ev
+
     def group_rows(self) -> list[list[str]]:
         """characters.group_member rows (groupId, memberGuid, online-less) of the master's saved party."""
         return db.query(f"SELECT gm2.guid, gm2.memberGuid FROM group_member gm1 JOIN group_member gm2 "
@@ -342,7 +373,22 @@ class Session:
                                  group=self.ws.group, members=self.members())
         m, info, e = found
         self.companions[m["name"]] = info
+        ev["reset_ai"] = self.reset_ai(m["name"], m["guid"])
         return ev | {"member": m, "bot": info, "group_list": e}
+
+    def reset_ai(self, name: str, guid: int, timeout: float = 10.0) -> dict:
+        """Whisper `reset botAI` (ResetAiAction: PlayerbotRepository::Reset + ResetStrategies, reply 'AI was reset to
+        defaults'). Strategies a master sets persist per bot in playerbots_db_store (PlayerbotRepository::Save) and are
+        reloaded at login, so a pool bot can carry an earlier session's (or a counterexample's) changes; the checks
+        test companions with their default strategies."""
+        since = self.ws.mark()
+        self.ws.chat("reset botAI", W.CHAT_MSG_WHISPER, to=name)
+        e = self.ws.wait_event(lambda e: e["kind"] == "chat" and e["type"] == W.CHAT_MSG_WHISPER
+                               and e["sender"] == guid and "defaults" in e["msg"],
+                               since, timeout=timeout)
+        if not e:
+            raise CompanionError(f"{name} didn't confirm `reset botAI` within {timeout:.0f} s")
+        return {"reply": e["msg"]}
 
     def remove(self, name: str, wait: bool = True, timeout: float = 30.0) -> dict:
         since = self.ws.mark()
@@ -360,6 +406,24 @@ class Session:
         self.companions.pop(name, None) if gone is not None else None
         group_events = [e for e in self.ws.events_since(since) if e["kind"] in ("group_list", "group_destroyed")]
         return ev | {"left_party_after_s": gone, "group_after": self.ws.group, "group_events": group_events[-3:]}
+
+    def npc_info(self, spawn_id: int | None = None) -> dict:
+        """Live state of a creature via `.npc info [spawnId]` (cs_npc.cpp HandleNpcInfoCommand): the master's selected
+        creature if any, else the spawn (GetCreatureFromPlayerMapByDbGuid)."""
+        cmd = ".npc info" + (f" {int(spawn_id)}" if spawn_id else "")
+        info = parse_npc_info(self.ws.command(cmd, settle=0.4, timeout=5))
+        m = re.search(r"DB GUID: (\d+)", "\n".join(info["raw"]))
+        return info | {"spawn_id": int(m.group(1)) if m else None}
+
+    def pick_live_creature(self) -> dict:
+        tried = []
+        for c in creature_candidates(self.level, self.tele):
+            info = self.npc_info(c["spawn_id"])
+            tried.append({"spawn_id": c["spawn_id"], "health": info["health"], "max": info["max_health"]})
+            if info["guid"] and info["health"] and info["health"] == info["max_health"]:
+                return c | {"guid": info["guid"], "npc_info": info, "rule": CREATURE_RULE, "tried": tried}
+        raise CompanionError("no live, unhurt creature among the rule's nearest candidates", rule=CREATURE_RULE,
+                             tried=tried)
 
     def summon(self, name: str) -> list[str]:
         return self.ws.command(f".summon {name}", settle=0.5, timeout=5)

@@ -497,6 +497,13 @@ class WorldSession:
             time.sleep(0.1)
         return out
 
+    def heartbeat(self, x: float, y: float, z: float, o: float = 0.0):
+        """MSG_MOVE_HEARTBEAT at the current position (HandleMovementOpcodes: packed mover guid, then MovementInfo as
+        WorldSession::ReadMovementInfo reads it: u32 flags 0, u16 flags2 0, u32 time, x, y, z, o, u32 fallTime 0).
+        A standing client's position report; it makes the server re-run visibility/aggro checks around us."""
+        self.send(W.MSG_MOVE_HEARTBEAT, W.pack_guid(self.player_guid)
+                  + struct.pack("<IHIffffI", 0, 0, _ms(), x, y, z, o, 0))
+
     def set_selection(self, guid: int):
         """CMSG_SET_SELECTION: uint64 target guid (what clicking a unit does)."""
         self.send(W.CMSG_SET_SELECTION, struct.pack("<Q", guid))
@@ -509,20 +516,30 @@ class WorldSession:
         """CMSG_GROUP_DISBAND (no payload): leave the current party."""
         self.send(W.CMSG_GROUP_DISBAND)
 
-    def logout_pumped(self, timeout=45) -> dict:
-        """logout() for a pumped session: CMSG_LOGOUT_REQUEST, then SMSG_LOGOUT_RESPONSE / _COMPLETE via events."""
-        since = self.mark()
-        self.send(W.CMSG_LOGOUT_REQUEST)
-        resp = self.wait_event(lambda e: e["kind"] == "logout_response", since, timeout=15)
-        if not resp or resp["result"] != 0:
-            raise ProbeError("logout refused or unanswered", response=resp)
+    def logout_pumped(self, timeout=45, refused_retry_s=40) -> dict:
+        """logout() for a pumped session: CMSG_LOGOUT_REQUEST, then SMSG_LOGOUT_RESPONSE / _COMPLETE via events.
+        A refusal (non-zero result: HandleLogoutRequestOpcode refuses while in combat, falling, ...) is retried every
+        2 s for up to refused_retry_s, since combat ends on its own."""
+        t_first = time.time()
+        refusals = []
+        while True:
+            since = self.mark()
+            self.send(W.CMSG_LOGOUT_REQUEST)
+            resp = self.wait_event(lambda e: e["kind"] == "logout_response", since, timeout=15)
+            if resp and resp["result"] == 0:
+                break
+            refusals.append(resp)
+            if time.time() - t_first > refused_retry_s:
+                raise ProbeError("logout refused or unanswered", responses=refusals[-3:])
+            time.sleep(2)
         t0 = time.time()
         done = self.wait_event(lambda e: e["kind"] == "logout_complete", since, timeout=timeout)
         if not done:
             raise ProbeError("no SMSG_LOGOUT_COMPLETE", response=resp)
         self.stop_pump()
         self.player_guid = None
-        return {"logout_result": 0, "instant": bool(resp["instant"]), "complete_after_s": round(time.time() - t0, 1)}
+        return {"logout_result": 0, "instant": bool(resp["instant"]), "complete_after_s": round(time.time() - t0, 1),
+                "refused_first": len(refusals)}
 
 
 def _ms() -> int:
