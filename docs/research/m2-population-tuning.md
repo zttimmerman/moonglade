@@ -37,14 +37,15 @@ A worldserver with playerbots disabled (`AiPlayerbot.Enabled = 0`, otherwise m0)
 
 ## Round 2 (task 2.2): default about 500, revised budget
 
-The knobs are set F plus capital weights Stormwind, Orgrimmar and Silvermoon 2 (set **G**, final). Each run is a fresh-world start; samples are the worst of 61.
+The knobs are set F plus capital weights Stormwind, Orgrimmar and Silvermoon 2, and Thunder Bluff 4 (set **G**, final). With equal weight, Thunder Bluff's intake 60 s after start was 11 bots against 17-25 for the other Horde capitals, and it held 2 bots in slow run 3. Each run is a fresh-world start; samples are the worst of 61.
 
 | N | knobs | worldserver GB | stack total GB | mysqld GB | p95 / median ms | host free+inactive min (recorded) | min starting zone / min capital | moved / progressed |
 |---|---|---|---|---|---|---|---|---|
 | 500 | G minus three weights | 4.84 | 5.56 | 0.72 | 9 / 2 | 2.51 | 16 / 5 (Stormwind, Orgrimmar) | 96% / 63% |
 | 750 | G | 4.94 | 5.67 | 0.73 | 10 / 2 | 2.71 | 27 / 12 (Undercity) | 97% / 62% |
 | 1500 | G | 5.34 | 6.09 | 0.75 | 26 / 4 | 2.61 | (all ≥ 3) | 97% / 56% |
-| 500 | G (slow run, below) | see the slow-run row in the JSON block | | | | | | |
+| 500 | G, TB weight 2 (slow run 3) | 4.78 | 5.54 | 0.75 | 9 / 2 | 2.61 | 17 / **2** (Thunder Bluff) | 96% / 67% |
+| 500 | G final (TB weight 4) | see the JSON block | | | | | 22 / 6 (Undercity, Silvermoon) | 95% / 63% |
 
 - **Memory grows slowly with N:** about 0.5 MB per bot from 500 to 1500. The fixed playerbots cost dominates. Even N=1500 is inside every revised limit, with 0.67 GB of headroom on worldserver, 0.9 GB on stack total, and p95 at 26 ms.
 - **No measured larger population breaks a limit.** Extrapolating linearly, stack total would reach 7.0 GB at about N=3100. That exceeds the `world_size` sanity cap (2000) and would add about 1600 more bot characters to the DB, so it wasn't measured. As a result `perf.population_tuned` **fails**: the record shows no larger run that broke a limit, and 500 is not a playerbots config ceiling (there is none). The default of 500 is Zach's choice for the world's feel, not the largest size that fits. Raising the default, or rewording the scenario to "the default fits, and a larger preset was measured", is the orchestrator's call.
@@ -65,6 +66,92 @@ Against the original limits, worldserver memory was above 4.0 GB at every N (4.2
 {
  "chosen_n": 500,
  "runs": [
+  {
+   "n": 500,
+   "knobs": "G (final, TB weight 4)",
+   "source": "harness/out/pop-session-N500-1791011619.json",
+   "summary": {
+    "worldserver_mem_gb": {
+     "min": 4.726,
+     "median": 4.774,
+     "max": 4.795,
+     "n": 61
+    },
+    "mysqld_mem_gb": {
+     "min": 0.749,
+     "median": 0.749,
+     "max": 0.75,
+     "n": 61
+    },
+    "stack_total_gb": {
+     "min": 5.487,
+     "median": 5.533,
+     "max": 5.556,
+     "n": 61
+    },
+    "update_p95_ms": {
+     "min": 5,
+     "median": 7,
+     "max": 8,
+     "n": 61
+    },
+    "update_median_ms": {
+     "min": 2,
+     "median": 2,
+     "max": 2,
+     "n": 61
+    },
+    "host_free_inactive_gb": {
+     "min": 2.787,
+     "median": 3.088,
+     "max": 3.186,
+     "n": 61
+    }
+   }
+  },
+  {
+   "n": 500,
+   "knobs": "G with TB weight 2 (slow run 3)",
+   "source": "harness/out/pop-session-N500-1791009712.json",
+   "summary": {
+    "worldserver_mem_gb": {
+     "min": 4.726,
+     "median": 4.766,
+     "max": 4.784,
+     "n": 61
+    },
+    "mysqld_mem_gb": {
+     "min": 0.745,
+     "median": 0.745,
+     "max": 0.745,
+     "n": 61
+    },
+    "stack_total_gb": {
+     "min": 5.482,
+     "median": 5.522,
+     "max": 5.54,
+     "n": 61
+    },
+    "update_p95_ms": {
+     "min": 5,
+     "median": 6,
+     "max": 9,
+     "n": 61
+    },
+    "update_median_ms": {
+     "min": 2,
+     "median": 2,
+     "max": 2,
+     "n": 61
+    },
+    "host_free_inactive_gb": {
+     "min": 2.606,
+     "median": 2.957,
+     "max": 3.237,
+     "n": 61
+    }
+   }
+  },
   {
    "n": 1500,
    "knobs": "G",

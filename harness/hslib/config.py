@@ -36,12 +36,13 @@ def _population(n: int) -> dict[str, dict[str, str]]:
             "AiPlayerbot.RandomBotMaxLevelChance": "0.05",
             "AiPlayerbot.ProbTeleToBankers": "1.0",
             # capital-banker weights per faction, from measured capital counts (design.md "Population profile knobs");
-            # Darnassus and Exodar keep the default 1 (they held 12-15 bots at weight 1 with N=500)
+            # Darnassus and Exodar keep the default 1 (they held 12-15 bots at weight 1 with N=500); Thunder Bluff
+            # 4: at equal weight its intake 60 s after start was 11 vs 17-25 for the other Horde capitals
             "AiPlayerbot.TeleToStormwindWeight": "2",
             "AiPlayerbot.TeleToOrgrimmarWeight": "2",
             "AiPlayerbot.TeleToIronforgeWeight": "2",
             "AiPlayerbot.TeleToUndercityWeight": "2",
-            "AiPlayerbot.TeleToThunderBluffWeight": "2",
+            "AiPlayerbot.TeleToThunderBluffWeight": "4",
             "AiPlayerbot.TeleToSilvermoonCityWeight": "2",
             "AiPlayerbot.MinRandomBotTeleportInterval": "300",
             "AiPlayerbot.MaxRandomBotTeleportInterval": "1200",
