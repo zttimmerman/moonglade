@@ -192,20 +192,33 @@ def mpq_write_roundtrip(ctx):
         # Refusal, tested on a scratch stand-in client (never the real client/): the guard's root is injectable.
         standin = tmp / "standin-client"
         (standin / "Data").mkdir(parents=True)
+        os.symlink(standin, tmp / "standin-link")
+        # APFS is case-insensitive here: case variants name the same directory and must be refused too.
+        variants = {"exact": standin, "upper": tmp / "STANDIN-CLIENT", "mixed": tmp / "Standin-Client",
+                    "dotdot": tmp / "standin-client" / ".." / "STANDIN-client", "symlink": tmp / "standin-link"}
         refused = {}
-        for label, dest in (("in_data", standin / "Data" / "hs-mpq-write-check.MPQ"),
-                            ("new_subdir", standin / "Data" / "enUS" / "patch-enUS-9.MPQ")):
+
+        def attempt(label, fn, dest):
             try:
-                mpq.write_archive(dest, files, client_root=standin)
-                refused[label] = {"refused": False}
+                fn(dest)
+                refused[label] = {"dest": str(dest), "refused": False}
             except mpq.MPQError as e:
-                refused[label] = {"refused": True, "message": str(e)}
-            refused[label]["created"] = dest.exists()
+                refused[label] = {"dest": str(dest), "refused": True, "message": str(e)[:200]}
+            refused[label]["created"] = os.path.lexists(dest)
+
+        for v, root in variants.items():
+            attempt(f"write_{v}_data", lambda d: mpq.write_archive(d, files, client_root=standin),
+                    root / "Data" / "hs-mpq-write-check.MPQ")
+            attempt(f"write_{v}_new_subdir", lambda d: mpq.write_archive(d, files, client_root=standin),
+                    root / "Data" / "enUS" / "patch-enUS-9.MPQ")
+            attempt(f"extract_{v}", lambda d: mpq.extract(str(tmp / "patch-zlib.MPQ"), "Interface\\GlueXML\\Test.lua",
+                                                          d, client_root=standin), root / "Data" / "Test.lua")
         stray = sorted(str(f.relative_to(standin)) for f in standin.rglob("*") if f.is_file())
         ev["refuse_standin"] = {"standin": str(standin), "attempts": refused, "files_in_standin": stray}
         # the default guard root is the real client (pure path test, nothing is written)
-        ev["default_root_is_client"] = mpq._under_client(P.CLIENT / "Data" / "x.MPQ") and \
-            not mpq._under_client(tmp / "x.MPQ")
+        ev["default_root_is_client"] = (mpq._under_client(P.CLIENT / "Data" / "x.MPQ")
+                                        and mpq._under_client(P.CLIENT.parent / P.CLIENT.name.upper() / "Data" / "x.MPQ")
+                                        and not mpq._under_client(tmp / "x.MPQ"))
         after = _snapshot()
         changed = sorted(k for k in before if k in after and before[k] != after[k])
         added, removed = sorted(set(after) - set(before)), sorted(set(before) - set(after))

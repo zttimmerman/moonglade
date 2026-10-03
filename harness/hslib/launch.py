@@ -297,8 +297,12 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None) -> tuple[
     from .clientcfg import WINE_DEFAULTS, configure
 
     _require_wine()
+    if os.environ.get("HS_CLIENT_DIR"):
+        bar = "!" * 78
+        log(f"{bar}\nWARNING: HS_CLIENT_DIR is set: launching the TEST client copy at {client_dir()}\n"
+            f"         (not the real client at {P.CLIENT}). Unset HS_CLIENT_DIR to play normally.\n{bar}")
     man = _installed_client()
-    ev: dict = {"client": str(client_dir()),
+    ev: dict = {"client": str(client_dir()), "client_override": bool(os.environ.get("HS_CLIENT_DIR")),
                 "wine": str(WINE), "wineprefix": str(P.WINEPREFIX), "wine_log": str(P.WINE_LOG),
                 "env": {k: v for k, v in wine_env().items() if k.startswith("WINE")}}
 

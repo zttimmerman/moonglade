@@ -1,6 +1,7 @@
 """client-connectivity: the installed client (`hs client-install`) and its launch under Wine (ADR-0004)."""
 import fnmatch
 import json
+import os
 import subprocess
 from pathlib import Path
 
@@ -96,7 +97,9 @@ def launch_smoke(ctx):
     from ..launch import prefix_processes
 
     cmd = [str(P.HARNESS / "hs"), "launch", "--smoke"]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=900)
+    # always the real client: a leftover HS_CLIENT_DIR (test-only scratch copy) must not leak into this check
+    env = {k: v for k, v in os.environ.items() if k != "HS_CLIENT_DIR"}
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=900, env=env)
     try:
         out = json.loads(r.stdout)
     except ValueError:
@@ -107,7 +110,11 @@ def launch_smoke(ctx):
         ev["stdout_tail"] = r.stdout[-3000:]
     else:
         ev["result"] = out
+    ev["hs_client_dir_in_harness_env"] = os.environ.get("HS_CLIENT_DIR")
+    ev["client_dir_used"] = (out or {}).get("client")
     require(r.returncode == 0 and out is not None, "hs launch --smoke failed", **ev)
+    require(out.get("client") == str(P.CLIENT) and out.get("client_override") is False,
+            "the smoke launch did not run the real client/", **ev)
     sm = out.get("smoke", {})
     require(sm.get("ok") is True, "smoke result not ok", **ev)
     wow_end = sm.get("wow_at_end") or []

@@ -443,14 +443,32 @@ def resolve_archive(arg) -> Path:
 
 
 def _under_client(p: Path, client_root=None) -> bool:
-    root0 = Path(client_root) if client_root is not None else P.CLIENT
-    real = Path(os.path.realpath(p))
-    for root in {Path(os.path.realpath(root0)), root0.absolute()}:
-        try:
-            real.relative_to(root)
-            return True
-        except ValueError:
-            pass
+    """True if `p` (existing or not) would land inside the client dir (`client_root`, default paths.CLIENT).
+
+    Decided by filesystem identity, not by comparing strings: APFS is case-insensitive here, so `CLIENT/` or
+    `Client/` name the same directory, and realpath doesn't normalise case. Every existing ancestor of the destination
+    (both the symlink-resolved path and the lexical absolute path, so `..` and symlinks are covered) is compared with
+    the client root by st_dev/st_ino (os.path.samefile). If the client root doesn't exist, fall back to a
+    case-folded path comparison."""
+    root = Path(client_root) if client_root is not None else P.CLIENT
+    try:
+        rst = os.stat(root)
+    except OSError:
+        rst = None
+    cands = {Path(os.path.realpath(p)), Path(os.path.abspath(p))}
+    for c in cands:
+        for anc in (c, *c.parents):
+            if rst is None:
+                for r in {os.path.realpath(root), os.path.abspath(root)}:
+                    if os.path.normcase(str(anc)).casefold() == os.path.normcase(r).casefold():
+                        return True
+                continue
+            try:
+                st = os.stat(anc)
+            except OSError:
+                continue                       # not created yet: walk up to the nearest existing parent
+            if (st.st_dev, st.st_ino) == (rst.st_dev, rst.st_ino):
+                return True
     return False
 
 
@@ -463,11 +481,11 @@ def list_archive(arg, pattern: str | None = None) -> list[str]:
     return names
 
 
-def extract(arg, inside: str, dest) -> dict:
+def extract(arg, inside: str, dest, client_root=None) -> dict:
     dest = Path(dest)
     if dest.is_dir() or str(dest).endswith(("/", os.sep)):
         dest = dest / inside.replace("/", "\\").rsplit("\\", 1)[-1]
-    if _under_client(dest) or _under_client(dest.parent):
+    if _under_client(dest, client_root) or _under_client(dest.parent, client_root):
         raise MPQError(f"refusing to write under client/: {dest}")
     with Archive(resolve_archive(arg)) as a:
         info = a.info(inside)
