@@ -1,6 +1,7 @@
 # Tasks
 
 ## 1. Harness support (builder)
+- [ ] 1.0 Slow-tier scenario rule in runner/reporting — verify: `report.slow_tier_rule`
 - [ ] 1.1 Config profiles (m0 / population) with module overrides; `Playerbots.log` grep helper; DBC reader moved into `hslib/dbc.py` — verify: unit use by pop checks; `hs list` shows new checks
 ## 2. Population (builder)
 - [ ] 2.1 Population profile + checks `pop.zones_covered`, `pop.size_stable`, `pop.bots_active`

@@ -11,6 +11,12 @@ See proposal.md and `docs/research/playerbots-scripting.md` (sections 1, 2, 4 an
 - **World-update time.** Use the server's own metric: `.server info` reports update-time diffs in AC. If it doesn't expose a p95, sample it every 10 s and compute the statistics over the window.
 - **Tuning record.** `docs/research/m2-population-tuning.md`: one row per measured N with peak and median metrics, picking the largest N within the budget.
 
+## Notes from later work (2026-10-02)
+- Upstream server-mail login crash is fixed by core patch 0001 (ADR-0006); bots logging in and out are safe from it.
+- `fixtures.settle_login` requires `CharacterDatabase.WorkerThreads = 1`; if the population needs more DB workers, remove settle_login (core patch makes it non-essential) rather than weaken its barrier.
+- Keep the Mac awake during long runs (F12): wrap warm-up/sampling in `caffeinate` or an IOPM assertion; a mysqld stall was seen during display sleep.
+- Tag population/perf checks `slow`; companion checks can be `full` if they take < ~2 min.
+
 ## Risks
 - Warm-up time grows full runs by about 10 minutes. → Acceptable; one shared warm-up.
 - Bot behaviour is stochastic. → Thresholds use generous percentages and evidence keeps the raw samples; flakiness counts as P0, so tune the thresholds or knobs with recorded reasons.

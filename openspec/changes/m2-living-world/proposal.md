@@ -16,13 +16,13 @@ KICKOFF §8 M2: world population bots are active in starting zones and cities, p
 - `performance-budget`: resource limits for the whole stack on the target Mac.
 
 ### Modified Capabilities
-(none; the M0 bot cap of 10 is replaced by the population profile, which is a config change. `build.playerbots_active` is unaffected.)
+- `harness-reporting`: slow-tier scenario checks (skipped in full runs, required in slow runs and at merge for changes that reference them). The M0 bot cap of 10 becomes the `m0` profile; the population profile is new config. `build.playerbots_active` is unaffected.
 
 ## Impact
-`harness/hslib/config.py` (population profile), probe chat, new checks. Every full run grows by a population warm-up (≈10 min). No core patches expected; any that turn out to be needed get an ADR.
+`harness/hslib/config.py` (population profile), probe chat, new checks. The population and budget checks are tagged `slow` (≈20 min warm-up + sampling), so full runs stay fast; slow runs and this change's merge gate run them. No core patches expected; any that turn out to be needed get an ADR.
 
 ## Data provenance
 Zone, area and map IDs used by checks come from the client's `AreaTable.dbc`/`Map.dbc` (`data/client-data/dbc`) or `game_tele`, read at runtime and cited in check evidence, never from memory (CLAUDE.md §7).
 
 ## Spec-change log
-(none yet)
+- 2026-10-02 · (pre-build) Population/perf checks are tagged `slow` instead of growing every full run by ~20 min. Adds the slow-tier scenario rule (harness-reporting delta). The guarantee is unchanged at merge: this change must pass an unfiltered `--tier slow` run.
