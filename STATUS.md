@@ -1,22 +1,22 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-03 (orchestrator context ~91%; compaction expected). After compaction or a fresh session: follow this section; the memory notes hold Zach's preferences and decisions._
+_Updated 2026-10-03 (after B13; M2 verifier running)._
 
 **Cold start:** read this file, then `openspec list` (Node 20: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`), then `git -C <repo> worktree list`, `git branch -a`, `gh pr list`, then `harness/hs status`. The skills `.claude/skills/hs-*` hold the procedures (change loop, checks, client debugging, RE). User preferences and decisions are in the orchestrator memory notes (plain language for decisions, Gate 1, front-menu vision, logo).
 
 **In flight**
 | Work | Branch / checkout | State | If its agent is gone |
 |---|---|---|---|
-| M2 living world | `change/m2-living-world`, **main checkout**, listed in `harness/active-changes` | Part 1 done (500 bots, world-size setting, `./play` = living world, budget). Part 2: probe chat done; `comp.follows`/`comp.assists` pass. **Builder B13 is fixing two upstream bugs** (no upstream issue/fix exists, searched 2026-10-03): core patch 0002 (playerbots `OnPacketReceived` hook receives a moved-from empty packet for typed handlers, so bots never see quest share; ADR-0007 + opcode audit) and a new `patches/playerbots/` queue + patch 0001 (`bot remove` leaves an offline party member; ADR-0008). B13 also adds `caffeinate -s` (F12). Owns the stack | Check the branch for B13's commits; re-brief a fresh builder from M2 tasks 3.3/3.4 + `design.md` ("Builder notes … B13", "Open: two scenarios fail") + B13's commits. Done when `comp.add_remove` and `comp.quest_shared` pass unmodified, each fails without its patch, and the quick tier + ONE unfiltered `--tier slow` run are green |
+| M2 living world | `change/m2-living-world` (HEAD eca9cb7, main merged in), **main checkout** | B13 done (2026-10-03): core patch 0002 (ADR-0007, proposed), playerbots queue + 0001 (ADR-0008, proposed), F12 keep-awake, `comp.follows` path fix, `core.login_logout_race_baseline` accepts macOS-coalesced crash reports (UUID match). B13's own slow run: 60/0. **Fresh M2 verifier running**, owns the stack (budget: 1 slow `--force-clean` + ≥5 repeats of `comp.*`/`core.*`) | Re-brief a fresh verifier from the M2 spec deltas + diff `c89420e..eca9cb7` (exclude STATUS/.claude/ADR-0006, which came from main) |
 
-**Next after B13:** M2 verifier (fresh). Budget: 1 unfiltered **`--tier slow --force-clean`** run (patches changed build inputs) + ≥5 repeats of `comp.*` and `core.*`. Ask it to judge the capital margin (≥3 required; observed 4–6) for flakiness, review both new patches and ADR-0007/0008, and confirm PLAYER, `env/player.json` and `env/settings.json` are untouched. Then archive, PR, merge; set ADR-0007/0008 to accepted.
+**After verifier PASS:** archive m2, PR + merge, set ADR-0007/0008 to accepted. New F-items from B13: **F15** upstream worldserver shutdown segfault (`GameObject::RemoveFromWorld` ← `MapMgr::UnloadAll`, after population sessions; seen before the patches); **F16** checks whisper `reset botAI` because companion strategies persist per bot (note for human-verify: real companions keep their last orders). Consider reporting 0002/0001 upstream (needs Zach's OK to post).
 
 **Next (in order):** M2 finish + verify → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
 
 **Decisions pending from Zach:** none blocking. Later: the patch ADR for the in-client front menu (step 2); light vs true save files; F-items as they come up.
 
-**Compaction hooks (PR #8):** `.claude/settings.json` runs `.claude/hooks/session-context.sh` on compact/clear/resume (injects this handoff + a context-survival checklist) and `precompact-check.sh` before compaction (warns if a change/* branch is newer than this handoff). The main checkout is on `change/m2-living-world`, which predates them, so a temporary **`.claude/settings.local.json` in the main checkout** points at the main-status worktree copies. **Delete it once that branch has main merged in**, or the hooks fire twice.
+**Compaction hooks (PR #8):** `.claude/settings.json` runs `.claude/hooks/session-context.sh` on compact/clear/resume (injects this handoff + a context-survival checklist) and `precompact-check.sh` before compaction (warns if a change/* branch is newer than this handoff). (The temporary settings.local.json was removed once main was merged into the M2 branch.) Mac sleep: Zach set `pmset disablesleep 1` on 2026-10-03, so a closed lid no longer stalls runs; undo with `sudo pmset -a disablesleep 0`.
 
 **Conventions:** **Before writing any core or module patch, search upstream issues and PRs and check newer versions** (see the hs-change-loop skill); prefer pin bump > cherry-pick > own patch. branch per change, PR + merge after a verifier PASS. Run budget: 2 full runs per change (my pre-check, quick tier OK; verifier: 1 full run, `--force-clean` when build inputs change, + ≥5 targeted repeats), plus a periodic full ×3. **STATUS.md is edited only on `main`** (status-only commits go straight to main; branches don't touch it). Every git write uses `git -C <path>`.
 
