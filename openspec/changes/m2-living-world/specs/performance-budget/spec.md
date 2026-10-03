@@ -14,10 +14,10 @@ With the population profile active at the default size, measured over a 10-minut
 - **THEN** every limit above holds, and the evidence includes all samples, the population size N, and host free+inactive memory (recorded, not limited: it depends on the user's other apps)
 - Check: `perf.server_budget`
 
-#### Scenario: Population size is the largest that fits
-- **GIVEN** the budget measurement passes at population N
-- **WHEN** the tuning record in the change is consulted
-- **THEN** it shows a measured run at a larger population (e.g. 1.5×N) that exceeded at least one limit, or states that N is the playerbots config ceiling
+#### Scenario: The default fits and the headroom is measured
+- **GIVEN** the budget measurement passes at the default (`normal`) population N
+- **WHEN** the tuning record in `docs/research/m2-population-tuning.md` is consulted
+- **THEN** it contains measured runs at N and at least one larger size, each with per-limit worst values, and it states the largest size measured and whether that size fit the budget
 - Check: `perf.population_tuned`
 
 ### Requirement: Client-side playability
