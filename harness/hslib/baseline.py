@@ -126,15 +126,17 @@ def worldserver_pids() -> list[int]:
     return [pid for pid, cmd in procs.table() if cmd.startswith(str(SERVER_BIN / "worldserver"))]
 
 
-def start_worldserver(timeout=600) -> tuple[subprocess.Popen, dict]:
+def start_worldserver(timeout=600, extra_env: dict | None = None) -> tuple[subprocess.Popen, dict]:
     """Render baseline confs (same DBs/ports/overrides as the real stack, own logs/pidfile) and start the baseline
-    worldserver. The real worldserver must already be stopped (same world + SOAP ports)."""
+    worldserver, with `extra_env` added to its environment (e.g. crashtrace's DYLD_INSERT_LIBRARIES). The real
+    worldserver must already be stopped (same world + SOAP ports)."""
     if stack.stack_processes()["worldserver"]:
         raise BaselineError("the real worldserver is still running; stop it before starting the baseline")
     config.write_all(etc=SERVER_ETC, logs=LOGS, run=RUN, tmp=TMP, source=SRC)
     out, err = open(LOGS / "worldserver.out", "w"), open(LOGS / "worldserver.err", "w")
     proc = subprocess.Popen([str(SERVER_BIN / "worldserver"), "-c", str(SERVER_ETC / "worldserver.conf")],
-                            cwd=SERVER_BIN, stdin=subprocess.DEVNULL, stdout=out, stderr=err, start_new_session=True)
+                            cwd=SERVER_BIN, stdin=subprocess.DEVNULL, stdout=out, stderr=err, start_new_session=True,
+                            env={**os.environ, **(extra_env or {})})
     t0 = time.time()
     ok = stack._wait(stack.soap_ready, timeout, interval=2.0, watch_pid=proc.pid)
     ev = {"pid": proc.pid, "ready": ok, "ready_s": round(time.time() - t0, 1),

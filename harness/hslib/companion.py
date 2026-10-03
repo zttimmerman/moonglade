@@ -203,6 +203,41 @@ def creature_candidates(level: int = LEVEL, tele: str = START_TELE, n: int = 10)
              "distance_from_start_yd": round(float(d), 1)} for g, e, nm, mn, mx, fac, x, y, z, d in rows]
 
 
+STAGE_RULE = ("staging point for comp.assists (where the companion joins the master before the fight): a point "
+              "STAGE_YD (35) yd from the creature's live position, out of its aggro reach, trying bearings in 45-degree "
+              "steps starting with the one toward the master's start point; the first with no hostile-to-players spawn "
+              "(FactionTemplate.dbc rule above), the picked creature included, within "
+              "STAGE_CLEAR_YD (25) yd (2D); ground height by `.go xyz x y` (cs_go.cpp HandleGoXYZCommand: "
+              "max(GetHeight, GetWaterLevel) when z is omitted)")
+STAGE_YD = 35          # > the creature's aggro radius (Creature.cpp GetAggroRange: DetectionRange, 20 by default, minus the
+                       # level difference: ~20-23 yd for these creatures vs. the level-8 master)
+STAGE_CLEAR_YD = 25
+
+
+def staging_point(creature: dict, toward: dict, map_id: int) -> dict:
+    """STAGE_RULE: {"x", "y", "bearing_deg", "distance_to_creature_yd", "tried"}; raises CompanionError if none."""
+    recs, _ = dbc.read_dbc("FactionTemplate.dbc")
+    fac = ",".join(str(r[0]) for r in recs if r[FT_HOSTILE_MASK] & FACTION_MASK_PLAYER)
+    cx, cy = creature["x"], creature["y"]
+    r = STAGE_YD + STAGE_CLEAR_YD
+    spawns = [(float(x), float(y)) for x, y in db.query(
+        f"SELECT c.position_x, c.position_y FROM creature c JOIN creature_template ct ON ct.entry = c.id "
+        f"WHERE c.map = {int(map_id)} AND ct.faction IN ({fac}) AND c.position_x BETWEEN {cx - r} AND {cx + r} "
+        f"AND c.position_y BETWEEN {cy - r} AND {cy + r}", "world")]
+    base = math.atan2(toward["y"] - cy, toward["x"] - cx)
+    tried = []
+    for k in range(8):
+        a = base + k * math.pi / 4
+        x, y = cx + STAGE_YD * math.cos(a), cy + STAGE_YD * math.sin(a)
+        near = min((math.hypot(sx - x, sy - y) for sx, sy in spawns), default=None)
+        tried.append({"bearing_deg": round(math.degrees(a) % 360), "nearest_hostile_spawn_yd":
+                      round(near, 1) if near is not None else None})
+        if near is None or near >= STAGE_CLEAR_YD:
+            return {"x": round(x, 2), "y": round(y, 2), "bearing_deg": round(math.degrees(a) % 360),
+                    "distance_to_creature_yd": STAGE_YD, "tried": tried, "rule": STAGE_RULE}
+    raise CompanionError("no staging point matches the rule", rule=STAGE_RULE, tried=tried)
+
+
 FOLLOW_RULE = ("two game_tele rows on the start point's map, 100-200 yd apart (2D), height difference < 10 yd, with no "
                "hostile-to-players spawn (FactionTemplate.dbc rule above) within 40 yd of the straight path between them "
                "(a companion that gets pulled into a fight on the way stops following: seen in a slow run on the "

@@ -9,12 +9,13 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import time
 from pathlib import Path
 
-from .. import baseline as B, build, fixtures as F, paths as P, soap, stack
+from .. import baseline as B, build, crashtrace as CT, fixtures as F, paths as P, soap, stack
 from ..registry import check, require
 
 HS = str(P.HARNESS / "hs")
@@ -22,8 +23,8 @@ PATCH_NAME = "0001-server-mail-guard-async-player.patch"
 SERVER_MAIL_CPP = B.SERVER_MAIL_CPP
 RACE_ATTEMPTS = 20          # spec: "20 times in a row" / "within the 20 attempts"
 DIAG = Path.home() / "Library/Logs/DiagnosticReports"
-CRASH_REPORT_WAIT_S = 120   # ReportCrash writes the .ips some seconds after the process dies; generous bound
-# Frames that identify the server-mail defect in a crash report (spec: "naming ServerMailMgr::SendServerMail or
+IPS_WAIT_S = 10             # supplementary only: how long to look for a fresh .ips for the baseline pid
+# Frames that identify the server-mail defect in a crash backtrace (spec: "naming ServerMailMgr::SendServerMail or
 # the server_mail.cpp callback"); ServerMailCondition::CheckCondition is the frame that dereferences the player.
 DEFECT_FRAMES = ("ServerMailMgr::SendServerMail", "ServerMailReward::OnPlayerLogin", "ServerMailCondition::")
 
@@ -161,24 +162,6 @@ def binary_uuid(path: Path) -> str | None:
     return m.group(1).lower() if m else None
 
 
-def coalesced_reports_for(uuid: str | None, before: dict) -> list[dict]:
-    """Existing reports macOS re-touched instead of writing a new one. Seen 2026-10-03: when the same binary crashes
-    the same way again (the baseline binary is unchanged between runs), ReportCrash updates the mtime of the earlier
-    report for that binary and writes no new file. A report counts only if its mtime moved past `before` and its
-    main image UUID is this binary's."""
-    out = []
-    for name, mt in crash_reports().items():
-        if name not in before or before[name] == mt:
-            continue
-        try:
-            r = parse_report(DIAG / name)
-        except (OSError, ValueError, KeyError, IndexError):
-            continue
-        if uuid and r.get("binary_uuid") == uuid:
-            out.append(r | {"coalesced": True, "mtime_before": before[name], "mtime_after": mt})
-    return out
-
-
 def new_reports_for(pid: int | None, before: dict) -> list[dict]:
     out = []
     for name, mt in crash_reports().items():
@@ -270,11 +253,15 @@ def _server_digest() -> str:
     return hashlib.sha256(json.dumps(build.tree_digest(P.SERVER), sort_keys=True).encode()).hexdigest()
 
 
+CRASHTRACE_DIR = B.TMP / "crashtrace"
+
+
 @check("core.login_logout_race_baseline", order=126, capability="server-build", stack="up", tier="full")
 def login_logout_race_baseline(ctx):
     """The pinned core built WITHOUT the patch (baseline/: own worktree, build dir and install) crashes within
-    20 immediate login/logout attempts, with a crash report whose top frames name the server-mail callback path;
-    the real server/ install is untouched and the normal stack is restored afterwards."""
+    20 immediate login/logout attempts: it dies of SIGSEGV, and the backtrace that THIS crash recorded (crashtrace
+    shim, a real bad-access fault in the baseline binary) names the server-mail callback path; the real server/
+    install is untouched and the normal stack is restored afterwards."""
     ev = {"server_digest_before": _server_digest(), "fixture": F.ensure()}
     guid = F.char_guid()
     F.poll(lambda: F.char_state(guid), lambda s: s.get("online") == 0, timeout=30)
@@ -282,32 +269,35 @@ def login_logout_race_baseline(ctx):
     try:
         ev["baseline_src"] = B.sync_src()
         ev["baseline_build"] = B.build_install()
-    except B.BaselineError as e:
-        require(False, f"baseline build failed: {e}", **ev, **e.evidence)
+        dylib = CT.build(B.TMP / "crashtrace.dylib")
+    except (B.BaselineError, CT.CrashTraceError) as e:
+        require(False, f"baseline build failed: {e}", **ev, **getattr(e, "evidence", {}))
+    binary = B.SERVER_BIN / "worldserver"
+    ev["baseline_binary_uuid"] = binary_uuid(binary)
     ev["real_worldserver_sha256"] = build._sha256_file(P.SERVER_BIN / "worldserver")
     main_pids = stack.stack_processes()["worldserver"]
     require(len(main_pids) == 1, "expected exactly one real worldserver", worldservers=main_pids, **ev)
     ev["real_worldserver_stop"] = stack.stop_worldserver(main_pids[0])
     proc = None
     try:
-        proc, ev["baseline_start"] = B.start_worldserver()
+        ev["crashtrace_records_cleared"] = CT.clear(CRASHTRACE_DIR)
+        proc, ev["baseline_start"] = B.start_worldserver(extra_env=CT.env(dylib, CRASHTRACE_DIR))
+        lsof = subprocess.run(["lsof", "-p", str(proc.pid), "-Fn"], capture_output=True, text=True).stdout
+        ev["crashtrace_loaded"] = str(dylib) in lsof
         reports_before = crash_reports()
         rows = race_loop(proc.pid)
         crashed = not stack.alive(proc.pid)
-        ev |= {"crashed": crashed, "crashed_on_attempt": rows[-1]["i"] if crashed else None,
+        ev |= {"crashed": crashed, "crashed_on_attempt": rows[-1]["i"] if crashed and rows else None,
                "summary": _summ_rows(rows), "attempts": rows}
-        reports = []
         if crashed:
             ev["baseline_returncode"] = proc.wait(timeout=30)
-            deadline = time.time() + CRASH_REPORT_WAIT_S
-            ev["baseline_binary_uuid"] = binary_uuid(B.SERVER_BIN / "worldserver")
-            while not reports and time.time() < deadline:
-                time.sleep(2)
-                reports = new_reports_for(proc.pid, reports_before)
-            if not reports:     # macOS coalesced it into the earlier report for this exact binary
-                reports = coalesced_reports_for(ev["baseline_binary_uuid"], reports_before)
-            ev["crash_report_wait_s"] = round(CRASH_REPORT_WAIT_S - max(0, deadline - time.time()), 1)
-        ev["crash_reports"] = reports
+        ev["crash_trace"] = CT.read(CRASHTRACE_DIR, proc.pid, binary)
+        # Supplementary, never gating: a fresh ReportCrash .ips for this pid, if macOS wrote one (it may coalesce).
+        if crashed:
+            time.sleep(IPS_WAIT_S)
+            ev["supplementary_ips_reports"] = new_reports_for(proc.pid, reports_before)
+    except CT.CrashTraceError as e:
+        ev["crash_trace_error"] = str(e)
     finally:
         if proc is not None:
             ev["baseline_stop"] = B.stop_worldserver(proc)
@@ -328,13 +318,23 @@ def login_logout_race_baseline(ctx):
             and src["server_mail_cpp_equals_core_sha"] and not src["server_mail_cpp_has_guid_guard"],
             "baseline source is not the pristine pinned core (patch present or tree dirty)", **ev)
     require(ev["baseline_start"]["cmdline_is_baseline"], "the started worldserver is not the baseline binary", **ev)
+    require(ev["crashtrace_loaded"], "the crashtrace shim is not loaded in the baseline worldserver", **ev)
     require(ev["crashed"], f"unpatched baseline worldserver survived {len(ev['attempts'])} attempts", **ev)
-    require(ev["crash_reports"], "no crash report for the baseline worldserver pid", **ev)
-    frames = " | ".join(f for r in ev["crash_reports"] for f in r.get("top_frames", []))
+    require(ev.get("baseline_returncode") == -signal.SIGSEGV,
+            f"baseline worldserver did not die of SIGSEGV (returncode {ev.get('baseline_returncode')})", **ev)
+    tr = ev.get("crash_trace")
+    require(tr is not None and tr.get("pid") == proc.pid and tr.get("complete"),
+            "no complete crash backtrace recorded by this run's baseline worldserver pid", **ev)
+    require(tr.get("signo") == signal.SIGSEGV, f"recorded signal is {tr.get('signo')}, not SIGSEGV", **ev)
+    require(ev["baseline_binary_uuid"] and tr.get("uuid") == ev["baseline_binary_uuid"],
+            "the crashed process's main image UUID is not the baseline worldserver's", **ev)
+    require(tr.get("hardware_fault"), "SIGSEGV was not a bad-access fault (ESR exception class "
+            f"{tr.get('esr_exception_class')}; e.g. sent with kill)", **ev)
+    frames = " | ".join(tr.get("top_frames", []))
     named = [n for n in DEFECT_FRAMES if n in frames]
     ev["defect_frames_named"] = named
     require("ServerMailMgr::SendServerMail" in frames or "ServerMailReward::OnPlayerLogin" in frames,
-            "crash report top frames don't name ServerMailMgr::SendServerMail or the server_mail.cpp callback", **ev)
+            "this crash's top frames don't name ServerMailMgr::SendServerMail or the server_mail.cpp callback", **ev)
     require(ev["baseline_build"]["worldserver_sha256"] != ev["real_worldserver_sha256"],
             "baseline worldserver binary is identical to the real (patched) one", **ev)
     require(ev["server_digest_after"] == ev["server_digest_before"], "the real server/ install changed", **ev)

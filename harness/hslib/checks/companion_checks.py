@@ -3,6 +3,7 @@
 Each check logs in the companion harness character (P.COMP_CHAR on the GM-level P.COMP_USER account, never PLAYER or
 HSTEST) through the probe and types the playerbots chat commands a player would type. Driver and data rules:
 hslib/companion.py. Each check takes well under 2 minutes, so they are `full` tier (design.md "Companion checks")."""
+import math
 import time
 
 from .. import companion as C, soap
@@ -15,6 +16,8 @@ FOLLOW_NEAR_YD = 15
 FOLLOW_S = 60
 ASSIST_ENGAGE_S = 20
 ASSIST_AGGRO_S = 15    # setup: the creature attacks the master after the teleport (aggressive creature, aggro radius)
+ASSIST_NEAR_YD = 10    # GIVEN "companion near": within 10 yd of the master at the staging point before the fight
+ASSIST_NEAR_S = 30     # `.summon` puts it beside the master at once; generous bound for the summon + `.gps` polls
 ASSIST_DEATH_S = 60    # the spec gives no time for the kill; 60 s after the master entered combat (measured: ~10 s)
 QUEST_S = 30
 
@@ -113,10 +116,12 @@ def _by(guid, victim):
 
 @check("comp.assists", order=132, capability="companion-bots", stack="up", tier="full")
 def assists(ctx):
-    """Master with a warrior companion enters combat with a hostile, level-appropriate creature (SQL/DBC rule; the
-    master is GM-teleported onto it and it attacks) → within
-    20 s the companion attacks that creature (SMSG_ATTACKSTART / combat log, attacker = companion) and the creature
-    dies (`.npc info` health 0) while the master sends no attack or spell and deals no damage."""
+    """GIVEN: the master and its warrior companion stand together (companion summoned and within 10 yd, `.gps`) at a
+    staging point 35 yd from a hostile, level-appropriate creature (SQL/DBC rules), with no combat yet. WHEN: the
+    master is GM-teleported onto the creature and it attacks (the master enters combat). THEN: within 20 s the
+    companion attacks that creature (SMSG_ATTACKSTART / combat log, attacker = companion) and the creature dies
+    (`.npc info` health 0) while the master sends no attack, spell or command other than `.npc info` and deals no
+    damage."""
     ev = {}
     s = C.Session()
     _run(s.__enter__)
@@ -128,8 +133,31 @@ def assists(ctx):
         cr = _run(s.pick_live_creature)
         ev["creature_picked"] = cr
         rule_entries = {c["entry"] for c in C.creature_candidates(n=500)}
-        since = s.ws.mark()
         p = cr["npc_info"]["pos"] or cr["spawn"]
+        # GIVEN: master + companion together near the creature, before any fight
+        start = s.gps()
+        require("x" in start, "precondition: no `.gps` position for the master", gps=start, **ev)
+        stage = _run(lambda: C.staging_point(p, start, start["map"]))
+        ev["staging_point"] = stage
+        stage_mark = s.ws.mark()
+        ev["go_stage"] = s.ws.command(f".go xyz {stage['x']:.2f} {stage['y']:.2f}", settle=0.5, timeout=5)
+        tps = s.ws.wait_event(lambda e: e["kind"] == "teleport_near", stage_mark, timeout=5)
+        require(tps is not None, "precondition: staging teleport not received/acked", **ev)
+        s.ws.heartbeat(tps["x"], tps["y"], tps["z"])
+        ev["summon"] = s.summon(bot["name"])
+        near = s.wait_near(bot["guid"], ASSIST_NEAR_YD, ASSIST_NEAR_S)
+        ev["companion_near_before_fight"] = {"ok": near["ok"], "elapsed_s": near["elapsed_s"],
+                                             "last_sample": near["samples"][-1]}
+        require(near["ok"], f"precondition: companion not within {ASSIST_NEAR_YD} yd of the master at the staging "
+                f"point within {ASSIST_NEAR_S} s", **ev)
+        me = near["samples"][-1]["master"]
+        ev["master_to_creature_before_fight_yd"] = round(math.hypot(me["x"] - p["x"], me["y"] - p["y"]), 1)
+        early = [e for e in s.ws.events_since(stage_mark) if e["kind"] in ("attack_start", "melee_damage", "spell_damage")
+                 and {bot["guid"], s.guid} & {e["attacker"], e["victim"]}]
+        ev["combat_before_fight"] = early[:10]
+        require(not early, "precondition: the master or companion was already in combat at the staging point", **ev)
+        # WHEN: the master enters combat with the creature
+        since = s.ws.mark()
         ev["go"] = s.ws.command(f".go xyz {p['x']:.2f} {p['y']:.2f} {p['z']:.2f}", settle=0.5, timeout=5)
         tp = s.ws.wait_event(lambda e: e["kind"] == "teleport_near", since, timeout=5)
         ev["teleport_event"] = tp
@@ -155,7 +183,6 @@ def assists(ctx):
         ev["creature"] = s.npc_info()       # the selected creature: spawn id, GUID, health
         require(ev["creature"]["guid"] == cg, "selected creature's GUID mismatch", **ev)
         trail_mark = len(s.ws.log)
-        ev["summon"] = s.summon(bot["name"])
         eng = s.ws.wait_event(_by(bot["guid"], cg), since, timeout=max(0.0, t0 + ASSIST_ENGAGE_S - time.time()))
         ev["companion_engages"] = eng
         ev["companion_engage_after_s"] = round(eng["t"] - t0, 2) if eng else None
@@ -182,7 +209,7 @@ def assists(ctx):
         ev["master_sent_after_combat"] = sent
         require(dead is not None, f"creature not dead {ASSIST_DEATH_S} s after the master entered combat", **ev)
         require(ev["damage_to_creature"].get("master", 0) == 0, "the master damaged the creature", **ev)
-        allowed = {"CMSG_MESSAGECHAT", "CMSG_KEEP_ALIVE", "CMSG_TIME_SYNC_RESP", "MSG_MOVE_TELEPORT_ACK"}   # chat = .summon / .npc info
+        allowed = {"CMSG_MESSAGECHAT", "CMSG_KEEP_ALIVE", "CMSG_TIME_SYNC_RESP", "MSG_MOVE_TELEPORT_ACK"}   # chat = .npc info
         require(set(sent) <= allowed, "the master sent game actions after entering combat", **ev)
     finally:
         s.__exit__(None, None, None)
