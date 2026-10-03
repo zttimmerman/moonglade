@@ -301,6 +301,24 @@ def profile_matches(name: str) -> bool:
     return bool(rp) and rp["profile"] == name and rp.get("digest") == config.profile_digest(name)
 
 
+def world_matches(name: str, population_n: int | None = None) -> bool:
+    """The running worldserver was started with profile `name` and, for the population profile, at N =
+    `population_n` (its recorded n and digest both match). False when no worldserver runs."""
+    rp = running_profile()
+    n = config.population_n(population_n) if name == "population" else None
+    return (bool(rp) and rp["profile"] == name and rp.get("n") == n
+            and rp.get("digest") == config.profile_digest(name, n))
+
+
+def describe_world(rp: dict | None) -> str:
+    """A running_profile() record in player terms, for messages."""
+    if not rp:
+        return "no world"
+    if rp["profile"] == "population":
+        return f"the living world with {rp.get('n')} AI players"
+    return f"the {rp['profile']!r} test world" + ("" if rp.get("recorded") else " (started outside the harness)")
+
+
 def up(world_datadir: Path | None = None, timeout: int | None = None, profile: str | None = None,
        population_n: int | None = None) -> dict:
     """Start the stack with a config profile (config.PROFILES; default $HS_PROFILE or "m0"); `population_n` sizes

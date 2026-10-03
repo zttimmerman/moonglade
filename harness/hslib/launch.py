@@ -287,6 +287,33 @@ def onscreen_windows(pid: int) -> list[dict]:
             wins.append({"width": int(float(parts[1])), "height": int(float(parts[2])), "layer": int(parts[3])})
     return wins
 
+def ensure_world(say=log, world_datadir: Path | None = None, profile: str | None = None,
+                 population_n: int | None = None) -> dict:
+    """The stack step of `prepare` (./play, `hs launch`): start the stack with `profile` / `population_n` if it
+    isn't running. When a profile is asked for (./play passes its world-size setting) and a worldserver left
+    running by `hs up`, a harness run or an earlier session holds another profile or size, restart the world server
+    rather than silently keeping the wrong world (m2-living-world design.md, "./play and an already-running
+    stack"). profile=None (`hs launch`) keeps whatever runs. Returns evidence."""
+    from . import config, stack
+    ev: dict = {}
+    st = stack.stack_processes()
+    if profile is not None and st["worldserver"] and not stack.world_matches(profile, population_n):
+        was = stack.running_profile()
+        want = {"profile": profile, "n": config.population_n(population_n) if profile == "population" else None}
+        say(f"The game server is running {stack.describe_world(was)}, not {stack.describe_world(want)}; "
+            "restarting the world server...")
+        ev["restarted_world"] = {"was": was, "want": want, "stop": stack.stop_worldserver(was["pid"])}
+        st = stack.stack_processes()
+    if all(st.values()):
+        ev["stack"] = "already up"
+        say("The game server is already running.")
+    else:
+        say("Starting the game server (database, login server, world server). This takes a minute or two...")
+        ev["stack"] = {"up": stack.up(world_datadir=world_datadir, profile=profile, population_n=population_n)}
+        say("The game server is ready.")
+    return ev
+
+
 def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: str | None = None,
             population_n: int | None = None) -> tuple[dict, dict]:
     """Everything before starting the client, shared by `hs launch` and `./play`: stack up (if needed) →
@@ -294,7 +321,7 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: 
     sure the login exists (default: the harness fixtures, test account + character; `./play` passes its
     player-account step). `say` reports each step. Raises stack.StackError / LaunchError / FixtureError.
     Returns (manifest, ev)."""
-    from . import fixtures, stack
+    from . import fixtures
     from .clientcfg import WINE_DEFAULTS, configure
 
     _require_wine()
@@ -312,14 +339,7 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: 
         raise LaunchError("Wow.exe is already running in this prefix; quit it first "
                           "(or `WINEPREFIX=env/wineprefix wineserver -k`)", ev | {"running": already})
 
-    st = stack.stack_processes()
-    if all(st.values()):
-        ev["stack"] = "already up"
-        say("The game server is already running.")
-    else:
-        say("Starting the game server (database, login server, world server). This takes a minute or two...")
-        ev["stack"] = {"up": stack.up(world_datadir=world_datadir, profile=profile, population_n=population_n)}
-        say("The game server is ready.")
+    ev |= ensure_world(say, world_datadir, profile, population_n)
     say("Pointing the game client at this computer (127.0.0.1)...")
     cfg = configure(client_dir(), defaults=WINE_DEFAULTS)
     ev["client_config"] = {"changed_files": cfg["changed_files"],

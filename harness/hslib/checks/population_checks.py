@@ -253,65 +253,107 @@ def population_tuned(ctx):
 # ----------------------------------------------------------------------------------------------- 2.2 checks
 
 SIZE_TOLERANCE = 0.05       # spec: online random bots within 5% of the preset's size
-SIZE_SETTLE_S = 420         # login of 150 bots measured ~1-2 min; generous ceiling, recorded in evidence
+SIZE_SETTLE_S = 420         # from the start step; login of 150 bots measured ~1-2 min; generous, recorded in evidence
+
+
+def _size_case(case: str, settings_file: Path, want: int) -> dict:
+    """./play's own world steps with $HS_SETTINGS = `settings_file` and no $HS_PROFILE: `play.choose_world()` (what
+    Loop.run calls) then `launch.ensure_world()` (the stack step of launch.prepare, which Loop.run calls next). Only
+    the client-side steps of ./play (Wine prefix, client config, Wow.exe) are left out. GIVEN state `case`:
+    "running_m0" (a 10-bot m0 stack already up, as after `hs up`) or "cold" (nothing running)."""
+    import time
+    from .. import launch, play, stack
+    ev: dict = {"case": case}
+    if any(stack.stack_processes().values()):
+        ev["down_before"] = {k: v for k, v in stack.down().items() if k == "remaining"}
+    if case == "running_m0":
+        ev["given_up"] = {k: v for k, v in stack.up(profile="m0").items() if k in ("profile", "worldserver")}
+    ev["running_before"] = stack.running_profile()
+    said: list[str] = []
+    t0 = time.time()
+    world = play.choose_world(say=said.append)
+    ev["world"] = world
+    started = launch.ensure_world(say=said.append, profile=world["profile"], population_n=world["population_n"])
+    ev["ensure_world"] = {"restarted_world": started.get("restarted_world"),
+                          "stack": started["stack"] if started["stack"] == "already up" else
+                          {k: v for k, v in started["stack"]["up"].items()
+                           if k in ("profile", "population_n", "worldserver", "ready_s")}}
+    ev["said"] = said
+    ev["running_profile"] = stack.running_profile()
+    counts, inband = [], 0
+    while time.time() - t0 < SIZE_SETTLE_S and inband < 3:
+        time.sleep(10)
+        c = pop.online_bots()
+        counts.append({"t_s": round(time.time() - t0), "online_random_bots": c})
+        inband = inband + 1 if abs(c - want) <= SIZE_TOLERANCE * want else 0
+    ev |= {"counts": counts, "inband_polls": inband}
+    ev["down_after"] = {k: v for k, v in stack.down().items() if k == "remaining"}
+    return ev
 
 
 @check("pop.size_setting", order=395, capability="world-population", stack="any", tier="slow", profile="population")
 def size_setting(ctx):
-    """With a (scratch) settings file saying `small`, starting the stack the way ./play does gives the population
-    profile with online random bots within 5% of the small preset; with no settings file the normal preset is used."""
+    """With a (scratch) settings file saying `small`, ./play's world steps (play.choose_world -> launch.ensure_world)
+    run the population profile with online random bots within 5% of the small preset, both from a cold start and
+    when a 10-bot m0 stack was already running (the world server is restarted instead of keeping the wrong world);
+    with no settings file the normal preset is used."""
     import os
     import tempfile
-    import time
     from .. import settings, stack
-    ev = {"presets": config.WORLD_SIZES, "user_settings_file_read": False}
+    ev = {"presets": config.WORLD_SIZES, "user_settings_file_read": False,
+          "entry": "play.choose_world() -> launch.ensure_world(), $HS_SETTINGS=<scratch>, no $HS_PROFILE"}
     saved = {k: os.environ.pop(k, None) for k in ("HS_PROFILE", settings.ENV, config.POPULATION_N_ENV)}
     tmp = Path(tempfile.mkdtemp(prefix="hs-settings-"))
+    want = config.WORLD_SIZES["small"]
     try:
-        # 1. no settings file -> normal
+        # 1. no settings file -> normal (the function ./play calls to choose its world; play.py Loop.run)
         os.environ[settings.ENV] = str(tmp / "missing.json")
-        ev["no_file"] = settings.play_world()
-        # 2. small -> the way ./play starts the stack (play.py: settings.play_world() -> launch.prepare -> stack.up)
+        from .. import play
+        ev["no_file"] = play.choose_world(say=lambda _m: None)
+        # 2. small -> ./play's world steps, from an already-running m0 stack and from cold
         f = tmp / "settings.json"
         f.write_text(json.dumps({"world_size": "small"}))
         os.environ[settings.ENV] = str(f)
-        world = settings.play_world()
-        ev["small"] = world
-        want = config.WORLD_SIZES["small"]
-        if any(stack.stack_processes().values()):
-            ev["down_before"] = stack.down()
-        t0 = time.time()
-        ev["up"] = {k: v for k, v in stack.up(profile=world["profile"], population_n=world["population_n"]).items()
-                    if k in ("profile", "population_n", "fresh_start", "worldserver", "ready_s")}
-        ev["running_profile"] = stack.running_profile()
-        counts, inband = [], 0
-        while time.time() - t0 < SIZE_SETTLE_S and inband < 3:
-            time.sleep(10)
-            c = pop.online_bots()
-            counts.append({"t_s": round(time.time() - t0), "online_random_bots": c})
-            inband = inband + 1 if abs(c - want) <= SIZE_TOLERANCE * want else 0
-        ev |= {"want": want, "tolerance": SIZE_TOLERANCE, "counts": counts}
+        ev["cases"] = [_size_case(case, f, want) for case in ("running_m0", "cold")]
     finally:
         for k, v in saved.items():
             os.environ.pop(k, None)
             if v is not None:
                 os.environ[k] = v
-        stack.down()
+        if any(stack.stack_processes().values()):
+            stack.down()
         for x in tmp.iterdir():
             x.unlink()
         tmp.rmdir()
+    ev |= {"want": want, "tolerance": SIZE_TOLERANCE}
     nf = ev["no_file"]
     require(nf["profile"] == "population" and nf["population_n"] == config.WORLD_SIZES["normal"],
             f"no settings file -> {nf['profile']} N={nf['population_n']}, want population N="
             f"{config.WORLD_SIZES['normal']}", **ev)
-    rp = ev["running_profile"] or {}
-    require(world["profile"] == "population" and world["population_n"] == want, "small setting not resolved", **ev)
-    require(rp.get("profile") == "population" and rp.get("n") == want
-            and rp.get("digest") == config.profile_digest("population", want),
-            f"running profile {rp.get('profile')} N={rp.get('n')}, want population N={want}", **ev)
-    last = counts[-1]["online_random_bots"] if counts else 0
-    require(abs(last - want) <= SIZE_TOLERANCE * want and inband >= 3,
-            f"online random bots {last} (want {want} +/- {SIZE_TOLERANCE:.0%}, stable for 3 polls)", **ev)
+    for c in ev["cases"]:
+        tag = c["case"]
+        w = c.get("world") or {}
+        require((w.get("source") or {}).get("file") == str(tmp / "settings.json"),
+                f"{tag}: the world size was not read from the scratch settings file", **ev)
+        require(w.get("profile") == "population" and w.get("population_n") == want,
+                f"{tag}: ./play chose {w.get('profile')} N={w.get('population_n')}, want population N={want}", **ev)
+        rp = c["running_profile"] or {}
+        require(rp.get("profile") == "population" and rp.get("n") == want
+                and rp.get("digest") == config.profile_digest("population", want),
+                f"{tag}: running profile {rp.get('profile')} N={rp.get('n')}, want population N={want}", **ev)
+        last = c["counts"][-1]["online_random_bots"] if c["counts"] else 0
+        require(abs(last - want) <= SIZE_TOLERANCE * want and c["inband_polls"] >= 3,
+                f"{tag}: online random bots {last} (want {want} +/- {SIZE_TOLERANCE:.0%}, stable for 3 polls)", **ev)
+        rw = c["ensure_world"]["restarted_world"]
+        if tag == "running_m0":
+            before = c["running_before"] or {}
+            require(before.get("profile") == "m0", f"GIVEN not met: running world before ./play was {before}", **ev)
+            require((rw or {}).get("was", {}).get("profile") == "m0"
+                    and any("restarting the world server" in m for m in c["said"]),
+                    "./play kept or did not report replacing the running m0 world", **ev)
+        else:
+            require(c["running_before"] is None, "GIVEN not met: a worldserver ran before the cold ./play", **ev)
+            require(not rw, "cold ./play reported a restart", **ev)
     return ev
 
 
