@@ -310,11 +310,17 @@ def _parse(argv):
     ap.add_argument("--client-cmd", type=Path, help=argparse.SUPPRESS)      # test-only stand-in client
     ap.add_argument("--account", choices=["player", "test"], default="player", help=argparse.SUPPRESS)  # test-only
     ap.add_argument("--world-datadir", type=Path, help=argparse.SUPPRESS)   # test-only: provoke a startup failure
+    # test-only: accept HS_CLIENT_DIR (a scratch client copy); without it ./play refuses to run when the variable is set
+    ap.add_argument("--allow-test-client-dir", action="store_true", help=argparse.SUPPRESS)
     return ap.parse_args(argv)
 
 
 def main(argv=None) -> int:
     args = _parse(sys.argv[1:] if argv is None else argv)
+    if os.environ.get("HS_CLIENT_DIR") and not args.allow_test_client_dir:
+        say(f"HS_CLIENT_DIR is set ({os.environ['HS_CLIENT_DIR']}): that points the game at a test copy of the client, "
+            "not your real one. Unset it (`unset HS_CLIENT_DIR`) and run ./play again.")
+        return EXIT_FAIL
     try:
         fd, lock = acquire_lock()
     except Busy as b:
