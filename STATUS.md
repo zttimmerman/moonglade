@@ -1,14 +1,14 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-02 ~20:30: spike merged (PR #7: GlueXML signed → in-client menu needs an exe patch + ADR; backdrop/music swap works data-only). M2 started._
+_Updated 2026-10-03: M2 part 1 done; part 2 (companions) in flight._
 
 **Cold start:** read this file, then `openspec list` (Node 20: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`), then `git -C <repo> worktree list`, `git branch -a`, `gh pr list`, then `harness/hs status`. The skills `.claude/skills/hs-*` hold the procedures (change loop, checks, client debugging, RE). User preferences and decisions are in the orchestrator memory notes (plain language for decisions, Gate 1, front-menu vision, logo).
 
 **In flight**
 | Work | Branch / checkout | State | If its agent is gone |
 |---|---|---|---|
-| M2 living world, part 1 (tasks 1.0, 1.1, 2.1, 4.1) | `change/m2-living-world`, **main checkout**, active | B12 built 1.0/1.1/2.1/4.1 (300 bots stable and active; worldserver ~4.6 GB, fixed ~3 GB playerbots cost). **Zach decided:** ≈500 bots default, an easy world-size setting (front-menu option later), a fresh bot world each session; budget revised (worldserver ≤6 GB, stack ≤7 GB; spec logged). B12 now on task 2.2 (setting, `./play` default population, retune to 500, re-measure). Owns the stack | re-brief from `openspec/changes/m2-living-world/` (design "Notes from later work") + branch commits; then part 2 (companions 3.x: probe chat) |
+| M2 living world | `change/m2-living-world`, **main checkout**, active | **Part 1 done** (B12; 1.0/1.1/2.1/2.2/4.1 ticked): 500 bots default, `hs world-size small|normal|large`, `./play` starts the living world, fresh bot world each boot; slow run green except comp.*-related (zones ≥19, capitals ≥4, server 4.8 GB, stack 5.5 GB). **Part 2: builder B13** on companions (probe chat + `comp.*`). Owns the stack | re-brief part 2 from `specs/companion-bots/spec.md` + design; then verifier (unfiltered `--tier slow` required) |
 
 **Next (in order):** M2 part 1 → M2 part 2 (companions) → verifier (needs an unfiltered `--tier slow` run) → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
 
