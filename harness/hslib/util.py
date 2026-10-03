@@ -38,12 +38,17 @@ def tail(path, n=40) -> str:
 
 
 class keep_awake:
-    """Context manager: hold macOS no-sleep assertions (`caffeinate -i -d -u -w <our pid>`) for the duration.
+    """Context manager: hold macOS no-sleep assertions (`caffeinate -s -i -d -u -w <our pid>`) for the duration.
 
     Why (F12, m2-living-world design "Notes from later work"): a mysqld abort ("Semaphore wait > 600 s") happened
-    while the display slept during a long run; runs under caffeinate were clean. -i: no idle system sleep;
+    while the display slept during a long run; runs under caffeinate were clean. -s: no system sleep while on AC
+    power (PreventSystemSleep; added 2026-10-03 after the Mac slept mid-run, worldserver stalled 5 and 15 min);
+    -i: no idle system sleep;
     -d: no display sleep; -u: declare the user active (wakes a dark display); -w: the assertion also ends if this
-    process dies. Entering returns evidence {"cmd", "pid"} (None pid when caffeinate isn't available)."""
+    process dies. Entering returns evidence {"cmd", "pid"} (None pid when caffeinate isn't available).
+
+    Limit: closing the lid of a MacBook with no external display still sleeps it ("Clamshell Sleep" in
+    `pmset -g log`), whatever the assertions say. Keep the lid open (or an external display attached) during runs."""
 
     def __init__(self):
         self.proc = None
@@ -52,7 +57,7 @@ class keep_awake:
         import os
         import shutil
         exe = shutil.which("caffeinate") or "/usr/bin/caffeinate"
-        cmd = [exe, "-i", "-d", "-u", "-w", str(os.getpid())]
+        cmd = [exe, "-s", "-i", "-d", "-u", "-w", str(os.getpid())]
         try:
             self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
                                          stderr=subprocess.DEVNULL)

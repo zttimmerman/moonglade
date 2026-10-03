@@ -1,0 +1,67 @@
+diff --git a/src/server/game/Server/WorldSession.cpp b/src/server/game/Server/WorldSession.cpp
+index 96705ee6f..0b9c34d66 100644
+--- a/src/server/game/Server/WorldSession.cpp
++++ b/src/server/game/Server/WorldSession.cpp
+@@ -467,10 +467,13 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
+                         if (!sScriptMgr->CanPacketReceive(this, *packet))
+                             break;
+ 
++#ifdef MOD_PLAYERBOTS
++                        WorldPacket hookPacket(*packet); // typed handlers move *packet out (PacketHandler::Call)
++#endif
+                         opHandle->Call(this, *packet);
+                         LogUnprocessedTail(packet);
+ #ifdef MOD_PLAYERBOTS
+-                        sScriptMgr->OnPacketReceived(this, *packet);
++                        sScriptMgr->OnPacketReceived(this, hookPacket);
+ #endif
+                     }
+ 
+@@ -488,10 +491,13 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
+                         if (!sScriptMgr->CanPacketReceive(this, *packet))
+                             break;
+ 
++#ifdef MOD_PLAYERBOTS
++                        WorldPacket hookPacket(*packet); // typed handlers move *packet out (PacketHandler::Call)
++#endif
+                         opHandle->Call(this, *packet);
+                         LogUnprocessedTail(packet);
+ #ifdef MOD_PLAYERBOTS
+-                        sScriptMgr->OnPacketReceived(this, *packet);
++                        sScriptMgr->OnPacketReceived(this, hookPacket);
+ #endif
+                     }
+                     break;
+@@ -501,10 +507,13 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
+                         if (!sScriptMgr->CanPacketReceive(this, *packet))
+                             break;
+ 
++#ifdef MOD_PLAYERBOTS
++                        WorldPacket hookPacket(*packet); // typed handlers move *packet out (PacketHandler::Call)
++#endif
+                         opHandle->Call(this, *packet);
+                         LogUnprocessedTail(packet);
+ #ifdef MOD_PLAYERBOTS
+-                        sScriptMgr->OnPacketReceived(this, *packet);
++                        sScriptMgr->OnPacketReceived(this, hookPacket);
+ #endif
+                     }
+                     break;
+@@ -520,11 +529,16 @@ bool WorldSession::Update(uint32 diff, PacketFilter& updater)
+                     if (!sScriptMgr->CanPacketReceive(this, *packet))
+                         break;
+ 
++                    {
++#ifdef MOD_PLAYERBOTS
++                    WorldPacket hookPacket(*packet); // typed handlers move *packet out (PacketHandler::Call)
++#endif
+                     opHandle->Call(this, *packet);
+                     LogUnprocessedTail(packet);
+ #ifdef MOD_PLAYERBOTS
+-                    sScriptMgr->OnPacketReceived(this, *packet);
++                    sScriptMgr->OnPacketReceived(this, hookPacket);
+ #endif
++                    }
+                     break;
+                 case STATUS_NEVER:
+                     LOG_ERROR("network.opcode", "Received not allowed opcode {} from {}",

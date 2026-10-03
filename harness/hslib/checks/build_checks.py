@@ -34,9 +34,10 @@ def pin_enforced(ctx):
     rogue.mkdir(exist_ok=True)
     (rogue / "CMakeLists.txt").write_text("# rogue module\n")
     (P.BOTS_SRC / "hs_sabotage_ignored.log").write_text("x")
-    patches = sorted(P.PATCHES.glob("*.patch"))     # the only uncommitted changes allowed in core (spec)
+    patches = build.core_patches()                  # the only uncommitted changes allowed in core (spec)
+    bots_patches = build.playerbots_patches()       # ... and in playerbots (ADR-0008)
     before = {"core": build.patched_pin_state(P.CORE_SRC, lock["core_sha"], patches, "modules/"),
-              "playerbots": build.pin_state(P.BOTS_SRC, lock["playerbots_sha"])}
+              "playerbots": build.patched_pin_state(P.BOTS_SRC, lock["playerbots_sha"], bots_patches)}
     before["core_stray_modules"] = build.stray_module_entries()
     require(before["core"] and before["playerbots"] and "mod-hs-rogue" in before["core_stray_modules"],
             "sabotage did not register as unpinned/dirty/stray", before=before)
@@ -45,7 +46,7 @@ def pin_enforced(ctx):
             "modules": sorted(e.name for e in (P.CORE_SRC / "modules").iterdir() if e.is_symlink())}
     require(r.returncode == 0, "`hs build` failed on a sabotaged vendor tree", **info)
     after = {"core": build.patched_pin_state(P.CORE_SRC, lock["core_sha"], patches, "modules/"),
-             "playerbots": build.pin_state(P.BOTS_SRC, lock["playerbots_sha"])}
+             "playerbots": build.patched_pin_state(P.BOTS_SRC, lock["playerbots_sha"], bots_patches)}
     ev = {"problems_before": before, "problems_after": after, "sync": info["after"], "modules": info["modules"]}
     require(not after["core"] and not after["playerbots"], "vendor not clean+pinned after sync", **ev)
     require(not (P.CORE_SRC / "hs_sabotage_untracked.txt").exists(), "untracked sabotage file survived", **ev)
@@ -192,6 +193,7 @@ def clean_smart(ctx):
     # Part 2: any input change flips the mode. Sandbox copies of the file inputs + in-process overrides for the
     # cmake args and compiler identity; the real modules/, patches/core and fork.lock are never edited.
     real_before = {"modules": build.tree_digest(P.MODULES), "patches": build.tree_digest(P.PATCHES),
+                   "bots_patches": build.tree_digest(P.BOTS_PATCHES),
                    "fork_lock": build._sha256_file(P.ROOT / "fork.lock")}
     base = build.input_manifest()
     flips = {}
@@ -199,13 +201,14 @@ def clean_smart(ctx):
         td = Path(td)
 
         def sandbox():
-            for d in ("modules", "patches"):
+            for d in ("modules", "patches", "bots_patches"):
                 shutil.rmtree(td / d, ignore_errors=True)
             shutil.copytree(P.MODULES, td / "modules", symlinks=True)
             shutil.copytree(P.PATCHES, td / "patches", symlinks=True)
+            shutil.copytree(P.BOTS_PATCHES, td / "bots_patches", symlinks=True)
             shutil.copy2(P.ROOT / "fork.lock", td / "fork.lock")
             return {"fork_lock_path": td / "fork.lock", "patches_dir": td / "patches", "modules_dir": td / "modules",
-                    "cmake": base["cmake_args"], "compiler": base["compiler"]}
+                    "bots_patches_dir": td / "bots_patches", "cmake": base["cmake_args"], "compiler": base["compiler"]}
 
         def first_file(d: Path) -> Path:
             files = sorted(p for p in d.rglob("*") if p.is_file() and not p.is_symlink())
@@ -226,7 +229,8 @@ def clean_smart(ctx):
             flips[name] = {"changed": what, "hash": h2, "differs_from_H": h2 != H, "mode": mode, "reason": reason}
 
         for name, key in (("modules/ (byte appended to a file)", "modules_dir"),
-                          ("patches/core/ (byte appended to a file)", "patches_dir")):
+                          ("patches/core/ (byte appended to a file)", "patches_dir"),
+                          ("patches/playerbots/ (byte appended to a file)", "bots_patches_dir")):
             ov = sandbox()
             target = first_file(ov[key])
             with open(target, "ab") as fh:
@@ -258,6 +262,7 @@ def clean_smart(ctx):
         ov["compiler"] = dict(base["compiler"], clang=base["compiler"]["clang"] + " (sandbox)")
         flip("compiler identity (changed)", ov, "clang --version + ' (sandbox)'")
     real_after = {"modules": build.tree_digest(P.MODULES), "patches": build.tree_digest(P.PATCHES),
+                  "bots_patches": build.tree_digest(P.BOTS_PATCHES),
                   "fork_lock": build._sha256_file(P.ROOT / "fork.lock")}
     ev |= {"input_change_cases": flips, "unrelated_pin_cases": unrelated,
            "real_inputs_unchanged": real_before == real_after}

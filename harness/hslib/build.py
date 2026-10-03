@@ -120,15 +120,25 @@ def stray_module_entries() -> list[str]:
     return stray
 
 
+def core_patches() -> list:
+    """patches/core/*.patch in apply order (ADR-0006)."""
+    return sorted(P.PATCHES.glob("*.patch"))
+
+
+def playerbots_patches() -> list:
+    """patches/playerbots/*.patch in apply order, applied to vendor/mod-playerbots like the core queue (ADR-0008)."""
+    return sorted(P.BOTS_PATCHES.glob("*.patch"))
+
+
 def sync_vendor() -> dict:
-    """Force vendor trees to the pinned state, apply core patches, link modules."""
+    """Force vendor trees to the pinned state, apply the core and playerbots patch queues, link modules."""
     lock = P.fork_lock()
     _ensure_clone(P.CORE_SRC, lock["core_repo"], lock["core_branch"], lock["core_sha"])
     _ensure_clone(P.BOTS_SRC, lock["playerbots_repo"], lock["playerbots_branch"], lock["playerbots_sha"])
 
     before = {
         "core": pin_state(P.CORE_SRC, lock["core_sha"], "modules/"),
-        "playerbots": pin_state(P.BOTS_SRC, lock["playerbots_sha"]),
+        "playerbots": patched_pin_state(P.BOTS_SRC, lock["playerbots_sha"], playerbots_patches()),
     }
     before["core_stray_modules"] = stray_module_entries()
     for repo, sha in ((P.CORE_SRC, lock["core_sha"]), (P.BOTS_SRC, lock["playerbots_sha"])):
@@ -143,11 +153,16 @@ def sync_vendor() -> dict:
         else:
             p.unlink()
 
-    patches = sorted(P.PATCHES.glob("*.patch"))
+    patches = core_patches()
     for p in patches:
         r = _git(P.CORE_SRC, "apply", "--index", "--whitespace=nowarn", str(p), check=False)
         if r.returncode != 0:
             raise BuildError(f"core patch failed to apply: {p.name}\n{r.stdout}")
+    bots_patches = playerbots_patches()
+    for p in bots_patches:
+        r = _git(P.BOTS_SRC, "apply", "--index", "--whitespace=nowarn", str(p), check=False)
+        if r.returncode != 0:
+            raise BuildError(f"playerbots patch failed to apply: {p.name}\n{r.stdout}")
 
     mods = P.CORE_SRC / "modules"
     links = _expected_links()
@@ -165,10 +180,13 @@ def sync_vendor() -> dict:
         "core_head": _head(P.CORE_SRC),
         "playerbots_head": _head(P.BOTS_SRC),
         "core_ok": _head(P.CORE_SRC) == lock["core_sha"],
-        "playerbots_ok": _head(P.BOTS_SRC) == lock["playerbots_sha"] and not pin_state(P.BOTS_SRC, lock["playerbots_sha"]),
+        "playerbots_ok": _head(P.BOTS_SRC) == lock["playerbots_sha"]
+                         and not patched_pin_state(P.BOTS_SRC, lock["playerbots_sha"], bots_patches),
     }
     if patches:
         after["patches_applied"] = [p.name for p in patches]
+    if bots_patches:
+        after["playerbots_patches_applied"] = [p.name for p in bots_patches]
     # the tree must be core_sha + exactly the patch queue (equals pin_state's check when there are no patches)
     dirty = patched_pin_state(P.CORE_SRC, lock["core_sha"], patches, "modules/")
     if dirty:
@@ -272,13 +290,15 @@ def build_pins(path=None) -> dict:
     return {k: lock.get(k) for k in BUILD_PINS}
 
 
-def input_manifest(*, fork_lock_path=None, patches_dir=None, modules_dir=None, cmake=None, compiler=None) -> dict:
+def input_manifest(*, fork_lock_path=None, patches_dir=None, modules_dir=None, cmake=None, compiler=None,
+                   bots_patches_dir=None) -> dict:
     """Everything a build's output depends on that the harness controls. Keyword overrides exist so checks
     can show a changed input changes the hash without touching the real inputs (sandbox copies)."""
     fl = fork_lock_path or (P.ROOT / "fork.lock")
     return {
         "fork_lock_build_pins": build_pins(fl),
         "patches_core": tree_digest(patches_dir or P.PATCHES),
+        "patches_playerbots": tree_digest(bots_patches_dir or P.BOTS_PATCHES),
         "modules": tree_digest(modules_dir or P.MODULES),
         "cmake_args": cmake if cmake is not None else [str(a) for a in cmake_args()] + [f"dep:{k}={v}" for k, v in sorted(_resolved_deps().items())],
         "compiler": compiler if compiler is not None else compiler_identity(),

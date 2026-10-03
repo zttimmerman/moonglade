@@ -19,6 +19,7 @@ MYSQL_DATA = DATA / "mysql"
 CLIENT_DATA = DATA / "client-data"
 DOWNLOADS = DATA / "downloads"
 PATCHES = ROOT / "patches" / "core"
+BOTS_PATCHES = ROOT / "patches" / "playerbots"   # mod-playerbots patch queue (ADR-0008), applied like PATCHES
 MODULES = ROOT / "modules"
 OUT = HARNESS / "out"
 RESULTS = HARNESS / "results.json"

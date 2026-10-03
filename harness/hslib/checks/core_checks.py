@@ -313,3 +313,126 @@ def login_logout_race_baseline(ctx):
     require(len(ev["real_worldserver_pids_after"]) == 1 and isinstance(ev["soap_after_restore"], dict)
             and ev["soap_after_restore"].get("ok"), "normal stack not restored (worldserver/SOAP)", **ev)
     return ev
+
+
+# ----------------------------------------------------------------------------- playerbots-facing patches (ADR-0007/0008)
+
+HOOK_PATCH = "0002-playerbots-hook-packet-copy.patch"
+WORLDSESSION_CPP = "src/server/game/Server/WorldSession.cpp"
+BOTS_PATCH = "0001-remove-bot-from-group-on-logout.patch"
+BOTS_FILES = ["src/Bot/PlayerbotMgr.cpp", "src/Bot/PlayerbotMgr.h", "src/Script/WorldThr/PlayerbotOperations.h"]
+HOOK_SITE_RE = re.compile(r"#ifdef MOD_PLAYERBOTS\s*WorldPacket hookPacket\(\*packet\);[^\n]*\n\s*#endif\s*"
+                          r"opHandle->Call\(this, \*packet\);\s*LogUnprocessedTail\(packet\);\s*"
+                          r"#ifdef MOD_PLAYERBOTS\s*sScriptMgr->OnPacketReceived\(this, hookPacket\);\s*#endif")
+
+
+def hook_problems(text: str) -> list[str]:
+    """What's missing for 0002 in a WorldSession.cpp text: every OnPacketReceived call gets a copy taken before the
+    handler runs (typed handlers move the packet out, Opcodes.cpp PacketHandler::Call)."""
+    probs = []
+    calls = len(re.findall(r"sScriptMgr->OnPacketReceived\(", text))
+    sites = len(HOOK_SITE_RE.findall(text))
+    if calls == 0:
+        probs.append("no OnPacketReceived call")
+    if sites != calls:
+        probs.append(f"{calls - sites} of {calls} OnPacketReceived calls don't get a pre-handler copy")
+    if re.search(r"OnPacketReceived\(this, \*packet\)", text):
+        probs.append("OnPacketReceived still gets *packet (emptied by typed handlers)")
+    return probs
+
+
+def remove_problems(texts: dict[str, str]) -> list[str]:
+    """What's missing for playerbots 0001: `remove` logs out with leaveGroup, the cleanup op removes the bot from the
+    captured group by GUID, and stays valid after the bot is gone."""
+    probs = []
+    mgr, ops, hdr = texts.get(BOTS_FILES[0], ""), texts.get(BOTS_FILES[2], ""), texts.get(BOTS_FILES[1], "")
+    if not re.search(r'cmd == "remove".*?LogoutPlayerBot\(guid, true\);', mgr, re.S):
+        probs.append("the remove command doesn't call LogoutPlayerBot(guid, true)")
+    if "void LogoutPlayerBot(ObjectGuid guid, bool leaveGroup = false);" not in hdr:
+        probs.append("LogoutPlayerBot has no leaveGroup parameter")
+    if not re.search(r"BotLogoutGroupCleanupOperation>\(guid, leaveGroupGuid\)", mgr):
+        probs.append("LogoutPlayerBot doesn't pass the bot's group to the cleanup operation")
+    if not re.search(r"group->IsMember\(m_botGuid\)\)\s*group->RemoveMember\(m_botGuid\);", ops):
+        probs.append("cleanup operation doesn't RemoveMember the bot")
+    if "return !m_leaveGroupGuid.IsEmpty() || ObjectAccessor::FindPlayer(m_botGuid) != nullptr;" not in ops:
+        probs.append("cleanup operation is skipped once the bot is offline (IsValid)")
+    return probs
+
+
+def _apply_queue(repo: Path, sha: str, patches: list[Path], files: list[str]) -> dict:
+    """Apply `patches` in order to `sha` in a throwaway index; return per-patch git results and the patched files."""
+    out = {"applied": [], "files": {}}
+    with tempfile.TemporaryDirectory(prefix="hs-queue-") as td:
+        env = os.environ | {"GIT_INDEX_FILE": str(Path(td) / "index")}
+
+        def g(*a):
+            return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True, env=env)
+        out["read_tree_exit"] = g("read-tree", sha).returncode
+        for p in patches:
+            before = g("write-tree").stdout.strip()
+            r = g("apply", "--cached", "--whitespace=nowarn", str(p))
+            changed = g("diff", "--name-only", before, g("write-tree").stdout.strip()).stdout.split() if r.returncode == 0 else []
+            out["applied"].append({"patch": p.name, "exit": r.returncode, "stderr": r.stderr[-500:], "files": changed})
+        out["files"] = {f: g("show", f":{f}").stdout for f in files}
+    return out
+
+
+@check("core.playerbots_patches_applied", order=23, capability="server-build", stack="any", tier="quick")
+def playerbots_patches_applied(ctx):
+    """patches/core/0002 (hook packet copy, ADR-0007) applies after 0001 to core_sha and patches every
+    OnPacketReceived site; patches/playerbots/0001 (remove leaves the party, ADR-0008) applies to playerbots_sha;
+    both vendor trees are sha + exactly their queue; the installed build is stamped with both patches; editing either
+    patch file changes the build-input hash."""
+    lock = P.fork_lock()
+    core_q, bots_q = build.core_patches(), build.playerbots_patches()
+    ev = {"core_queue": [p.name for p in core_q], "playerbots_queue": [p.name for p in bots_q]}
+    require(HOOK_PATCH in ev["core_queue"], f"patches/core/{HOOK_PATCH} missing", **ev)
+    require(BOTS_PATCH in ev["playerbots_queue"], f"patches/playerbots/{BOTS_PATCH} missing", **ev)
+    c = _apply_queue(P.CORE_SRC, lock["core_sha"], core_q, [WORLDSESSION_CPP])
+    b = _apply_queue(P.BOTS_SRC, lock["playerbots_sha"], bots_q, BOTS_FILES)
+    ev["core_apply"], ev["playerbots_apply"] = c["applied"], b["applied"]
+    hook = next(a for a in c["applied"] if a["patch"] == HOOK_PATCH)
+    bots = next(a for a in b["applied"] if a["patch"] == BOTS_PATCH)
+    require(all(a["exit"] == 0 for a in c["applied"] + b["applied"]), "a patch does not apply cleanly to its pin", **ev)
+    require(hook["files"] == [WORLDSESSION_CPP], "0002 changes files other than WorldSession.cpp", **ev)
+    require(sorted(bots["files"]) == sorted(BOTS_FILES), "playerbots 0001 changes unexpected files", **ev)
+    ev["pristine_hook_problems"] = hook_problems(c["files"][WORLDSESSION_CPP])
+    ev["pristine_remove_problems"] = remove_problems(b["files"])
+    ev["vendor_hook_problems"] = hook_problems((P.CORE_SRC / WORLDSESSION_CPP).read_text())
+    ev["vendor_remove_problems"] = remove_problems({f: (P.BOTS_SRC / f).read_text() for f in BOTS_FILES})
+    ev["pin_state"] = {"core": build.patched_pin_state(P.CORE_SRC, lock["core_sha"], core_q, "modules/"),
+                       "playerbots": build.patched_pin_state(P.BOTS_SRC, lock["playerbots_sha"], bots_q)}
+    require(not ev["pristine_hook_problems"] and not ev["pristine_remove_problems"],
+            "patched pins lack the intended change", **ev)
+    require(not ev["vendor_hook_problems"] and not ev["vendor_remove_problems"],
+            "the vendor trees the build used lack the patches (run `hs build`)", **ev)
+    require(not ev["pin_state"]["core"] and not ev["pin_state"]["playerbots"],
+            "a vendor tree is not its sha + exactly its patch queue", **ev)
+    try:
+        stamp = json.loads(build.install_stamp_path().read_text())
+    except (OSError, ValueError):
+        stamp = {}
+    man = stamp.get("manifest", {})
+    ev["installed_stamp"] = {"patches_core": man.get("patches_core"), "patches_playerbots": man.get("patches_playerbots")}
+    require((man.get("patches_core") or {}).get(HOOK_PATCH) == build._sha256_file(P.PATCHES / HOOK_PATCH)
+            and (man.get("patches_playerbots") or {}).get(BOTS_PATCH) == build._sha256_file(P.BOTS_PATCHES / BOTS_PATCH),
+            "installed binaries are not stamped as built with both patches (run `hs build --clean`)", **ev)
+    real = build.input_manifest()
+    h_real = build.input_hash(real)
+    with tempfile.TemporaryDirectory(prefix="hs-bots-hash-") as td:
+        td = Path(td)
+        for name, src in (("core", P.PATCHES), ("bots", P.BOTS_PATCHES), ("core_x", P.PATCHES), ("bots_x", P.BOTS_PATCHES)):
+            shutil.copytree(src, td / name)
+        (td / "core_x" / HOOK_PATCH).write_text((td / "core_x" / HOOK_PATCH).read_text() + "# hs: content change\n")
+        (td / "bots_x" / BOTS_PATCH).write_text((td / "bots_x" / BOTS_PATCH).read_text() + "# hs: content change\n")
+
+        def h(core, bots):
+            return build.input_hash(build.input_manifest(patches_dir=td / core, bots_patches_dir=td / bots,
+                                                         cmake=real["cmake_args"], compiler=real["compiler"]))
+        ev["input_hash"] = {"real": h_real, "copies_unchanged": h("core", "bots"), "core_0002_edited": h("core_x", "bots"),
+                            "playerbots_0001_edited": h("core", "bots_x")}
+    hs = ev["input_hash"]
+    require(hs["copies_unchanged"] == h_real, "input hash of unchanged patch copies differs (hash unstable)", **ev)
+    require(hs["core_0002_edited"] != h_real and hs["playerbots_0001_edited"] != h_real,
+            "editing a patch file did not change the build-input hash", **ev)
+    return ev
