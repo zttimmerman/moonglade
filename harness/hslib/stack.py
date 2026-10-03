@@ -1,4 +1,5 @@
 """Isolated mysqld + authserver + worldserver lifecycle (ADR-0002). State lives in env/ and data/."""
+import json
 import os
 import signal
 import socket
@@ -114,6 +115,11 @@ def _write_my_cnf():
         f"pid-file={PIDFILE['mysqld']}\n"
         f"log-error={LOG['mysqld']}\n"
         "innodb_buffer_pool_size=512M\n"
+        # m2 performance budget (mysqld <= 1.0 GB): the defaults' performance_schema (~150 MB of instrumentation)
+        # and 64 MB log buffer pushed mysqld's footprint to ~1.01 GB with the M0 profile (measured 2026-10-02);
+        # nothing in the harness or AzerothCore reads performance_schema.
+        "performance_schema=OFF\n"
+        "innodb_log_buffer_size=16M\n"
         "max_connections=300\n"
         "skip-name-resolve\n"
         "max_allowed_packet=64M\n"
@@ -271,19 +277,73 @@ def _kill(pid, grace=10):
         _wait(lambda: not alive(pid), 5, interval=0.2)
 
 
-def up(world_datadir: Path | None = None, timeout: int | None = None) -> dict:
+PROFILE_FILE = P.RUN / "stack-profile.json"
+
+
+def running_profile() -> dict | None:
+    """The config profile the running worldserver was started with ({"profile", "digest", "pid"}), or None when
+    no worldserver runs. A worldserver started before profiles existed (no record, or a record for another pid)
+    counts as the default profile with an unknown digest."""
+    ws = stack_processes()["worldserver"]
+    if not ws:
+        return None
+    try:
+        rec = json.loads(PROFILE_FILE.read_text())
+    except (OSError, ValueError):
+        rec = None
+    if not rec or rec.get("pid") not in ws:
+        return {"profile": config.DEFAULT_PROFILE, "digest": None, "pid": ws[0], "recorded": False}
+    return rec | {"recorded": True}
+
+
+def profile_matches(name: str) -> bool:
+    rp = running_profile()
+    return bool(rp) and rp["profile"] == name and rp.get("digest") == config.profile_digest(name)
+
+
+def up(world_datadir: Path | None = None, timeout: int | None = None, profile: str | None = None) -> dict:
+    """Start the stack with a config profile (config.PROFILES; default $HS_PROFILE or "m0"). If a worldserver is
+    already running it is left alone (idempotent `hs up`); callers that need a specific profile use
+    `ensure_profile`."""
     if not (P.SERVER_BIN / "worldserver").exists():
         raise StackError("server not built; run `harness/hs build` first")
+    name = config.profile_name(profile)
+    was_running = bool(stack_processes()["worldserver"])
+    if was_running:
+        rp = running_profile()
+        if rp["profile"] != name and (profile or os.environ.get("HS_PROFILE")):
+            raise StackError(f"worldserver is already running with profile {rp['profile']!r}, not {name!r}; "
+                             "`hs down` first (or use stack.ensure_profile)")
+        name = rp["profile"]          # keep the rendered confs matching the running worldserver
     first_run = not db_exists("world") if stack_processes()["mysqld"] else not (P.MYSQL_DATA / "acore_world").exists()
     timeout = timeout or (1800 if first_run else 300)
-    info = {"first_run": first_run, "config": list(config.write_all(world_datadir))}
+    info = {"first_run": first_run, "profile": name, "config": list(config.write_all(world_datadir, profile=name))}
     info |= mysql_up()
     ensure_realmlist()          # before authserver: it refuses to start if every realm has flag 3
     info |= auth_up(timeout)
     ensure_realmlist()          # first run: auth DB only exists once authserver created it
     info["gm_account_id"] = ensure_gm_account()
-    info |= world_up(timeout)
+    if name == "population" and not was_running and db_exists("playerbots"):
+        from . import population      # "fresh world": re-roll random bots before they log in (population.py)
+        info["fresh_start"] = population.fresh_start()
+    w = world_up(timeout)
+    info |= w
+    if not was_running and w.get("worldserver") == "started":
+        PROFILE_FILE.write_text(json.dumps({"profile": name, "digest": config.profile_digest(name), "pid": w["pid"]}))
     return info
+
+
+def ensure_profile(name: str, timeout: int | None = None) -> dict:
+    """Make the running stack use profile `name`: restart the worldserver (only) if it runs with another profile
+    (or a stale digest), start everything if it's down. Returns what was done."""
+    rp = running_profile()
+    if rp and profile_matches(name):
+        return {"profile": name, "action": "already running"}
+    out = {"profile": name, "was": rp}
+    if rp:
+        out["stop_worldserver"] = stop_worldserver(rp["pid"])
+    out["up"] = up(profile=name, timeout=timeout)
+    return out
 
 
 def stop_worldserver(pid: int) -> dict:

@@ -35,3 +35,45 @@ def tail(path, n=40) -> str:
         return f"(no log at {path})"
     lines = [l for l in lines if l.strip()]
     return "\n".join(lines[-n:])
+
+
+class keep_awake:
+    """Context manager: hold macOS no-sleep assertions (`caffeinate -i -d -u -w <our pid>`) for the duration.
+
+    Why (F12, m2-living-world design "Notes from later work"): a mysqld abort ("Semaphore wait > 600 s") happened
+    while the display slept during a long run; runs under caffeinate were clean. -i: no idle system sleep;
+    -d: no display sleep; -u: declare the user active (wakes a dark display); -w: the assertion also ends if this
+    process dies. Entering returns evidence {"cmd", "pid"} (None pid when caffeinate isn't available)."""
+
+    def __init__(self):
+        self.proc = None
+
+    def __enter__(self) -> dict:
+        import os
+        import shutil
+        exe = shutil.which("caffeinate") or "/usr/bin/caffeinate"
+        cmd = [exe, "-i", "-d", "-u", "-w", str(os.getpid())]
+        try:
+            self.proc = subprocess.Popen(cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL)
+        except OSError as e:
+            log(f"keep_awake: caffeinate unavailable ({e}); the Mac may sleep during long runs")
+            return {"cmd": shlex.join(cmd), "pid": None, "error": str(e)}
+        return {"cmd": shlex.join(cmd), "pid": self.proc.pid}
+
+    def __exit__(self, *exc):
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        return False
+
+
+def awake_assertions(pid: int | None) -> list[str]:
+    """Lines of `pmset -g assertions` owned by `pid` (evidence that the no-sleep assertion is held)."""
+    if not pid:
+        return []
+    r = subprocess.run(["pmset", "-g", "assertions"], capture_output=True, text=True, errors="replace", timeout=20)
+    return [l.strip() for l in r.stdout.splitlines() if f"pid {pid}(" in l]

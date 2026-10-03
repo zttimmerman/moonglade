@@ -21,3 +21,48 @@ See proposal.md and `docs/research/playerbots-scripting.md` (sections 1, 2, 4 an
 - Warm-up time grows full runs by about 10 minutes. → Acceptable; one shared warm-up.
 - Bot behaviour is stochastic. → Thresholds use generous percentages and evidence keeps the raw samples; flakiness counts as P0, so tune the thresholds or knobs with recorded reasons.
 - 16 GB is tight with the client running. → The budget reserves 3 GB host memory for the client; the human scenario confirms it.
+
+## Builder notes, tasks 1.0 / 1.1 / 2.1 / 4.1 (B12, 2026-10-03)
+
+### Slow-tier rule (1.0)
+`runner.slow_tier_skips` lists the slow checks referenced by a gating scenario (archived specs + `harness/active-changes`). A **full**-tier run records each as `skip` with the message `slow tier, not run in a full run` and lists them in `meta.slow_tier_skipped`. `runner.tolerated_skip` accepts such a record only when the run's tier is `full`, the registry says the check is `slow`, the runner listed it, and the message matches. `reporting.full_run_record` leaves those records out of `non_passing`. A slow run executes them like any check. Any other skip still fails. `report.slow_tier_rule` (quick) drives the runner's own functions (`select`, `slow_tier_skips`, `execute`, `full_run_record`, `run_ok`) over a synthetic registry, covering five cases: a full run, a slow run that passes, a slow run that fails, a full check that skips, and a full check that imitates the slow-skip message.
+
+### Profiles and helpers (1.1)
+- `harness/hslib/config.py` `PROFILES`: `m0` (10 random bots, the default) and `population`. Select one with `hs up --profile population`, `HS_PROFILE=population` (also read by `./play` and `hs launch`, since they call `stack.up`), or `stack.up(profile=…)` in code. A check declares `@check(..., profile=…)`. `stack.up` records the running profile and a digest of its overrides in `env/run/stack-profile.json`. The runner restarts a worldserver that runs a different profile (`stack.ensure_profile`). `hs up --profile X` refuses when a worldserver already runs with another profile.
+- `HS_POPULATION_N=<n>` renders the population profile at another N. It is for tuning runs only: `perf.population_tuned` fails a session whose N isn't `config.POPULATION_N`.
+- `harness/hslib/botlog.py`: `offset/lines/grep/count` over `env/logs/Playerbots.log`, which is truncated at each worldserver start.
+- `harness/hslib/dbc.py`: the WDBC reader moved from era-diff (era-diff imports it), plus `area_table()` and `top_zone()`.
+- `util.keep_awake`: `caffeinate -i -d -u -w <pid>` around every `hs run` and every population session (F12). The session evidence includes the `pmset -g assertions` lines for that pid.
+- mysqld (`stack._write_my_cnf`, every profile): `performance_schema=OFF` and `innodb_log_buffer_size=16M`. Measured with the M0 profile, mysqld's memory footprint dropped from 1.01 GB to 0.70 GB, under the 1.0 GB budget. Nothing reads performance_schema.
+
+### Population profile knobs (2.1)
+Line numbers refer to `server/etc/modules/playerbots.conf.dist` (pinned playerbots `7bae1b5c`) and `server/etc/worldserver.conf.dist`.
+
+| Key (line) | Default | Population | Why |
+|---|---|---|---|
+| `MinRandomBots` / `MaxRandomBots` (89-90) | 500 | `POPULATION_N` = 300 | Measured choice, see `docs/research/m2-population-tuning.md`. Min = Max fixes the count, so `bot_count` never re-rolls (`RandomPlayerbotMgr.cpp:300-309`). |
+| `AddClassAccountPoolSize` (102) | 50 | 5 | Same as m0, so no extra accounts get created. The companions pool belongs to task 3.x. |
+| `RandomBotMinLevelChance` (807) | 0.1 | 0.4 | On a re-roll, 40% of bots come out at level 1. Bots at level 4 or below are only placed within 500 yd of their race's start position (`PlayerbotAI.cpp:6497-6523` `StarterLevelDistanceCheck`), so they fill the 8 starting zones. |
+| `RandomBotMaxLevelChance` (811) | 0.1 | 0.05 | Level-80 bots only go to Dalaran or Northrend. Lowering this leaves more bots in levels 10-60, which use the base capitals. |
+| `ProbTeleToBankers` (1577) | 0.25 | 1.0 | Every "teleport for level" by a bot of level 10 or higher goes to a capital banker (`RandomPlayerbotMgr.cpp:1803`; `urand(0,100) < 100` is true 100 times in 101). Levels 10-60 go to their faction's 4 base capitals, 61-70 to Shattrath, 71+ to Dalaran (`TravelMgr.cpp:4789-4803`). From there the RPG strategy sends them out by flight, grinding and quests, so capitals act as hubs and the leveling zones fill as bots fly out. |
+| `TeleToStormwindWeight`, `TeleToOrgrimmarWeight` (1582, 1586) | 2 | 1 | Equal weights across the 4 capitals of each faction. The default doubles Stormwind and Orgrimmar, which starves Darnassus, Exodar, Thunder Bluff and Silvermoon. |
+| `BotActiveAlone` (1273) / `botActiveAloneSmartScale` (1311) | 10 / 1 | 100 / 0 | Every bot acts with no real player nearby. Otherwise about 90% sit idle (research doc §4, short-circuit at `PlayerbotAI.cpp:4609-4610`). Measured cost: world update p95 of 18 ms or less at N=300. |
+| `RandomBotJoinLfg` (753) / `RandomBotJoinBG` (1619) | 1 / 1 | 0 / 0 | Queued or instanced bots leave the open world, which is the thing this profile exists to populate. LFG can't form bot-only groups anyway (`LFGQueue.cpp:415-418`, `Playerbots.cpp:435-451`). Revisit at the BG and dungeon milestones. |
+| relied on, unchanged | | | `EnablePeriodicOnlineOffline = 0` (758) keeps the online set fixed. `DisabledWithoutRealPlayer = 0` (117) lets bots run headless. `Min/MaxRandomBotTeleportInterval` 3600/18000 (1751-1752) means no redistribution mid-session. `RandomBotMaps = 0,1,530,571` (1573) covers all four continents. `EnableNewRpgStrategy = 1` (1406). |
+| `MapUpdate.Threads` (wsconf 1334) | 1 | 4 | Bots spread over 4 continent maps, and the M2 Pro has spare cores. |
+| `DontCacheRandomMovementPaths` (wsconf 1424) | 0 | 1 | Trades CPU (which had headroom) for memory (which is the constraint). |
+| `Appender.Playerbots` (wsconf 679) | flags 0 | flags 3 | Adds a timestamp and level prefix (`LogCommon.h:53-55`), so `pop.size_stable` can see FATAL lines. |
+| `Logger.playerbots` (wsconf 713) | 5 | 4 | Drops DEBUG output. With 10 bots, startup alone wrote 300 KB/min at DEBUG. |
+
+**Fresh world at every population start** (`population.fresh_start`, called by `stack.up` before the worldserver starts, population profile only). mod-playerbots stores each bot's level and its next randomize and teleport times (teleport every 1-5 h, randomize every 2 h to 14 d). Without a reset, each boot resumes bots where the last session left them. Measured: a second session at N=250 had 0-2 bots in 7 of the 8 capitals, because bots had walked out and their teleport timers hadn't expired. Over accumulated play, bots also level out of the starting zones. The step sets random-bot characters to level 1 and deletes their `randomize`/`teleport` timer rows. Seconds after login, `Randomize()` then takes the `RandomizeFirst` path: a new level from the knobs above, then a teleport for that level. In gameplay terms, every time the server starts the ambient bots re-roll like a fresh realm, while names, races and classes persist. It touches only characters on accounts with `playerbots_account_type = 1`. `pop.size_stable` compares checksums of non-bot accounts and characters before and after.
+
+### Zone targets (data rule, never memory)
+- **Starting zones:** for each race in `world.playercreateinfo`, take the start zone shared by most of its classes (this outvotes the Death Knight start), then map it to its top-level zone through `AreaTable.dbc` parents. Races that share a zone count once.
+- **Capitals:** `AreaTable.dbc` zones (parent 0) with `AREA_FLAG_CAPITAL` 0x100 (`DBCEnums.h:242`) and team ALLY (2) or HORDE (4) (`DBCEnums.h:56-59`). This drops the neutral, capital-flagged Shattrath and Dalaran (team 6).
+- A bot's zone is `characters.zone` after `.saveall` (the zone the server computed from its position), mapped to its top-level zone through `AreaTable.dbc`. The `.saveall` barrier: every online bot's `totaltime` (played seconds, written by `Player::SaveToDB`) must advance.
+
+### Session and timing
+`population.run_session`: stack down → `hs up --profile population` (T0) → 570 s warm-up → S0 (its `.saveall` must start within 600 s of T0) → S1 300 s later. Meanwhile a sampler thread takes one sample every 10 s for 600 s. All five checks read the same session (`ctx["population_session"]`). They run at order 400+, after every m0 check.
+
+### Process memory metric
+The budget's "resident memory" is measured as **max(ps RSS, `proc_pid_rusage` phys_footprint)**, which is the conservative reading. This Mac runs with 7-8.5 GB of swap in use, because of other apps. macOS compresses and swaps idle server heap, so RSS reads far below real use. Measured: worldserver RSS 0.75 GB against a footprint of 3.30 GB, with `vmmap` showing 3.0 GB allocated at 0% fragmentation. Footprint is the "Memory" column in Activity Monitor. Both figures are in every sample.

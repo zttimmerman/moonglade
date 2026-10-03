@@ -28,6 +28,8 @@ def main(argv=None) -> int:
     u = sub.add_parser("up", help="start mysqld, authserver, worldserver; wait for readiness")
     u.add_argument("--world-datadir", type=Path, help="override worldserver DataDir (self-tests)")
     u.add_argument("--timeout", type=int)
+    u.add_argument("--profile", help="config profile (harness/hslib/config.py PROFILES: m0 | population); "
+                                     "default $HS_PROFILE or m0. A worldserver already running is left as is")
     sub.add_parser("down", help="graceful shutdown of the whole stack")
     sub.add_parser("status", help="process/port/readiness status")
 
@@ -45,6 +47,10 @@ def main(argv=None) -> int:
                    help="quick: quick checks only; full (default, the merge gate): quick+full; slow: everything")
     r.add_argument("--force-clean", action="store_true", help="build.clean always does a from-empty build")
     r.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)   # nested runs (report.tiers) write here
+    ps_ = sub.add_parser("pop-session", help="one M2 population session (cold start with the population profile, "
+                                            "warm-up, 10 min of samples); tuning runs for the budget record")
+    ps_.add_argument("--n", type=int, help="random bots (default: config.POPULATION_N)")
+    ps_.add_argument("--leave-up", action="store_true")
     ls = sub.add_parser("list", help="list registered checks")
     ls.add_argument("--json", action="store_true", help="machine-readable: id, order, capability, stack, tier")
 
@@ -111,7 +117,7 @@ def main(argv=None) -> int:
         from . import stack
         try:
             if a.cmd == "up":
-                _print(stack.up(world_datadir=a.world_datadir, timeout=a.timeout))
+                _print(stack.up(world_datadir=a.world_datadir, timeout=a.timeout, profile=a.profile))
             elif a.cmd == "down":
                 info = stack.down()
                 _print(info)
@@ -152,6 +158,16 @@ def main(argv=None) -> int:
             a.results_dir.mkdir(parents=True, exist_ok=True)
             P.RESULTS, P.SUMMARY = a.results_dir.resolve() / "results.json", a.results_dir.resolve() / "summary.md"
         return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean)
+
+    if a.cmd == "pop-session":
+        from . import population
+        try:
+            _print(population.cli(a.n, a.leave_up))
+        except population.PopulationError as e:
+            log(f"POP-SESSION FAILED: {e}")
+            _print({k: v for k, v in e.evidence.items() if k not in ("samples",)})
+            return 1
+        return 0
 
     if a.cmd == "list":
         from .registry import load_all
