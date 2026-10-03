@@ -141,7 +141,7 @@ def player_login() -> tuple[dict, bool]:
     else:
         pw = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(10))
         login, new = {"account": default_player(), "password": pw}, True
-    if login["account"].upper() in (P.TEST_USER.upper(), P.GM_USER.upper()):
+    if login["account"].upper() in (P.TEST_USER.upper(), P.GM_USER.upper(), P.COMP_USER.upper()):
         raise PlayerAccountError(f"{pf}: {login['account']} is reserved for the test harness, pick another name")
     for k in ("account", "password"):
         if not _NAME_RE.match(login[k]):

@@ -49,8 +49,84 @@ SMSG_AUTH_CHALLENGE = 0x1EC
 CMSG_AUTH_SESSION = 0x1ED
 SMSG_AUTH_RESPONSE = 0x1EE
 SMSG_LOGIN_VERIFY_WORLD = 0x236
+# chat, group, movement acks, combat log, quest sharing, keepalive (task m2 3.1; same Opcodes.h)
+SMSG_NEW_WORLD = 0x03E
+SMSG_GROUP_UNINVITE = 0x077
+CMSG_GROUP_DISBAND = 0x07B
+SMSG_GROUP_DESTROYED = 0x07C
+SMSG_GROUP_LIST = 0x07D
+CMSG_MESSAGECHAT = 0x095
+SMSG_MESSAGECHAT = 0x096
+MSG_MOVE_TELEPORT_ACK = 0x0C7
+MSG_MOVE_WORLDPORT_ACK = 0x0DC
+CMSG_SET_SELECTION = 0x13D
+SMSG_ATTACKSTART = 0x143
+SMSG_ATTACKSTOP = 0x144
+SMSG_ATTACKERSTATEUPDATE = 0x14A
+CMSG_PUSHQUESTTOPARTY = 0x19D
+SMSG_NOTIFICATION = 0x1CB
+SMSG_SPELLNONMELEEDAMAGELOG = 0x250
+MSG_QUEST_PUSH_RESULT = 0x276
+SMSG_TIME_SYNC_REQ = 0x390
+CMSG_TIME_SYNC_RESP = 0x391
+SMSG_GM_MESSAGECHAT = 0x3B3
+CMSG_KEEP_ALIVE = 0x407
 
 OPCODE_NAMES = {v: k for k, v in list(globals().items()) if k.startswith(("CMSG_", "SMSG_")) and isinstance(v, int)}
+
+# --- ChatMsg (src/server/shared/SharedDefines.h enum ChatMsg) and Language (enum Language, same file)
+CHAT_MSG_SYSTEM = 0x00
+CHAT_MSG_SAY = 0x01
+CHAT_MSG_PARTY = 0x02
+CHAT_MSG_WHISPER = 0x07
+CHAT_MSG_WHISPER_FOREIGN = 0x08
+CHAT_MSG_WHISPER_INFORM = 0x09
+CHAT_MSG_CHANNEL = 0x11
+CHAT_MSG_PARTY_LEADER = 0x33
+CHAT_NAMES = {0x00: "system", 0x01: "say", 0x02: "party", 0x07: "whisper", 0x09: "whisper_inform", 0x11: "channel",
+              0x33: "party_leader"}
+# ChatHandler::BuildChatPacket (src/server/game/Chat/Chat.cpp) writes a sender name for these types
+CHAT_MONSTER_TYPES = {0x0C, 0x0D, 0x0E, 0x0F, 0x10, 0x29, 0x2A, 0x2F}   # MONSTER_SAY/PARTY/YELL/WHISPER/EMOTE,
+                                                                         # RAID_BOSS_EMOTE/WHISPER, BATTLENET
+CHAT_BG_SYSTEM_TYPES = {0x24, 0x25, 0x26}
+CHAT_ACHIEVEMENT_TYPES = {0x30, 0x31}
+LANG_UNIVERSAL = 0     # refused for CMSG_MESSAGECHAT say/party/whisper (ChatHandler.cpp HandleMessagechatOpcode)
+LANG_COMMON = 7        # Alliance common tongue (SKILL_LANG_COMMON 98); the harness characters are human
+
+# Group (src/server/game/Groups/Group.h): GroupType, GroupMemberOnlineStatus
+GROUPTYPE_LFG = 0x08
+MEMBER_STATUS_ONLINE = 0x0001
+
+# QuestShareMessages (src/server/game/Quests/QuestDef.h), sent in MSG_QUEST_PUSH_RESULT
+QUEST_PARTY_MSG = {0: "SHARING_QUEST", 1: "CANT_TAKE_QUEST", 2: "ACCEPT_QUEST", 3: "DECLINE_QUEST", 4: "BUSY",
+                   5: "LOG_FULL", 6: "HAVE_QUEST", 7: "FINISH_QUEST", 8: "CANT_BE_SHARED_TODAY",
+                   9: "SHARING_TIMER_EXPIRED", 10: "NOT_IN_PARTY"}
+
+# ObjectGuid high parts (src/server/game/Entities/Object/ObjectGuid.h enum HighGuid): GUID = high << 48 | ...
+HIGHGUID_PLAYER = 0x0000
+HIGHGUID_UNIT = 0xF130
+HIGHGUID_PET = 0xF140
+
+
+def guid_high(guid: int) -> int:
+    return (guid >> 48) & 0xFFFF
+
+
+def guid_entry(guid: int) -> int:
+    """Entry of a creature GUID (ObjectGuid(HighGuid, entry, counter): entry in bits 24..47)."""
+    return (guid >> 24) & 0xFFFFFF
+
+
+def pack_guid(guid: int) -> bytes:
+    """ByteBuffer::appendPackGUID (src/server/shared/Packets/ByteBuffer.h): mask byte, then the non-zero bytes."""
+    mask, out = 0, bytearray()
+    for i in range(8):
+        b = (guid >> (8 * i)) & 0xFF
+        if b:
+            mask |= 1 << i
+            out.append(b)
+    return bytes([mask]) + bytes(out)
+
 
 # AccountDataType (src/server/game/Server/WorldSession.h); 6 is per-character (PER_CHARACTER_CACHE_MASK 0xEA)
 PER_CHARACTER_LAYOUT_CACHE = 6
@@ -180,6 +256,15 @@ class Reader:
 
     def f32(self):
         return struct.unpack("<f", self.take(4))[0]
+
+    def packed_guid(self) -> int:
+        """ByteBuffer::readPackGUID: mask byte, one byte per set bit (little-endian positions)."""
+        mask = self.u8()
+        g = 0
+        for i in range(8):
+            if mask & (1 << i):
+                g |= self.u8() << (8 * i)
+        return g
 
     def cstr(self) -> str:
         end = self.d.index(b"\x00", self.p)
