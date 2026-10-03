@@ -8,7 +8,7 @@ _Updated 2026-10-02 ~20:30: spike merged (PR #7: GlueXML signed → in-client me
 **In flight**
 | Work | Branch / checkout | State | If its agent is gone |
 |---|---|---|---|
-| M2 living world, part 1 (tasks 1.0, 1.1, 2.1, 4.1) | `change/m2-living-world`, **main checkout**, active | builder B12: slow-tier scenario rule, config profiles (m0/population), DBC reader move, keep-awake, population checks (slow), perf budget + tuning record. Owns the stack | re-brief from `openspec/changes/m2-living-world/` (design "Notes from later work") + branch commits; then part 2 (companions 3.x: probe chat) |
+| M2 living world, part 1 (tasks 1.0, 1.1, 2.1, 4.1) | `change/m2-living-world`, **main checkout**, active | B12 built 1.0/1.1/2.1/4.1 (300 bots stable and active; worldserver ~4.6 GB, fixed ~3 GB playerbots cost). **Zach decided:** ≈500 bots default, an easy world-size setting (front-menu option later), a fresh bot world each session; budget revised (worldserver ≤6 GB, stack ≤7 GB; spec logged). B12 now on task 2.2 (setting, `./play` default population, retune to 500, re-measure). Owns the stack | re-brief from `openspec/changes/m2-living-world/` (design "Notes from later work") + branch commits; then part 2 (companions 3.x: probe chat) |
 
 **Next (in order):** M2 part 1 → M2 part 2 (companions) → verifier (needs an unfiltered `--tier slow` run) → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
 
@@ -64,7 +64,7 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 - The era-diff tool couldn't read VMaNGOS source to confirm what `RewXP` means, because a web fetch was denied. It's flagged in the memo.
 
 ## Backlog (later rounds)
-- **Front menu** (target state, see North star). Step 1: a launcher-side menu (`.app`: profiles/saves/options, the launcher types the login, backdrop/music swap via a data-only patch MPQ). Step 2: the in-client screen, which needs a Wow.exe signature-check patch on a copy (ADR when we get there). Spike phase A: GlueXML is RSA/MD5-signed and verified each load; backdrops (WotLK/TBC/Dark Portal) and music are present and unsigned. Saves: light (per account) vs true save files (separate DBs), to decide later.
+- **Front menu** (target state, see North star). Options include world size (population presets). Step 1: a launcher-side menu (`.app`: profiles/saves/options, the launcher types the login, backdrop/music swap via a data-only patch MPQ). Step 2: the in-client screen, which needs a Wow.exe signature-check patch on a copy (ADR when we get there). Spike phase A: GlueXML is RSA/MD5-signed and verified each load; backdrops (WotLK/TBC/Dark Portal) and music are present and unsigned. Saves: light (per account) vs true save files (separate DBs), to decide later.
 - Mac `.app` launcher for `./play` (right after the spike); optional stopgap where the launcher types the login.
 - F6 setup reproducibility: Brewfile, `hs bootstrap`, docs/setup.md.
 - In-game single-player settings menu: toggle leveling pace/difficulty (vanilla vs WotLK, per character?) without SQL swaps or restarts. Zach's idea from Gate 1.
