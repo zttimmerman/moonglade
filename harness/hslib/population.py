@@ -35,9 +35,11 @@ SAMPLE_WINDOW_S = 600     # ... for 10 minutes after warm-up
 ACTIVITY_GAP_S = 300      # spec: count/sample again 5 minutes later
 SAVE_BARRIER_TIMEOUT_S = 120
 
-# Budget limits (performance-budget delta, "Server-side budget under the population profile")
-LIMITS = {"worldserver_mem_gb": ("<=", 4.0), "mysqld_mem_gb": ("<=", 1.0), "update_p95_ms": ("<=", 100),
-          "update_median_ms": ("<=", 50), "host_free_inactive_gb": (">=", 3.0)}
+# Budget limits (performance-budget delta as revised 2026-10-03, "Server-side budget under the population profile").
+# Process memory = max(RSS, phys_footprint) (mem_gb). Host free+inactive is recorded, not limited.
+LIMITS = {"worldserver_mem_gb": ("<=", 6.0), "mysqld_mem_gb": ("<=", 1.0), "stack_total_gb": ("<=", 7.0),
+          "update_p95_ms": ("<=", 100), "update_median_ms": ("<=", 50)}
+RECORDED = ("host_free_inactive_gb",)
 
 
 class PopulationError(RuntimeError):
@@ -98,6 +100,9 @@ RNDBOT_ACCOUNTS = (f"SELECT account_id FROM {P.DB_NAMES['playerbots']}.playerbot
                    "WHERE account_type = 1")       # 1 = RNDbot (column comment in playerbots_account_type)
 
 
+FRESH_LEVEL = 1     # < 3, so Randomize() takes the RandomizeFirst (re-roll) path (RandomPlayerbotMgr.cpp:1950)
+
+
 def fresh_start() -> dict:
     """"Fresh world" step of the population profile, run by stack.up before the worldserver starts.
 
@@ -112,8 +117,9 @@ def fresh_start() -> dict:
     Touches only random-bot characters (accounts with playerbots_account_type = 1) and their playerbots_random_bots
     timer rows; never another account's data (non_bot_digest is compared before/after by pop.size_stable)."""
     guids = f"SELECT guid FROM characters WHERE account IN ({RNDBOT_ACCOUNTS})"
+    before = non_bot_digest()
     n = int(db.scalar(f"SELECT COUNT(*) FROM characters WHERE account IN ({RNDBOT_ACCOUNTS})", "characters") or 0)
-    db.query(f"UPDATE characters SET level = 1, xp = 0 WHERE account IN ({RNDBOT_ACCOUNTS}) AND online = 0",
+    db.query(f"UPDATE characters SET level = {FRESH_LEVEL}, xp = 0 WHERE account IN ({RNDBOT_ACCOUNTS}) AND online = 0",
              "characters")
     ids = [r[0] for r in db.query(guids, "characters")]
     deleted = 0
@@ -122,7 +128,13 @@ def fresh_start() -> dict:
                                 f"('randomize', 'teleport') AND bot IN ({','.join(ids)})", "playerbots") or 0)
         db.query(f"DELETE FROM playerbots_random_bots WHERE owner = 0 AND event IN ('randomize', 'teleport') "
                  f"AND bot IN ({','.join(ids)})", "playerbots")
-    return {"random_bot_characters_reset": n, "timer_rows_deleted": deleted}
+    levels = db.query(f"SELECT level, COUNT(*) FROM characters WHERE account IN ({RNDBOT_ACCOUNTS}) GROUP BY level",
+                      "characters")
+    left = int(db.scalar(f"SELECT COUNT(*) FROM playerbots_random_bots WHERE owner = 0 AND event IN "
+                         f"('randomize', 'teleport') AND bot IN ({','.join(ids)})", "playerbots") or 0) if ids else 0
+    return {"random_bot_characters_reset": n, "timer_rows_deleted": deleted, "reset_level": FRESH_LEVEL,
+            "bot_levels_after": {int(lv): int(c) for lv, c in levels}, "timer_rows_left": left,
+            "non_bot_before": before, "non_bot_after": non_bot_digest()}
 
 
 def online_bots() -> int:
@@ -256,10 +268,13 @@ def perf_sample() -> dict:
         si = parse_server_info(info.output) if info.ok else {"error": info.output[-300:]}
     except OSError as e:
         si = {"error": f"SOAP unreachable: {e}"}
+    au = (st["authserver"] or [None])[0]
     wr, mr, wf, mf = _rss_gb(ws), _rss_gb(my), footprint_gb(ws), footprint_gb(my)
+    ar, af = _rss_gb(au), footprint_gb(au)
     return {"t": round(time.time(), 1), "worldserver_pid": ws,
             "worldserver_gb": mem_gb(wr, wf), "worldserver_ps_rss_gb": wr, "worldserver_rusage": wf,
             "mysqld_gb": mem_gb(mr, mf), "mysqld_ps_rss_gb": mr, "mysqld_rusage": mf,
+            "authserver_gb": mem_gb(ar, af), "authserver_ps_rss_gb": ar, "authserver_rusage": af,
             "host": host_memory(), "swap_used_gb": swap_used_gb(), "server_info": si}
 
 
@@ -272,7 +287,9 @@ def swap_used_gb() -> float | None:
 def sample_values(s: dict) -> dict:
     """One perf sample reduced to the budget's quantities (None when unreadable: that fails the budget)."""
     si = s.get("server_info", {})
+    parts = [s.get("worldserver_gb"), s.get("mysqld_gb"), s.get("authserver_gb")]
     return {"worldserver_mem_gb": s.get("worldserver_gb"), "mysqld_mem_gb": s.get("mysqld_gb"),
+            "stack_total_gb": round(sum(parts), 3) if None not in parts else None,
             "update_p95_ms": si.get("p95_ms"), "update_median_ms": si.get("median_ms"),
             "host_free_inactive_gb": s.get("host", {}).get("free_inactive_gb")}
 
@@ -281,8 +298,9 @@ def violations(samples: list[dict], limits: dict = LIMITS) -> list[str]:
     """Every sample must meet every limit ("every limit above holds" over the 10-minute window)."""
     bad = []
     for i, s in enumerate(samples):
-        for k, v in sample_values(s).items():
-            op, lim = limits[k]
+        vals = sample_values(s)
+        for k, (op, lim) in limits.items():
+            v = vals.get(k)
             if v is None or (op == "<=" and v > lim) or (op == ">=" and v < lim):
                 bad.append(f"sample {i} (t+{s['t'] - samples[0]['t']:.0f}s): {k}={v} (limit {op} {lim})")
     return bad
@@ -291,7 +309,7 @@ def violations(samples: list[dict], limits: dict = LIMITS) -> list[str]:
 def summarize(samples: list[dict]) -> dict:
     """Per quantity: min / median / max over the window (the tuning record's columns)."""
     out = {}
-    for k in LIMITS:
+    for k in (*LIMITS, *RECORDED):
         vals = [v for v in (sample_values(s)[k] for s in samples) if v is not None]
         out[k] = ({"min": min(vals), "median": round(statistics.median(vals), 3), "max": max(vals), "n": len(vals)}
                   if vals else {"n": 0})

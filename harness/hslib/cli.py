@@ -51,6 +51,9 @@ def main(argv=None) -> int:
                                             "warm-up, 10 min of samples); tuning runs for the budget record")
     ps_.add_argument("--n", type=int, help="random bots (default: config.POPULATION_N)")
     ps_.add_argument("--leave-up", action="store_true")
+    wsz = sub.add_parser("world-size", help="show or set how many AI players ./play starts "
+                                            "(small | normal | large | a number); stored in env/settings.json")
+    wsz.add_argument("value", nargs="?")
     ls = sub.add_parser("list", help="list registered checks")
     ls.add_argument("--json", action="store_true", help="machine-readable: id, order, capability, stack, tier")
 
@@ -166,6 +169,16 @@ def main(argv=None) -> int:
         except population.PopulationError as e:
             log(f"POP-SESSION FAILED: {e}")
             _print({k: v for k, v in e.evidence.items() if k not in ("samples",)})
+            return 1
+        return 0
+
+    if a.cmd == "world-size":
+        from . import config, settings
+        try:
+            _print((settings.set_world_size(a.value) if a.value else settings.world_size())
+                   | {"presets": config.WORLD_SIZES})
+        except settings.SettingsError as e:
+            log(str(e))
             return 1
         return 0
 

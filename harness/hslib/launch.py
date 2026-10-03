@@ -287,7 +287,8 @@ def onscreen_windows(pid: int) -> list[dict]:
             wins.append({"width": int(float(parts[1])), "height": int(float(parts[2])), "layer": int(parts[3])})
     return wins
 
-def prepare(say=log, world_datadir: Path | None = None, accounts=None) -> tuple[dict, dict]:
+def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: str | None = None,
+            population_n: int | None = None) -> tuple[dict, dict]:
     """Everything before starting the client, shared by `hs launch` and `./play`: stack up (if needed) →
     client-config (+ Wine defaults) → accounts → Wine prefix → binaries match the manifest. `accounts` makes
     sure the login exists (default: the harness fixtures, test account + character; `./play` passes its
@@ -317,7 +318,7 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None) -> tuple[
         say("The game server is already running.")
     else:
         say("Starting the game server (database, login server, world server). This takes a minute or two...")
-        ev["stack"] = {"up": stack.up(world_datadir=world_datadir)}
+        ev["stack"] = {"up": stack.up(world_datadir=world_datadir, profile=profile, population_n=population_n)}
         say("The game server is ready.")
     say("Pointing the game client at this computer (127.0.0.1)...")
     cfg = configure(client_dir(), defaults=WINE_DEFAULTS)

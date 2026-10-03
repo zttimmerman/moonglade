@@ -5,6 +5,7 @@ the cold start + warm-up + 10-minute sampling, the rest read the cached result f
 400+), after every m0-profile check, so the population profile never leaks into other checks; the runner's final
 `hs down` stops it."""
 import json
+from pathlib import Path
 import math
 import re
 
@@ -133,16 +134,19 @@ def bots_active(ctx):
 @check("perf.server_budget", order=410, capability="performance-budget", stack="any", tier="slow",
        profile="population")
 def server_budget(ctx):
-    """With the population profile after warm-up, every 10 s sample over 10 minutes meets: worldserver memory <= 4.0 GB,
-    mysqld memory <= 1.0 GB, server-reported world update p95 <= 100 ms and median <= 50 ms, host free+inactive >= 3 GB."""
+    """With the population profile after warm-up, every 10 s sample over 10 minutes meets: worldserver <= 6.0 GB,
+    mysqld <= 1.0 GB, worldserver+mysqld+authserver <= 7.0 GB (memory = max(RSS, footprint)), server-reported world
+    update p95 <= 100 ms and median <= 50 ms; host free+inactive is recorded (not limited)."""
     s = pop.session(ctx)
     samples = s["samples"]
     span = samples[-1]["t"] - samples[0]["t"] if samples else 0
     bad = pop.violations(samples)
-    ev = {"n": s["n"], "limits": pop.LIMITS, "samples_taken": len(samples), "window_s": round(span, 1),
+    ev = {"n": s["n"], "limits": pop.LIMITS, "recorded_not_limited": list(pop.RECORDED), "samples_taken": len(samples), "window_s": round(span, 1),
           "summary": pop.summarize(samples), "violations": bad[:40], "violation_count": len(bad),
           "sampler_errors": s["sampler_errors"], "metric_source": {
-              "process_memory": "max(ps -o rss, proc_pid_rusage phys_footprint) of the worldserver/mysqld pids (population.mem_gb)", "host": "vm_stat Pages free + Pages inactive",
+              "process_memory": "max(ps -o rss, proc_pid_rusage phys_footprint) per process (population.mem_gb); "
+                                "stack_total = worldserver + mysqld + authserver",
+              "host": "vm_stat Pages free + Pages inactive (recorded only)",
               "update_time": "SOAP `.server info`: Median and Percentiles (95, ...) over the server's last 500 "
                              "world-loop diffs (cs_server.cpp:283-289, UpdateTime.h:26)"},
           "samples": samples}
@@ -223,4 +227,90 @@ def population_tuned(ctx):
     probs = tuning_problems(doc, n)
     ev["problems"] = probs
     require(not probs, "; ".join(probs), **ev)
+    return ev
+
+
+# ----------------------------------------------------------------------------------------------- 2.2 checks
+
+SIZE_TOLERANCE = 0.05       # spec: online random bots within 5% of the preset's size
+SIZE_SETTLE_S = 420         # login of 150 bots measured ~1-2 min; generous ceiling, recorded in evidence
+
+
+@check("pop.size_setting", order=395, capability="world-population", stack="any", tier="slow", profile="population")
+def size_setting(ctx):
+    """With a (scratch) settings file saying `small`, starting the stack the way ./play does gives the population
+    profile with online random bots within 5% of the small preset; with no settings file the normal preset is used."""
+    import os
+    import tempfile
+    import time
+    from .. import settings, stack
+    ev = {"presets": config.WORLD_SIZES, "user_settings_file_read": False}
+    saved = {k: os.environ.pop(k, None) for k in ("HS_PROFILE", settings.ENV, config.POPULATION_N_ENV)}
+    tmp = Path(tempfile.mkdtemp(prefix="hs-settings-"))
+    try:
+        # 1. no settings file -> normal
+        os.environ[settings.ENV] = str(tmp / "missing.json")
+        ev["no_file"] = settings.play_world()
+        # 2. small -> the way ./play starts the stack (play.py: settings.play_world() -> launch.prepare -> stack.up)
+        f = tmp / "settings.json"
+        f.write_text(json.dumps({"world_size": "small"}))
+        os.environ[settings.ENV] = str(f)
+        world = settings.play_world()
+        ev["small"] = world
+        want = config.WORLD_SIZES["small"]
+        if any(stack.stack_processes().values()):
+            ev["down_before"] = stack.down()
+        t0 = time.time()
+        ev["up"] = {k: v for k, v in stack.up(profile=world["profile"], population_n=world["population_n"]).items()
+                    if k in ("profile", "population_n", "fresh_start", "worldserver", "ready_s")}
+        ev["running_profile"] = stack.running_profile()
+        counts, inband = [], 0
+        while time.time() - t0 < SIZE_SETTLE_S and inband < 3:
+            time.sleep(10)
+            c = pop.online_bots()
+            counts.append({"t_s": round(time.time() - t0), "online_random_bots": c})
+            inband = inband + 1 if abs(c - want) <= SIZE_TOLERANCE * want else 0
+        ev |= {"want": want, "tolerance": SIZE_TOLERANCE, "counts": counts}
+    finally:
+        for k, v in saved.items():
+            os.environ.pop(k, None)
+            if v is not None:
+                os.environ[k] = v
+        stack.down()
+        for x in tmp.iterdir():
+            x.unlink()
+        tmp.rmdir()
+    nf = ev["no_file"]
+    require(nf["profile"] == "population" and nf["population_n"] == config.WORLD_SIZES["normal"],
+            f"no settings file -> {nf['profile']} N={nf['population_n']}, want population N="
+            f"{config.WORLD_SIZES['normal']}", **ev)
+    rp = ev["running_profile"] or {}
+    require(world["profile"] == "population" and world["population_n"] == want, "small setting not resolved", **ev)
+    require(rp.get("profile") == "population" and rp.get("n") == want
+            and rp.get("digest") == config.profile_digest("population", want),
+            f"running profile {rp.get('profile')} N={rp.get('n')}, want population N={want}", **ev)
+    last = counts[-1]["online_random_bots"] if counts else 0
+    require(abs(last - want) <= SIZE_TOLERANCE * want and inband >= 3,
+            f"online random bots {last} (want {want} +/- {SIZE_TOLERANCE:.0%}, stable for 3 polls)", **ev)
+    return ev
+
+
+@check("pop.fresh_start_scope", order=403, capability="world-population", stack="any", tier="slow",
+       profile="population")
+def fresh_start_scope(ctx):
+    """The population start's fresh-world reset put every random-bot character at the reset level with no
+    randomize/teleport timers left, and checksums of all non-bot accounts and characters are identical before and
+    after the reset (and after the whole session)."""
+    s = pop.session(ctx)
+    fs = s["up"].get("fresh_start") or {}
+    ev = {"fresh_start": fs, "session_non_bot_before": s["non_bot_before"], "session_non_bot_after": s["non_bot_after"]}
+    require(fs, "no fresh-start record in the population start", **ev)
+    n = fs.get("random_bot_characters_reset", 0)
+    require(n >= s["n"], f"{n} random-bot characters reset, fewer than N={s['n']}", **ev)
+    require(fs.get("bot_levels_after") == {str(fs.get("reset_level")): n} or
+            fs.get("bot_levels_after") == {fs.get("reset_level"): n},
+            f"bot levels after reset {fs.get('bot_levels_after')}, want all {n} at {fs.get('reset_level')}", **ev)
+    require(fs.get("timer_rows_left") == 0, f"{fs.get('timer_rows_left')} randomize/teleport timer rows left", **ev)
+    require(fs.get("non_bot_before") == fs.get("non_bot_after"), "non-bot data changed during the reset", **ev)
+    require(s["non_bot_before"] == s["non_bot_after"], "non-bot data changed during the session", **ev)
     return ev

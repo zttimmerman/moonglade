@@ -23,6 +23,9 @@ from .. import launch, paths as P, play, procs, stack
 from ..registry import check, require
 
 PLAY = str(P.ROOT / "play")
+# Checks keep fixed profiles and never read the user's world-size setting (world-population "World size is one easy
+# setting"): ./play under test runs the 10-bot m0 profile.
+PINNED = {"HS_PROFILE": "m0"}
 START_TIMEOUT = 900          # cold up is normally ~20-90 s; first_run would be far longer, never in a check run
 SERVER_LOG = P.LOGS / "Server.log"
 CAP = "play-launcher"
@@ -58,7 +61,7 @@ class StandIn:
         # the whole group (os.killpg) the way a terminal does.
         self.proc = subprocess.Popen([*(wrap or []), PLAY, "--account", account, "--client-cmd", str(self.bat), *extra],
                                      cwd=P.ROOT, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
-                                     start_new_session=True, env={**os.environ, **(env or {})})
+                                     start_new_session=True, env={**os.environ, **PINNED, **(env or {})})
         fh.close()
         return self.proc
 
@@ -666,7 +669,8 @@ def player_account(ctx):
             bad = s.dir / f"reserved-{name}.json"
             bad.write_text(json.dumps({"account": name, "password": "whatever1"}))
             r = subprocess.run([PLAY, "--account", "player", "--client-cmd", str(s.bat)], cwd=P.ROOT,
-                               env={**os.environ, "HS_PLAYER_FILE": str(bad)}, capture_output=True, text=True, timeout=300)
+                               env={**os.environ, **PINNED, "HS_PLAYER_FILE": str(bad)}, capture_output=True, text=True,
+                               timeout=300)
             ev["reserved"][name] = {"exit": r.returncode, "output": (r.stdout + r.stderr)[-800:]}
             require(r.returncode != 0 and f"{name} is reserved for the test harness" in r.stdout, f"{name} in the player file wasn't refused", **ev)
         require(is_clear(remaining(s)), "something from this repo is still running", **ev)

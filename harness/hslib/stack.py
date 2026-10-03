@@ -301,10 +301,11 @@ def profile_matches(name: str) -> bool:
     return bool(rp) and rp["profile"] == name and rp.get("digest") == config.profile_digest(name)
 
 
-def up(world_datadir: Path | None = None, timeout: int | None = None, profile: str | None = None) -> dict:
-    """Start the stack with a config profile (config.PROFILES; default $HS_PROFILE or "m0"). If a worldserver is
-    already running it is left alone (idempotent `hs up`); callers that need a specific profile use
-    `ensure_profile`."""
+def up(world_datadir: Path | None = None, timeout: int | None = None, profile: str | None = None,
+       population_n: int | None = None) -> dict:
+    """Start the stack with a config profile (config.PROFILES; default $HS_PROFILE or "m0"); `population_n` sizes
+    the population profile (./play passes the user's world-size setting). If a worldserver is already running it
+    is left alone (idempotent `hs up`); callers that need a specific profile use `ensure_profile`."""
     if not (P.SERVER_BIN / "worldserver").exists():
         raise StackError("server not built; run `harness/hs build` first")
     name = config.profile_name(profile)
@@ -315,9 +316,12 @@ def up(world_datadir: Path | None = None, timeout: int | None = None, profile: s
             raise StackError(f"worldserver is already running with profile {rp['profile']!r}, not {name!r}; "
                              "`hs down` first (or use stack.ensure_profile)")
         name = rp["profile"]          # keep the rendered confs matching the running worldserver
+        population_n = rp.get("n") if name == "population" else None
     first_run = not db_exists("world") if stack_processes()["mysqld"] else not (P.MYSQL_DATA / "acore_world").exists()
     timeout = timeout or (1800 if first_run else 300)
-    info = {"first_run": first_run, "profile": name, "config": list(config.write_all(world_datadir, profile=name))}
+    n = config.population_n(population_n) if name == "population" else None
+    info = {"first_run": first_run, "profile": name, "population_n": n,
+            "config": list(config.write_all(world_datadir, profile=name, population_n=n))}
     info |= mysql_up()
     ensure_realmlist()          # before authserver: it refuses to start if every realm has flag 3
     info |= auth_up(timeout)
@@ -329,7 +333,8 @@ def up(world_datadir: Path | None = None, timeout: int | None = None, profile: s
     w = world_up(timeout)
     info |= w
     if not was_running and w.get("worldserver") == "started":
-        PROFILE_FILE.write_text(json.dumps({"profile": name, "digest": config.profile_digest(name), "pid": w["pid"]}))
+        PROFILE_FILE.write_text(json.dumps({"profile": name, "n": n, "digest": config.profile_digest(name, n),
+                                            "pid": w["pid"]}))
     return info
 
 

@@ -234,7 +234,14 @@ class Loop:
                 return ensure_player_account(login)
         say("Starting Hearthstone.")
         self.step("prepare")
-        man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts)
+        from . import settings
+        world = settings.play_world()      # living world at the user's world size (env/settings.json), M2 2.2
+        self.rec["world"] = world
+        if world["profile"] == "population":
+            say(f"World size: {world['source']['setting']} ({world['population_n']} AI players; change it with "
+                "`harness/hs world-size small|normal|large|<number>`).")
+        man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts,
+                                 profile=world["profile"], population_n=world["population_n"])
         self.rec["prepare"] = {k: ev[k] for k in ("stack", "fixtures", "accounts", "prefix",
                                                   "binaries_match_manifest_before") if k in ev}
         self.man = man

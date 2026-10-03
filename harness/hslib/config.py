@@ -18,7 +18,10 @@ from . import paths as P
 DEFAULT_PROFILE = "m0"
 
 # Population size N, chosen by measurement: docs/research/m2-population-tuning.md (perf.population_tuned reads it).
-POPULATION_N = 300
+# World-size presets (random bots), the user's one setting (hslib/settings.py, env/settings.json). Sizes chosen from
+# measurements: docs/research/m2-population-tuning.md.
+WORLD_SIZES = {"small": 150, "normal": 500, "large": 1000}
+POPULATION_N = WORLD_SIZES["normal"]      # what the checks' population profile uses (never the user's setting)
 POPULATION_N_ENV = "HS_POPULATION_N"     # tuning runs only: measure the population profile at another N
 
 
@@ -32,13 +35,14 @@ def _population(n: int) -> dict[str, dict[str, str]]:
             "AiPlayerbot.RandomBotMinLevelChance": "0.4",
             "AiPlayerbot.RandomBotMaxLevelChance": "0.05",
             "AiPlayerbot.ProbTeleToBankers": "1.0",
-            # capital-banker weights per faction: the best of the measured settings (design.md "Population profile
-            # knobs", capital retention runs R1-R4); unlisted capitals keep the default 1
-            "AiPlayerbot.TeleToStormwindWeight": "1",
-            "AiPlayerbot.TeleToOrgrimmarWeight": "1",
+            # capital-banker weights per faction, from measured capital counts (design.md "Population profile knobs");
+            # Darnassus and Exodar keep the default 1 (they held 12-15 bots at weight 1 with N=500)
+            "AiPlayerbot.TeleToStormwindWeight": "2",
+            "AiPlayerbot.TeleToOrgrimmarWeight": "2",
             "AiPlayerbot.TeleToIronforgeWeight": "2",
             "AiPlayerbot.TeleToUndercityWeight": "2",
             "AiPlayerbot.TeleToThunderBluffWeight": "2",
+            "AiPlayerbot.TeleToSilvermoonCityWeight": "2",
             "AiPlayerbot.MinRandomBotTeleportInterval": "300",
             "AiPlayerbot.MaxRandomBotTeleportInterval": "1200",
             "AiPlayerbot.BotActiveAlone": "100",
@@ -70,16 +74,19 @@ PROFILES: dict[str, dict[str, dict[str, str]]] = {
 }
 
 
-def overrides(name: str) -> dict[str, dict[str, str]]:
-    """A profile's overrides; the population profile honours $HS_POPULATION_N (tuning runs)."""
-    if name == "population" and os.environ.get(POPULATION_N_ENV):
-        return _population(int(os.environ[POPULATION_N_ENV]))
+def overrides(name: str, population_n: int | None = None) -> dict[str, dict[str, str]]:
+    """A profile's overrides. For the population profile, N is `population_n` if given (./play's world-size
+    setting), else $HS_POPULATION_N (tuning runs), else POPULATION_N."""
+    if name == "population":
+        n = population_n or (int(os.environ[POPULATION_N_ENV]) if os.environ.get(POPULATION_N_ENV) else None)
+        if n:
+            return _population(int(n))
     return PROFILES[name]
 
 
-def population_n() -> int:
+def population_n(population_n: int | None = None) -> int:
     """N of the population profile as it would be rendered now."""
-    return int(overrides("population")["playerbots"]["AiPlayerbot.MaxRandomBots"])
+    return int(overrides("population", population_n)["playerbots"]["AiPlayerbot.MaxRandomBots"])
 
 
 def profile_name(profile: str | None = None) -> str:
@@ -90,9 +97,9 @@ def profile_name(profile: str | None = None) -> str:
     return name
 
 
-def profile_digest(name: str) -> str:
+def profile_digest(name: str, population_n: int | None = None) -> str:
     """Short hash of a profile's overrides: a running stack whose recorded digest differs is stale."""
-    return hashlib.sha256(json.dumps(overrides(name), sort_keys=True).encode()).hexdigest()[:12]
+    return hashlib.sha256(json.dumps(overrides(name, population_n), sort_keys=True).encode()).hexdigest()[:12]
 
 
 def _dbinfo(db: str) -> str:
@@ -126,11 +133,11 @@ def common(logs: Path = P.LOGS, tmp: Path = P.ENV / "tmp", source: Path = P.CORE
 
 def write_all(world_datadir: Path | None = None, extra_world: dict | None = None, *, etc: Path = P.SERVER_ETC,
               logs: Path = P.LOGS, run: Path = P.RUN, tmp: Path = P.ENV / "tmp", source: Path = P.CORE_SRC,
-              profile: str | None = None) -> dict:
+              profile: str | None = None, population_n: int | None = None) -> dict:
     """Render authserver/worldserver/module confs into `etc` with the given profile (see PROFILES). The keyword
     paths default to the real stack; the unpatched baseline worldserver (core.login_logout_race_baseline) renders
     its own install's confs with them."""
-    prof = overrides(profile_name(profile))
+    prof = overrides(profile_name(profile), population_n)
     for d in (logs, tmp, run):
         d.mkdir(parents=True, exist_ok=True)
     auth = common(logs, tmp, source) | {
