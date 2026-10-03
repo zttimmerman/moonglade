@@ -79,10 +79,12 @@ def slow_tier_skips(reg: dict, tier: str, only: list[str] | None, referenced: se
                   key=lambda c: (c.order, c.id))
 
 
-def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None) -> list[dict]:
+def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: bool = False) -> list[dict]:
     """Run `checks` in (order, id) sequence, recording `slow_skips` as skip ("slow tier") in their place.
-    `ensure(stack_want, ctx, profile)` brings the stack to each check's required state (default _ensure_stack)."""
+    `ensure(stack_want, ctx, profile)` brings the stack to each check's required state (default _ensure_stack).
+    `quiet` suppresses the per-check log lines (report.slow_tier_rule's synthetic runs)."""
     ensure = ensure or _ensure_stack
+    say = (lambda _m: None) if quiet else log
     skip_ids = {c.id for c in slow_skips}
     results = []
     for c in sorted([*checks, *slow_skips], key=lambda c: (c.order, c.id)):
@@ -90,7 +92,7 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None) -> list
         if c.id in skip_ids:
             rec |= {"status": "skip", "message": SLOW_SKIP_MSG, "duration_s": 0.0,
                     "evidence": {"skip_reason": SLOW_SKIP_MSG, "tier": c.tier, "slow_tier": True}}
-            log(f"SKIP  {c.id}  {SLOW_SKIP_MSG}")
+            say(f"SKIP  {c.id}  {SLOW_SKIP_MSG}")
             results.append(rec)
             continue
         t0 = time.time()
@@ -107,7 +109,7 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None) -> list
             rec |= {"status": "error", "message": f"{type(e).__name__}: {e}",
                     "evidence": {"traceback": traceback.format_exc()[-3000:], **({"log_excerpt": excerpt} if excerpt else {})}}
         rec["duration_s"] = round(time.time() - t0, 2)
-        log(f"{rec['status'].upper():5} {c.id} ({rec['duration_s']}s){'  ' + rec.get('message', '') if rec['status'] != 'pass' else ''}")
+        say(f"{rec['status'].upper():5} {c.id} ({rec['duration_s']}s){'  ' + rec.get('message', '') if rec['status'] != 'pass' else ''}")
         results.append(rec)
     return results
 

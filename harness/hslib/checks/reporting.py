@@ -280,7 +280,7 @@ def _simulate(reg: dict, tier: str, referenced: set) -> dict:
     from .. import runner
     selected = runner.select(reg, tier, None)
     skips = runner.slow_tier_skips(reg, tier, None, referenced)
-    results = runner.execute(selected, {}, skips, ensure=lambda *a: None)
+    results = runner.execute(selected, {}, skips, ensure=lambda *a: None, quiet=True)
     meta = {"full_run": runner.is_full_run(tier, None), "tier": tier, "filter": [],
             "slow_tier_skipped": [c.id for c in skips]}
     doc = {"meta": meta, "checks": results}

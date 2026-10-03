@@ -32,8 +32,15 @@ def _population(n: int) -> dict[str, dict[str, str]]:
             "AiPlayerbot.RandomBotMinLevelChance": "0.4",
             "AiPlayerbot.RandomBotMaxLevelChance": "0.05",
             "AiPlayerbot.ProbTeleToBankers": "1.0",
+            # capital-banker weights per faction: the best of the measured settings (design.md "Population profile
+            # knobs", capital retention runs R1-R4); unlisted capitals keep the default 1
             "AiPlayerbot.TeleToStormwindWeight": "1",
             "AiPlayerbot.TeleToOrgrimmarWeight": "1",
+            "AiPlayerbot.TeleToIronforgeWeight": "2",
+            "AiPlayerbot.TeleToUndercityWeight": "2",
+            "AiPlayerbot.TeleToThunderBluffWeight": "2",
+            "AiPlayerbot.MinRandomBotTeleportInterval": "300",
+            "AiPlayerbot.MaxRandomBotTeleportInterval": "1200",
             "AiPlayerbot.BotActiveAlone": "100",
             "AiPlayerbot.botActiveAloneSmartScale": "0",
             "AiPlayerbot.RandomBotJoinLfg": "0",

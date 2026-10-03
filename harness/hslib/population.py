@@ -22,6 +22,7 @@ import subprocess
 import threading
 import time
 from collections import Counter
+from pathlib import Path
 
 from . import botlog, config, db, dbc, paths as P, soap, stack
 from .util import awake_assertions, keep_awake, log
@@ -410,6 +411,16 @@ def run_session(warmup_s: int = WARMUP_S, window_s: int = SAMPLE_WINDOW_S, gap_s
         return ev
 
 
+def save_session(s: dict) -> Path:
+    """Keep the full session (all samples and both snapshots) as harness/out/pop-session-N<N>-<epoch>.json, so a
+    run's numbers can be replayed or copied into the tuning record."""
+    P.OUT.mkdir(parents=True, exist_ok=True)
+    out = P.OUT / f"pop-session-N{s['n']}-{int(s['t0'])}.json"
+    out.write_text(json.dumps(s, indent=1, default=str))
+    s["session_file"] = str(out.relative_to(P.ROOT))
+    return out
+
+
 def session(ctx: dict) -> dict:
     """The shared session for this run (computed once; a failure is re-raised to every check that needs it)."""
     if "population_session" not in ctx:
@@ -418,6 +429,7 @@ def session(ctx: dict) -> dict:
                 warmup_s=int(os.environ.get("HS_POP_WARMUP_S", WARMUP_S)),
                 window_s=int(os.environ.get("HS_POP_WINDOW_S", SAMPLE_WINDOW_S)),
                 gap_s=int(os.environ.get("HS_POP_GAP_S", ACTIVITY_GAP_S)))
+            save_session(ctx["population_session"])
         except Exception as e:  # noqa: BLE001
             ctx["population_session"] = e
     s = ctx["population_session"]
@@ -449,10 +461,8 @@ def cli(n: int | None, leave_up: bool = False) -> dict:
         os.environ[config.POPULATION_N_ENV] = str(n)
     try:
         s = run_session()
-        P.OUT.mkdir(parents=True, exist_ok=True)
-        out = P.OUT / f"pop-session-N{s['n']}-{int(s['t0'])}.json"
-        out.write_text(json.dumps(s, indent=1, default=str))
-        return brief(s) | {"session_file": str(out.relative_to(P.ROOT))}
+        save_session(s)
+        return brief(s) | {"session_file": s["session_file"]}
     finally:
         if not leave_up:
             stack.down()

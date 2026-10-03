@@ -54,7 +54,8 @@ def zones_covered(ctx):
     saveall_at = s["s0"]["save"]["gm_at"] - s["t0"]
     areas = pop.dbc.area_table()
     all_zones = sorted(((z, n) for z, n in _zone_counts(s["s0"]).items()), key=lambda x: -x[1])
-    ev = {"n": s["n"], "online_random_bots": len(s["s0"]["bots"]), "per_zone": rows, "problems": probs,
+    ev = {"n": s["n"], "session_file": s.get("session_file"), "fresh_start": s["up"].get("fresh_start"),
+          "online_random_bots": len(s["s0"]["bots"]), "per_zone": rows, "problems": probs,
           "rules": tg["rules"], "dbc": tg["dbc"],
           "positions_captured_at_s_after_up": round(saveall_at, 1), "warmup_max_s": pop.WARMUP_MAX_S,
           "saveall": s["s0"]["save"], "zone_source": "characters.zone after .saveall (the server's zone for the "
