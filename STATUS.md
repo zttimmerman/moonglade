@@ -1,16 +1,16 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-02 ~17:55: core server-mail guard merged (PR #6, ADR-0006). Spike Phase B running._
+_Updated 2026-10-02 ~20:30: spike merged (PR #7: GlueXML signed → in-client menu needs an exe patch + ADR; backdrop/music swap works data-only). M2 started._
 
 **Cold start:** read this file, then `openspec list` (Node 20: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`), then `git -C <repo> worktree list`, `git branch -a`, `gh pr list`, then `harness/hs status`. The skills `.claude/skills/hs-*` hold the procedures (change loop, checks, client debugging, RE). User preferences and decisions are in the orchestrator memory notes (plain language for decisions, Gate 1, front-menu vision, logo).
 
 **In flight**
 | Work | Branch / checkout | State | If its agent is gone |
 |---|---|---|---|
-| Login-screen spike Phase B | `change/login-screen-spike`, **main checkout**, active | B11 done with runs + report (688da96, 2db2a01): modified GlueXML → client silently closes (exit 0, GlueXML.log); Dark Portal backdrop + classic music work data-only (music proven streaming via a file probe; hearing it = human-verify). Now fixing `re.mpq_write_roundtrip` so its refusal test uses a stand-in client (it briefly wrote into real client/). Then verifier | brief a builder from `docs/research/login-screen-spike.md` + tasks B.1/C.1; then verifier |
+| M2 living world, part 1 (tasks 1.0, 1.1, 2.1, 4.1) | `change/m2-living-world`, **main checkout**, active | builder B12: slow-tier scenario rule, config profiles (m0/population), DBC reader move, keep-awake, population checks (slow), perf budget + tuning record. Owns the stack | re-brief from `openspec/changes/m2-living-world/` (design "Notes from later work") + branch commits; then part 2 (companions 3.x: probe chat) |
 
-**Next (in order):** spike Phase B → M2 living world (`openspec/changes/m2-living-world`) → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
+**Next (in order):** M2 part 1 → M2 part 2 (companions) → verifier (needs an unfiltered `--tier slow` run) → M3 vanilla mode (`openspec/changes/m3-vanilla-mode`, task 1.1 done on `change/m3-vanilla-mode`, rebase before continuing) → launcher `.app` (logo source at `env/branding/logo-source.jpeg`) → front menu.
 
 **Decisions pending from Zach:** none blocking. Later: the patch ADR for the in-client front menu (step 2); light vs true save files; F-items as they come up.
 
@@ -33,9 +33,11 @@ M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01
 | Harness tiers | **done / archived** (verifier PASS) | `hs run --tier quick` ~36 s (builders' loop); full ~9.5 min; `--force-clean` ~13 min (required once per merge); test logout ~20 s → <1 s |
 | F10 tiers verifier nits | todo | enforce force-clean at merge in the harness (e.g. a merge-gate flag/check), not just the verifier brief; keep the from-empty build log (don't let `build.clean_smart` overwrite it) |
 | Core server-mail guard (ADR-0006) | **done / merged** (PR #6) | first core patch; M2 unblocked |
+| F13 MPQ guard hard-link edge | todo (low) | refuse an existing destination with link count > 1; NFD fallback for a missing non-ASCII root (unreachable today) |
 | F12 keep the Mac awake during harness runs | todo (important) | a mysqld abort ("Semaphore wait > 600 s") happened while the display slept during spike Phase B; B11's later runs under `caffeinate -d -i -u` were clean. Wrap `hs run`/`./play`/long builder runs in caffeinate (or `IOPMAssertion`); add a check |
 | F11 server-mail relog misdelivery check | todo | behavioural check: second char on test account, A→B fast relog, no misdelivered mail (requirement narrowed in core-server-mail-guard, logged) |
-| Login-screen spike | next after tiers | Q1: custom GlueXML from a patch MPQ with an unmodified Wow.exe? (Wow.exe has "GlueXML has corrupt signature" strings). Q2: are the TBC/Vanilla login backdrops and music in the 3.3.5a MPQs (background picker)? Needs an MPQ reader |
+| Login-screen spike | **done / merged** (PR #7) | report: docs/research/login-screen-spike.md |
+| Login-screen spike (old row) | superseded | Q1: custom GlueXML from a patch MPQ with an unmodified Wow.exe? (Wow.exe has "GlueXML has corrupt signature" strings). Q2: are the TBC/Vanilla login backdrops and music in the 3.3.5a MPQs (background picker)? Needs an MPQ reader |
 | F8 M1 verifier nits | todo (low) | smoke picks `wow[0]` (pick the persistent/oldest pid); `play_processes()` matches any cmdline with 'hslib.play'; real Wow.exe exit path only human-verified |
 | M2 living world | spec written | `openspec/changes/m2-living-world` |
 | M3 vanilla mode | spec written; task 1.1 done (RewXP verified) | branch `change/m3-vanilla-mode` |
