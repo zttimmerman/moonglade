@@ -1,0 +1,22 @@
+#
+# mod-era-profile: Hearthstone "vanilla mode" (openspec/changes/m3-vanilla-mode, Gate 1 decisions in
+# docs/gate1-era-profile-memo.md). Levels 1-60 use pre-2.3 (VMaNGOS 1.12) pacing and difficulty values; every
+# TBC/WotLK system and all content above level 60 stay stock.
+#
+[worldserver]
+
+###################################################################################################
+# ERA PROFILE
+#
+#    EraProfile.Enable
+#        Description: Vanilla mode for levels 1-60. 1 = vanilla values (XP per level 11-59, quest XP, ...),
+#                     0 = stock WotLK values. Read once at server start: changing it takes effect at the
+#                     next restart (a config reload only logs that a restart is needed). Characters' levels,
+#                     XP, items and quests are never touched by switching.
+#        Default:     1 - (Vanilla mode on, Gate 1 Decision 6)
+#                     0 - (Stock WotLK)
+
+EraProfile.Enable = 1
+
+#
+###################################################################################################

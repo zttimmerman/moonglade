@@ -12,6 +12,10 @@ from . import paths as P
 #   m0          10 random bots: the default for `hs up`, `./play` and every check that doesn't ask otherwise.
 #   population  the M2 living-world population (openspec/changes/m2-living-world/design.md "Population profile":
 #               every key below is explained there, with the playerbots.conf.dist line it comes from).
+#   wotlk       m0 with vanilla mode OFF (EraProfile.Enable = 0, mod-era-profile): stock WotLK values, for the
+#               era-profile toggle checks and counterexamples (openspec/changes/m3-vanilla-mode).
+# A profile may carry an "era" section: overrides for mod_era_profile.conf. No profile but `wotlk` sets one, so the
+# default (vanilla mode on) comes from the module's .conf.dist (era-profile "Default is vanilla mode").
 # Select one with `hs up --profile NAME`, `HS_PROFILE=NAME` (also read by `./play` and `hs launch`), or in code
 # `stack.up(profile=NAME)`. Checks declare `@check(..., profile=NAME)`; the runner restarts a running stack that
 # was started with a different profile (env/run/stack-profile.json records the running one).
@@ -74,6 +78,9 @@ PROFILES: dict[str, dict[str, dict[str, str]]] = {
     },
     "population": _population(POPULATION_N),
 }
+PROFILES["wotlk"] = {**PROFILES["m0"], "era": {"EraProfile.Enable": "0"}}
+
+ERA_CONF = "mod_era_profile.conf"     # modules/mod-era-profile/conf/mod_era_profile.conf.dist, installed to etc/modules
 
 
 def overrides(name: str, population_n: int | None = None) -> dict[str, dict[str, str]]:
@@ -175,6 +182,8 @@ def write_all(world_datadir: Path | None = None, extra_world: dict | None = None
             ov |= prof["playerbots"]
             # command server binds 0.0.0.0 with no address option (PlayerbotCommandServer.cpp:62); off in every profile.
             ov["AiPlayerbot.CommandServerPort"] = "0"
+        elif dist.name == ERA_CONF + ".dist":
+            ov |= prof.get("era", {})
         render(dist, dist.with_suffix(""), ov)
         rendered.append(dist.with_suffix("").name)
     return {"authserver.conf": auth, "worldserver.conf": world, "modules": rendered, "profile": profile_name(profile)}
