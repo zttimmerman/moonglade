@@ -72,6 +72,10 @@ CMSG_TIME_SYNC_RESP = 0x391
 SMSG_GM_MESSAGECHAT = 0x3B3
 CMSG_KEEP_ALIVE = 0x407
 MSG_MOVE_HEARTBEAT = 0x0EE
+# object updates and XP log (m3-vanilla-mode era checks; same Opcodes.h)
+SMSG_UPDATE_OBJECT = 0x0A9
+SMSG_LOG_XPGAIN = 0x1D0
+SMSG_COMPRESSED_UPDATE_OBJECT = 0x1F6   # u32 uncompressed size + zlib stream (WorldSocket.cpp CompressIfNeeded)
 
 OPCODE_NAMES = {v: k for k, v in list(globals().items()) if k.startswith(("CMSG_", "SMSG_")) and isinstance(v, int)}
 
@@ -102,6 +106,20 @@ MEMBER_STATUS_ONLINE = 0x0001
 QUEST_PARTY_MSG = {0: "SHARING_QUEST", 1: "CANT_TAKE_QUEST", 2: "ACCEPT_QUEST", 3: "DECLINE_QUEST", 4: "BUSY",
                    5: "LOG_FULL", 6: "HAVE_QUEST", 7: "FINISH_QUEST", 8: "CANT_BE_SHARED_TODAY",
                    9: "SHARING_TIMER_EXPIRED", 10: "NOT_IN_PARTY"}
+
+# ObjectUpdateType: src/server/game/Entities/Object/Updates/UpdateData.h. The probe parses only VALUES and the
+# guid-list blocks; a create/movement block (variable-length movement data) ends parsing of that packet.
+UPDATETYPE_VALUES = 0
+UPDATETYPE_OUT_OF_RANGE_OBJECTS = 4
+UPDATETYPE_NEAR_OBJECTS = 5
+# Update field indices: src/server/game/Entities/Object/Updates/UpdateFields.h (OBJECT_END = 0x0006,
+# UNIT_END = OBJECT_END + 0x008E, UNIT_FIELD_LEVEL = OBJECT_END + 0x0030, PLAYER_XP = UNIT_END + 0x01E6,
+# PLAYER_NEXT_LEVEL_XP = UNIT_END + 0x01E7)
+OBJECT_END = 0x0006
+UNIT_END = OBJECT_END + 0x008E
+UNIT_FIELD_LEVEL = OBJECT_END + 0x0030
+PLAYER_XP = UNIT_END + 0x01E6
+PLAYER_NEXT_LEVEL_XP = UNIT_END + 0x01E7
 
 # ObjectGuid high parts (src/server/game/Entities/Object/ObjectGuid.h enum HighGuid): GUID = high << 48 | ...
 HIGHGUID_PLAYER = 0x0000

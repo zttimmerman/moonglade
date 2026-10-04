@@ -432,6 +432,18 @@ class WorldSession:
             self._emit("logout_response", result=result, instant=instant)
         elif op == W.SMSG_LOGOUT_COMPLETE:
             self._emit("logout_complete")
+        elif op == W.SMSG_LOG_XPGAIN:
+            self._emit("xp_gain", **parse_log_xpgain(data))
+        elif op in (W.SMSG_UPDATE_OBJECT, W.SMSG_COMPRESSED_UPDATE_OBJECT):
+            # only our own character's VALUES blocks become events (creature updates would flood the list)
+            try:
+                blocks, _stop = parse_values_updates(data, compressed=(op == W.SMSG_COMPRESSED_UPDATE_OBJECT))
+            except Exception:   # noqa: BLE001  (a malformed/unsupported packet must not kill the pump)
+                self.ignored["update_object_parse_error"] = self.ignored.get("update_object_parse_error", 0) + 1
+                return
+            for b in blocks:
+                if self.player_guid is not None and b["guid"] == self.player_guid:
+                    self._emit("self_values", fields=b["fields"])
         else:
             name = W.OPCODE_NAMES.get(op, hex(op))
             self.ignored[name] = self.ignored.get(name, 0) + 1
@@ -584,6 +596,47 @@ def parse_chat(data: bytes, gm: bool = False) -> dict:
     r.u32()                       # message length + 1
     ev["msg"] = r.cstr()
     return ev
+
+
+def parse_log_xpgain(data: bytes) -> dict:
+    """SMSG_LOG_XPGAIN (Player::SendLogXPGain, Player.cpp): u64 victim guid, u32 given XP (incl. bonus), u8 type
+    (0 kill, 1 non-kill), [kill: u32 XP without bonus, float group rate], u8 recruit-a-friend."""
+    r = W.Reader(data)
+    victim, xp, kind = r.u64(), r.u32(), r.u8()
+    ev = {"victim": victim, "xp": xp, "kill": kind == 0}
+    if kind == 0:
+        ev["xp_without_bonus"] = r.u32()
+        r.f32()
+    ev["raf"] = r.u8()
+    return ev
+
+
+def parse_values_updates(data: bytes, compressed: bool = False) -> tuple[list[dict], str | None]:
+    """SMSG_(COMPRESSED_)UPDATE_OBJECT (UpdateData::BuildPacket): u32 block count, then blocks. VALUES blocks
+    (Object::BuildValuesUpdateBlockForPlayer / BuildValuesUpdate): u8 type, packed guid, u8 mask block count, the mask
+    (u32 each), then one u32 per set bit in index order. Returns ([{"guid", "fields": {index: u32}}], stop reason or
+    None); parsing stops at the first block that isn't VALUES or a guid list."""
+    if compressed:
+        data = zlib.decompress(data[4:])
+    r = W.Reader(data)
+    out = []
+    for _ in range(r.u32()):
+        t = r.u8()
+        if t == W.UPDATETYPE_VALUES:
+            guid = r.packed_guid()
+            masks = [r.u32() for _ in range(r.u8())]
+            fields = {}
+            for bi, m in enumerate(masks):
+                for bit in range(32):
+                    if (m >> bit) & 1:
+                        fields[bi * 32 + bit] = r.u32()
+            out.append({"guid": guid, "fields": fields})
+        elif t in (W.UPDATETYPE_OUT_OF_RANGE_OBJECTS, W.UPDATETYPE_NEAR_OBJECTS):
+            for _ in range(r.u32()):
+                r.packed_guid()
+        else:
+            return out, f"block type {t} not parsed"
+    return out, None
 
 
 def parse_group_list(data: bytes) -> dict:
