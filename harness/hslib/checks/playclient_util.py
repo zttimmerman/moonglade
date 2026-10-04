@@ -139,7 +139,11 @@ def db_ready() -> bool:
 def account_state(name: str) -> dict:
     """auth.account last_login (epoch) and online flag for `name` (read-only)."""
     from .. import db
-    rows = db.query(f"SELECT UNIX_TIMESTAMP(last_login), online FROM account WHERE username='{name.upper()}'", "auth")
+    try:
+        rows = db.query(f"SELECT UNIX_TIMESTAMP(last_login), online FROM account WHERE username='{name.upper()}'",
+                        "auth")
+    except db.SQLError as e:          # e.g. the play loop already shut the stack down after the client quit
+        return {"exists": None, "error": str(e)[:200]}
     if not rows:
         return {"exists": False}
     ll, online = rows[0]

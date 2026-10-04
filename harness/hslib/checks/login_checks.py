@@ -85,6 +85,8 @@ def auto_login(ctx):
             st |= {"t": round(time.time() - up["t"], 1),
                    "chars_received": bool(re.search(r"COP_GET_CHARACTERS code=\d+ result=TRUE", conn))}
             samples.append(st)
+            if run.proc.poll() is not None:          # the client quit and ./play shut down: stop waiting
+                return {"play_exited": run.proc.returncode, **st}
             ok = (st.get("last_login") or 0) > (base.get("last_login") or 0) and st.get("online") == 1 \
                 and st["chars_received"]
             return st if ok else None
@@ -92,7 +94,8 @@ def auto_login(ctx):
         ev["samples"] = samples[-5:]
         ev["login_seen"] = hit
         ev["connection_log"] = connection_log(scratch)[-1500:]
-        require(hit is not None, f"no login + character list within {LOGIN_LIMIT} s of the client starting", **ev)
+        require(hit is not None and "play_exited" not in hit,
+                f"no login + character list within {LOGIN_LIMIT} s of the client starting", **ev)
         _finish(run, ev)
         _no_secret(ev)
         require(not ev["password_in_play_last_json"], "the password appears in play-last.json", **ev)
