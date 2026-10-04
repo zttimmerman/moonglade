@@ -60,7 +60,7 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 - The app needs macOS Documents-folder permission (repo is in ~/Documents); granted 2026-10-04 for `local.hearthstone.app`. Don't change the bundle id or designated requirement, or macOS re-prompts.
 
 ## Roadmap and backlog (groomed 2026-10-04)
-**Now:** in-client login screen (verifying) → **launcher polish** (Zach moved it before M4, 2026-10-04: one Dock icon that focuses the game + loading screen with stages; research spike running in a worktree, branch `spike/launcher-polish`, no stack use) → **M4 solo dungeons** (human gate: Zach plays two dungeons; review M2 budget loosenings there).
+**Now:** in-client login screen (verifying) → **launcher polish** (change `launcher-polish`; ADR-0010 Wine host shim accepted by Zach 2026-10-04, option A: one Dock icon; loading screen with stages, launches when the world is ready and shows the bot count; builds after the login verifier frees the stack) → **M4 solo dungeons** (human gate: Zach plays two dungeons; review M2 budget loosenings there).
 
 **M5 (after M4), proposed order:**
 1. **Solo-first feature audit (Zach, 2026-10-04).** Principle: every MMO feature either serves solo play or gets hidden. Hide: global chat channels, trade/LFG/guild-recruitment noise, anything waiting on strangers. Keep: visible bots, instant groups, useful systems. Mostly config/module work.
