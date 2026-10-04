@@ -42,7 +42,7 @@ HSFrontMenuState = state;
 -- ---------------------------------------------------------------- test hook marks
 
 -- Test hook: only when the generated HSProfiles.lua carries HS_TEST (harness checks). Records `event` in
--- HSFrontMenuState.testLog; the "showlog" script action puts it on screen (HSMenuTitle) so a screenshot carries it.
+-- HSFrontMenuState.testLog (in memory; checks read the marker squares and server/client logs instead).
 function HSFrontMenu_Mark(event)
 	if ( not HS_TEST ) then return; end
 	if ( state.testLog ~= "" ) then state.testLog = state.testLog .. ";"; end
@@ -416,9 +416,35 @@ end
 -- "backdrop:TBC" | "menu:settings" | "key:DOWN" | ...}, ... }; HS_TEST.quit_after_charlist = seconds. "continue"
 -- clicks the Continue button once (the same handler a mouse click runs); "key:X" calls the login screen's own
 -- key handler; nothing here injects keystrokes into the client.
+-- Marker colours (HS_TEST.marker): backdrop and music squares red / green / blue for the 1st / 2nd / 3rd entry of
+-- HS_BACKDROPS (by model requested and by CurrentGlueMusic, independently); menu square white while the main menu is
+-- up, magenta otherwise. harness/hslib/checks/login_checks.py decodes them from the screenshots.
+local MARK_RGB = { {1, 0, 0}, {0, 1, 0}, {0, 0, 1} };
+
+function HSFrontMenu_UpdateMarker()
+	local bi, mi = 0, 0;
+	for i, b in ipairs(HS_BACKDROPS) do
+		if ( state.backdrop == b ) then bi = i; end
+		if ( CurrentGlueMusic == b.music ) then mi = i; end
+	end
+	local function paint(tex, i)
+		local c = MARK_RGB[i] or {0, 0, 0};
+		tex:SetTexture(c[1], c[2], c[3], 1);
+	end
+	paint(HSTestMarkerBackdrop, bi);
+	paint(HSTestMarkerMusic, mi);
+	if ( state.menu == "main" and HSMenuPanel:IsVisible() ) then
+		HSTestMarkerMenu:SetTexture(1, 1, 1, 1);
+	else
+		HSTestMarkerMenu:SetTexture(1, 0, 1, 1);
+	end
+	HSTestMarker:Show();
+end
+
 function HSFrontMenu_TestUpdate(self, elapsed)
 	if ( not HS_TEST or not state.shown ) then return; end
 	state.testClock = state.testClock + elapsed;
+	if ( HS_TEST.marker ) then HSFrontMenu_UpdateMarker(); end
 	if ( HS_TEST.script ) then
 		for i, step in ipairs(HS_TEST.script) do
 			if ( not state.testDone[i] and state.testClock >= step.t ) then
@@ -441,10 +467,6 @@ function HSFrontMenu_TestUpdate(self, elapsed)
 				elseif ( act == "enterworld" ) then
 					HSFrontMenu_Mark("press:enterworld");
 					EnterWorld();
-				elseif ( act == "showlog" ) then
-					HSMenuTitle:Show();
-					HSMenuTitle:SetText(state.testLog .. " | saved=" .. (GetSavedAccountName() or "") .. "/"
-					                  .. (GetSavedAccountList() or ""));
 				elseif ( strsub(act, 1, 9) == "backdrop:" ) then
 					local b = backdropByKey(strsub(act, 10));
 					if ( b ) then HSFrontMenu_ApplyBackdrop(b, true); end

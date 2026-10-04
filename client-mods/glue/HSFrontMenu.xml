@@ -118,6 +118,41 @@
 		</Scripts>
 	</Frame>
 
+	<!-- Test hook only (HS_TEST.marker): three solid squares, top right, that encode the menu's state in the client's
+	     own screenshots (backdrop, music, main menu shown). Hidden unless a harness check asks for them. -->
+	<Frame name="HSTestMarker" parent="GlueParent" frameStrata="FULLSCREEN_DIALOG" hidden="true">
+		<Size x="150" y="40"/>
+		<Anchors>
+			<Anchor point="TOPRIGHT">
+				<Offset>
+					<AbsDimension x="-10" y="-10"/>
+				</Offset>
+			</Anchor>
+		</Anchors>
+		<Layers>
+			<Layer level="OVERLAY">
+				<Texture name="HSTestMarkerBackdrop">
+					<Size x="40" y="40"/>
+					<Anchors>
+						<Anchor point="LEFT"/>
+					</Anchors>
+				</Texture>
+				<Texture name="HSTestMarkerMusic">
+					<Size x="40" y="40"/>
+					<Anchors>
+						<Anchor point="CENTER"/>
+					</Anchors>
+				</Texture>
+				<Texture name="HSTestMarkerMenu">
+					<Size x="40" y="40"/>
+					<Anchors>
+						<Anchor point="RIGHT"/>
+					</Anchors>
+				</Texture>
+			</Layer>
+		</Layers>
+	</Frame>
+
 	<!-- Test hook only (HS_TEST in HSFrontMenu.lua): character-list marker and scripted actions -->
 	<Frame name="HSFrontMenuEvents" parent="GlueParent">
 		<Scripts>

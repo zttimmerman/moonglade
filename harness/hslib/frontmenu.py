@@ -104,23 +104,24 @@ def last_character(account: str) -> dict | None:
     return {"name": n, "level": int(lvl), "class": int(cls)}
 
 
-def continue_context(account: str, profile_name: str, several: bool, classes: dict[int, str] | None = None) -> str:
+def continue_context(account: str, profile_name: str, several: bool, classes: dict[int, str] | None = None,
+                     dbc_dir: Path | None = None) -> str:
     """The line under Continue: "<character> · Level <n> <class>" (class name from ChrClasses.dbc), or
     "No characters yet"; " · <profile>" is appended when there are several profiles. Never credentials."""
     from . import dbc
     ch = last_character(account)
     if ch:
-        classes = classes if classes is not None else dbc.class_names()
+        classes = classes if classes is not None else dbc.class_names(*([dbc_dir] if dbc_dir else []))
         line = f"{ch['name']} {DOT} Level {ch['level']} {classes.get(ch['class'], 'class ' + str(ch['class']))}"
     else:
         line = NO_CHARACTERS
     return f"{line} {DOT} {profile_name}" if several else line
 
 
-def with_context(profiles: list[dict]) -> list[dict]:
-    """profiles + a "context" line each (needs the stack's database)."""
+def with_context(profiles: list[dict], dbc_dir: Path | None = None) -> list[dict]:
+    """profiles + a "context" line each (needs the stack's database). dbc_dir: test-only (a scratch ChrClasses.dbc)."""
     several = len(profiles) > 1
-    return [p | {"context": continue_context(p["account"], p.get("name") or p["account"], several)}
+    return [p | {"context": continue_context(p["account"], p.get("name") or p["account"], several, dbc_dir=dbc_dir)}
             for p in profiles]
 
 

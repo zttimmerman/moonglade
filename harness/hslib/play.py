@@ -28,8 +28,8 @@ the game client. `patched` (default): the play client env/client-play/, (re)buil
 `clientbuild.build` (a no-op when up to date), whose login screen lists the profiles and logs in by itself; the
 profile file with the login is generated into the play client at each start and removed at cleanup (frontmenu.py).
 `stock`: the untouched client/, exactly as before (type the login). Test-only: $HS_PLAY_CLIENT_DIR builds/uses a
-scratch play client instead of env/client-play/ (needs --allow-test-client-dir), $HS_GLUE_TEST passes the GlueXML
-test hook (frontmenu.py).
+scratch play client instead of env/client-play/ (needs --allow-test-client-dir), $HS_PLAY_SKIP_PATCHES leaves
+patches out of that scratch build (counterexamples), $HS_GLUE_TEST passes the GlueXML test hook (frontmenu.py).
 """
 from __future__ import annotations
 
@@ -204,6 +204,7 @@ def client_processes(name: str) -> list[dict]:
 
 
 PLAY_CLIENT_ENV = "HS_PLAY_CLIENT_DIR"
+SKIP_ENV = "HS_PLAY_SKIP_PATCHES"      # test-only (counterexamples): build the scratch play client without these patches
 
 
 def play_client_dir() -> Path:
@@ -251,7 +252,10 @@ class Loop:
             mode = settings.client_mode()["mode"]
             if mode == "patched":
                 dest = play_client_dir()
-                b = clientbuild.build(dest=dest)
+                skip = tuple(x for x in os.environ.get(SKIP_ENV, "").split(",") if x)
+                if skip and not os.environ.get(PLAY_CLIENT_ENV):
+                    raise clientbuild.ClientBuildError(f"${SKIP_ENV} is test-only and needs ${PLAY_CLIENT_ENV}")
+                b = clientbuild.build(dest=dest, skip=skip)
                 launch.select_client(dest)
                 info = {"mode": mode, "dir": str(dest), "built": b["built"], "reason": b.get("reason"),
                         "outputs": b["stamp"]["outputs"], "state": b["stamp"].get("state")}
