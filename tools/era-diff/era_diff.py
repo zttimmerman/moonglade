@@ -872,6 +872,16 @@ NOT_IN_DB = {
 # --------------------------------------------------------------------------- --emit-sql (m3 task 1.2)
 SQL_DIR = ROOT / "modules/mod-era-profile/data/sql/db-world"
 QUEST_XP_KEEP_PCT = 5       # Gate 1 Decision 2: quests whose VMaNGOS XP is within +-5% of AC's keep AC's XP
+# Gate 1 Decision 3 "Outdoor elites: restored together with their elite HP" (orchestrator scope decision, m3 task 2.3,
+# design.md "Elite HP scope"): a creature_stats HealthModifier change is emitted only for creatures whose VMaNGOS rank
+# is an elite rank. Rank values: AC SharedDefines.h CreatureEliteType (0 normal, 1 elite, 2 rare-elite, 3 world boss,
+# 4 rare); VMaNGOS uses the same values (RANK_NAMES).
+ELITE_RANKS = (1, 2, 3)
+
+
+def elite_hp_in_scope(vm_rank):
+    """Elite-HP scope rule: HealthModifier is applied only where the VMaNGOS rank is elite, rare-elite or boss."""
+    return vm_rank in ELITE_RANKS
 
 
 def sql_lit(v):
@@ -903,8 +913,9 @@ EMIT_TABLES = {
     "era_creature_template": (
         "creature_template", [("entry", "INT UNSIGNED")],
         [("rank", "TINYINT UNSIGNED", "VMaNGOS creature_template.rank; NULL = keep AC"),
-         ("HealthModifier", "FLOAT", "derived from VMaNGOS health_multiplier (era_diff cat_creature_stats); NULL = keep AC")],
-        "Gate 1 #3/#4: outdoor 1-60 creatures: vanilla rank and HealthModifier (damage/armor deferred)."),
+         ("HealthModifier", "FLOAT", "derived from VMaNGOS health_multiplier (era_diff cat_creature_stats); only VMaNGOS elite ranks (ELITE_RANKS); NULL = keep AC")],
+        "Gate 1 #3/#4: outdoor 1-60 creatures: vanilla rank, and vanilla HealthModifier only where the VMaNGOS rank "
+        "is elite/rare-elite/boss (elite HP); damage/armor deferred."),
     "era_item_template": (
         "item_template", [("entry", "INT UNSIGNED")],
         [("RequiredLevel", "TINYINT UNSIGNED", "VMaNGOS item_template.required_level; NULL = keep AC"),
@@ -955,8 +966,9 @@ def emit_rows(c, snap):
     for r in cat_outdoor_elite(c):
         if r["status"] == "change":
             cre.setdefault(r["entry"], {})["rank"] = r["proposed"]
+    vmc = c.vm_creatures()
     for r in cat_creature_stats(c):
-        if r["status"] == "change" and r["field"] == "HealthModifier":
+        if r["status"] == "change" and r["field"] == "HealthModifier" and elite_hp_in_scope(vmc[r["entry"]]["rank"]):
             cre.setdefault(r["entry"], {})["HealthModifier"] = float(r["proposed"])
     rows["era_creature_template"] = sorted(
         (e, v.get("rank"), v.get("HealthModifier"), snap, "creature_template", f"entry={e}")

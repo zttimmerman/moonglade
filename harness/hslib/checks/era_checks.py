@@ -1,16 +1,18 @@
 """era-profile (openspec/changes/m3-vanilla-mode): vanilla mode for levels 1-60.
 
 Expected values come from the source data at check time (hslib/era.py), observed values from the running server
-through the probe (our own update fields, SMSG_LOG_XPGAIN). The checks use the default profile (m0), which sets no
-EraProfile override, so they test the shipped default (vanilla on). Counterexample: the `wotlk` profile
-(EraProfile.Enable = 0) must make era.default_on, era.xp_curve and era.quest_xp fail."""
+through the probe (our own update fields, SMSG_LOG_XPGAIN, creature/item queries, the trainer window, `.npc info` as
+the companion GM character). The checks use the default profile (m0), which sets no EraProfile override, so they test
+the shipped default (vanilla on); era.toggle_roundtrip and era.scope_guard also restart with the `wotlk` profile
+(EraProfile.Enable = 0) and back. Counterexample: the `wotlk` profile must make the vanilla spot checks fail."""
 import hashlib
+import math
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
 
-from .. import config, era as E, paths as P
+from .. import config, db, era as E, paths as P, stack
 from ..probe import client as probe
 from ..registry import check, require
 
@@ -149,21 +151,494 @@ def quest_xp(ctx):
     return ev
 
 
-# ------------------------------------------------------------------------------------------------ not built yet
-# Spec scenarios of later m3 tasks. Registered so report.coverage sees their ids; they FAIL until their task
-# replaces them (a full run stays red until then). Not quick: a quick run doesn't cover scenarios.
-
-def _not_yet(task: str):
-    def fn(ctx):
-        require(False, f"not implemented yet (openspec/changes/m3-vanilla-mode task {task})", task=task)
-    return fn
 
 
-for _id, _order, _task, _doc in (
-        ("era.elites", 144, "2.3", "Creatures 678, 436, 623 have vanilla rank and HP; a map-571 creature is unchanged."),
-        ("era.mounts", 145, "2.4", "Mount items 2411/18766 and riding 33388/33391 have vanilla levels and prices."),
-        ("era.toggle_roundtrip", 146, "2.5", "Each mode shows its own values; the character is unchanged by switching."),
-        ("era.scope_guard", 147, "2.5", "Out-of-scope rows are byte-identical to stock; changed rows = report count.")):
-    _fn = _not_yet(_task)
-    _fn.__doc__ = f"NOT IMPLEMENTED (task {_task}): {_doc}"
-    check(_id, order=_order, capability="era-profile", stack="any", tier="full")(_fn)
+# ------------------------------------------------------------------------------------------------ elites (task 2.3)
+
+ELITE_CREATURES = (678, 436, 623)    # spec: Mosh'Ogg Mauler, Blackrock Shadowcaster, Skeletal Miner
+ELITE_RANKS = (1, 2, 3)              # elite, rare-elite, world boss (SharedDefines.h CreatureEliteType)
+
+
+def _stock_creature(entry: int) -> dict:
+    """Stock rank/HealthModifier of an in-scope creature: the module's captured baseline (the live stock row before
+    its first apply), else the live row (the module never applied it)."""
+    r = db.query(f"SELECT `rank`, HealthModifier FROM era_baseline_creature_template WHERE entry = {entry}", "world")
+    src = "era_baseline_creature_template"
+    if not r:
+        r = db.query(f"SELECT `rank`, HealthModifier FROM creature_template WHERE entry = {entry}", "world")
+        src = "creature_template (not captured)"
+    return {"rank": int(r[0][0]), "HealthModifier": float(r[0][1]), "source": src}
+
+
+def _template_shape(entry: int) -> dict:
+    """Columns the module never writes that the HP formula needs (exp, unit_class), from the live template."""
+    exp, cls = db.query(f"SELECT exp, unit_class FROM creature_template WHERE entry = {entry}", "world")[0]
+    return {"exp": int(exp), "unit_class": int(cls)}
+
+
+@check("era.elites", order=144, capability="era-profile", stack="up", tier="quick")
+def elites(ctx):
+    """On the running server, creatures 678, 436 and 623 have VMaNGOS's elite rank (creature query) and max HP =
+    base HP x VMaNGOS HealthModifier at their spawned level (`.npc info`), and a map-571 creature is unchanged from
+    the pinned core's stock data."""
+    cases = []
+    for e in ELITE_CREATURES:
+        v = E.vm_creature(e)
+        cases.append({"entry": e, "name": v["name"], "vm": {k: v[k] for k in ("rank", "health_multiplier", "unit_class",
+                      "level_min", "level_max")}, "stock": _stock_creature(e), "shape": _template_shape(e)})
+    ev = {"source": "VMaNGOS snapshot creature_template/creature_classlevelstats (era_diff.VM); AC "
+                    "creature_classlevelstats; Rate.Creature.*.HP from worldserver.conf", "cases": cases}
+    for c in cases:
+        require(c["vm"]["rank"] in ELITE_RANKS, f"creature {c['entry']}: VMaNGOS rank {c['vm']['rank']} is not elite",
+                **ev)
+        require(c["vm"]["rank"] != c["stock"]["rank"], f"creature {c['entry']}: stock rank equals VMaNGOS's (check "
+                                                       "could not tell the modes apart)", **ev)
+    nr_cands = _run(lambda: E.northrend_candidates())
+    ev["northrend_rule"] = E.NORTHREND_RULE
+    with E.Session(gm=True) as s:
+        for c in cases:
+            c["creature_query"] = _run(lambda: s.ws.query_creature(c["entry"]))
+            c["live"] = _run(lambda: E.inspect_spawn(s, c["entry"], E.spawn_rows(c["entry"])))
+            L = c["live"]["npc_info"]["level"]
+            ac_base = E.ac_base_hp(L, c["shape"]["unit_class"], c["shape"]["exp"])
+            vm_base = E.vm_base_hp(L, c["vm"]["unit_class"])
+            c["hp"] = {"level": L, "ac_basehp": ac_base, "vm_base_health": vm_base,
+                       "expected_max": E.creature_max_hp(ac_base, c["vm"]["health_multiplier"], c["vm"]["rank"]),
+                       "vmangos_hp": math.ceil(vm_base * c["vm"]["health_multiplier"]),
+                       "stock_max": E.creature_max_hp(ac_base, c["stock"]["HealthModifier"], c["stock"]["rank"]),
+                       "observed_max": c["live"]["npc_info"]["max_health"]}
+        nr = None
+        tried = []
+        for cand in nr_cands:
+            try:
+                live = E.inspect_spawn(s, cand["entry"], E.spawn_rows(cand["entry"], {E.NORTHREND_MAP}), max_tries=2)
+            except E.EraError as e:
+                tried.append({"entry": cand["entry"], "error": str(e)})
+                continue
+            nr = cand | {"live": live, "creature_query": _run(lambda: s.ws.query_creature(cand["entry"]))}
+            break
+        ev["northrend_tried_before"] = tried
+    require(nr is not None, "no map-571 candidate answered `.npc info`", **ev)
+    b = nr["base_sql"]
+    nr["live_db"] = dict(zip(("rank", "HealthModifier"), db.query(
+        f"SELECT `rank`, HealthModifier FROM creature_template WHERE entry = {nr['entry']}", "world")[0]))
+    nr["in_module_tables"] = {t: bool(db.scalar(f"SELECT COUNT(*) FROM {t} WHERE entry = {nr['entry']}", "world") != "0")
+                              for t in ("era_creature_template", "era_baseline_creature_template")}
+    L = nr["live"]["npc_info"]["level"]
+    nr["hp"] = {"level": L, "ac_basehp": E.ac_base_hp(L, int(b["unit_class"]), int(b["exp"])),
+                "observed_max": nr["live"]["npc_info"]["max_health"]}
+    nr["hp"]["expected_max"] = E.creature_max_hp(nr["hp"]["ac_basehp"], float(b["HealthModifier"]), int(b["rank"]))
+    ev["northrend"] = nr
+    bad = []
+    for c in cases:
+        q, hp = c["creature_query"], c["hp"]
+        if hp["ac_basehp"] != hp["vm_base_health"]:
+            bad.append(f"{c['entry']}: base HP tables disagree at level {hp['level']}")
+        if q["rank"] != c["vm"]["rank"]:
+            bad.append(f"{c['entry']}: rank {q['rank']}, VMaNGOS {c['vm']['rank']}")
+        if abs(q["health_modifier"] - E.f32(c["vm"]["health_multiplier"])) > 1e-4:
+            bad.append(f"{c['entry']}: HealthModifier {q['health_modifier']}, VMaNGOS {c['vm']['health_multiplier']}")
+        if hp["observed_max"] != hp["expected_max"]:
+            bad.append(f"{c['entry']}: max HP {hp['observed_max']} at level {hp['level']}, expected "
+                       f"{hp['expected_max']} (stock would be {hp['stock_max']})")
+        if hp["expected_max"] == hp["stock_max"]:
+            bad.append(f"{c['entry']}: vanilla and stock max HP are equal at level {hp['level']}")
+    if any(nr["in_module_tables"].values()):
+        bad.append(f"map-571 creature {nr['entry']} has rows in the module's tables: {nr['in_module_tables']}")
+    if int(nr["live_db"]["rank"]) != int(b["rank"]) or \
+            abs(float(nr["live_db"]["HealthModifier"]) - float(b["HealthModifier"])) > 1e-6:
+        bad.append(f"map-571 creature {nr['entry']}: world DB row {nr['live_db']} differs from stock {b}")
+    if nr["creature_query"]["rank"] != int(b["rank"]):
+        bad.append(f"map-571 creature {nr['entry']}: rank {nr['creature_query']['rank']}, stock {b['rank']}")
+    if abs(nr["creature_query"]["health_modifier"] - E.f32(float(b["HealthModifier"]))) > 1e-4:
+        bad.append(f"map-571 creature {nr['entry']}: HealthModifier {nr['creature_query']['health_modifier']}, "
+                   f"stock {b['HealthModifier']}")
+    if nr["hp"]["observed_max"] != nr["hp"]["expected_max"]:
+        bad.append(f"map-571 creature {nr['entry']}: max HP {nr['hp']['observed_max']}, stock formula "
+                   f"{nr['hp']['expected_max']}")
+    ev["mismatch"] = bad
+    require(not bad, "; ".join(bad), **ev)
+    return ev
+
+
+# ------------------------------------------------------------------------------------------------ mounts (task 2.4)
+
+MOUNT_ITEMS = (2411, 18766)          # spec: Black Stallion Bridle, Swift Frostsaber
+RIDING_SPELLS = (33388, 33391)       # spec: Apprentice / Journeyman riding (AC trainer spell ids)
+UNCHANGED_RIDING = ("Expert Riding", "Artisan Riding", "Cold Weather Flying")   # spec: unchanged from stock
+
+
+def _stock_item(entry: int) -> dict:
+    r = db.query(f"SELECT RequiredLevel, RequiredSkillRank, BuyPrice FROM era_baseline_item_template WHERE entry = "
+                 f"{entry}", "world")
+    src = "era_baseline_item_template"
+    if not r:
+        r = db.query(f"SELECT RequiredLevel, RequiredSkillRank, BuyPrice FROM item_template WHERE entry = {entry}", "world")
+        src = "item_template (not captured)"
+    return {"RequiredLevel": int(r[0][0]), "RequiredSkillRank": int(r[0][1]), "BuyPrice": int(r[0][2]), "source": src}
+
+
+def vm_riding() -> dict:
+    """{AC spell: {"ReqLevel", "MoneyCost", "vm_trainer"}} for the riding spells, from era-diff's riding category
+    (VMaNGOS npc_trainer(_template) at build 5875 matched to AC trainer spells, era_diff.cat_riding_training)."""
+    ed = E.era_diff()
+    out = {}
+    for r in ed.cat_riding_training(ed.Ctx()):
+        if r["status"] != "change":
+            continue
+        for sp in r["ac_spell_ids"]:
+            out.setdefault(sp, {})[r["field"]] = r["vmangos"]
+            out[sp]["vm_trainer"] = r["vm_trainer"]
+            out[sp]["vm_spell"] = r["entry"]
+    return out
+
+
+@check("era.mounts", order=145, capability="era-profile", stack="up", tier="quick")
+def mounts(ctx):
+    """On the running server, items 2411 and 18766 show VMaNGOS's required level and price (item query), riding
+    33388/33391 show VMaNGOS's level and cost in a riding trainer's window (and in every trainer_spell row), and
+    Expert/Artisan/Cold Weather riding in the same window are unchanged from the pinned core's stock data."""
+    items = []
+    for e in MOUNT_ITEMS:
+        v = E.vm_item(e)
+        items.append({"entry": e, "name": v["name"], "vm": {k: v[k] for k in ("required_level", "required_skill_rank",
+                      "buy_price")}, "stock": _stock_item(e)})
+    vmr = vm_riding()
+    ev = {"source": "VMaNGOS snapshot item_template / npc_trainer(_template) via era_diff; stock riding from "
+                    "vendor/azerothcore-wotlk/data/sql/base/db_world/trainer_spell.sql", "items": items,
+          "vm_riding": vmr}
+    for it in items:
+        require(it["vm"]["required_level"] != it["stock"]["RequiredLevel"] and it["vm"]["buy_price"] != it["stock"]["BuyPrice"],
+                f"item {it['entry']}: VMaNGOS level/price equal stock (check could not tell the modes apart)", **ev)
+    for sp in RIDING_SPELLS:
+        require(sp in vmr and "ReqLevel" in vmr[sp] and "MoneyCost" in vmr[sp],
+                f"era-diff has no VMaNGOS level and cost for riding spell {sp}", **ev)
+    tr = _run(lambda: E.riding_trainer(RIDING_SPELLS, UNCHANGED_RIDING))
+    ev["trainer"] = {k: v for k, v in tr.items() if k != "spawns"}
+    unchanged = sorted(tr["unchanged_spells"])
+    keys = {(tr["trainer"], sp) for sp in unchanged}
+    stock = E.ac_base_rows("trainer_spell", ["TrainerId", "SpellId"], keys)
+    ev["unchanged_stock"] = {f"{t}/{sp}": {"ReqLevel": int(r["ReqLevel"]), "MoneyCost": int(r["MoneyCost"])}
+                             for (t, sp), r in stock.items()}
+    ev["unchanged_update_mentions"] = E.update_sql_mentions("trainer_spell", unchanged)
+    side = E.side_keys("era_trainer_spell", "TrainerId, SpellId")
+    require(len(stock) == len(keys), "unchanged riding spells missing from the base SQL", **ev)
+    require(not any(ev["unchanged_update_mentions"].values()), "a world-DB update touches an unchanged riding spell; "
+                                                                "its base-SQL value may not be stock", **ev)
+    require(not (keys & side), "an Expert/Artisan/Cold Weather row is in era_trainer_spell", **ev)
+    # every trainer row of the two riding spells holds the VMaNGOS values (all trainers, not just the one we open)
+    rows = db.query(f"SELECT TrainerId, SpellId, ReqLevel, MoneyCost FROM trainer_spell WHERE SpellId IN "
+                    f"({','.join(map(str, RIDING_SPELLS))}) ORDER BY TrainerId, SpellId", "world")
+    ev["riding_rows"] = rows
+    wrong_rows = [r for r in rows if int(r[2]) != vmr[int(r[1])]["ReqLevel"] or int(r[3]) != vmr[int(r[1])]["MoneyCost"]]
+    with E.Session(gm=True) as s:
+        for it in items:
+            it["item_query"] = _run(lambda: s.ws.query_item(it["entry"]))
+        live = _run(lambda: E.inspect_spawn(s, tr["creature"], tr["spawns"]))
+        ev["trainer_live"] = live
+        ev["discount"] = _run(lambda: E.price_discount(s.char, tr["faction_template"]))
+        tl = _run(lambda: s.ws.trainer_list(live["npc_info"]["guid"]))
+    ev["trainer_list"] = tl
+    shown = {x["spell"]: x for x in tl["spells"]}
+    disc = ev["discount"]["discount"]
+    bad = []
+    for it in items:
+        q = it["item_query"]
+        if q["required_level"] != it["vm"]["required_level"] or q["buy_price"] != it["vm"]["buy_price"]:
+            bad.append(f"item {it['entry']}: level {q['required_level']} price {q['buy_price']}, VMaNGOS "
+                       f"{it['vm']['required_level']} / {it['vm']['buy_price']}")
+        if q["required_skill_rank"] != it["vm"]["required_skill_rank"]:
+            bad.append(f"item {it['entry']}: riding rank {q['required_skill_rank']}, VMaNGOS {it['vm']['required_skill_rank']}")
+    for sp in RIDING_SPELLS:
+        x = shown.get(sp)
+        want = {"req_level": vmr[sp]["ReqLevel"], "money_cost": E.discounted(vmr[sp]["MoneyCost"], disc)}
+        if not x or x["req_level"] != want["req_level"] or x["money_cost"] != want["money_cost"]:
+            bad.append(f"spell {sp}: shown {x and {k: x[k] for k in want}}, VMaNGOS {want}")
+    for (t, sp), r in stock.items():
+        x = shown.get(sp)
+        want = {"req_level": int(r["ReqLevel"]), "money_cost": E.discounted(int(r["MoneyCost"]), disc)}
+        if not x or x["req_level"] != want["req_level"] or x["money_cost"] != want["money_cost"]:
+            bad.append(f"spell {sp} ({tr['unchanged_spells'][sp]}): shown {x and {k: x[k] for k in want}}, stock {want}")
+    if wrong_rows:
+        bad.append(f"trainer_spell rows without the VMaNGOS values: {wrong_rows}")
+    ev["mismatch"] = bad
+    require(not bad, "; ".join(bad), **ev)
+    return ev
+
+
+# ------------------------------------------------------------------------------------------------ toggle (task 2.5)
+
+WOTLK_PROFILE = "wotlk"              # config.PROFILES: m0 + EraProfile.Enable = 0
+TOGGLE_LEVEL = 48                    # quest 10's level, so rewarding it gives the character XP
+TOGGLE_REWARDED = QUESTS_VANILLA[0]  # quest 10 (spec spot quest; no reward items, so inventory stays bounded)
+TOGGLE_IN_LOG = E.F.QUEST_ID         # the fixture quest, left incomplete in the quest log
+SPOT_ITEM, SPOT_CREATURE, SPOT_XP_LEVEL = MOUNT_ITEMS[0], ELITE_CREATURES[0], 20
+
+
+def char_snapshot(guid: int) -> dict:
+    """The character's saved level, XP, inventory (bag, slot, item entry, count) and quest status (log rows and
+    rewarded quests) from the characters DB; money is recorded as extra evidence."""
+    lvl, xp, money, online = db.query(f"SELECT level, xp, money, online FROM characters WHERE guid = {guid}",
+                                      "characters")[0]
+    return {
+        "level": int(lvl), "xp": int(xp),
+        "inventory": db.query("SELECT ci.bag, ci.slot, ii.itemEntry, ii.count FROM character_inventory ci JOIN "
+                              f"item_instance ii ON ii.guid = ci.item WHERE ci.guid = {guid} ORDER BY ci.bag, ci.slot",
+                              "characters"),
+        "quest_status": db.query("SELECT quest, status, explored, mobcount1, mobcount2, mobcount3, mobcount4, itemcount1, "
+                                 "itemcount2, itemcount3, itemcount4, itemcount5, itemcount6, playercount FROM "
+                                 f"character_queststatus WHERE guid = {guid} ORDER BY quest", "characters"),
+        "quest_rewarded": db.query(f"SELECT quest, active FROM character_queststatus_rewarded WHERE guid = {guid} "
+                                   "ORDER BY quest", "characters"),
+        "money": int(money), "online": int(online)}
+
+
+SNAP_FIELDS = ("level", "xp", "inventory", "quest_status", "quest_rewarded")   # spec: level, XP, inventory, quests
+
+
+def _set_known_state(src: dict) -> dict:
+    """HSTEST with vanilla mode on: level TOGGLE_LEVEL, quest 10 rewarded (its XP is the character's XP), the fixture
+    quest in the log, incomplete. Deterministic on every run (`.character level` zeroes XP; both quests are
+    removed first)."""
+    ev = {}
+    with E.Session() as s:
+        ev["level"] = s.set_level(TOGGLE_LEVEL)
+        for q in (TOGGLE_REWARDED, TOGGLE_IN_LOG):
+            E.gm(f"quest remove {q} {s.char}", ok_required=False)
+        E.gm(f"quest add {TOGGLE_REWARDED} {s.char}")
+        E.gm(f"quest complete {TOGGLE_REWARDED} {s.char}")
+        since = s.ws.mark()
+        E.gm(f"quest reward {TOGGLE_REWARDED} {s.char}")
+        g = s.ws.wait_event(lambda e: e["kind"] == "xp_gain", since, E.XP_GAIN_S)
+        ev["xp_gain"] = g
+        E.gm(f"quest add {TOGGLE_IN_LOG} {s.char}")
+        guid = s.guid
+    ev["session"] = s.ev
+    want_xp = E.vanilla_quest_xp(src, TOGGLE_REWARDED)
+    snap, ok, dt = E.F.poll(lambda: char_snapshot(guid), lambda v: v["online"] == 0 and v["level"] == TOGGLE_LEVEL
+                            and v["xp"] == want_xp and [str(TOGGLE_IN_LOG), "3"] == (v["quest_status"][:1] or [[]])[0][:2]
+                            and [str(TOGGLE_REWARDED), "1"] in v["quest_rewarded"], timeout=30)
+    ev |= {"expected": {"level": TOGGLE_LEVEL, "xp": want_xp, "rewarded": TOGGLE_REWARDED, "in_log_incomplete":
+                        TOGGLE_IN_LOG}, "snapshot": snap, "saved": ok, "wait_s": dt}
+    if not ok:
+        raise E.EraError("the known character state was not saved", **ev)
+    return ev
+
+
+def _reset_toggle_state() -> dict:
+    """After the comparison: back to the fixture level with both quests removed, as the other era checks leave it."""
+    with E.Session() as s:
+        for q in (TOGGLE_REWARDED, TOGGLE_IN_LOG):
+            E.gm(f"quest remove {q} {s.char}", ok_required=False)
+        return {"level": s.set_level(E.F.LEVEL)}
+
+
+def mode_expectations(src: dict) -> dict:
+    """Spot values each mode must show, from the sources: XP needed at level 20, quest 10's XP, item 2411's level and
+    price, creature 678's rank. vanilla = VMaNGOS; stock = AC base SQL / QuestXP.dbc / the module's captured baseline."""
+    vm_xp, ac_xp = E.vm_xp_for_level(), E.ac_stock_xp_for_level()
+    vi, si = E.vm_item(SPOT_ITEM), _stock_item(SPOT_ITEM)
+    vc, sc = E.vm_creature(SPOT_CREATURE), _stock_creature(SPOT_CREATURE)
+    exp = {"vanilla": {"xp_l20": vm_xp[SPOT_XP_LEVEL], "quest10_xp": E.vanilla_quest_xp(src, TOGGLE_REWARDED),
+                       "item_level": vi["required_level"], "item_price": vi["buy_price"], "creature_rank": vc["rank"]},
+           "stock": {"xp_l20": ac_xp[SPOT_XP_LEVEL], "quest10_xp": E.stock_quest_xp(src, TOGGLE_REWARDED),
+                     "item_level": si["RequiredLevel"], "item_price": si["BuyPrice"], "creature_rank": sc["rank"]}}
+    same = [k for k in exp["vanilla"] if exp["vanilla"][k] == exp["stock"][k]]
+    if same:
+        raise E.EraError(f"spot values identical in both modes: {same}", expectations=exp)
+    return exp
+
+
+def observe_spots() -> dict:
+    """The spot values on the running server, read by the GM character (not the toggled character): our
+    PLAYER_NEXT_LEVEL_XP at level 20, SMSG_LOG_XPGAIN for quest 10, the item and creature query responses."""
+    with E.Session(gm=True) as s:
+        start_level = s.level
+        xp = s.set_level(SPOT_XP_LEVEL)
+        q = s.reward_quest(TOGGLE_REWARDED, TOGGLE_LEVEL)
+        it = s.ws.query_item(SPOT_ITEM)
+        cq = s.ws.query_creature(SPOT_CREATURE)
+        s.set_level(start_level)
+    return {"xp_l20": xp["next_level_xp"], "quest10_xp": q["xp_gained"], "item_level": it["required_level"],
+            "item_price": it["buy_price"], "creature_rank": cq["rank"]}
+
+
+def _phase(name: str, want: str, exp: dict, guid: int) -> dict:
+    """One phase: the module's startup lines, the spot values against the mode's expectations, the character."""
+    lines = E.module_log_lines()
+    tables = E.table_lines(lines)
+    obs = _run(observe_spots)
+    return {"phase": name, "mode": want, "running_profile": stack.running_profile(), "module_log_lines": lines,
+            "tables": tables, "observed": obs, "expected": exp[want],
+            "spot_mismatch": {k: {"observed": obs[k], "expected": exp[want][k]} for k in obs if obs[k] != exp[want][k]},
+            "log_ok": (any(E.ACTIVE_RE.search(l) for l in lines) if want == "vanilla" else
+                       any(E.OFF_RE.search(l) for l in lines))
+                      and bool(tables) and all(t["mode"] == ("vanilla" if want == "vanilla" else "stock")
+                                               and t["differing"] == 0 for t in tables.values()),
+            "character": char_snapshot(guid)}
+
+
+@check("era.toggle_roundtrip", order=146, capability="era-profile", stack="up", tier="full")
+def toggle_roundtrip(ctx):
+    """With the test character at a known level, XP and quest state (vanilla on), restarting with EraProfile.Enable = 0
+    shows the stock spot values and restarting with 1 shows the vanilla ones again, while the character's level, XP,
+    inventory and quest status stay identical through both switches."""
+    src = E.quest_sources()
+    exp = _run(lambda: mode_expectations(src))
+    ev = {"expectations": exp, "known_state": _run(lambda: _set_known_state(src))}
+    guid = E.F.char_guid()
+    phases = [_phase("before (vanilla on)", "vanilla", exp, guid)]
+    ev["to_wotlk"] = stack.ensure_profile(WOTLK_PROFILE)
+    phases.append(_phase(f"after restart with profile {WOTLK_PROFILE} (EraProfile.Enable = 0)", "stock", exp, guid))
+    ev["to_vanilla"] = stack.ensure_profile(config.DEFAULT_PROFILE)
+    phases.append(_phase(f"after restart with profile {config.DEFAULT_PROFILE} (EraProfile.Enable = 1)", "vanilla",
+                         exp, guid))
+    ev["phases"] = phases
+    base = ev["known_state"]["snapshot"]
+    drift = [{"phase": p["phase"], "field": f, "before": base[f], "now": p["character"][f]}
+             for p in phases for f in SNAP_FIELDS if p["character"][f] != base[f]]
+    ev["character_drift"] = drift
+    ev["cleanup"] = _run(_reset_toggle_state)
+    bad_log = [p["phase"] for p in phases if not p["log_ok"]]
+    bad_spot = {p["phase"]: p["spot_mismatch"] for p in phases if p["spot_mismatch"]}
+    require(not bad_log, f"module startup log does not show the expected mode in: {bad_log}", **ev)
+    require(not bad_spot, f"spot values differ from the mode's expectations: {bad_spot}", **ev)
+    require(not drift, f"character changed across the switches: {[(d['phase'], d['field']) for d in drift]}", **ev)
+    return ev
+
+
+# ------------------------------------------------------------------------------------------------ scope guard (2.5)
+
+def report_scope() -> dict:
+    """In-scope rows per touched table and the values vanilla mode must give them, from era-diff's report rows (the
+    same category functions that write tools/era-diff/out/report.json), with the elite-HP scope decision applied
+    here: a HealthModifier change counts only for creatures whose VMaNGOS rank is elite/rare-elite/boss
+    (design.md "Elite HP scope"). quest_template has no in-scope rows: quest XP is a runtime hook."""
+    ed = E.era_diff()
+    c = ed.Ctx()
+    vmc = c.vm_creatures()
+    out = {t: {} for t in ("player_xp_for_level", "creature_template", "item_template", "trainer_spell",
+                           "quest_template")}
+    used = {}
+    for r in ed.cat_xp_curve(c):
+        if r["status"] == "change":
+            out["player_xp_for_level"].setdefault((int(r["entry"]),), {})["Experience"] = r["proposed"]
+            used["xp_curve"] = used.get("xp_curve", 0) + 1
+    for r in ed.cat_outdoor_elite(c):
+        if r["status"] == "change":
+            out["creature_template"].setdefault((r["entry"],), {})["rank"] = r["proposed"]
+            used["outdoor_elite rank"] = used.get("outdoor_elite rank", 0) + 1
+    hp_left_out = []
+    for r in ed.cat_creature_stats(c):
+        if r["status"] == "change" and r["field"] == "HealthModifier":
+            if vmc[r["entry"]]["rank"] in ELITE_RANKS:
+                out["creature_template"].setdefault((r["entry"],), {})["HealthModifier"] = float(r["proposed"])
+                used["creature_stats HealthModifier (VMaNGOS elite)"] = used.get(
+                    "creature_stats HealthModifier (VMaNGOS elite)", 0) + 1
+            else:
+                hp_left_out.append(r["entry"])
+    for r in ed.cat_mount_items(c):
+        if r["status"] == "change":
+            out["item_template"].setdefault((r["entry"],), {})[r["field"]] = r["proposed"]
+            used["mount_items"] = used.get("mount_items", 0) + 1
+    live = {(a["TrainerId"], a["SpellId"]) for a in c.ac_trainer_spells()}
+    for r in ed.cat_riding_training(c):
+        if r["status"] == "change":
+            used["riding_training"] = used.get("riding_training", 0) + 1
+            for t in r["ac_trainers"]:
+                for sp in r["ac_spell_ids"]:
+                    if (t, sp) in live:
+                        out["trainer_spell"].setdefault((t, sp), {})[r["field"]] = r["proposed"]
+    return {"rows": out, "report_rows_used": used, "hp_rows_left_out (VMaNGOS non-elite)": sorted(hp_left_out)}
+
+
+SCOPE_KEYS = {"player_xp_for_level": ["Level"], "creature_template": ["entry"], "item_template": ["entry"],
+              "trainer_spell": ["TrainerId", "SpellId"], "quest_template": ["ID"]}
+
+
+def table_hashes(table: str, keys: list[str], era_cols: list[str]) -> dict[tuple, tuple]:
+    """{key: (md5 of the whole row, md5 of the row without the module's columns, module column values)} for every row
+    of a world table, hashed by MySQL (every column, NULL kept distinct)."""
+    cols = [r[0] for r in db.query("SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() "
+                                   f"AND TABLE_NAME = '{table}' ORDER BY ORDINAL_POSITION", "world")]
+    h = lambda cs: "MD5(CONCAT_WS(0x1f, " + ", ".join(f"IFNULL(CAST(`{x}` AS CHAR), 0x00)" for x in cs) + "))"  # noqa
+    rest = [x for x in cols if x not in era_cols]
+    extra = "".join(f", `{x}`" for x in era_cols)
+    rows = db.query(f"SELECT {', '.join(f'`{k}`' for k in keys)}, {h(cols)}, {h(rest)}{extra} FROM `{table}`", "world",
+                    timeout=300)
+    n = len(keys)
+    return {tuple(int(x) for x in r[:n]): (r[n], r[n + 1], tuple(r[n + 2:])) for r in rows}
+
+
+def _digest(rows: dict, keys) -> str:
+    m = hashlib.sha256()
+    for k in sorted(keys):
+        m.update(f"{k}:{rows[k][0] if k in rows else '-'}\n".encode())
+    return m.hexdigest()
+
+
+def _same(a: str, b) -> bool:
+    try:
+        return abs(float(a) - float(b)) <= 1e-4
+    except (TypeError, ValueError):
+        return str(a) == str(b)
+
+
+@check("era.scope_guard", order=147, capability="era-profile", stack="up", tier="full")
+def scope_guard(ctx):
+    """Every out-of-scope row of creature_template, quest_template, item_template, trainer_spell and
+    player_xp_for_level hashes identically with vanilla mode off and on; the rows that change are exactly the
+    era-diff report's in-scope rows (count and keys, elite-HP scope applied), only in the module's columns, to the
+    report's values."""
+    ed = E.era_diff()
+    scope = report_scope()
+    era_cols = {t: [x for x, _ in ed.BASELINE_COLS.get(t, [])] for t in SCOPE_KEYS}
+    ev = {"report": {"rows_used": scope["report_rows_used"],
+                     "hp_rows_left_out (VMaNGOS non-elite)": scope["hp_rows_left_out (VMaNGOS non-elite)"],
+                     "expected_changed_rows": {t: len(v) for t, v in scope["rows"].items()}},
+          "module_columns": era_cols}
+    ev["to_off"] = stack.ensure_profile(WOTLK_PROFILE)
+    ev["off_log"] = E.module_log_lines()
+    off = {t: table_hashes(t, k, era_cols[t]) for t, k in SCOPE_KEYS.items()}
+    ev["to_on"] = stack.ensure_profile(config.DEFAULT_PROFILE)
+    ev["on_log"] = E.module_log_lines()
+    on = {t: table_hashes(t, k, era_cols[t]) for t, k in SCOPE_KEYS.items()}
+    tables, bad = {}, []
+    for t in SCOPE_KEYS:
+        exp = scope["rows"][t]
+        keys = set(off[t]) | set(on[t])
+        out_keys = keys - set(exp)
+        out_diff = sorted(k for k in out_keys if off[t].get(k, (None,))[0] != on[t].get(k, (None,))[0])
+        changed = sorted(k for k in keys if off[t].get(k, (None,))[0] != on[t].get(k, (None,))[0])
+        in_other_cols = sorted(k for k in exp if k in off[t] and k in on[t] and off[t][k][1] != on[t][k][1])
+        wrong_vals, missing = [], sorted(k for k in exp if k not in on[t])
+        for k, want in exp.items():
+            if k not in on[t] or k not in off[t]:
+                continue
+            for i, col in enumerate(era_cols[t]):
+                target = want[col] if col in want else off[t][k][2][i]
+                if not _same(on[t][k][2][i], target):
+                    wrong_vals.append({"key": k, "column": col, "on": on[t][k][2][i], "want": target,
+                                       "off": off[t][k][2][i]})
+        tables[t] = {"rows_off": len(off[t]), "rows_on": len(on[t]), "out_of_scope_rows": len(out_keys),
+                     "out_of_scope_digest_off": _digest(off[t], out_keys),
+                     "out_of_scope_digest_on": _digest(on[t], out_keys),
+                     "out_of_scope_changed": out_diff[:20], "out_of_scope_changed_count": len(out_diff),
+                     "changed_rows": len(changed), "expected_changed_rows": len(exp),
+                     "in_scope_not_changed": sorted(set(exp) - set(changed))[:20],
+                     "in_scope_other_columns_changed": in_other_cols[:20], "in_scope_wrong_values": wrong_vals[:20],
+                     "in_scope_missing": missing[:20]}
+        if out_diff or len(off[t]) != len(on[t]):
+            bad.append(f"{t}: {len(out_diff)} out-of-scope rows differ (rows off {len(off[t])}, on {len(on[t])})")
+        if len(changed) != len(exp) or set(changed) != set(exp):
+            bad.append(f"{t}: {len(changed)} rows changed, era-diff report says {len(exp)}")
+        if in_other_cols or wrong_vals or missing:
+            bad.append(f"{t}: in-scope rows changed outside the module's columns ({len(in_other_cols)}), hold wrong "
+                       f"values ({len(wrong_vals)}) or are missing ({len(missing)})")
+    ev["tables"] = tables
+    ev["mismatch"] = bad
+    require(any(E.OFF_RE.search(l) for l in ev["off_log"]), "vanilla mode did not report OFF for the off snapshot", **ev)
+    require(any(E.ACTIVE_RE.search(l) for l in ev["on_log"]), "vanilla mode did not report ACTIVE for the on snapshot",
+            **ev)
+    require(not bad, "; ".join(bad), **ev)
+    return ev

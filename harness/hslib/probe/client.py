@@ -434,6 +434,12 @@ class WorldSession:
             self._emit("logout_complete")
         elif op == W.SMSG_LOG_XPGAIN:
             self._emit("xp_gain", **parse_log_xpgain(data))
+        elif op == W.SMSG_CREATURE_QUERY_RESPONSE:
+            self._emit("creature_query", **parse_creature_query(data))
+        elif op == W.SMSG_ITEM_QUERY_SINGLE_RESPONSE:
+            self._emit("item_query", **parse_item_query(data))
+        elif op == W.SMSG_TRAINER_LIST:
+            self._emit("trainer_list", **parse_trainer_list(data))
         elif op in (W.SMSG_UPDATE_OBJECT, W.SMSG_COMPRESSED_UPDATE_OBJECT):
             # only our own character's VALUES blocks become events (creature updates would flood the list)
             try:
@@ -515,6 +521,37 @@ class WorldSession:
         A standing client's position report; it makes the server re-run visibility/aggro checks around us."""
         self.send(W.MSG_MOVE_HEARTBEAT, W.pack_guid(self.player_guid)
                   + struct.pack("<IHIffffI", 0, 0, _ms(), x, y, z, o, 0))
+
+    def query_creature(self, entry: int, guid: int = 0, timeout: float = 10.0) -> dict:
+        """CMSG_CREATURE_QUERY (HandleCreatureQueryOpcode: u32 entry, u64 guid) -> the SMSG_CREATURE_QUERY_RESPONSE
+        event for that entry (static template data as the client gets it: rank, HealthModifier, ...)."""
+        since = self.mark()
+        self.send(W.CMSG_CREATURE_QUERY, struct.pack("<IQ", entry, guid))
+        e = self.wait_event(lambda e: e["kind"] == "creature_query" and e["entry"] == entry, since, timeout)
+        if e is None:
+            raise ProbeError(f"no SMSG_CREATURE_QUERY_RESPONSE for creature {entry} within {timeout} s")
+        return e
+
+    def query_item(self, entry: int, timeout: float = 10.0) -> dict:
+        """CMSG_ITEM_QUERY_SINGLE (HandleItemQuerySingleOpcode: u32 item) -> the SMSG_ITEM_QUERY_SINGLE_RESPONSE event
+        for that item (the tooltip data: price, required level, required skill rank, ...)."""
+        since = self.mark()
+        self.send(W.CMSG_ITEM_QUERY_SINGLE, struct.pack("<I", entry))
+        e = self.wait_event(lambda e: e["kind"] == "item_query" and e["entry"] == entry, since, timeout)
+        if e is None:
+            raise ProbeError(f"no SMSG_ITEM_QUERY_SINGLE_RESPONSE for item {entry} within {timeout} s")
+        return e
+
+    def trainer_list(self, guid: int, timeout: float = 10.0) -> dict:
+        """CMSG_TRAINER_LIST (WorldPackets::NPC::Hello: u64 unit guid; HandleTrainerListOpcode needs the trainer within
+        interaction range) -> the SMSG_TRAINER_LIST event (the trainer window as the client draws it)."""
+        since = self.mark()
+        self.send(W.CMSG_TRAINER_LIST, struct.pack("<Q", guid))
+        e = self.wait_event(lambda e: e["kind"] == "trainer_list" and e["guid"] == guid, since, timeout)
+        if e is None:
+            raise ProbeError(f"no SMSG_TRAINER_LIST from {guid:#x} within {timeout} s (out of range, or not a "
+                             "trainer for this character?)")
+        return e
 
     def set_selection(self, guid: int):
         """CMSG_SET_SELECTION: uint64 target guid (what clicking a unit does)."""
@@ -608,6 +645,70 @@ def parse_log_xpgain(data: bytes) -> dict:
         ev["xp_without_bonus"] = r.u32()
         r.f32()
     ev["raf"] = r.u8()
+    return ev
+
+
+def parse_creature_query(data: bytes) -> dict:
+    """SMSG_CREATURE_QUERY_RESPONSE (QueryHandler.cpp HandleCreatureQueryOpcode): u32 entry (high bit set = unknown
+    entry), name, 3 empty names, subname, icon name, u32 type_flags, type, family, rank, 2 kill credits, 4 display ids,
+    float ModHealth, float ModMana, u8 racial leader, quest items, u32 movement id."""
+    r = W.Reader(data)
+    entry = r.u32()
+    if entry & 0x80000000:
+        return {"entry": entry & 0x7FFFFFFF, "known": False}
+    name = r.cstr()
+    for _ in range(3):
+        r.cstr()
+    ev = {"entry": entry, "known": True, "name": name, "subname": r.cstr(), "icon": r.cstr()}
+    ev |= {"type_flags": r.u32(), "type": r.u32(), "family": r.u32(), "rank": r.u32()}
+    r.u32(), r.u32()
+    ev["display_ids"] = [r.u32() for _ in range(4)]
+    ev["health_modifier"], ev["mana_modifier"] = r.f32(), r.f32()
+    return ev
+
+
+def parse_item_query(data: bytes) -> dict:
+    """SMSG_ITEM_QUERY_SINGLE_RESPONSE (ItemHandler.cpp HandleItemQuerySingleOpcode; ItemTemplate field types): u32
+    entry (high bit set = unknown item), class, subclass, i32 sound override, name, 3 empty names, u32 display id,
+    quality, flags, flags2, i32 BuyPrice, u32 SellPrice, InventoryType, AllowableClass, AllowableRace, ItemLevel,
+    RequiredLevel, RequiredSkill, RequiredSkillRank, ... (only the fields up to RequiredSkillRank are read)."""
+    r = W.Reader(data)
+    entry = r.u32()
+    if entry & 0x80000000:
+        return {"entry": entry & 0x7FFFFFFF, "known": False}
+    ev = {"entry": entry, "known": True, "class": r.u32(), "subclass": r.u32()}
+    r.u32()
+    ev["name"] = r.cstr()
+    for _ in range(3):
+        r.cstr()
+    ev |= {"display_id": r.u32(), "quality": r.u32(), "flags": r.u32(), "flags2": r.u32()}
+    ev["buy_price"] = struct.unpack("<i", r.take(4))[0]
+    ev |= {"sell_price": r.u32(), "inventory_type": r.u32(), "allowable_class": r.u32(), "allowable_race": r.u32(),
+           "item_level": r.u32(), "required_level": r.u32(), "required_skill": r.u32(),
+           "required_skill_rank": r.u32()}
+    return ev
+
+
+def parse_trainer_list(data: bytes) -> dict:
+    """SMSG_TRAINER_LIST (WorldPackets::NPC::TrainerList::Write, NPCPackets.cpp; TrainerListSpell in NPCPackets.h):
+    u64 trainer guid, i32 type, i32 count, per spell: i32 spell, u8 usable, i32 money cost (after the reputation
+    discount, Trainer::SendSpells), 2 x i32 point cost, u8 required level, i32 skill line, i32 skill rank, 3 x i32
+    required ability; then the greeting."""
+    r = W.Reader(data)
+    ev = {"guid": r.u64(), "type": struct.unpack("<i", r.take(4))[0]}
+    spells = []
+    for _ in range(struct.unpack("<i", r.take(4))[0]):
+        sid = struct.unpack("<i", r.take(4))[0]
+        usable = r.u8()
+        cost = struct.unpack("<i", r.take(4))[0]
+        r.take(8)
+        lvl = r.u8()
+        sk, rk = struct.unpack("<ii", r.take(8))
+        r.take(12)
+        spells.append({"spell": sid, "usable": usable, "money_cost": cost, "req_level": lvl, "req_skill": sk,
+                       "req_skill_rank": rk})
+    ev["spells"] = spells
+    ev["greeting"] = r.cstr()
     return ev
 
 

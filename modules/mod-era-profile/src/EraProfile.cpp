@@ -47,9 +47,17 @@ namespace
         std::vector<std::string> cols;
     };
 
-    // m3 task 2.2: the XP curve. Tasks 2.3/2.4 add creature_template, item_template and trainer_spell here.
+    // m3 tasks 2.2-2.4 (design.md "Hook research": none of these has a hook on both the shown and the enforced path).
     std::vector<ApplySpec> const APPLY_SPECS = {
+        // 2.2 XP per level 11-59 (ObjectMgr::LoadPlayerInfo)
         { "player_xp_for_level", "era_player_xp_for_level", { "Level" }, { "Experience" } },
+        // 2.3 outdoor elites: rank + HealthModifier (LoadCreatureTemplates). The side table carries HealthModifier
+        //     only for VMaNGOS elite ranks (design.md "Elite HP scope"); NULL keeps the stock value.
+        { "creature_template", "era_creature_template", { "entry" }, { "rank", "HealthModifier" } },
+        // 2.4 vendor mounts: required level / riding rank / price (LoadItemTemplates)
+        { "item_template", "era_item_template", { "entry" }, { "RequiredLevel", "RequiredSkillRank", "BuyPrice" } },
+        // 2.4 Apprentice/Journeyman riding at their trainers: level / cost (LoadTrainers)
+        { "trainer_spell", "era_trainer_spell", { "TrainerId", "SpellId" }, { "ReqLevel", "MoneyCost" } },
     };
 
     struct QuestXpRow
@@ -131,9 +139,14 @@ namespace
         // a. capture stock values (first capture wins). A row already equal to its vanilla value is not stock.
         uint64 suspicious = Count("SELECT COUNT(*)" + from + " WHERE " + uncaptured + " AND " + looksApplied);
         uint64 before = Count("SELECT COUNT(*) FROM " + Quoted(base));
-        WorldDatabase.DirectExecute("INSERT IGNORE INTO " + Quoted(base) + " (" + Join(s.keys, ", ") + ", " +
-                                    Join(s.cols, ", ") + ") SELECT " + Join(keyT, ", ") + ", " + Join(colT, ", ") +
-                                    from + " WHERE " + uncaptured + " AND NOT " + looksApplied);
+        std::vector<std::string> baseCols;              // quoted: `rank` is a reserved word in MySQL 8
+        for (auto const& k : s.keys)
+            baseCols.push_back(Quoted(k));
+        for (auto const& c : s.cols)
+            baseCols.push_back(Quoted(c));
+        WorldDatabase.DirectExecute("INSERT IGNORE INTO " + Quoted(base) + " (" + Join(baseCols, ", ") + ") SELECT " +
+                                    Join(keyT, ", ") + ", " + Join(colT, ", ") + from + " WHERE " + uncaptured +
+                                    " AND NOT " + looksApplied);
         uint64 captured = Count("SELECT COUNT(*) FROM " + Quoted(base)) - before;
 
         // b. apply (mode 1) or revert (mode 0) every captured row in one statement
@@ -228,7 +241,7 @@ public:
         g_active = g_enabled && ok && quest;
         if (g_active)
             LOG_INFO("server.loading", "[mod-era-profile] Vanilla mode ACTIVE ({} = 1): levels 1-60 use VMaNGOS 1.12 "
-                     "values (XP per level 11-59, quest XP)", OPT_ENABLE);
+                     "values (XP per level 11-59, quest XP, outdoor elites + elite HP, mounts + riding)", OPT_ENABLE);
         else if (!g_enabled && ok)
             LOG_INFO("server.loading", "[mod-era-profile] Vanilla mode OFF ({} = 0): stock WotLK values", OPT_ENABLE);
         else

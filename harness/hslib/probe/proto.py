@@ -76,6 +76,13 @@ MSG_MOVE_HEARTBEAT = 0x0EE
 SMSG_UPDATE_OBJECT = 0x0A9
 SMSG_LOG_XPGAIN = 0x1D0
 SMSG_COMPRESSED_UPDATE_OBJECT = 0x1F6   # u32 uncompressed size + zlib stream (WorldSocket.cpp CompressIfNeeded)
+# static-data queries and the trainer window (m3-vanilla-mode era.elites / era.mounts; same Opcodes.h)
+CMSG_ITEM_QUERY_SINGLE = 0x056
+SMSG_ITEM_QUERY_SINGLE_RESPONSE = 0x058
+CMSG_CREATURE_QUERY = 0x060
+SMSG_CREATURE_QUERY_RESPONSE = 0x061
+CMSG_TRAINER_LIST = 0x1B0
+SMSG_TRAINER_LIST = 0x1B1
 
 OPCODE_NAMES = {v: k for k, v in list(globals().items()) if k.startswith(("CMSG_", "SMSG_")) and isinstance(v, int)}
 

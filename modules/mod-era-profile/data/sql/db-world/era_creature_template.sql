@@ -4,21 +4,20 @@
 --   final 1.12 row per entry (patch <= 10; spells/trainers at build 5875).
 -- Compared against: AzerothCore world DB, core 7f12e89ee5f467a50e62eba1d525eac7dc953d03, last core DB update 2026_09_20_00.sql.
 -- Scope: entities in both DBs by entry, level <= 60, no maps [530, 571, 609]; override-only; needs-review rows omitted.
--- Gate 1 #3/#4: outdoor 1-60 creatures: vanilla rank and HealthModifier (damage/armor deferred).
--- Rows: 246.
+-- Gate 1 #3/#4: outdoor 1-60 creatures: vanilla rank, and vanilla HealthModifier only where the VMaNGOS rank is elite/rare-elite/boss (elite HP); damage/armor deferred.
+-- Rows: 233.
 
 DROP TABLE IF EXISTS `era_creature_template`;
 CREATE TABLE `era_creature_template` (
   `entry` INT UNSIGNED NOT NULL,
   `rank` TINYINT UNSIGNED NULL COMMENT 'VMaNGOS creature_template.rank; NULL = keep AC',
-  `HealthModifier` FLOAT NULL COMMENT 'derived from VMaNGOS health_multiplier (era_diff cat_creature_stats); NULL = keep AC',
+  `HealthModifier` FLOAT NULL COMMENT 'derived from VMaNGOS health_multiplier (era_diff cat_creature_stats); only VMaNGOS elite ranks (ELITE_RANKS); NULL = keep AC',
   `src_snapshot` VARCHAR(64) NOT NULL COMMENT 'VMaNGOS DB snapshot id (fork.lock vmangos_db_url)',
   `src_table` VARCHAR(64) NOT NULL COMMENT 'VMaNGOS table the value comes from',
   `src_entry` VARCHAR(64) NOT NULL COMMENT 'VMaNGOS key of the source row',
   PRIMARY KEY (`entry`)
-) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Gate 1 #3/#4: outdoor 1-60 creatures: vanilla rank and HealthModifier (damage/armor deferred).';
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT='Gate 1 #3/#4: outdoor 1-60 creatures: vanilla rank, and vanilla HealthModifier only where the VMaNGOS rank is elite/rare-elite/boss (elite HP); damage/armor deferred.';
 INSERT INTO `era_creature_template` (`entry`, `rank`, `HealthModifier`, `src_snapshot`, `src_table`, `src_entry`) VALUES
-(330,NULL,1.3000,'db-sqlite-4641790','creature_template','entry=330'),
 (397,1,NULL,'db-sqlite-4641790','creature_template','entry=397'),
 (436,1,3.0000,'db-sqlite-4641790','creature_template','entry=436'),
 (594,1,3.0000,'db-sqlite-4641790','creature_template','entry=594'),
@@ -56,7 +55,6 @@ INSERT INTO `era_creature_template` (`entry`, `rank`, `HealthModifier`, `src_sna
 (1225,1,3.0000,'db-sqlite-4641790','creature_template','entry=1225'),
 (1364,1,NULL,'db-sqlite-4641790','creature_template','entry=1364'),
 (1388,1,3.0000,'db-sqlite-4641790','creature_template','entry=1388'),
-(1533,NULL,1.0000,'db-sqlite-4641790','creature_template','entry=1533'),
 (1559,1,NULL,'db-sqlite-4641790','creature_template','entry=1559'),
 (1726,1,3.0000,'db-sqlite-4641790','creature_template','entry=1726'),
 (1788,1,3.0000,'db-sqlite-4641790','creature_template','entry=1788'),
@@ -70,8 +68,6 @@ INSERT INTO `era_creature_template` (`entry`, `rank`, `HealthModifier`, `src_sna
 (2091,1,NULL,'db-sqlite-4641790','creature_template','entry=2091'),
 (2106,1,3.0000,'db-sqlite-4641790','creature_template','entry=2106'),
 (2166,1,3.0000,'db-sqlite-4641790','creature_template','entry=2166'),
-(2252,NULL,1.1000,'db-sqlite-4641790','creature_template','entry=2252'),
-(2253,NULL,1.1500,'db-sqlite-4641790','creature_template','entry=2253'),
 (2254,1,3.0000,'db-sqlite-4641790','creature_template','entry=2254'),
 (2255,1,3.0000,'db-sqlite-4641790','creature_template','entry=2255'),
 (2256,1,3.0000,'db-sqlite-4641790','creature_template','entry=2256'),
@@ -110,11 +106,8 @@ INSERT INTO `era_creature_template` (`entry`, `rank`, `HealthModifier`, `src_sna
 (2647,1,3.7509,'db-sqlite-4641790','creature_template','entry=2647'),
 (2648,1,3.0000,'db-sqlite-4641790','creature_template','entry=2648'),
 (2681,1,3.0000,'db-sqlite-4641790','creature_template','entry=2681'),
-(2721,NULL,1.1000,'db-sqlite-4641790','creature_template','entry=2721'),
 (2738,1,3.0000,'db-sqlite-4641790','creature_template','entry=2738'),
 (2753,0,NULL,'db-sqlite-4641790','creature_template','entry=2753'),
-(2764,NULL,1.1500,'db-sqlite-4641790','creature_template','entry=2764'),
-(2765,NULL,1.1500,'db-sqlite-4641790','creature_template','entry=2765'),
 (2773,1,3.2500,'db-sqlite-4641790','creature_template','entry=2773'),
 (2780,1,3.0000,'db-sqlite-4641790','creature_template','entry=2780'),
 (2781,1,3.0000,'db-sqlite-4641790','creature_template','entry=2781'),
@@ -122,11 +115,9 @@ INSERT INTO `era_creature_template` (`entry`, `rank`, `HealthModifier`, `src_sna
 (2783,1,3.0000,'db-sqlite-4641790','creature_template','entry=2783'),
 (2892,1,NULL,'db-sqlite-4641790','creature_template','entry=2892'),
 (2932,1,NULL,'db-sqlite-4641790','creature_template','entry=2932'),
-(3203,NULL,1.0000,'db-sqlite-4641790','creature_template','entry=3203'),
 (3528,1,3.0000,'db-sqlite-4641790','creature_template','entry=3528'),
 (3530,1,3.0000,'db-sqlite-4641790','creature_template','entry=3530'),
 (3532,1,3.0000,'db-sqlite-4641790','creature_template','entry=3532'),
-(3617,NULL,1.0000,'db-sqlite-4641790','creature_template','entry=3617'),
 (3630,1,3.0000,'db-sqlite-4641790','creature_template','entry=3630'),
 (3631,1,3.0000,'db-sqlite-4641790','creature_template','entry=3631'),
 (3632,1,3.0000,'db-sqlite-4641790','creature_template','entry=3632'),
@@ -141,7 +132,6 @@ INSERT INTO `era_creature_template` (`entry`, `rank`, `HealthModifier`, `src_sna
 (4052,1,3.0000,'db-sqlite-4641790','creature_template','entry=4052'),
 (4056,1,3.0000,'db-sqlite-4641790','creature_template','entry=4056'),
 (4061,1,3.0000,'db-sqlite-4641790','creature_template','entry=4061'),
-(4063,NULL,1.1500,'db-sqlite-4641790','creature_template','entry=4063'),
 (4064,1,3.0000,'db-sqlite-4641790','creature_template','entry=4064'),
 (4065,1,3.0000,'db-sqlite-4641790','creature_template','entry=4065'),
 (4066,2,3.0000,'db-sqlite-4641790','creature_template','entry=4066'),
@@ -167,7 +157,6 @@ INSERT INTO `era_creature_template` (`entry`, `rank`, `HealthModifier`, `src_sna
 (4846,1,3.0000,'db-sqlite-4641790','creature_template','entry=4846'),
 (4856,1,3.0000,'db-sqlite-4641790','creature_template','entry=4856'),
 (4872,1,NULL,'db-sqlite-4641790','creature_template','entry=4872'),
-(4952,NULL,1.0000,'db-sqlite-4641790','creature_template','entry=4952'),
 (5224,1,3.0000,'db-sqlite-4641790','creature_template','entry=5224'),
 (5225,1,3.0000,'db-sqlite-4641790','creature_template','entry=5225'),
 (5235,1,3.0000,'db-sqlite-4641790','creature_template','entry=5235'),
@@ -211,7 +200,6 @@ INSERT INTO `era_creature_template` (`entry`, `rank`, `HealthModifier`, `src_sna
 (7977,1,3.2500,'db-sqlite-4641790','creature_template','entry=7977'),
 (7995,1,5.0000,'db-sqlite-4641790','creature_template','entry=7995'),
 (7996,1,5.0000,'db-sqlite-4641790','creature_template','entry=7996'),
-(8284,NULL,1.2000,'db-sqlite-4641790','creature_template','entry=8284'),
 (8400,1,NULL,'db-sqlite-4641790','creature_template','entry=8400'),
 (8419,1,NULL,'db-sqlite-4641790','creature_template','entry=8419'),
 (8447,1,NULL,'db-sqlite-4641790','creature_template','entry=8447'),
@@ -253,7 +241,6 @@ INSERT INTO `era_creature_template` (`entry`, `rank`, `HealthModifier`, `src_sna
 (11786,1,3.0000,'db-sqlite-4641790','creature_template','entry=11786'),
 (11787,1,3.0000,'db-sqlite-4641790','creature_template','entry=11787'),
 (11788,1,3.0000,'db-sqlite-4641790','creature_template','entry=11788'),
-(11873,NULL,1.3500,'db-sqlite-4641790','creature_template','entry=11873'),
 (11897,1,6.0000,'db-sqlite-4641790','creature_template','entry=11897'),
 (11921,1,3.0000,'db-sqlite-4641790','creature_template','entry=11921'),
 (12262,1,6.0000,'db-sqlite-4641790','creature_template','entry=12262'),
