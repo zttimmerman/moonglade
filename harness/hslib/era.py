@@ -145,8 +145,17 @@ def worldserver_log() -> str:
     return stack.LOG["worldserver"].read_text(errors="replace") if stack.LOG["worldserver"].exists() else ""
 
 
+def worldserver_err_log() -> str:
+    """The worldserver's stderr (LOG_ERROR lines, e.g. the module's FAILED and query-failure lines, land here)."""
+    from . import stack
+    f = stack.ERRLOG["worldserver"]
+    return f.read_text(errors="replace") if f.exists() else ""
+
+
 def module_log_lines(text: str | None = None) -> list[str]:
-    text = worldserver_log() if text is None else text
+    """The module's lines of the current worldserver run: stdout, then stderr (separate files, so interleaving is
+    lost; callers only match patterns)."""
+    text = (worldserver_log() + "\n" + worldserver_err_log()) if text is None else text
     return [l for l in text.splitlines() if LOG_TAG in l]
 
 

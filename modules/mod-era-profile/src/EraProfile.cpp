@@ -185,8 +185,8 @@ namespace
         bool const queryFailed = g_queryFailed;
         bool ok = !queryFailed && wrong == 0 && (!enabled || sideCaptured == sideRows);
         if (queryFailed)
-            LOG_ERROR("server.loading", "[mod-era-profile] {}: mode {}: a capture/verify query failed, so the counts "
-                      "below are not trustworthy", s.target, enabled ? "vanilla" : "stock");
+            LOG_ERROR("server.loading", "[mod-era-profile] {}: mode {}: a capture/verify query failed (see the query "
+                      "above); the table is not verified and no counts are reported", s.target, enabled ? "vanilla" : "stock");
         else
             LOG_INFO("server.loading", "[mod-era-profile] {}: mode {}, {} side-table rows, {} captured into {} ({} new), "
                      "{} rows at vanilla values, {} rows differing from the mode", s.target,
