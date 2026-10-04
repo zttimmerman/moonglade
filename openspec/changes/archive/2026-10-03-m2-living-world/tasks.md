@@ -18,5 +18,5 @@
 ## 4. Budget (builder)
 - [x] 4.1 `perf.server_budget` sampler + `perf.population_tuned`; tuning record `docs/research/m2-population-tuning.md`
 ## 5. Verify + human
-- [ ] 5.1 Verifier pass + full harness
-- [ ] 5.2 Human: living world, companions, playability (3 `[human-verify]` scenarios)
+- [x] 5.1 Verifier pass + full harness (verifier PASS at eca9cb7: slow run 60/0 + 5× comp/core; re-verify PASS at a01699a: B14 items, quick tier, client/play ×2)
+- [ ] 5.2 (deferred to Zach's next play session; tracked in STATUS.md) Human: living world, companions, playability (3 `[human-verify]` scenarios)

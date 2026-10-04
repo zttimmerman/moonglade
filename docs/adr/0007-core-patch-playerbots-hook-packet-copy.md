@@ -1,6 +1,6 @@
 # ADR-0007: Core patch: give the playerbots packet hook an intact copy of the packet
 
-- Status: proposed (2026-10-03). Patch: `patches/core/0002-playerbots-hook-packet-copy.patch`; checks `core.playerbots_patches_applied` (patch content, stamp, hash) and `comp.quest_shared` (behaviour)
+- Status: accepted (2026-10-03, M2 verifier PASS). Patch: `patches/core/0002-playerbots-hook-packet-copy.patch`; checks `core.playerbots_patches_applied` (patch content, stamp, hash) and `comp.quest_shared` (behaviour)
 - Date: 2026-10-03
 
 ## Context

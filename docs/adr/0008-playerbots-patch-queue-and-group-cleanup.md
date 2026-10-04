@@ -1,6 +1,6 @@
 # ADR-0008: mod-playerbots patch queue; `.playerbots bot remove` takes the companion out of the party
 
-- Status: proposed (2026-10-03). Patch: `patches/playerbots/0001-remove-bot-from-group-on-logout.patch`; checks `core.playerbots_patches_applied`, `build.pin_enforced`, `build.clean_smart` (queue and hash coverage), `comp.add_remove` (behaviour)
+- Status: accepted (2026-10-03, M2 verifier PASS). Patch: `patches/playerbots/0001-remove-bot-from-group-on-logout.patch`; checks `core.playerbots_patches_applied`, `build.pin_enforced`, `build.clean_smart` (queue and hash coverage), `comp.add_remove` (behaviour)
 - Date: 2026-10-03
 
 ## Context
