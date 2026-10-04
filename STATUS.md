@@ -64,7 +64,7 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 
 **M5 (after M4), proposed order:**
 1. **Solo-first feature audit (Zach, 2026-10-04).** Principle: every MMO feature either serves solo play or gets hidden. Hide: global chat channels, trade/LFG/guild-recruitment noise, anything waiting on strangers. Keep: visible bots, instant groups, useful systems. Mostly config/module work.
-2. **In-client unified login screen (front menu step 2), fast follow (Zach, 2026-10-04).** Profiles/saves/options/auto-login/backdrop picker inside the game's own login screen, built on a revertable derived "play client" (`env/client-play/`, APFS clone of the pristine `client/` + `patches/client/` queue). **ADR-0009 (proposed) needs Zach's explicit yes before any binary change.** Given this, front menu step 1 stays thin: the profile/account/options/auto-login backend that step 2 reuses, with minimal launcher UI.
+2. **In-client unified login screen (front menu step 2), fast follow (Zach, 2026-10-04).** Profiles/saves/options/auto-login/backdrop picker inside the game's own login screen, built on a revertable derived "play client" (`env/client-play/`, APFS clone of the pristine `client/` + `patches/client/` queue). **ADR-0009 accepted (Zach, 2026-10-04).** Given this, front menu step 1 stays thin: the profile/account/options/auto-login backend that step 2 reuses, with minimal launcher UI.
 3. **Auction house with real listings.** Evaluate first: does mod-playerbots' random-bot economy post to the AH at all, and AzerothCore's AH-bot module (seeds listings from item data, can buy players' items). Pick the less invasive one; listings priced from data, not invented.
 4. **Transmog spike.** `azerothcore/mod-transmog` (AGPL-3.0). Target as modern-retail as possible: account-wide appearance collection, outfits saved independently of items (Midnight-style). Evaluate what the module gives vs needs building; client UI limits.
 5. **LLM companions spike (Zach, 2026-10-04).** Local model (e.g. Ollama), toggleable, off the main path, time-boxed. Use it for companion orders in plain language, personality/banter, lore comments: a few calls a minute, not the 500-bot population. Measure memory/latency next to the server + Wine. Goal: companions *better than* human party members, not fake strangers. M4 companions come first.
@@ -85,7 +85,7 @@ Audit of everything created so far (specs, ADRs, tasks, kickoff split, harness c
 - **M0 specs, design, tasks, ADR-0001/0002/0003, verifier agent, harness code**: no vanilla or VMaNGOS-as-codebase assumption found. All target 3.3.5a build 12340 (client-data v20.0 is 3.3.5a data).
 
 ## Open questions for Zach
-**ADR-0009 (client patch overlay): your yes/no** before the in-client login screen work starts (not blocking current work). When convenient: play M2 + M3 (living world, companions, smoothness, vanilla pacing/elites); first double-click of `Hearthstone.app` once its verifier passes.
+When convenient: play M2 + M3 (living world, companions, smoothness, vanilla pacing/elites); first double-click of `Hearthstone.app` once its verifier passes.
 
 ## Environment notes
 - Node 20 needed for `openspec` (`~/.nvm/versions/node/v20.20.1/bin`); default shell node is 16.

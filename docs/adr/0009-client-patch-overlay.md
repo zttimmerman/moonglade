@@ -1,6 +1,6 @@
 # ADR-0009: Revertable client patches on a derived "play client"
 
-- Status: **proposed** (2026-10-04). Needs Zach's explicit yes before any binary is modified (CLAUDE.md §2, §11).
+- Status: **accepted** (2026-10-04). Zach's explicit yes, given in chat on the plain-language summary of this ADR (pristine `client/` as the base, a derived play client with a hash-checked patch queue, one-step revert, a minimal first patch, each later patch needing its own ADR and yes).
 - Scope of this ADR: the *mechanism*, plus the *first* patch (GlueXML signature check) needed for the in-client front menu. Every later binary patch gets its own short ADR (or a dated appendix here) and its own yes.
 
 ## Context
