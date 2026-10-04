@@ -103,6 +103,10 @@ def main(argv=None) -> int:
                     help="launch, require Wow.exe alive after 30 s, then stop it and every prefix process")
     la.add_argument("--smoke-seconds", type=int, default=30, help=argparse.SUPPRESS)
 
+    sub.add_parser("app", help="build dist/Hearthstone.app (double-clickable launcher for ./play; launcher-app)")
+    ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns from env/branding/logo-source.jpeg")
+    ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
+
     a = ap.parse_args(argv)
 
     if a.cmd == "build":
@@ -292,6 +296,19 @@ def main(argv=None) -> int:
         except BrokenPipeError:                       # e.g. `| head`
             import os
             os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 0
+
+    if a.cmd == "app":
+        from . import app
+        return app.cli()
+
+    if a.cmd == "icon":
+        from . import icon
+        try:
+            _print(icon.generate(out_dir=a.out_dir))
+        except icon.IconError as e:
+            log(f"ICON FAILED: {e}")
+            return 1
         return 0
 
     if a.cmd == "launch":

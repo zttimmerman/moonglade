@@ -62,6 +62,14 @@ def uid(pid: int) -> int | None:
     return struct.unpack_from("I", buf.raw, 20)[0]
 
 
+def ppid(pid: int) -> int | None:
+    """Parent pid (proc_bsdinfo.pbi_ppid), None if the process is gone."""
+    buf = ctypes.create_string_buffer(136)
+    if _libproc.proc_pidinfo(pid, 3, ctypes.c_uint64(0), buf, 136) < 136:   # PROC_PIDTBSDINFO
+        return None
+    return struct.unpack_from("I", buf.raw, 16)[0]
+
+
 def is_zombie(pid: int) -> bool:
     raw = _sysctl([CTL_KERN, KERN_PROC, KERN_PROC_PID, pid], _KINFO_SIZE)
     return bool(raw) and len(raw) > _P_STAT_OFF and raw[_P_STAT_OFF] == SZOMB

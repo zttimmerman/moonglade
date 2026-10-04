@@ -1,0 +1,52 @@
+{
+  "source": "env/branding/logo-source.jpeg",
+  "source_sha256": "c1fd3dd969d9a010ac24cf3b556701e59cabf1a43d933325a8bae9f14260edd7",
+  "source_size": [
+    2048,
+    2048
+  ],
+  "ring_source_px": {
+    "cx": 1023.486,
+    "cy": 1024.691,
+    "r": 959.464,
+    "fit_rounds": [
+      {
+        "rays_hit": 720,
+        "points_kept": 634,
+        "cx": 1023.488,
+        "cy": 1024.694,
+        "r": 959.461,
+        "rms_px": 0.814,
+        "max_abs_px": 3.632
+      },
+      {
+        "rays_hit": 720,
+        "points_kept": 634,
+        "cx": 1023.486,
+        "cy": 1024.691,
+        "r": 959.464,
+        "rms_px": 0.814,
+        "max_abs_px": 3.847
+      }
+    ]
+  },
+  "cut_radius_source_px": 951.464,
+  "resampled_size": 887,
+  "canvas": 1024,
+  "icon_circle_canvas_px": {
+    "cx": 512.494,
+    "cy": 512.016,
+    "r": 412.084
+  },
+  "params": {
+    "EDGE_DEFICIT": 96.0,
+    "RAYS": 720,
+    "RAY_STEP": 0.5,
+    "RUN": 6,
+    "OUTLIER_PX": 4.0,
+    "INSET_SRC_PX": 8.0,
+    "ICON_DIAMETER": 824
+  },
+  "png_sha256": "dc38c7de0b61555a7c7d4a8703a2f61fe8a77f5a588128006726f025808f3806",
+  "icns_sha256": "86b15f255cfeec38b7bc93cfc3661f383570e8472b151842d254c87011a599ec"
+}
