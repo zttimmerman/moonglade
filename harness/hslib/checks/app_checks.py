@@ -354,10 +354,14 @@ def _play_pid(off: int, launcher_pid: int | None = None) -> int | None:
 
 
 def tcc_prompts(since: str) -> list[str]:
-    r = subprocess.run(["/usr/bin/log", "show", "--start", since, "--predicate",
-                        'process == "tccd" AND eventMessage CONTAINS "AUTHREQ_PROMPTING" '
-                        f'AND eventMessage CONTAINS "{A.BUNDLE_ID}"'], capture_output=True, text=True, timeout=120)
-    return [l[:400] for l in r.stdout.splitlines() if "AUTHREQ_PROMPTING" in l]
+    """tccd's Documents-folder prompts and answers for the app over the last 2 h (a prompt raised by an earlier launch
+    may still be waiting on screen; later requests queue behind it without a new prompt line). `since` is kept in
+    the evidence by callers; the window is wider on purpose."""
+    r = subprocess.run(["/usr/bin/log", "show", "--last", "2h", "--predicate",
+                        'process == "tccd" AND eventMessage CONTAINS "SystemPolicyDocumentsFolder"'],
+                       capture_output=True, text=True, timeout=300)
+    return [l[:400] for l in r.stdout.splitlines()
+            if ("AUTHREQ_PROMPTING" in l and A.BUNDLE_ID in l) or "AUTHREQ_RESULT" in l]
 
 
 def wait_app_client_up(s: StandIn, hook: Hook, off: int, since: str, timeout=START_TIMEOUT) -> dict:
@@ -398,7 +402,7 @@ def stop_launchers(bundle: Path | None = None) -> list:
         except ProcessLookupError:
             pass
     t0 = time.time()
-    while _launchers(bundle) and time.time() - t0 < 180:
+    while _launchers(bundle) and time.time() - t0 < 150:    # > play's own cleanup (stack down ~60 s)
         time.sleep(1)
     for l in _launchers(bundle):
         os.kill(l["pid"], signal.SIGKILL)
