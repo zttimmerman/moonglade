@@ -30,10 +30,36 @@ WINESERVER = P.WINE_BIN / "wineserver"
 SMOKE_SECONDS = 30
 
 
+_selected: Path | None = None       # set by ./play for the play client (select_client); None = client/
+
+
 def client_dir() -> Path:
-    """The client directory to launch: HS_CLIENT_DIR (test-only scratch copy) or the real client/."""
+    """The client directory to launch: HS_CLIENT_DIR (test-only scratch copy), else the client ./play selected
+    (select_client: the play client env/client-play/ in `client = patched` mode), else the real client/."""
     v = os.environ.get("HS_CLIENT_DIR")
-    return Path(v).resolve() if v else P.CLIENT
+    if v:
+        return Path(v).resolve()
+    return _selected or P.CLIENT
+
+
+def select_client(d: Path | None) -> None:
+    """./play: launch `d` (a play client built by `hs client-build`) instead of client/; None = client/ again."""
+    global _selected
+    _selected = Path(d).resolve() if d else None
+
+
+def is_play_client(d: Path | None = None) -> bool:
+    from .clientbuild import STAMP
+    return ((d or client_dir()) / STAMP).is_file()
+
+
+def expected_binaries(man: dict) -> dict:
+    """What the launched client's .exe/.dll must hash to: the manifest's, or for a play client the manifest's with
+    the build's patched outputs (its build stamp) on top."""
+    if is_play_client():
+        from .clientbuild import expected_binaries as play_expected
+        return play_expected(client_dir())
+    return man["binaries_sha256"]
 
 
 class LaunchError(RuntimeError):
@@ -352,10 +378,12 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: 
     ev["prefix"] = ensure_prefix()
 
     hashes_before = _binary_hashes(man)
-    ev["binaries_match_manifest_before"] = hashes_before == man["binaries_sha256"]
+    ev["binaries_match_manifest_before"] = hashes_before == expected_binaries(man)
+    ev["play_client"] = is_play_client()
     if not ev["binaries_match_manifest_before"]:
-        raise LaunchError("client binaries no longer match env/client-manifest.json; "
-                          "re-run `harness/hs client-install`", ev)
+        raise LaunchError("client binaries no longer match env/client-manifest.json "
+                          + ("plus the play client's build stamp; re-run `harness/hs client-build`" if ev["play_client"]
+                             else "; re-run `harness/hs client-install`"), ev)
     return man, ev
 
 
@@ -449,7 +477,7 @@ def run(smoke: bool = False, smoke_seconds: int = SMOKE_SECONDS) -> dict:
     ev["remaining_prefix_processes"] = prefix_processes()
     ev["wow_remaining"] = [p for p in ev["remaining_prefix_processes"] if "wow.exe" in p["cmd"].lower()]
     hashes_after = _binary_hashes(man)
-    ev["binaries_match_manifest_after"] = hashes_after == man["binaries_sha256"]
+    ev["binaries_match_manifest_after"] = hashes_after == expected_binaries(man)
     ev["wine_log_tail"] = tail(P.WINE_LOG, 25)
 
     if not alive_ok:

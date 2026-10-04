@@ -6,7 +6,12 @@ the user's). Today it holds one key:
     {"world_size": "small" | "normal" | "large" | <number of random bots>}
 
 Missing file or key -> "normal". Change it with `harness/hs world-size small` (or edit the file); `./play` reads it
-on every start. Intended as a front-menu option later."""
+on every start. Intended as a front-menu option later.
+
+    {"client": "patched" | "stock"}   (in-client-login, ADR-0009) which game client ./play and the app run:
+        patched = the play client env/client-play/ (built from client/ + patches/client/; the default),
+        stock   = the untouched client/, exactly as before the play client existed.
+    Change it with `harness/hs client-mode stock|patched`."""
 import json
 import os
 from pathlib import Path
@@ -76,3 +81,27 @@ def play_world() -> dict:
         return {"profile": config.profile_name(), "population_n": None, "source": "$HS_PROFILE"}
     ws = world_size()
     return {"profile": "population", "population_n": ws["bots"], "source": ws}
+
+
+CLIENT_MODES = ("patched", "stock")
+DEFAULT_CLIENT = "patched"
+
+
+def client_mode() -> dict:
+    """{"mode": "patched"|"stock", "setting": as written or None, "file": path}."""
+    data = load()
+    raw = data.get("client")
+    mode = DEFAULT_CLIENT if raw is None else str(raw).strip().lower()
+    if mode not in CLIENT_MODES:
+        raise SettingsError(f"{path()}: client {raw!r}: use one of {list(CLIENT_MODES)}")
+    return {"mode": mode, "setting": raw, "file": str(path()), "file_exists": path().exists()}
+
+
+def set_client_mode(value: str) -> dict:
+    if value not in CLIENT_MODES:
+        raise SettingsError(f"client {value!r}: use one of {list(CLIENT_MODES)}")
+    data = load()
+    data["client"] = value
+    path().parent.mkdir(parents=True, exist_ok=True)
+    path().write_text(json.dumps(data, indent=2) + "\n")
+    return client_mode()
