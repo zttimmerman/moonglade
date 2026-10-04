@@ -17,7 +17,7 @@
 
 	<!-- The whole front menu: one centred column in the lower middle, over a subtle dark panel -->
 	<Frame name="HSMenuPanel" parent="AccountLoginUI" hidden="true">
-		<Size x="300" y="280"/>
+		<Size x="340" y="280"/>
 		<Anchors>
 			<Anchor point="BOTTOM">
 				<Offset>
@@ -48,6 +48,10 @@
 					</Anchors>
 				</FontString>
 				<FontString name="HSMenuSub" inherits="GlueFontNormalSmall" text=""/>
+				<FontString name="HSMenuSelLabel" inherits="GlueFontNormal" text="" hidden="true"/>
+				<FontString name="HSMenuText" inherits="GlueFontHighlightSmall" justifyH="CENTER" text="" hidden="true">
+					<Size x="310" y="0"/>
+				</FontString>
 			</Layer>
 		</Layers>
 		<Frames>

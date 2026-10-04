@@ -304,7 +304,7 @@ class Loop:
             self.rec["client"]["profiles"] = frontmenu.write(
                 self.profiles_dir, [{"name": login["account"].upper(), "account": login["account"],
                                      "password": login["password"]}],
-                default=login["account"], test=frontmenu.test_hook_from_env())
+                default=login["account"], test=frontmenu.test_hook_from_env(), about=frontmenu.about_info())
         say("Starting the game client..." if args_ is None else f"Starting the test stand-in client ({name})...")
         proc = launch.start_client(args_, cwd)
         self.rec["client_started"] = True

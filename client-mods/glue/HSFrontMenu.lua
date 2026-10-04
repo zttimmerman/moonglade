@@ -5,7 +5,7 @@
 --   Main:     Continue (the current profile, its name small underneath; preselected), Profiles, Settings, Extras, Quit
 --   Profiles: every profile, the current one marked; choosing one makes it Continue's target; Back
 --   Settings: Game options (the stock option panels), Login screen < name > (backdrop, logo and music switch live), Back
---   Extras:   Cinematics, Credits, Back
+--   Extras:   Cinematics, Credits, About (read-only: game and Hearthstone versions, current world), Back
 -- Keyboard: Up/Down move, Enter selects, Left/Right change the selector, Escape goes back a level (on the main menu
 -- it moves to Quit). The mouse works too (hovering highlights a button the stock way but doesn't move the
 -- keyboard selection, so a resting cursor can't steal Continue's preselection). Every stock login control (edit boxes, corner buttons) is hidden.
@@ -157,7 +157,7 @@ MENUS.settings = { title = "Settings", back = "main", items = function()
 			PlaySound("gsTitleOptions");
 			OptionsSelectFrame:Show();
 		end },
-		{ text = (state.backdrop or HS_BACKDROPS[1]).label, selector = true, sub = "Login screen",
+		{ text = (state.backdrop or HS_BACKDROPS[1]).label, selector = true, label = "Login screen:",
 		  action = function() HSFrontMenu_CycleBackdrop(1); end },
 		{ text = "Back", back = true },
 	};
@@ -167,8 +167,35 @@ MENUS.extras = { title = "Extras", back = "main", items = function()
 	return {
 		{ text = "Cinematics", action = function() AccountLogin_Cinematics(); end },
 		{ text = "Credits", action = function() AccountLogin_Credits(); end },
+		{ text = "About", action = function() HSFrontMenu_Open("about"); end },
 		{ text = "Back", back = true },
 	};
+end };
+
+-- About: read-only. Game version from the client itself (GetBuildInfo); Hearthstone version, commit, pins and the
+-- world the launcher started come from HS_ABOUT in the generated HSProfiles.lua (no credentials in it).
+function HSFrontMenu_AboutText()
+	local _, buildType, version, build, date = GetBuildInfo();
+	local a = HS_ABOUT or {};
+	local gold, white = "|cffffd100", "|cffffffff";
+	local function line(k, v) return gold .. k .. "|r  " .. white .. (v or "unknown") .. "|r"; end
+	local t = {
+		line("Game:", "World of Warcraft " .. (version or "?") .. " (build " .. (build or "?") .. ", " .. (date or "?") .. ")"),
+		"",
+		line("Hearthstone:", (a.version or "?") .. " (" .. (a.commit or "?") .. ")"),
+		line("Server core:", a.core),
+		line("Playerbots:", a.playerbots),
+		"",
+		line("Vanilla mode:", a.vanilla),
+		line("World size:", a.world),
+		"",
+		BLIZZ_DISCLAIMER or "",
+	};
+	return table.concat(t, "\n");
+end
+
+MENUS.about = { title = "About", back = "extras", text = HSFrontMenu_AboutText, items = function()
+	return { { text = "Back", back = true } };
 end };
 
 local SLOT_H, SLOT_GAP = 40, 6;
@@ -181,15 +208,25 @@ function HSFrontMenu_Render()
 	local top = menu.title and -42 or -18;
 	if ( menu.title ) then HSMenuTitle:SetText(menu.title); HSMenuTitle:Show(); else HSMenuTitle:Hide(); end
 	HSMenuSub:Hide();
+	HSMenuSelLabel:Hide();
 	HSArrowLeft:Hide();
 	HSArrowRight:Hide();
 	local y = top;
+	if ( menu.text ) then
+		HSMenuText:SetText(menu.text());
+		HSMenuText:ClearAllPoints();
+		HSMenuText:SetPoint("TOP", HSMenuPanel, "TOP", 0, y);
+		HSMenuText:Show();
+		y = y - HSMenuText:GetHeight() - 14;
+	else
+		HSMenuText:Hide();
+	end
 	for i = 1, 6 do
 		local slot = _G["HSMenuSlot" .. i];
 		local it = items[i];
 		if ( it ) then
 			slot:ClearAllPoints();
-			slot:SetPoint("TOP", HSMenuPanel, "TOP", 0, y);
+			slot:SetPoint("TOP", HSMenuPanel, "TOP", it.selector and 48 or 0, y);
 			slot:SetText(it.text);
 			if ( it.disabled ) then slot:Disable(); else slot:Enable(); end
 			if ( i == state.sel ) then slot:LockHighlight(); else slot:UnlockHighlight(); end
@@ -203,13 +240,17 @@ function HSFrontMenu_Render()
 				y = y - 12;
 			end
 			if ( it.selector ) then
-				slot:SetWidth(180);
+				slot:SetWidth(150);
 				HSArrowLeft:ClearAllPoints();
 				HSArrowLeft:SetPoint("RIGHT", slot, "LEFT", 2, 0);
 				HSArrowRight:ClearAllPoints();
 				HSArrowRight:SetPoint("LEFT", slot, "RIGHT", -2, 0);
 				HSArrowLeft:Show();
 				HSArrowRight:Show();
+				HSMenuSelLabel:SetText(it.label or "");
+				HSMenuSelLabel:ClearAllPoints();
+				HSMenuSelLabel:SetPoint("RIGHT", HSArrowLeft, "LEFT", -2, 0);
+				HSMenuSelLabel:Show();
 			else
 				slot:SetWidth(240);
 			end
@@ -287,6 +328,14 @@ function AccountLogin_OnShow(self)
 		local f = _G[name];
 		if ( f ) then f:Hide(); end
 	end
+	-- nothing on the bottom edge: the Blizzard logo, copyright and version text (AccountLoginUI's own regions,
+	-- except the era logo) and the ESRB notice (WorldOfWarcraftRating, placed by GlueLocalization.lua)
+	if ( AccountLoginUI.GetRegions ) then
+		for _, r in ipairs({ AccountLoginUI:GetRegions() }) do
+			if ( r ~= AccountLoginLogo ) then r:Hide(); end
+		end
+	end
+	if ( WorldOfWarcraftRating ) then WorldOfWarcraftRating:Hide(); end
 	-- the stock OnHide clears the saved account list (our backdrop) unless "remember account name" is checked
 	AccountLoginSaveAccountName:SetChecked(1);
 	HSFrontMenu_ApplyBackdrop(b, false);
