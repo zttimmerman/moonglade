@@ -20,6 +20,12 @@ On start, the login screen SHALL show the menu (no username or password fields) 
 - **THEN** no login is attempted for at least 60 s after the menu appears, and the menu (profile list with Continue) stays up (evidence: no authserver login attempt; GlueXML state marker if available)
 - Check: `login.cancel_shows_list`
 
+#### Scenario: Continue shows where you left off
+- **GIVEN** a profile whose account has characters, and another with none
+- **WHEN** the launcher generates the front-menu data at start
+- **THEN** the line under Continue names that account's most recently played character with its level and class (class name taken from the game's own data, e.g. ChrClasses.dbc, not a hardcoded table), the profile name is appended only when more than one profile exists, and the profile with no characters shows "No characters yet"; no credentials appear in the line or its data
+- Check: `login.continue_context`
+
 #### Scenario: No UI errors
 - **WHEN** the patched client starts with our GlueXML (Continue and menu-waits runs)
 - **THEN** the play client's `Logs/GlueXML.log` and `Logs/FrameXML.log` contain no errors from our files, and the client doesn't quit by itself

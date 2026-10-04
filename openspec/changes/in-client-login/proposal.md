@@ -35,3 +35,4 @@ No game data values change. Patch bytes come from disassembly of a copy of build
 
 ## Spec-change log
 - 2026-10-04: auto-login countdown replaced by a preselected Continue button (Zach agreed after a UX discussion). Reason: a countdown races the player, hides the menu where options will live, and can log in before server options are chosen; one Enter press costs nothing. Scenario "Cancel shows the profile list" became "Menu waits for the player" (same check id `login.cancel_shows_list`); `login.auto_login` now triggers Continue once. Not a loosening: login still requires zero typed credentials; a zero-click skip-menu setting may come later, off by default.
+- 2026-10-04: added scenario "Continue shows where you left off" (`login.continue_context`) after a UX review with Zach: a short line under Continue shows the last-played character (name · level · class), the profile name only when there are several. A tightening, not a loosening.
