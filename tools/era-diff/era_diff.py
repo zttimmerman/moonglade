@@ -16,6 +16,15 @@ Stdlib only.  Usage:
     python3 tools/era-diff/era_diff.py               # all categories
     python3 tools/era-diff/era_diff.py --list
     python3 tools/era-diff/era_diff.py -c quest_xp -c outdoor_elite
+    python3 tools/era-diff/era_diff.py --emit-sql     # mod-era-profile side tables (m3 task 1.2)
+
+--emit-sql writes modules/mod-era-profile/data/sql/db-world/era_*.sql: one side table per touched AC table with the
+vanilla value of every in-scope change row, each row citing its source (VMaNGOS snapshot id from fork.lock, VMaNGOS
+table, VMaNGOS key), plus era_baseline.sql (CREATE TABLE IF NOT EXISTS only) for the stock values the module captures
+before its first apply. Output is deterministic: no timestamps, rows sorted by key, fixed number formats, so a re-run
+against the same sources is byte-identical (check era.sql_deterministic). The AC side of the diff reads captured
+baseline values (era_baseline_*) in place of live rows when they exist, so a world DB with vanilla mode applied
+diffs (and emits) exactly like a stock one.
 """
 import argparse
 import csv
@@ -49,6 +58,16 @@ SPELL_EFFECT_LEARN_SPELL = 36
 CLASS_DK_MASK = 32
 
 RANK_NAMES = {0: "normal", 1: "elite", 2: "rare-elite", 3: "boss", 4: "rare"}
+
+# Columns of each AC world table that mod-era-profile may overwrite in place (startup apply/revert, design.md) and
+# therefore captures into era_baseline_<table> before its first apply. Keep in sync with EMIT_TABLES below and with
+# the module's apply specs (modules/mod-era-profile/src/EraProfile.cpp).
+BASELINE_COLS = {
+    "player_xp_for_level": [("Experience", int)],
+    "creature_template": [("rank", int), ("HealthModifier", float)],
+    "item_template": [("RequiredLevel", int), ("RequiredSkillRank", int), ("BuyPrice", int)],
+    "trainer_spell": [("ReqLevel", int), ("MoneyCost", int)],
+}
 
 
 # --------------------------------------------------------------------------- sources
@@ -165,6 +184,35 @@ class Ctx:
             self._cache[key] = fn()
         return self._cache[key]
 
+    # --- captured stock baseline (mod-era-profile): stock values of rows the module may have overwritten
+    def baseline(self, table, keys, cols):
+        """{key tuple: {col: value}} from era_baseline_<table> (written by mod-era-profile before its first apply), or
+        {} when that table doesn't exist. Used so the diff compares VMaNGOS against *stock* AC even when vanilla mode
+        has been applied to the live world rows."""
+        def f():
+            name = f"era_baseline_{table}"
+            n = self.ac.scalar("SELECT COUNT(*) FROM information_schema.tables WHERE table_schema = DATABASE() "
+                               f"AND table_name = '{name}'")
+            if n in (None, "0"):
+                return {}
+            spec = [(k, int) for k in keys] + list(cols)
+            sel = ", ".join(f"`{c}`" for c, _ in spec)
+            out = {}
+            for r in self.ac.q(f"SELECT {sel} FROM `{name}`", spec):
+                out[tuple(r[k] for k in keys)] = {c: r[c] for c, _ in cols}
+            return out
+        return self.memo(("baseline", table), f)
+
+    def overlay(self, rows, table, keys, cols):
+        """Replace live values in `rows` (dicts keyed by AC column names) with captured baseline values."""
+        base = self.baseline(table, keys, cols)
+        if base:
+            for r in rows:
+                b = base.get(tuple(r[k] for k in keys))
+                if b:
+                    r.update(b)
+        return rows
+
     # --- maps / zones
     def map_types(self):
         def f():
@@ -221,10 +269,11 @@ class Ctx:
                 ("rank", int), ("unit_class", int), ("HealthModifier", float),
                 ("DamageModifier", float), ("ArmorModifier", float),
                 ("ExperienceModifier", float), ("ManaModifier", float), ("BaseAttackTime", int)]
-        return self.memo("ac_ct", lambda: {r["entry"]: r for r in self.ac.q(
+        return self.memo("ac_ct", lambda: {r["entry"]: r for r in self.overlay(self.ac.q(
             "SELECT entry, REPLACE(name,'\\t',' '), minlevel, maxlevel, exp, `rank`, unit_class, "
             "HealthModifier, DamageModifier, ArmorModifier, ExperienceModifier, ManaModifier, "
-            "BaseAttackTime FROM creature_template", cols)})
+            "BaseAttackTime FROM creature_template", cols), "creature_template", ["entry"],
+            BASELINE_COLS["creature_template"])})
 
     def vm_spawn_maps(self):
         def f():
@@ -248,6 +297,14 @@ class Ctx:
                         m[r[f"i{n}"]].add(r["map"])
             return m
         return self.memo("ac_spawn", f)
+
+    def ac_trainer_spells(self):
+        cols = [("TrainerId", int), ("SpellId", int), ("MoneyCost", int), ("ReqSkillLine", int),
+                ("ReqSkillRank", int), ("ReqLevel", int)]
+        return self.memo("ac_ts", lambda: self.overlay(self.ac.q(
+            "SELECT TrainerId, SpellId, MoneyCost, ReqSkillLine, ReqSkillRank, ReqLevel FROM trainer_spell "
+            "ORDER BY TrainerId, SpellId", cols), "trainer_spell", ["TrainerId", "SpellId"],
+            BASELINE_COLS["trainer_spell"]))
 
     def creature_id_cols(self):
         """Live AC `creature` spawn-id columns: `id` (this fork's live schema) or id1..id3."""
@@ -373,8 +430,9 @@ class Ctx:
 def cat_xp_curve(c):
     """player_xp_for_level: XP needed at level L to reach L+1. World-DB table in both cores."""
     vm = {r["lvl"]: r["xp_for_next_level"] for r in c.vm.q("SELECT * FROM player_xp_for_level")}
-    ac = {r["L"]: r["X"] for r in c.ac.q("SELECT Level, Experience FROM player_xp_for_level",
-                                         [("L", int), ("X", int)])}
+    ac = {r["Level"]: r["Experience"] for r in c.overlay(
+        c.ac.q("SELECT Level, Experience FROM player_xp_for_level", [("Level", int), ("Experience", int)]),
+        "player_xp_for_level", ["Level"], BASELINE_COLS["player_xp_for_level"])}
     out = []
     for lvl in sorted(set(vm) & set(ac)):
         if lvl > MAX_LEVEL:
@@ -620,9 +678,9 @@ def cat_mount_items(c):
                      "required_skill_rank, buy_price, quality, allowable_class")
     cols = [("entry", int), ("name", str), ("RequiredLevel", int), ("RequiredSkill", int),
             ("RequiredSkillRank", int), ("BuyPrice", int)]
-    ac = {r["entry"]: r for r in c.ac.q(
+    ac = {r["entry"]: r for r in c.overlay(c.ac.q(
         "SELECT entry, REPLACE(name,'\\t',' '), RequiredLevel, RequiredSkill, RequiredSkillRank, "
-        "BuyPrice FROM item_template", cols)}
+        "BuyPrice FROM item_template", cols), "item_template", ["entry"], BASELINE_COLS["item_template"])}
     sold = {r["i"] for r in c.ac.q("SELECT DISTINCT item FROM npc_vendor", [("i", int)])}
     vsold = {r["item"] for r in c.vm.q("SELECT item FROM npc_vendor UNION SELECT item FROM npc_vendor_template")}
     out = []
@@ -677,8 +735,7 @@ def cat_riding_training(c):
             vriding.setdefault(r["spell"], (r, s))
     cols = [("TrainerId", int), ("SpellId", int), ("MoneyCost", int), ("ReqSkillLine", int),
             ("ReqSkillRank", int), ("ReqLevel", int)]
-    arows = c.ac.q("SELECT TrainerId, SpellId, MoneyCost, ReqSkillLine, ReqSkillRank, ReqLevel "
-                   "FROM trainer_spell", cols)
+    arows = c.ac_trainer_spells()
     out = []
     for sid, (r, s) in sorted(vriding.items()):
         taught = s["effectTriggerSpell1"] if s["effect1"] == SPELL_EFFECT_LEARN_SPELL else None
@@ -751,8 +808,8 @@ def cat_class_mount_quests(c):
             todo.extend(prev_of.get(q, ()))
     acq_spell_cols = [("SpellId", int), ("TrainerId", int), ("ReqLevel", int)]
     tspells = defaultdict(list)
-    for r in c.ac.q("SELECT SpellId, TrainerId, ReqLevel FROM trainer_spell", acq_spell_cols):
-        tspells[r["SpellId"]].append(r)
+    for r in c.ac_trainer_spells():
+        tspells[r["SpellId"]].append({k: r[k] for k, _ in acq_spell_cols})
     out = []
     for q, (f, m) in sorted(chain.items()):
         v = vq[q]
@@ -810,6 +867,193 @@ NOT_IN_DB = {
                "them in core config, not the world DB. No DB value to diff; unsourced.",
 }
 
+
+
+# --------------------------------------------------------------------------- --emit-sql (m3 task 1.2)
+SQL_DIR = ROOT / "modules/mod-era-profile/data/sql/db-world"
+QUEST_XP_KEEP_PCT = 5       # Gate 1 Decision 2: quests whose VMaNGOS XP is within +-5% of AC's keep AC's XP
+
+
+def sql_lit(v):
+    """Deterministic SQL literal: NULL, integers as-is, floats with 4 decimals, strings single-quoted."""
+    if v is None:
+        return "NULL"
+    if isinstance(v, bool):
+        return str(int(v))
+    if isinstance(v, int):
+        return str(v)
+    if isinstance(v, float):
+        return f"{v:.4f}"
+    return "'" + str(v).replace("\\", "\\\\").replace("'", "''") + "'"
+
+
+# Side tables: name -> (AC target table, key columns, value columns (name, SQL type, comment), description).
+# Value columns are NULL when that field keeps its stock value for the row.
+EMIT_TABLES = {
+    "era_player_xp_for_level": (
+        "player_xp_for_level", [("Level", "TINYINT UNSIGNED")],
+        [("Experience", "INT UNSIGNED", "VMaNGOS player_xp_for_level.xp_for_next_level")],
+        "Gate 1 #1: XP to reach the next level, levels 11-59 (the L60 row is needs-review and stays AC)."),
+    "era_quest_xp": (
+        "quest_template", [("QuestId", "INT UNSIGNED")],
+        [("QuestLevel", "SMALLINT", "AC quest_template.QuestLevel (equal to VMaNGOS QuestLevel for every row)"),
+         ("RewXP", "INT UNSIGNED", "VMaNGOS quest_template.RewXP: full XP at quest level (docs/gate1-era-profile-memo.md)")],
+        "Gate 1 #2: vanilla quest XP for the OnPlayerQuestComputeXP hook; rows within +-5% of AC and "
+        "needs-review rows are left out (they keep AC XP)."),
+    "era_creature_template": (
+        "creature_template", [("entry", "INT UNSIGNED")],
+        [("rank", "TINYINT UNSIGNED", "VMaNGOS creature_template.rank; NULL = keep AC"),
+         ("HealthModifier", "FLOAT", "derived from VMaNGOS health_multiplier (era_diff cat_creature_stats); NULL = keep AC")],
+        "Gate 1 #3/#4: outdoor 1-60 creatures: vanilla rank and HealthModifier (damage/armor deferred)."),
+    "era_item_template": (
+        "item_template", [("entry", "INT UNSIGNED")],
+        [("RequiredLevel", "TINYINT UNSIGNED", "VMaNGOS item_template.required_level; NULL = keep AC"),
+         ("RequiredSkillRank", "SMALLINT UNSIGNED", "VMaNGOS item_template.required_skill_rank; NULL = keep AC"),
+         ("BuyPrice", "BIGINT", "VMaNGOS item_template.buy_price; NULL = keep AC")],
+        "Gate 1 #5: vendor-sold riding mounts."),
+    "era_trainer_spell": (
+        "trainer_spell", [("TrainerId", "INT UNSIGNED"), ("SpellId", "INT UNSIGNED")],
+        [("ReqLevel", "TINYINT UNSIGNED", "VMaNGOS npc_trainer(_template).reqlevel; NULL = keep AC"),
+         ("MoneyCost", "INT UNSIGNED", "VMaNGOS npc_trainer(_template).spellcost; NULL = keep AC")],
+        "Gate 1 #5: Apprentice/Journeyman riding on AC trainers."),
+}
+
+BASELINE_SQL_TYPES = {
+    "player_xp_for_level": ([("Level", "TINYINT UNSIGNED")], [("Experience", "INT UNSIGNED")]),
+    "creature_template": ([("entry", "INT UNSIGNED")], [("rank", "TINYINT UNSIGNED"), ("HealthModifier", "FLOAT")]),
+    "item_template": ([("entry", "INT UNSIGNED")],
+                      [("RequiredLevel", "TINYINT UNSIGNED"), ("RequiredSkillRank", "SMALLINT UNSIGNED"),
+                       ("BuyPrice", "BIGINT")]),
+    "trainer_spell": ([("TrainerId", "INT UNSIGNED"), ("SpellId", "INT UNSIGNED")],
+                      [("ReqLevel", "TINYINT UNSIGNED"), ("MoneyCost", "INT UNSIGNED")]),
+}
+
+
+def keep_stock_quest(vxp, acxp):
+    """Decision 2: |VM - AC| <= 5% of AC keeps AC's XP. Exact integer arithmetic (no rounded pct)."""
+    return 100 * abs(vxp - acxp) <= QUEST_XP_KEEP_PCT * acxp
+
+
+def emit_rows(c, snap):
+    """{side table: sorted list of row tuples (keys..., values..., src_snapshot, src_table, src_entry)}."""
+    rows = {}
+    rows["era_player_xp_for_level"] = sorted(
+        (r["entry"], r["proposed"], snap, "player_xp_for_level", f"lvl={r['entry']}")
+        for r in cat_xp_curve(c) if r["status"] == "change")
+
+    q = []
+    for r in cat_quest_xp(c):
+        if r["status"] != "change" or keep_stock_quest(r["vmangos"], r["ac"]):
+            continue
+        # both mechanisms ("exact" difficulty index and absolute) go through the module so over-level XP follows
+        # VMaNGOS rounding too (memo, RewXP semantics, Caveat A)
+        assert r["quest_level_ac"] == r["quest_level_vm"], r
+        q.append((r["entry"], r["quest_level_ac"], r["vmangos"], snap, "quest_template", f"entry={r['entry']}"))
+    rows["era_quest_xp"] = sorted(q)
+
+    cre = {}
+    for r in cat_outdoor_elite(c):
+        if r["status"] == "change":
+            cre.setdefault(r["entry"], {})["rank"] = r["proposed"]
+    for r in cat_creature_stats(c):
+        if r["status"] == "change" and r["field"] == "HealthModifier":
+            cre.setdefault(r["entry"], {})["HealthModifier"] = float(r["proposed"])
+    rows["era_creature_template"] = sorted(
+        (e, v.get("rank"), v.get("HealthModifier"), snap, "creature_template", f"entry={e}")
+        for e, v in cre.items())
+
+    it = {}
+    for r in cat_mount_items(c):
+        if r["status"] == "change":
+            it.setdefault(r["entry"], {})[r["field"]] = r["proposed"]
+    rows["era_item_template"] = sorted(
+        (e, v.get("RequiredLevel"), v.get("RequiredSkillRank"), v.get("BuyPrice"), snap, "item_template",
+         f"entry={e}") for e, v in it.items())
+
+    ts = {}
+    live = {(a["TrainerId"], a["SpellId"]) for a in c.ac_trainer_spells()}
+    for r in cat_riding_training(c):
+        if r["status"] != "change":
+            continue
+        vt_table, vt_entry = r["vm_trainer"].split(":")
+        for t in r["ac_trainers"]:
+            for sp in r["ac_spell_ids"]:
+                if (t, sp) not in live:
+                    continue
+                d = ts.setdefault((t, sp), {"src": (vt_table, f"entry={vt_entry},spell={r['entry']}")})
+                d[r["field"]] = r["proposed"]
+    rows["era_trainer_spell"] = sorted(
+        (t, sp, v.get("ReqLevel"), v.get("MoneyCost"), snap, v["src"][0], v["src"][1]) for (t, sp), v in ts.items())
+    return rows
+
+
+def emit_header(c, lock, snap, title, lines):
+    try:
+        last_core = c.ac.scalar("SELECT name FROM updates WHERE state <> 'MODULE' ORDER BY name DESC LIMIT 1")
+    except Exception:  # pragma: no cover
+        last_core = None
+    migs = c.vm.q("SELECT id FROM migrations ORDER BY id DESC LIMIT 1")
+    h = [f"-- {title}",
+         "-- GENERATED by `python3 tools/era-diff/era_diff.py --emit-sql`. DO NOT EDIT: regenerate instead (CLAUDE.md §7).",
+         f"-- Source: VMaNGOS {snap} ({lock.get('vmangos_db_url', '')}; zip sha256 "
+         f"{sha256(VM_ZIP) if VM_ZIP.exists() else 'n/a'}; latest migration {migs[0]['id'] if migs else 'n/a'}),",
+         f"--   final 1.12 row per entry (patch <= {VM_PATCH}; spells/trainers at build {VM_BUILD}).",
+         f"-- Compared against: AzerothCore world DB, core {lock.get('core_sha')}, last core DB update {last_core}.",
+         f"-- Scope: entities in both DBs by entry, level <= {MAX_LEVEL}, no maps {sorted(EXCLUDED_MAPS)}; "
+         "override-only; needs-review rows omitted."]
+    return "\n".join(h + [f"-- {l}" for l in lines]) + "\n"
+
+
+def emit_sql(c, out_dir):
+    lock = fork_lock()
+    url = lock.get("vmangos_db_url", "")
+    snap = url.rsplit("/", 1)[-1].removesuffix(".zip")
+    if not snap:
+        sys.exit("fork.lock has no vmangos_db_url; cannot cite a snapshot")
+    rows = emit_rows(c, snap)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written = {}
+    for name, (target, keys, vals, desc) in EMIT_TABLES.items():
+        rs = rows[name]
+        cols = [k for k, _ in keys] + [v for v, _, _ in vals] + ["src_snapshot", "src_table", "src_entry"]
+        body = [emit_header(c, lock, snap, f"mod-era-profile side table `{name}` (vanilla values for AC `{target}`)",
+                            [desc, f"Rows: {len(rs)}."]),
+                f"DROP TABLE IF EXISTS `{name}`;",
+                f"CREATE TABLE `{name}` ("]
+        body += [f"  `{k}` {t} NOT NULL," for k, t in keys]
+        body += [f"  `{v}` {t} {'NOT NULL' if name in ('era_player_xp_for_level', 'era_quest_xp') else 'NULL'} "
+                 f"COMMENT {sql_lit(cm)}," for v, t, cm in vals]
+        body += ["  `src_snapshot` VARCHAR(64) NOT NULL COMMENT 'VMaNGOS DB snapshot id (fork.lock vmangos_db_url)',",
+                 "  `src_table` VARCHAR(64) NOT NULL COMMENT 'VMaNGOS table the value comes from',",
+                 "  `src_entry` VARCHAR(64) NOT NULL COMMENT 'VMaNGOS key of the source row',",
+                 f"  PRIMARY KEY ({', '.join(f'`{k}`' for k, _ in keys)})",
+                 f") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT={sql_lit(desc[:2048])};"]
+        if rs:
+            body.append(f"INSERT INTO `{name}` ({', '.join(f'`{x}`' for x in cols)}) VALUES")
+            body.append(",\n".join("(" + ",".join(sql_lit(v) for v in r) + ")" for r in rs) + ";")
+        f = out_dir / f"{name}.sql"
+        f.write_text("\n".join(body) + "\n")
+        written[f.name] = len(rs)
+    # captured baseline: CREATE IF NOT EXISTS only, never dropped by a regeneration (it holds the stock values)
+    body = [emit_header(c, lock, snap, "mod-era-profile captured stock baseline tables",
+                        ["mod-era-profile copies the stock AzerothCore values of every row it may overwrite into these",
+                         "tables before its first apply (INSERT IGNORE: the first capture wins), and restores them when",
+                         "EraProfile.Enable = 0. They are never dropped or regenerated: they hold the only copy of the",
+                         "stock values while vanilla mode is applied. era_diff reads them in place of live rows."])]
+    for target, (keys, vals) in BASELINE_SQL_TYPES.items():
+        name = f"era_baseline_{target}"
+        assert [v for v, _ in vals] == [v for v, _ in BASELINE_COLS[target]], target
+        body.append(f"CREATE TABLE IF NOT EXISTS `{name}` (")
+        body += [f"  `{k}` {t} NOT NULL," for k, t in keys]
+        body += [f"  `{v}` {t} NULL," for v, t in vals]
+        body += ["  `captured_at` TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,",
+                 f"  PRIMARY KEY ({', '.join(f'`{k}`' for k, _ in keys)})",
+                 f") ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci COMMENT="
+                 f"{sql_lit(f'stock AC {target} values captured by mod-era-profile before its first apply')};"]
+    f = out_dir / "era_baseline.sql"
+    f.write_text("\n".join(body) + "\n")
+    written[f.name] = 0
+    return written
 
 # --------------------------------------------------------------------------- main
 def header(c):
@@ -870,12 +1114,20 @@ def main():
     ap.add_argument("-c", "--category", action="append", choices=list(CATEGORIES))
     ap.add_argument("--out", type=Path, default=OUT_DIR)
     ap.add_argument("--list", action="store_true")
+    ap.add_argument("--emit-sql", action="store_true",
+                    help="write the mod-era-profile side tables (era_*.sql) instead of the report")
+    ap.add_argument("--sql-dir", type=Path, default=SQL_DIR, help="where --emit-sql writes (default: the module)")
     args = ap.parse_args()
     if args.list:
         for k, fn in CATEGORIES.items():
             print(f"{k:22s} {(fn.__doc__ or '').strip().splitlines()[0] if fn.__doc__ else ''}")
         return
     c = Ctx()
+    if args.emit_sql:
+        for name, n in emit_sql(c, args.sql_dir).items():
+            print(f"{name:32s} rows={n:5d}")
+        print(f"wrote {args.sql_dir}")
+        return
     cats = args.category or list(CATEGORIES)
     report = {"header": header(c), "summary": {}, "categories": {}}
     qs, cs = c.quest_scope(), c.creature_scope()
