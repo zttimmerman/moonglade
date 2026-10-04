@@ -34,3 +34,6 @@ The first build worked but felt cluttered: Continue in the middle, a 3-button ba
 - A subtle dark translucent panel behind the menu column for legibility. Stock Blizzard button art and fonts.
 - The logo stays top-left (don't cover the animation). Version, copyright and ESRB text go small at the bottom edge. No other buttons in the corners.
 - Backlog: a setting to swap the WoW logo; creating profiles from the menu.
+
+## Known limit: when choices are saved (verifier note, 2026-10-04)
+The last profile and the backdrop choice are stored in the client's own settings (`WTF/Config.wtf`), which the client writes only when entering the world (EnterWorld → save routine; ADR-0009 appendix A). A backdrop picked and then quit from the menu without playing isn't remembered. `login.backdrop_choice` proves persistence through an enter-world step. Zach is told before his play session. A launcher-side store could lift this later, but the client has no reliable way to report the choice back.
