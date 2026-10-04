@@ -280,7 +280,7 @@ static NSString *const kHookEnv = @"HS_APP_TEST_HOOK";
     if ([remaining isKindOfClass:[NSArray class]] && remaining.count)
         [parts addObject:[NSString stringWithFormat:@"%lu part(s) were still running after shutdown.", (unsigned long)remaining.count]];
     if (parts.count == 0) {
-        NSArray *lines = self.playLines.count ? self.playLines : self.outLines;
+        NSArray *lines = self.outLines.count ? self.outLines : self.playLines;   // stray output is usually the error
         NSRange r = NSMakeRange(lines.count > 3 ? lines.count - 3 : 0, MIN(lines.count, (NSUInteger)3));
         NSString *last = [[lines subarrayWithRange:r] componentsJoinedByString:@"\n"];
         [parts addObject:last.length ? last : [NSString stringWithFormat:@"The play loop exited with code %d.", code]];

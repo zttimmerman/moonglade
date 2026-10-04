@@ -275,9 +275,9 @@ def bundle_valid(ctx):
                          "build": [r for r in rows if r["time"] and r["time"][:19].replace("T", " ") >= build_since]}
         require(any("outside-write-probe" in r["target"] for r in ev["denials"]["selftest"]),
                 "self-test: the blocked write isn't in the denial log, so the log can't vouch for the build", **ev)
+        require(not ev["denials"]["build"], "the build tried to write outside the repo", **ev)
         require(b.returncode == 0, "`harness/hs app` failed", **ev)
         require(A.APP.is_dir(), "dist/Hearthstone.app doesn't exist after the build", **ev)
-        require(not ev["denials"]["build"], "the build tried to write outside the repo", **ev)
         verify_bundle(A.APP, ev)
         ev["build_window_started"] = t0.isoformat()
         return ev
@@ -293,7 +293,8 @@ def _launchers(bundle: Path | None = None) -> list[dict]:
     out = []
     for pid, cmd in procs.table():
         exe = cmd.split(" --", 1)[0]
-        if exe.endswith(suffix) and (bundle is None or exe == str(bundle) + "/Contents/MacOS/" + A.EXE_NAME):
+        if exe.endswith(suffix) and (bundle is None or os.path.realpath(exe) ==
+                                     os.path.realpath(str(bundle) + "/Contents/MacOS/" + A.EXE_NAME)):
             out.append({"pid": pid, "cmd": cmd[:300], "ppid": procs.ppid(pid)})
     return out
 
@@ -656,11 +657,12 @@ def relocatable(ctx):
         require(d.returncode == 0 and v.returncode == 0 and ev["copy_outside_dist"],
                 "couldn't make a valid copy outside the repo", **ev)
         lifecycle(copy, ev, "moved")
-        ran_from = {e.get("bundle") for e in ev.get("events", [])}
+        ran_from = {os.path.realpath(e.get("bundle", "")) for e in ev.get("events", [])}
         ev["events_bundle_paths"] = sorted(ran_from)
-        require(ran_from == {str(copy)}, "the events weren't recorded by the copy's launcher", **ev)
-        require(all(l["cmd"].startswith(str(copy)) for l in ev["launchers_while_running"]),
-                "the running launcher wasn't the copy", **ev)
+        require(ran_from == {os.path.realpath(copy)}, "the events weren't recorded by the copy's launcher", **ev)
+        require(ev["launchers_while_running"] and all(
+            os.path.realpath(l["cmd"].split(" --", 1)[0]).startswith(os.path.realpath(copy) + "/")
+            for l in ev["launchers_while_running"]), "the running launcher wasn't the copy", **ev)
         return ev
     finally:
         stop_launchers(copy)
