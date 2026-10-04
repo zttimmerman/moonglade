@@ -23,3 +23,14 @@
 ## Risks
 - The patched exe might behave differently in untested places → stock mode one setting away; human-verify play.
 - The first launch of a new exe path under Wine may re-trigger macOS prompts → note for Zach.
+
+## Menu layout (Zach + orchestrator UX review, 2026-10-04, after the first play test)
+The first build worked but felt cluttered: Continue in the middle, a 3-button backdrop picker on the left, Options/Cinematics/Credits on the right. New layout, following single-player title screens:
+- **Main menu**, one centred column in the lower-middle (backdrop art stays visible): **Continue** (preselected; current profile name in small text under it), **Profiles**, **Settings**, **Extras**, **Quit**.
+- **Profiles** is always shown, even with one profile, so it's clear more can exist later. It lists profiles with a "current" mark; choosing one makes it Continue's target. Creating profiles is a later change.
+- **Settings** submenu: **Game options** (opens the client's stock video/sound/interface option panels), **Login screen ◀ name ▶** (one cycling selector; backdrop, logo and music switch live), **Back**. World size and vanilla mode join here in the next change; nothing greyed out before it works.
+- **Extras** submenu: **Cinematics**, **Credits**, **Back**.
+- Keyboard first: Up/Down move, Enter selects, Escape goes back a level (Escape on the main menu does nothing or focuses Quit); mouse works too.
+- A subtle dark translucent panel behind the menu column for legibility. Stock Blizzard button art and fonts.
+- The logo stays top-left (don't cover the animation). Version, copyright and ESRB text go small at the bottom edge. No other buttons in the corners.
+- Backlog: a setting to swap the WoW logo; creating profiles from the menu.
