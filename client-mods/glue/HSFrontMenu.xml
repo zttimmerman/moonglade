@@ -6,96 +6,22 @@
 	<Script file="HSProfiles.lua"/>
 	<Script file="HSFrontMenu.lua"/>
 
-	<Frame name="HSProfileRowTemplate" virtual="true" hidden="true">
-		<Size x="270" y="28"/>
-		<Layers>
-			<Layer level="ARTWORK">
-				<FontString name="$parentName" inherits="GlueFontHighlight" justifyH="LEFT">
-					<Anchors>
-						<Anchor point="LEFT">
-							<Offset>
-								<AbsDimension x="8" y="0"/>
-							</Offset>
-						</Anchor>
-					</Anchors>
-				</FontString>
-			</Layer>
-		</Layers>
-		<Frames>
-			<Button name="$parentPlay" inherits="GlueButtonSmallTemplateBlue">
-				<Anchors>
-					<Anchor point="RIGHT">
-						<Offset>
-							<AbsDimension x="-2" y="0"/>
-						</Offset>
-					</Anchor>
-				</Anchors>
-				<Scripts>
-					<OnClick>
-						HSFrontMenu_RowClicked(self:GetParent());
-					</OnClick>
-				</Scripts>
-			</Button>
-		</Frames>
-	</Frame>
-
-	<Button name="HSBackdropButtonTemplate" inherits="GlueButtonSmallTemplateBlue" virtual="true">
+	<Button name="HSMenuSlotTemplate" inherits="GlueButtonTemplateBlue" virtual="true">
+		<Size x="240" y="40"/>
 		<Scripts>
 			<OnClick>
-				HSFrontMenu_BackdropClicked(self);
+				HSFrontMenu_SlotClicked(self);
 			</OnClick>
 		</Scripts>
 	</Button>
 
-	<!-- Continue (the last-used profile) where the stock Login button and edit boxes were -->
-	<Frame name="HSMenu" parent="AccountLoginUI" hidden="true">
-		<Size x="300" y="80"/>
+	<!-- The whole front menu: one centred column in the lower middle, over a subtle dark panel -->
+	<Frame name="HSMenuPanel" parent="AccountLoginUI" hidden="true">
+		<Size x="300" y="280"/>
 		<Anchors>
 			<Anchor point="BOTTOM">
 				<Offset>
-					<AbsDimension x="0" y="300"/>
-				</Offset>
-			</Anchor>
-		</Anchors>
-		<Layers>
-			<Layer level="ARTWORK">
-				<FontString name="HSMenuWho" inherits="GlueFontNormal" text="">
-					<Anchors>
-						<Anchor point="TOP">
-							<Offset>
-								<AbsDimension x="0" y="0"/>
-							</Offset>
-						</Anchor>
-					</Anchors>
-				</FontString>
-			</Layer>
-		</Layers>
-		<Frames>
-			<Button name="HSContinueButton" inherits="GlueButtonTemplateBlue">
-				<Size x="260" y="52"/>
-				<Anchors>
-					<Anchor point="BOTTOM">
-						<Offset>
-							<AbsDimension x="0" y="0"/>
-						</Offset>
-					</Anchor>
-				</Anchors>
-				<Scripts>
-					<OnClick>
-						HSFrontMenu_Continue();
-					</OnClick>
-				</Scripts>
-			</Button>
-		</Frames>
-	</Frame>
-
-	<!-- The other profiles, each with Play -->
-	<Frame name="HSOthers" parent="AccountLoginUI" hidden="true">
-		<Size x="290" y="60"/>
-		<Anchors>
-			<Anchor point="TOP" relativeTo="HSMenu" relativePoint="BOTTOM">
-				<Offset>
-					<AbsDimension x="0" y="-14"/>
+					<AbsDimension x="0" y="120"/>
 				</Offset>
 			</Anchor>
 		</Anchors>
@@ -112,78 +38,52 @@
 		</Backdrop>
 		<Layers>
 			<Layer level="ARTWORK">
-				<FontString name="HSOthersTitle" inherits="GlueFontNormalSmall" text="">
+				<FontString name="HSMenuTitle" inherits="GlueFontNormal" text="">
 					<Anchors>
 						<Anchor point="TOP">
 							<Offset>
-								<AbsDimension x="0" y="-12"/>
+								<AbsDimension x="0" y="-16"/>
 							</Offset>
 						</Anchor>
 					</Anchors>
 				</FontString>
+				<FontString name="HSMenuSub" inherits="GlueFontNormalSmall" text=""/>
 			</Layer>
 		</Layers>
 		<Frames>
-			<Frame name="HSProfileRow1" inherits="HSProfileRowTemplate" id="1"/>
-			<Frame name="HSProfileRow2" inherits="HSProfileRowTemplate" id="2"/>
-			<Frame name="HSProfileRow3" inherits="HSProfileRowTemplate" id="3"/>
-			<Frame name="HSProfileRow4" inherits="HSProfileRowTemplate" id="4"/>
-		</Frames>
-	</Frame>
-
-	<Frame name="HSBackdropPanel" parent="AccountLoginUI">
-		<Size x="180" y="130"/>
-		<Anchors>
-			<Anchor point="BOTTOMLEFT">
-				<Offset>
-					<AbsDimension x="5" y="170"/>
-				</Offset>
-			</Anchor>
-		</Anchors>
-		<Layers>
-			<Layer level="ARTWORK">
-				<FontString name="HSBackdropPanelLabel" inherits="GlueFontNormalSmall" text="">
-					<Anchors>
-						<Anchor point="TOP">
-							<Offset>
-								<AbsDimension x="0" y="0"/>
-							</Offset>
-						</Anchor>
-					</Anchors>
-				</FontString>
-			</Layer>
-		</Layers>
-		<Frames>
-			<Button name="HSBackdropButton1" inherits="HSBackdropButtonTemplate" id="1">
-				<Anchors>
-					<Anchor point="TOP" relativeTo="HSBackdropPanelLabel" relativePoint="BOTTOM">
-						<Offset>
-							<AbsDimension x="0" y="-4"/>
-						</Offset>
-					</Anchor>
-				</Anchors>
+			<Button name="HSMenuSlot1" inherits="HSMenuSlotTemplate" id="1" hidden="true"/>
+			<Button name="HSMenuSlot2" inherits="HSMenuSlotTemplate" id="2" hidden="true"/>
+			<Button name="HSMenuSlot3" inherits="HSMenuSlotTemplate" id="3" hidden="true"/>
+			<Button name="HSMenuSlot4" inherits="HSMenuSlotTemplate" id="4" hidden="true"/>
+			<Button name="HSMenuSlot5" inherits="HSMenuSlotTemplate" id="5" hidden="true"/>
+			<Button name="HSMenuSlot6" inherits="HSMenuSlotTemplate" id="6" hidden="true"/>
+			<Button name="HSArrowLeft" hidden="true">
+				<Size x="32" y="32"/>
+				<Scripts>
+					<OnClick>
+						HSFrontMenu_CycleBackdrop(-1);
+					</OnClick>
+				</Scripts>
+				<NormalTexture file="Interface\Glues\Common\Glue-LeftArrow-Button-Up"/>
+				<PushedTexture file="Interface\Glues\Common\Glue-LeftArrow-Button-Down"/>
+				<HighlightTexture file="Interface\Glues\Common\Glue-LeftArrow-Button-Highlight" alphaMode="ADD"/>
 			</Button>
-			<Button name="HSBackdropButton2" inherits="HSBackdropButtonTemplate" id="2">
-				<Anchors>
-					<Anchor point="TOP" relativeTo="HSBackdropButton1" relativePoint="BOTTOM">
-						<Offset>
-							<AbsDimension x="0" y="-2"/>
-						</Offset>
-					</Anchor>
-				</Anchors>
-			</Button>
-			<Button name="HSBackdropButton3" inherits="HSBackdropButtonTemplate" id="3">
-				<Anchors>
-					<Anchor point="TOP" relativeTo="HSBackdropButton2" relativePoint="BOTTOM">
-						<Offset>
-							<AbsDimension x="0" y="-2"/>
-						</Offset>
-					</Anchor>
-				</Anchors>
+			<Button name="HSArrowRight" hidden="true">
+				<Size x="32" y="32"/>
+				<Scripts>
+					<OnClick>
+						HSFrontMenu_CycleBackdrop(1);
+					</OnClick>
+				</Scripts>
+				<NormalTexture file="Interface\Glues\Common\Glue-RightArrow-Button-Up"/>
+				<PushedTexture file="Interface\Glues\Common\Glue-RightArrow-Button-Down"/>
+				<HighlightTexture file="Interface\Glues\Common\Glue-RightArrow-Button-Highlight" alphaMode="ADD"/>
 			</Button>
 		</Frames>
 		<Scripts>
 			<OnLoad>
+				self:SetBackdropColor(0, 0, 0, 0.55);
+				self:SetBackdropBorderColor(0.5, 0.5, 0.5, 0.6);
 				HSFrontMenu_Init();
 			</OnLoad>
 		</Scripts>

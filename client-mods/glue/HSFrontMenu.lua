@@ -1,13 +1,16 @@
 -- Hearthstone front menu (openspec/changes/in-client-login, patch 0002).
 --
--- The stock 3.3.5a login screen (animated backdrop, music, logo, Options/Credits/Cinematics/Quit) with the
--- account/password boxes replaced by a menu:
---   * a prominent Continue button for the last-used profile (GetSavedAccountName); Enter or a click logs in;
---   * the other profiles below it, each with Play;
---   * no timer, no typing: the logins come from HSProfiles.lua, which the launcher generates at each start inside
---     the play client (never committed, never in client/) and removes when the game closes;
---   * a backdrop picker (Lich King / Burning Crusade / Classic) that swaps the login model, logo and music and
---     remembers the choice in the client's own settings.
+-- The stock 3.3.5a login screen (animated backdrop, music, era logo) turned into a single-player title menu
+-- (design.md "Menu layout"): one centred column over a subtle dark panel.
+--   Main:     Continue (the current profile, its name small underneath; preselected), Profiles, Settings, Extras, Quit
+--   Profiles: every profile, the current one marked; choosing one makes it Continue's target; Back
+--   Settings: Game options (the stock option panels), Login screen < name > (backdrop, logo and music switch live), Back
+--   Extras:   Cinematics, Credits, Back
+-- Keyboard: Up/Down move, Enter selects, Left/Right change the selector, Escape goes back a level (on the main menu
+-- it moves to Quit). The mouse works too (hovering highlights a button the stock way but doesn't move the
+-- keyboard selection, so a resting cursor can't steal Continue's preselection). Every stock login control (edit boxes, corner buttons) is hidden.
+-- No typing: the logins come from HSProfiles.lua, which the launcher generates at each start inside the play client
+-- (never committed, never in client/) and removes when the game closes.
 -- Where the choices live: the glue screens only know the client's own console variables (GetCVar on an unknown name
 -- errors and RegisterCVar doesn't exist there), so the last profile is the stock saved account name (accountName) and
 -- the backdrop is kept in the stock saved account list (accountList, "HSBD<key>|"; it only holds Battle.net
@@ -28,18 +31,17 @@ HS_BACKDROPS = {
 	  model = "Interface\\Glues\\Models\\UI_MainMenu\\UI_MainMenu.m2",
 	  logo = "Interface\\Glues\\Common\\Glues-WoW-Logo", music = "GS_Retail" },
 };
-HS_MAX_OTHERS = 4;
 
 HS_PROFILES = HS_PROFILES or {};
 
-local state = { shown = false, backdrop = nil, continueProfile = nil, others = {},
+local state = { shown = false, backdrop = nil, current = nil, menu = "main", sel = 1, items = nil,
                 testClock = 0, testDone = {}, quitAt = nil, testLog = "" };
 HSFrontMenuState = state;
 
 -- ---------------------------------------------------------------- test hook marks
 
 -- Test hook: only when the generated HSProfiles.lua carries HS_TEST (harness checks). Records `event` in
--- HSFrontMenuState.testLog; the "showlog" script action puts it on screen (HSMenuWho) so a screenshot carries it.
+-- HSFrontMenuState.testLog; the "showlog" script action puts it on screen (HSMenuTitle) so a screenshot carries it.
 function HSFrontMenu_Mark(event)
 	if ( not HS_TEST ) then return; end
 	if ( state.testLog ~= "" ) then state.testLog = state.testLog .. ";"; end
@@ -75,17 +77,9 @@ function HSFrontMenu_ApplyBackdrop(b, remember)
 	if ( remember ) then
 		SetSavedAccountList("HSBD" .. b.key .. "|");
 	end
-	for i = 1, #HS_BACKDROPS do
-		local button = _G["HSBackdropButton" .. i];
-		if ( HS_BACKDROPS[i] == b ) then button:LockHighlight(); else button:UnlockHighlight(); end
-	end
 	HSFrontMenu_Mark("backdrop:" .. b.key .. ":" .. b.model .. ":" .. b.music);
 end
 
-function HSFrontMenu_BackdropClicked(self)
-	PlaySound("gsTitleOptionOK");
-	HSFrontMenu_ApplyBackdrop(HS_BACKDROPS[self:GetID()], true);
-end
 
 -- ---------------------------------------------------------------- profiles and login
 
@@ -97,9 +91,13 @@ local function profileByAccount(account)
 	return nil;
 end
 
--- The Continue profile: the last one used (saved account name), else the launcher's default, else the first.
-function HSFrontMenu_ContinueProfile()
-	return profileByAccount(GetSavedAccountName()) or profileByAccount(HS_PROFILE_DEFAULT) or HS_PROFILES[1];
+local function pname(p) return p.name or p.account; end
+
+-- The current profile (Continue's target): chosen in Profiles this session, else the last one used (saved account
+-- name), else the launcher's default, else the first.
+function HSFrontMenu_CurrentProfile()
+	return state.current or profileByAccount(GetSavedAccountName()) or profileByAccount(HS_PROFILE_DEFAULT)
+		or HS_PROFILES[1];
 end
 
 function HSFrontMenu_Login(profile, how)
@@ -111,56 +109,171 @@ function HSFrontMenu_Login(profile, how)
 end
 
 function HSFrontMenu_Continue(how)
-	HSFrontMenu_Login(state.continueProfile, how or "continue");
+	HSFrontMenu_Login(HSFrontMenu_CurrentProfile(), how or "continue");
 end
 
-function HSFrontMenu_RowClicked(row)
-	HSFrontMenu_Login(state.others[row:GetID()], "play");
+function HSFrontMenu_CycleBackdrop(dir)
+	local _, i = backdropByKey((state.backdrop or HS_BACKDROPS[1]).key);
+	i = (((i or 1) - 1 + dir) % #HS_BACKDROPS) + 1;
+	PlaySound("gsTitleOptionOK");
+	HSFrontMenu_ApplyBackdrop(HS_BACKDROPS[i], true);
+	HSFrontMenu_Render();
 end
 
-function HSFrontMenu_Layout()
-	local cont = HSFrontMenu_ContinueProfile();
-	state.continueProfile = cont;
-	state.others = {};
-	for _, p in ipairs(HS_PROFILES) do
-		if ( p ~= cont ) then table.insert(state.others, p); end
+-- ---------------------------------------------------------------- the menus
+
+local MENUS = {};
+
+MENUS.main = { back = nil, items = function()
+	local cur = HSFrontMenu_CurrentProfile();
+	return {
+		{ text = "Continue", sub = cur and pname(cur) or "No profile: start from the Hearthstone app",
+		  disabled = not cur, action = function() HSFrontMenu_Continue("continue"); end },
+		{ text = "Profiles", action = function() HSFrontMenu_Open("profiles"); end },
+		{ text = "Settings", action = function() HSFrontMenu_Open("settings"); end },
+		{ text = "Extras", action = function() HSFrontMenu_Open("extras"); end },
+		{ text = "Quit", action = function() AccountLogin_Exit(); end },
+	};
+end };
+
+MENUS.profiles = { title = "Profiles", back = "main", items = function()
+	local list, cur = {}, HSFrontMenu_CurrentProfile();
+	for i = 1, math.min(#HS_PROFILES, 5) do
+		local p = HS_PROFILES[i];
+		table.insert(list, { text = pname(p) .. ((p == cur) and "  (current)" or ""), action = function()
+			state.current = p;
+			PlaySound("gsTitleOptionOK");
+			HSFrontMenu_Mark("profile:" .. p.account);
+			HSFrontMenu_Open("main");
+		end });
 	end
-	if ( cont ) then
-		HSMenuWho:SetText(cont.name or cont.account);
-		HSContinueButton:Enable();
-	else
-		HSMenuWho:SetText("No profiles: start the game from the Hearthstone app");
-		HSContinueButton:Disable();
-	end
-	HSMenu:Show();
-	local n = math.min(#state.others, HS_MAX_OTHERS);
-	for i = 1, HS_MAX_OTHERS do
-		local row = _G["HSProfileRow" .. i];
-		if ( i <= n ) then
-			local p = state.others[i];
-			_G["HSProfileRow" .. i .. "Name"]:SetText(p.name or p.account);
-			row:ClearAllPoints();
-			row:SetPoint("TOP", HSOthers, "TOP", 0, -30 - (i - 1) * 28);
-			row:Show();
+	table.insert(list, { text = "Back", back = true });
+	return list;
+end };
+
+MENUS.settings = { title = "Settings", back = "main", items = function()
+	return {
+		{ text = "Game options", action = function()
+			PlaySound("gsTitleOptions");
+			OptionsSelectFrame:Show();
+		end },
+		{ text = (state.backdrop or HS_BACKDROPS[1]).label, selector = true, sub = "Login screen",
+		  action = function() HSFrontMenu_CycleBackdrop(1); end },
+		{ text = "Back", back = true },
+	};
+end };
+
+MENUS.extras = { title = "Extras", back = "main", items = function()
+	return {
+		{ text = "Cinematics", action = function() AccountLogin_Cinematics(); end },
+		{ text = "Credits", action = function() AccountLogin_Credits(); end },
+		{ text = "Back", back = true },
+	};
+end };
+
+local SLOT_H, SLOT_GAP = 40, 6;
+
+function HSFrontMenu_Render()
+	local menu = MENUS[state.menu];
+	local items = menu.items();
+	state.items = items;
+	if ( state.sel > #items ) then state.sel = #items; end
+	local top = menu.title and -42 or -18;
+	if ( menu.title ) then HSMenuTitle:SetText(menu.title); HSMenuTitle:Show(); else HSMenuTitle:Hide(); end
+	HSMenuSub:Hide();
+	HSArrowLeft:Hide();
+	HSArrowRight:Hide();
+	local y = top;
+	for i = 1, 6 do
+		local slot = _G["HSMenuSlot" .. i];
+		local it = items[i];
+		if ( it ) then
+			slot:ClearAllPoints();
+			slot:SetPoint("TOP", HSMenuPanel, "TOP", 0, y);
+			slot:SetText(it.text);
+			if ( it.disabled ) then slot:Disable(); else slot:Enable(); end
+			if ( i == state.sel ) then slot:LockHighlight(); else slot:UnlockHighlight(); end
+			slot:Show();
+			y = y - SLOT_H - SLOT_GAP;
+			if ( it.sub ) then
+				HSMenuSub:ClearAllPoints();
+				HSMenuSub:SetPoint("TOP", slot, "BOTTOM", 0, 2);
+				HSMenuSub:SetText(it.sub);
+				HSMenuSub:Show();
+				y = y - 12;
+			end
+			if ( it.selector ) then
+				slot:SetWidth(180);
+				HSArrowLeft:ClearAllPoints();
+				HSArrowLeft:SetPoint("RIGHT", slot, "LEFT", 2, 0);
+				HSArrowRight:ClearAllPoints();
+				HSArrowRight:SetPoint("LEFT", slot, "RIGHT", -2, 0);
+				HSArrowLeft:Show();
+				HSArrowRight:Show();
+			else
+				slot:SetWidth(240);
+			end
 		else
-			row:Hide();
+			slot:Hide();
 		end
 	end
-	if ( n > 0 ) then
-		HSOthers:SetHeight(42 + n * 28);
-		HSOthers:Show();
-	else
-		HSOthers:Hide();
-	end
-	HSFrontMenu_Mark("menu:" .. #HS_PROFILES .. ":continue=" .. (cont and cont.account or "-") .. ":others=" .. n);
+	HSMenuPanel:SetHeight(-y + 10);
+	HSMenuPanel:Show();
 end
+
+function HSFrontMenu_Open(name, sel)
+	state.menu = name;
+	state.sel = sel or 1;
+	HSFrontMenu_Mark("open:" .. name);
+	HSFrontMenu_Render();
+end
+
+function HSFrontMenu_Activate(i)
+	local it = state.items and state.items[i];
+	if ( not it or it.disabled ) then return; end
+	state.sel = i;
+	if ( it.back ) then
+		HSFrontMenu_Back();
+	else
+		if ( not it.selector ) then PlaySound("gsTitleOptionOK"); end
+		it.action();
+	end
+end
+
+function HSFrontMenu_Back()
+	local menu = MENUS[state.menu];
+	PlaySound("gsTitleOptionExit");
+	if ( menu.back ) then
+		HSFrontMenu_Open(menu.back);
+	else
+		state.sel = #state.items;          -- Escape on the main menu moves to Quit
+		HSFrontMenu_Render();
+	end
+end
+
+function HSFrontMenu_Move(dir)
+	local n = #state.items;
+	local i = state.sel;
+	repeat
+		i = ((i - 1 + dir) % n) + 1;
+	until ( not state.items[i].disabled or i == state.sel );
+	state.sel = i;
+	HSFrontMenu_Render();
+end
+
+function HSFrontMenu_SlotClicked(self)
+	HSFrontMenu_Activate(self:GetID());
+end
+
 
 -- ---------------------------------------------------------------- wrapping the stock login screen
 
 local stockHide = { "AccountLoginAccountEdit", "AccountLoginPasswordEdit", "AccountLoginTokenEdit",
 	"AccountLoginLoginButton", "AccountLoginSaveAccountName", "AccountLoginSaveAccountNameText",
 	"AccountLoginDropDown", "AccountLoginManageAccountButton", "AccountLoginCommunityButton",
-	"AccountLoginShowLauncher", "AccountLoginTOSButton", "AccountLoginUpgradeAccountButton" };
+	"AccountLoginShowLauncher", "AccountLoginTOSButton", "AccountLoginUpgradeAccountButton",
+	"AccountLoginRealmName", "OptionsButton", "AccountLoginCinematicsButton", "AccountLoginCreditsButton",
+	"AccountLoginExitButton" };
 
 local HS_Stock_OnShow = AccountLogin_OnShow;
 local HS_Stock_OnKeyDown = AccountLogin_OnKeyDown;
@@ -178,18 +291,31 @@ function AccountLogin_OnShow(self)
 	AccountLoginSaveAccountName:SetChecked(1);
 	HSFrontMenu_ApplyBackdrop(b, false);
 	state.shown = true;
-	HSFrontMenu_Layout();
+	HSFrontMenu_Open("main", 1);
+	local cur = HSFrontMenu_CurrentProfile();
+	HSFrontMenu_Mark("menu:" .. #HS_PROFILES .. ":continue=" .. (cur and cur.account or "-"));
 end
 
 function AccountLogin_OnKeyDown(key)
-	if ( key == "ENTER" ) then
-		if ( TOSAccepted() and not TOSFrame:IsShown() and not ConnectionHelpFrame:IsShown()
-		     and not GlueDialog:IsShown() and HSContinueButton:IsEnabled() == 1 ) then
-			HSFrontMenu_Continue("enter");
-		end
+	if ( key == "PRINTSCREEN" ) then
+		Screenshot();
 		return;
 	end
-	HS_Stock_OnKeyDown(key);
+	if ( not state.items or GlueDialog:IsShown() or TOSFrame:IsShown() or ConnectionHelpFrame:IsShown() ) then
+		if ( key ~= "ENTER" ) then HS_Stock_OnKeyDown(key); end
+		return;
+	end
+	if ( key == "UP" ) then
+		HSFrontMenu_Move(-1);
+	elseif ( key == "DOWN" or key == "TAB" ) then
+		HSFrontMenu_Move(1);
+	elseif ( key == "ENTER" ) then
+		HSFrontMenu_Activate(state.sel);
+	elseif ( key == "ESCAPE" ) then
+		HSFrontMenu_Back();
+	elseif ( (key == "LEFT" or key == "RIGHT") and state.items[state.sel].selector ) then
+		HSFrontMenu_CycleBackdrop(key == "LEFT" and -1 or 1);
+	end
 end
 
 -- The stock Login function reads the (hidden) edit boxes; route it to Continue instead.
@@ -218,8 +344,9 @@ function HSFrontMenu_OnEvent(self, event)
 end
 
 -- HS_TEST.script = { {t = seconds after the login screen first shows, act = "continue" | "shot" | "quit" |
--- "backdrop:TBC" | ...}, ... }; HS_TEST.quit_after_charlist = seconds. "continue" clicks the Continue button once
--- (the same handler a mouse click runs); nothing here injects keystrokes.
+-- "backdrop:TBC" | "menu:settings" | "key:DOWN" | ...}, ... }; HS_TEST.quit_after_charlist = seconds. "continue"
+-- clicks the Continue button once (the same handler a mouse click runs); "key:X" calls the login screen's own
+-- key handler; nothing here injects keystrokes into the client.
 function HSFrontMenu_TestUpdate(self, elapsed)
 	if ( not HS_TEST or not state.shown ) then return; end
 	state.testClock = state.testClock + elapsed;
@@ -230,7 +357,12 @@ function HSFrontMenu_TestUpdate(self, elapsed)
 				local act = step.act;
 				if ( act == "continue" ) then
 					HSFrontMenu_Mark("press:continue");
-					HSContinueButton:Click();
+					HSFrontMenu_Open("main", 1);
+					HSMenuSlot1:Click();
+				elseif ( strsub(act, 1, 5) == "menu:" ) then
+					HSFrontMenu_Open(strsub(act, 6));
+				elseif ( strsub(act, 1, 4) == "key:" ) then
+					AccountLogin_OnKeyDown(strsub(act, 5));
 				elseif ( act == "shot" ) then
 					Screenshot();
 					HSFrontMenu_Mark("shot");
@@ -241,7 +373,8 @@ function HSFrontMenu_TestUpdate(self, elapsed)
 					HSFrontMenu_Mark("press:enterworld");
 					EnterWorld();
 				elseif ( act == "showlog" ) then
-					HSMenuWho:SetText(state.testLog .. " | saved=" .. (GetSavedAccountName() or "") .. "/"
+					HSMenuTitle:Show();
+					HSMenuTitle:SetText(state.testLog .. " | saved=" .. (GetSavedAccountName() or "") .. "/"
 					                  .. (GetSavedAccountList() or ""));
 				elseif ( strsub(act, 1, 9) == "backdrop:" ) then
 					local b = backdropByKey(strsub(act, 10));
@@ -264,17 +397,8 @@ end
 
 -- ---------------------------------------------------------------- load time
 
--- Called from HSBackdropPanel's OnLoad (HSFrontMenu.xml), once its buttons exist.
+-- Called from HSMenuPanel's OnLoad (HSFrontMenu.xml).
 function HSFrontMenu_Init()
-	HSContinueButton:SetText("Continue");
-	for i = 1, HS_MAX_OTHERS do
-		_G["HSProfileRow" .. i .. "Play"]:SetText("Play");
-	end
-	HSOthersTitle:SetText("Other profiles");
-	HSBackdropPanelLabel:SetText("Login screen");
-	for i, b in ipairs(HS_BACKDROPS) do
-		_G["HSBackdropButton" .. i]:SetText(b.label);
-	end
 	if ( HS_TEST ) then
 		HSFrontMenu_Mark("stored=" .. HSFrontMenu_StoredBackdrop().key);
 	end
