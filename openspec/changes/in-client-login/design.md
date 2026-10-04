@@ -11,7 +11,7 @@
 ## Login flow in GlueXML
 - `AccountLogin.lua`/`.xml` overrides via our patch MPQ (`patch-enUS-4.MPQ` or the next free slot; the spike showed patch-N priority order).
 - Credentials: the launcher writes a small generated Lua file (e.g. `Interface\GlueXML\HSProfiles.lua`, loose file or tiny MPQ) into the play client at each start. It holds the profile names and logins. It's the same secret already stored in `env/player.json` (gitignored); never committed, never written into `client/`.
-- Auto-login: on show, if a last-used profile exists and the cancel key/button isn't used within a short countdown, call the client's login function with that profile. Otherwise show the list.
+- Continue: on show, the menu preselects the last-used profile's Continue button (Enter or click calls the client's login function). Other profiles are listed with Play. No countdown.
 - Backdrop: `AccountLogin:SetModel(...)` plus glue music by choice. The choice is persisted in the client's own saved settings (or our generated file).
 - Keep the realm list skipped (single local realm) and the character screen unchanged.
 

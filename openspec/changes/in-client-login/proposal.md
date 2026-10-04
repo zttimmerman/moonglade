@@ -13,7 +13,7 @@ ADR-0009 (accepted 2026-10-04) approves the mechanism: a derived **play client**
    - The player's existing client settings (`WTF/`) are carried over into the play client once, so nothing is lost.
 2. **Patch 0001 (binary):** the GlueXML signature result counts as OK, so a modified GlueXML loads instead of quitting. Exact bytes are pinned from analysis of a copy (ADR-0005) and recorded in an ADR-0009 appendix. Nothing else in Wow.exe changes.
 3. **Our GlueXML (data patch MPQ):**
-   - **Profiles:** the login screen lists this install's profiles (for now: the PLAYER account; the design allows more). Picking one logs in with no typing (GlueXML's own login call). The last-used profile auto-logs in on start, with a visible way to cancel and pick another.
+   - **Profiles:** the login screen lists this install's profiles (for now: the PLAYER account; the design allows more). The menu opens with a preselected **Continue** for the last-used profile (Enter or click, GlueXML's own login call); other profiles are listed below. No countdown.
    - **No password typing anywhere.** Profile credentials reach GlueXML through a file the launcher generates at start, inside the play client only, never committed.
    - **Backdrop picker:** WotLK / TBC / Vanilla (Dark Portal) login backdrop with matching music, remembered between launches. The spike showed all three models and tracks ship in the 3.3.5a MPQs.
    - Looks native: keeps the original animated backdrop, music and layout style.
@@ -34,4 +34,4 @@ New `hs client-build`, `patches/client/`, GlueXML sources under `client-mods/glu
 No game data values change. Patch bytes come from disassembly of a copy of build 12340 (SHA-256 aa63a575…), cited with addresses.
 
 ## Spec-change log
-(none yet)
+- 2026-10-04: auto-login countdown replaced by a preselected Continue button (Zach agreed after a UX discussion). Reason: a countdown races the player, hides the menu where options will live, and can log in before server options are chosen; one Enter press costs nothing. Scenario "Cancel shows the profile list" became "Menu waits for the player" (same check id `login.cancel_shows_list`); `login.auto_login` now triggers Continue once. Not a loosening: login still requires zero typed credentials; a zero-click skip-menu setting may come later, off by default.
