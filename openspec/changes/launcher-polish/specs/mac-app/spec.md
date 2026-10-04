@@ -9,6 +9,7 @@ When the game runs from Hearthstone.app, the Dock SHALL show exactly one icon fo
 - **GIVEN** the app opened with the GUI stand-in client (Wine's notepad under the same runtime and shim)
 - **WHEN** the stand-in's window is up
 - **THEN** `lsappinfo` reports the stand-in pid as a UIElement (no Dock icon) named Hearthstone, the launcher pid as the only Foreground process of this session with bundle id `local.hearthstone.app`, and no other process of this prefix as Foreground
+- **AND** sampling every process of this prefix at least 10 times per second from the Wine host's start until 5 s after the window is up, none is ever reported as Foreground (no Wine Dock icon flashes, even briefly), with the sample count recorded
 - Check: `app.single_dock_icon`
 
 #### Scenario: Hand-off when the game window appears

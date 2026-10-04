@@ -30,4 +30,4 @@ Research: `docs/research/launcher-polish-spike.md`. Decision: ADR-0010 (accepted
 New `harness/app/dockshim.m` (or similar), launcher.m changes, `launch.wine_env()` sets the shim only for app runs, play.py stage emission, new checks. No change to Wow.exe, `client/`, the pinned runtime directory, or the server.
 
 ## Spec-change log
-(none yet)
+- 2026-10-04 (before build): `app.single_dock_icon` also samples from Wine-host start to 5 s after the window at ≥10 Hz and fails on any Foreground sample, so a momentary Wine Dock icon flash is caught (Zach asked about flicker). A tightening.
