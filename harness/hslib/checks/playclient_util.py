@@ -5,7 +5,7 @@ PlayRun drives the real `./play` with the real Wow.exe (no stand-in) against a s
 account. The GlueXML test hook ($HS_GLUE_TEST) scripts actions inside the client (one Continue click, screenshots,
 entering the world); nothing injects keystrokes.
 
-Marker squares: with {"marker": true} the client draws three solid squares top right (HSFrontMenu.lua,
+Marker squares: with {"marker": true} the client draws four solid squares top right (HSFrontMenu.lua,
 HSFrontMenu_UpdateMarker); `marker()` reads them back from the client's own screenshot.
 """
 from __future__ import annotations
@@ -111,6 +111,7 @@ class PlayRun:
             return ""
 
     def cleanup(self) -> None:
+        """Stop everything; remove the generated login file even when ./play was killed before its own cleanup."""
         if self.proc and self.proc.poll() is None:
             try:
                 os.killpg(self.proc.pid, signal.SIGKILL)
@@ -121,7 +122,17 @@ class PlayRun:
             launch.stop_prefix()
         if any(stack.stack_processes().values()):
             stack.down()
+        from .. import clientbuild, frontmenu
+        target = self.scratch or clientbuild.PLAY
+        if (target / "hs-build.json").is_file():
+            self.removed_profiles = frontmenu.remove(target)
         shutil.rmtree(self.tmp, ignore_errors=True)
+
+
+def drop_scratch(d: Path | None) -> None:
+    """Delete a scratch play client when a check is done (APFS clones, but the disk is tight)."""
+    if d and d.name.startswith("check-play-") and d.parent == P.ENV:
+        shutil.rmtree(d, ignore_errors=True)
 
 
 def leftovers() -> dict:
@@ -212,17 +223,19 @@ COLOR_INDEX = {"red": 0, "green": 1, "blue": 2}
 
 
 def marker(path: Path) -> dict:
-    """Decode the three marker squares (UI scale 1:1 at the client's 1024x768 window; HSTestMarker is anchored
-    TOPRIGHT -10,-10, 150x40, squares LEFT / CENTER / RIGHT)."""
+    """Decode the four marker squares (UI scale 1:1 at the client's 1024x768 window; HSTestMarker is anchored
+    TOPRIGHT -10,-10, 200x40, 40x40 squares at x = 0 / 53 / 106 / 159 from its left edge)."""
     w, h, px = _bmp_pixels(path)
     cy = 10 + 20
-    pts = {"backdrop": w - 10 - 150 + 20, "music": w - 10 - 75, "menu": w - 10 - 20}
+    left = w - 10 - 200
+    pts = {k: left + i * 53 + 20 for i, k in enumerate(("backdrop", "music", "menu", "errors"))}
     raw = {k: _avg(px, x, cy) for k, x in pts.items()}
     cls = {k: _classify(v) for k, v in raw.items()}
     out = {"file": path.name, "size": [w, h], "rgb": raw, "colors": cls}
     out["backdrop"] = BACKDROP_KEYS[COLOR_INDEX[cls["backdrop"]]] if cls["backdrop"] in COLOR_INDEX else None
     out["music"] = BACKDROP_KEYS[COLOR_INDEX[cls["music"]]] if cls["music"] in COLOR_INDEX else None
     out["main_menu_up"] = {"white": True, "magenta": False}.get(cls["menu"])
+    out["lua_errors"] = {"white": 0, "red": ">=1"}.get(cls["errors"])        # None = square not readable
     return out
 
 

@@ -17,8 +17,8 @@ from pathlib import Path
 from .. import frontmenu, paths as P, play
 from ..registry import check, require
 from .play_checks import is_clear, remaining, require_given_clear, _delete_scratch
-from .playclient_util import (PlayRun, account_state, clear_logs, connection_log, db_ready, fresh_scratch,
-                              glue_logs, marker, screenshots)
+from .playclient_util import (PlayRun, account_state, clear_logs, connection_log, db_ready, drop_scratch,
+                              fresh_scratch, glue_logs, marker, screenshots)
 
 CAP = "login-screen"
 LOGIN_LIMIT = 90               # spec: within 90 s
@@ -57,15 +57,54 @@ def _no_secret(ev: dict) -> None:
 
 # ---------------------------------------------------------------- Continue
 
+def _hook_refused() -> dict:
+    """A normal ./play (no test flag) with $HS_GLUE_TEST set exits nonzero before starting anything. Dry: a scratch
+    player file that must stay absent (so the player's own login is never read), nothing running before or after."""
+    import os
+    import subprocess
+    from .play_checks import PLAY
+    tmp = Path(tempfile.mkdtemp(prefix="hs-hook-"))
+    pf = tmp / "player.json"
+    out = {}
+    try:
+        # safety nets in case a broken ./play accepted the hook: a scratch account name and a world data dir that
+        # makes the server fail at once, so nothing real is ever logged into
+        for args in ([], ["--account", "test"]):
+            t = time.time()
+            r = subprocess.run([PLAY, *args, "--world-datadir", str(tmp / "no-such-data")], cwd=P.ROOT,
+                               capture_output=True, text=True, timeout=600,
+                               env={**os.environ, "HS_GLUE_TEST": '{"script": [{"t": 1, "act": "continue"}]}',
+                                    "HS_PLAYER_FILE": str(pf), "HS_PLAYER_DEFAULT_NAME": "HSHOOKTEST",
+                                    "HS_PROFILE": "m0"})
+            out[" ".join(args) or "(default)"] = {"exit": r.returncode, "seconds": round(time.time() - t, 1),
+                                                  "output": (r.stdout + r.stderr)[-500:]}
+        out["player_file_created"] = pf.exists()
+        out["remaining_after"] = remaining()
+        out["ok"] = (all(v["exit"] != 0 and "HS_GLUE_TEST is set" in v["output"]
+                         for k, v in out.items() if isinstance(v, dict) and "exit" in v)
+                     and not out["player_file_created"] and is_clear(out["remaining_after"]))
+        return out
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 @check("login.auto_login", order=387, capability=CAP, stack="down", tier="full")
 def auto_login(ctx):
-    """One synthetic Continue (the generated file's test flag; no keystrokes): within 90 s the authserver records a
+    """A normal ./play refuses $HS_GLUE_TEST (exits nonzero, starts nothing). Then one synthetic Continue (the
+    generated file's test flag, test account, scratch play client; no keystrokes): within 90 s the authserver records a
     successful login for the profile's account (last_login), the worldserver opens its session (online = 1) and the
     client receives the character list (its own connection.log: COP_GET_CHARACTERS result=TRUE)."""
     ev: dict = {"account": P.TEST_USER, "glue_test": {"script": [{"t": 3, "act": "continue"}]},
                 "input": "no keystrokes or input helpers; one Continue click by the GlueXML test hook"}
     require_given_clear(ev)
+    ev["hook_refused"] = _hook_refused()
+    require(ev["hook_refused"]["ok"], "a normal ./play accepted $HS_GLUE_TEST", **ev)
     scratch = fresh_scratch("login")
+    # a login file left behind by a killed ./play: the next run must remove it before anything else
+    from .. import clientbuild
+    clientbuild.build(dest=scratch)
+    stale = frontmenu.write(scratch, [{"name": "HSSTALE", "account": "HSSTALE", "password": "stale123"}], "HSSTALE")
+    ev["stale_planted"] = stale["archive"]
     run = PlayRun("login", glue_test=ev["glue_test"], scratch=scratch)
     try:
         run.start()
@@ -97,6 +136,10 @@ def auto_login(ctx):
         require(hit is not None and "play_exited" not in hit,
                 f"no login + character list within {LOGIN_LIMIT} s of the client starting", **ev)
         _finish(run, ev)
+        ev["stale_removed"] = ((ev["play_record"].get("client") or {}).get("stale_profiles_removed"))
+        ev["profiles_used"] = ((ev["play_record"].get("client") or {}).get("profiles") or {}).get("profiles")
+        require(ev["stale_removed"] and ev["profiles_used"] == [P.TEST_USER],
+                "the stale login file wasn't removed at the start of the run", **ev)
         _no_secret(ev)
         require(not ev["password_in_play_last_json"], "the password appears in play-last.json", **ev)
         require((ev["profiles_removed"] or {}).get("removed") is True, "the generated profile file wasn't removed", **ev)
@@ -104,6 +147,7 @@ def auto_login(ctx):
         return ev
     finally:
         run.cleanup()
+        drop_scratch(scratch)
 
 
 @check("login.cancel_shows_list", order=388, capability=CAP, stack="down", tier="full")
@@ -139,6 +183,7 @@ def menu_waits(ctx):
         require(len(shots) >= 2, "the client didn't take both screenshots", **ev)
         require(all(m["main_menu_up"] is True for m in ev["screens"]),
                 "the main menu wasn't up in both screenshots", **ev)
+        require(all(m["lua_errors"] == 0 for m in ev["screens"]), "Lua errors while the menu waited", **ev)
         require(not ev["login_attempts"], "a login happened without Continue", **ev)
         require("COP_AUTHENTICATE" not in ev["connection_log"], "the client attempted a login (connection.log)", **ev)
         require(ev["wow_alive_at_end"], "the client quit by itself", **ev)
@@ -147,14 +192,17 @@ def menu_waits(ctx):
         return ev
     finally:
         run.cleanup()
+        drop_scratch(scratch)
 
 
 @check("login.no_glue_errors", order=389, capability=CAP, stack="down", tier="full")
 def no_glue_errors(ctx):
-    """Patched client with our GlueXML, menu-waits then Continue: our code runs (marker squares on screen), the play
-    client's Logs/GlueXML.log and FrameXML.log hold no errors (absent or empty) and the client doesn't quit by itself
-    through 20 s at character select."""
-    glue = {"marker": True, "script": [{"t": 4, "act": "shot"}, {"t": 20, "act": "continue"}]}
+    """Patched client with our GlueXML, menu-waits then Continue: our code runs (marker squares on screen), no Lua
+    error is raised at runtime (the test-mode error handler's count, on the login screen and at character select),
+    the play client's Logs/GlueXML.log and FrameXML.log hold no errors (absent or empty) and the client doesn't quit
+    by itself through 20 s at character select."""
+    glue = {"marker": True, "script": [{"t": 4, "act": "shot"}, {"t": 20, "act": "continue"},
+                                       {"t": 40, "act": "shot"}]}
     ev: dict = {"glue_test": glue}
     require_given_clear(ev)
     scratch = fresh_scratch("glue")
@@ -175,11 +223,15 @@ def no_glue_errors(ctx):
             alive.append(bool(run.wow_alive()))
             time.sleep(1)
         ev["alive_samples"] = {"n": len(alive), "dead": alive.count(False)}
+        _wait(lambda: len(screenshots(scratch)) >= 2, 30)
         shots = screenshots(scratch)
         ev["screen"] = marker(shots[0]) if shots else None
+        ev["screens"] = [marker(p) for p in shots]
         ev["logs"] = glue_logs(scratch)
         _finish(run, ev)
         require(ev["screen"] and ev["screen"]["main_menu_up"] is True, "our GlueXML didn't run (no marker)", **ev)
+        require(len(ev["screens"]) >= 2 and all(m["lua_errors"] == 0 for m in ev["screens"]),
+                "Lua errors at runtime (the test error handler's marker isn't clean in every screenshot)", **ev)
         require(not any((v or "").strip() for v in ev["logs"].values()), "GlueXML.log / FrameXML.log hold errors",
                 **ev)
         require(ev["reached_character_list"], "never reached the character list", **ev)
@@ -188,6 +240,7 @@ def no_glue_errors(ctx):
         return ev
     finally:
         run.cleanup()
+        drop_scratch(scratch)
 
 
 # ---------------------------------------------------------------- backdrop
@@ -203,9 +256,16 @@ def backdrop_choice(ctx):
     """Picking TBC in the menu is applied (marker: TBC model and music requested by GlueXML), stored in the client's
     own settings when it saves them (WTF/Config.wtf accountList HSBDTBC, written on entering the world), and on the
     next start, with nothing picked, the TBC model and music are requested again."""
+    scratch = fresh_scratch("backdrop")
+    try:
+        return _backdrop_choice(scratch)
+    finally:
+        drop_scratch(scratch)
+
+
+def _backdrop_choice(scratch):
     ev: dict = {}
     require_given_clear(ev)
-    scratch = fresh_scratch("backdrop")
     g1 = {"marker": True, "script": [{"t": 3, "act": "shot"}, {"t": 4, "act": "backdrop:TBC"}, {"t": 7, "act": "shot"},
                                      {"t": 9, "act": "continue"}], "enter_world_after_charlist": 3}
     run = PlayRun("backdrop1", glue_test=g1, scratch=scratch)

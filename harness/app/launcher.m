@@ -183,6 +183,7 @@ static NSString *const kHookEnv = @"HS_APP_TEST_HOOK";
     env[@"PATH"] = pyDir.length ? [NSString stringWithFormat:@"%@:%@", pyDir, path] : path;
     [env removeObjectForKey:kHookEnv];                 // the hook is the app's, not the play loop's
     env[@"PYTHONUNBUFFERED"] = @"1";
+    env[@"HS_FROM_APP"] = @"1";                        // ./play then keeps passwords out of app.log (play.shown_password)
 
     unsigned long long size = [[[NSFileManager defaultManager] attributesOfItemAtPath:self.logPath error:nil] fileSize];
     self.tailOffset = size;

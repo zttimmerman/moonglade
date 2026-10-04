@@ -412,7 +412,7 @@ function HSFrontMenu_OnEvent(self, event)
 	end
 end
 
--- HS_TEST.script = { {t = seconds after the login screen first shows, act = "continue" | "shot" | "quit" |
+-- HS_TEST.script = { {t = seconds after the glue screens load (the login screen shows within a frame or two), act = "continue" | "shot" | "quit" |
 -- "backdrop:TBC" | "menu:settings" | "key:DOWN" | ...}, ... }; HS_TEST.quit_after_charlist = seconds. "continue"
 -- clicks the Continue button once (the same handler a mouse click runs); "key:X" calls the login screen's own
 -- key handler; nothing here injects keystrokes into the client.
@@ -438,13 +438,33 @@ function HSFrontMenu_UpdateMarker()
 	else
 		HSTestMarkerMenu:SetTexture(1, 0, 1, 1);
 	end
+	-- Lua errors caught by the test error handler: white = none, red = one or more
+	if ( HS_TEST_ERRORS == 0 ) then
+		HSTestMarkerErrors:SetTexture(1, 1, 1, 1);
+	else
+		HSTestMarkerErrors:SetTexture(1, 0, 0, 1);
+	end
 	HSTestMarker:Show();
 end
 
+-- Test mode only: count every Lua error the glue screens raise (runtime errors don't reach Logs/GlueXML.log),
+-- then hand it on to the previous handler. The count shows in the marker's fourth square.
+HS_TEST_ERRORS = 0;
+if ( HS_TEST and seterrorhandler ) then
+	local previous = geterrorhandler and geterrorhandler();
+	seterrorhandler(function(msg, ...)
+		HS_TEST_ERRORS = HS_TEST_ERRORS + 1;
+		HSFrontMenu_Mark("error:" .. tostring(msg));
+		if ( previous ) then return previous(msg, ...); end
+	end);
+end
+HS_TEST_ERRORHANDLER = (HS_TEST and seterrorhandler) and "installed" or "none";
+
 function HSFrontMenu_TestUpdate(self, elapsed)
-	if ( not HS_TEST or not state.shown ) then return; end
-	state.testClock = state.testClock + elapsed;
+	if ( not HS_TEST ) then return; end
+	-- the marker paints from the first frame on, even if the login screen's own setup failed
 	if ( HS_TEST.marker ) then HSFrontMenu_UpdateMarker(); end
+	state.testClock = state.testClock + elapsed;      -- seconds since the glue screens loaded
 	if ( HS_TEST.script ) then
 		for i, step in ipairs(HS_TEST.script) do
 			if ( not state.testDone[i] and state.testClock >= step.t ) then

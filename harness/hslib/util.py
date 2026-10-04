@@ -82,3 +82,45 @@ def awake_assertions(pid: int | None) -> list[str]:
         return []
     r = subprocess.run(["pmset", "-g", "assertions"], capture_output=True, text=True, errors="replace", timeout=20)
     return [l.strip() for l in r.stdout.splitlines() if f"pid {pid}(" in l]
+
+
+# ---------------------------------------------------------------- keeping passwords out of reports
+
+_PW_RE = __import__("re").compile(r"""(?i)(password(?:["']?\s*[:=]\s*["']?|\s+))([^\s"',()][^\s"',]*)""")
+
+
+def _known_secrets() -> list[str]:
+    """The player's real password (env/player.json, read-only) and $HS_PLAYER_FILE's, when present."""
+    import json
+    import os
+    from pathlib import Path
+    from . import paths as P
+    out = []
+    for f in {P.ENV / "player.json", *([Path(os.environ["HS_PLAYER_FILE"])] if os.environ.get("HS_PLAYER_FILE") else [])}:
+        try:
+            pw = str(json.loads(Path(f).read_text())["password"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if len(pw) >= 6:
+            out.append(pw)
+    return out
+
+
+def redact(obj, secrets: list[str] | None = None):
+    """A copy of obj (dicts/lists/strings) with every "password <value>" / "password": "<value>" value and every
+    known secret replaced by [redacted]. Used on harness results before they're written."""
+    secrets = _known_secrets() if secrets is None else secrets
+
+    def s(x: str) -> str:
+        x = _PW_RE.sub(lambda m: m.group(1) + "[redacted]", x)
+        for sec in secrets:
+            x = x.replace(sec, "[redacted]")
+        return x
+    if isinstance(obj, str):
+        return s(obj)
+    if isinstance(obj, dict):
+        return {k: (("[redacted]" if str(k).lower() == "password" and isinstance(v, str) else redact(v, secrets)))
+                for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [redact(v, secrets) for v in obj]
+    return obj

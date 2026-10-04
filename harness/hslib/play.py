@@ -204,7 +204,20 @@ def client_processes(name: str) -> list[dict]:
 
 
 PLAY_CLIENT_ENV = "HS_PLAY_CLIENT_DIR"
+GLUE_TEST_ENV = "HS_GLUE_TEST"        # test-only GlueXML hook (frontmenu.py); needs --allow-test-client-dir, test account
 SKIP_ENV = "HS_PLAY_SKIP_PATCHES"      # test-only (counterexamples): build the scratch play client without these patches
+
+
+FROM_APP_ENV = "HS_FROM_APP"           # set by Hearthstone.app (launcher.m); its output goes to env/logs/app.log
+
+
+def shown_password(login: dict) -> str:
+    """The password as ./play prints it: in a terminal, the password (the player needs it to type it in); in an app
+    run, where every line lands in env/logs/app.log, a pointer to the file that holds it instead."""
+    if os.environ.get(FROM_APP_ENV):
+        return "(see harness/hslib/paths.py TEST_PASS)" if login["account"].upper() == P.TEST_USER \
+            else f"(in {player_file()})"
+    return login["password"]
 
 
 def play_client_dir() -> Path:
@@ -264,6 +277,11 @@ class Loop:
             else:
                 launch.select_client(None)
                 info = {"mode": mode, "dir": str(P.CLIENT)}
+        # a login file left behind by a killed ./play (SIGKILL skips cleanup) goes before anything else happens
+        from . import frontmenu
+        stale = [frontmenu.remove(d) for d in {play_client_dir(), launch.client_dir()}
+                 if (d / "hs-build.json").is_file()]
+        info["stale_profiles_removed"] = [x for x in stale if x.get("removed")]
         self.rec["client"] = info
         return info
 
@@ -282,7 +300,7 @@ class Loop:
                                    "file_created": new}
             if new:
                 say(f"Created your personal login (saved in {player_file()}, keep it):")
-                print(f"\n      Account:  {login['account']}\n      Password: {login['password']}\n", flush=True)
+                print(f"\n      Account:  {login['account']}\n      Password: {shown_password(login)}\n", flush=True)
 
             def accounts():
                 say(f"Making sure your account ({login['account']}) exists...")
@@ -305,20 +323,22 @@ class Loop:
         if auto:
             from . import frontmenu
             self.profiles_dir = launch.client_dir()
+            # the GlueXML test hook only ever reaches a test-account run (main() also refuses it without the flag)
+            hook = frontmenu.test_hook_from_env() if self.args.account == "test" else None
             self.rec["client"]["profiles"] = frontmenu.write(
                 self.profiles_dir, frontmenu.with_context([{"name": login["account"].upper(),
                                                            "account": login["account"],
                                                            "password": login["password"]}]),
-                default=login["account"], test=frontmenu.test_hook_from_env(), about=frontmenu.about_info())
+                default=login["account"], test=hook, about=frontmenu.about_info())
         say("Starting the game client..." if args_ is None else f"Starting the test stand-in client ({name})...")
         proc = launch.start_client(args_, cwd)
         self.rec["client_started"] = True
         self.step("client_started", launcher_pid=proc.pid, args=args_ or ["Wow.exe"])
         if auto:
             say(f"The game is starting. On its login screen, press Continue (or Enter) to play as "
-                f"{login['account'].upper()}; no password needed.")
+                f"{login['account'].upper()}; nothing to type.")
         else:
-            say(f"The game is starting. Log in with account {login['account']} and password {login['password']}"
+            say(f"The game is starting. Log in with account {login['account']} and password {shown_password(login)}"
                 + (f" (character {login['character']})." if "character" in login else
                    ". Create a character on the realm if you don't have one yet."))
         say("When you quit the game, everything shuts down by itself. Press Ctrl-C here to stop everything.")
@@ -402,6 +422,10 @@ def main(argv=None) -> int:
     if os.environ.get(PLAY_CLIENT_ENV) and not args.allow_test_client_dir:
         say(f"{PLAY_CLIENT_ENV} is set ({os.environ[PLAY_CLIENT_ENV]}): that's a test copy of the play client. "
             f"Unset it (`unset {PLAY_CLIENT_ENV}`) and run ./play again.")
+        return EXIT_FAIL
+    if os.environ.get(GLUE_TEST_ENV) and not args.allow_test_client_dir:
+        say(f"{GLUE_TEST_ENV} is set: that's a test hook for the harness, not for playing. "
+            f"Unset it (`unset {GLUE_TEST_ENV}`) and run ./play again.")
         return EXIT_FAIL
     try:
         fd, lock = acquire_lock()
