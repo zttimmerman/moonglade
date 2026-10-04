@@ -141,7 +141,7 @@ def player_login() -> tuple[dict, bool]:
     else:
         pw = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(10))
         login, new = {"account": default_player(), "password": pw}, True
-    if login["account"].upper() in (P.TEST_USER.upper(), P.GM_USER.upper()):
+    if login["account"].upper() in (P.TEST_USER.upper(), P.GM_USER.upper(), P.COMP_USER.upper()):
         raise PlayerAccountError(f"{pf}: {login['account']} is reserved for the test harness, pick another name")
     for k in ("account", "password"):
         if not _NAME_RE.match(login[k]):
@@ -195,6 +195,18 @@ def client_processes(name: str) -> list[dict]:
             if name in p["cmd"].lower() and "start.exe" not in p["cmd"].lower()]
 
 
+def choose_world(say=say) -> dict:
+    """Which world ./play starts: the living world at the user's world size (env/settings.json, or $HS_SETTINGS),
+    unless $HS_PROFILE pins a profile (M2 2.2). Loop.run passes the result to launch.prepare, whose stack step is
+    launch.ensure_world; pop.size_setting drives these same two functions."""
+    from . import settings
+    world = settings.play_world()
+    if world["profile"] == "population":
+        say(f"World size: {world['source']['setting']} ({world['population_n']} AI players; change it with "
+            "`harness/hs world-size small|normal|large|<number>`).")
+    return world
+
+
 class Loop:
     def __init__(self, args):
         self.args = args
@@ -234,8 +246,11 @@ class Loop:
                 return ensure_player_account(login)
         say("Starting Hearthstone.")
         self.step("prepare")
-        man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts)
-        self.rec["prepare"] = {k: ev[k] for k in ("stack", "fixtures", "accounts", "prefix",
+        world = choose_world()
+        self.rec["world"] = world
+        man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts,
+                                 profile=world["profile"], population_n=world["population_n"])
+        self.rec["prepare"] = {k: ev[k] for k in ("restarted_world", "stack", "fixtures", "accounts", "prefix",
                                                   "binaries_match_manifest_before") if k in ev}
         self.man = man
 

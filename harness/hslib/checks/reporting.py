@@ -209,6 +209,33 @@ def tiers_nested(leave_up: bool) -> dict:
     return _tiers_record(probs, ev | tev, t0)
 
 
+def full_run_record(doc: dict, referenced: set, extra: list, reg: dict | None = None) -> dict:
+    """report.full_run over a results document (+ the post-run records in `extra`): a full run passes only if every
+    scenario-referenced check has a record and every record passes, except tolerated skips (runner.tolerated_skip:
+    a full-tier run's "slow tier" skips of scenario-referenced slow checks)."""
+    from ..runner import tolerated_skip
+    m = doc["meta"]
+    referenced = set(referenced) - set(POST_IDS)
+    executed = {r["id"] for r in doc["checks"]}
+    not_run = sorted(referenced - executed)
+    slow_skipped = sorted(r["id"] for r in doc["checks"] if r["status"] == "skip" and tolerated_skip(r, m, reg))
+    failing = sorted(r["id"] for r in doc["checks"] + extra if r["status"] != "pass" and r["id"] not in slow_skipped)
+    full = m["full_run"]
+    ok = full and not not_run and not failing
+    # Not a full run (quick tier or --only): skip, which only for this record and only then doesn't fail the run
+    # (runner.tolerated_skip). A full run must pass; it can never be skipped.
+    status = "pass" if ok else ("fail" if full else "skip")
+    why = [] if full else [f"not a full run (tier {m.get('tier')}{', filtered' if m.get('filter') else ''})"]
+    return {"id": "report.full_run", "capability": "harness-reporting", "status": status,
+            "evidence": {"full_run": full, "tier": m.get("tier"), "filter": m.get("filter"),
+                         "spec_ids_not_executed": not_run, "slow_tier_skipped": slow_skipped,
+                         "non_passing": failing, "checks_executed": len(executed) - len(slow_skipped),
+                         "outputs": [str(P.RESULTS.relative_to(P.ROOT)), str(P.SUMMARY.relative_to(P.ROOT))]},
+            "duration_s": 0.0,
+            **({} if ok else {"message": (why[0] if not full else
+                                          "not a clean full run: " + ", ".join(not_run + failing))[:300]})}
+
+
 def post_run(doc, selected_ids, t_start=None, leave_up=False):
     out = []
     t0 = time.time()
@@ -236,27 +263,113 @@ def post_run(doc, selected_ids, t_start=None, leave_up=False):
                              "records_validated": len(doc["checks"]) + 1},
                 "duration_s": round(time.time() - t0, 2), **({} if ok else {"message": "results.json fails schema"})})
 
-    referenced = set(ev["referenced_ids"]) - set(POST_IDS)
-    executed = {r["id"] for r in doc["checks"]}
-    not_run = sorted(referenced - executed)
-    failing = sorted(r["id"] for r in doc["checks"] + out if r["status"] != "pass")
-    full = doc["meta"]["full_run"]
-    ok = full and not not_run and not failing
-    # Not a full run (quick tier or --only): skip, which only for this record and only then doesn't fail the run
-    # (runner.tolerated_skip). A full run must pass; it can never be skipped.
-    status = "pass" if ok else ("fail" if full else "skip")
-    why = [] if full else [f"not a full run (tier {m.get('tier')}{', filtered' if m.get('filter') else ''})"]
-    out.append({"id": "report.full_run", "capability": "harness-reporting", "status": status,
-                "evidence": {"full_run": full, "tier": m.get("tier"), "filter": m.get("filter"),
-                             "spec_ids_not_executed": not_run,
-                             "non_passing": failing, "checks_executed": len(executed),
-                             "outputs": [str(P.RESULTS.relative_to(P.ROOT)), str(P.SUMMARY.relative_to(P.ROOT))]},
-                "duration_s": 0.0,
-                **({} if ok else {"message": (why[0] if not full else
-                                              "not a clean full run: " + ", ".join(not_run + failing))[:300]})})
+    out.append(full_run_record(doc, set(ev["referenced_ids"]), out))
     if self_mode:
         t0 = time.time()
         wall = time.time() - (t_start or time.time())
         probs, tev = _tier_problems_for_run(doc, wall, out[-1])
         out.append(_tiers_record(probs, {"mode": "this run (unfiltered quick tier)"} | tev, t0))
     return out
+
+
+# ----------------------------------------------------------------------------- slow-tier scenario rule
+
+def _simulate(reg: dict, tier: str, referenced: set) -> dict:
+    """One unfiltered run of a synthetic registry through the runner's own code paths (select, slow_tier_skips,
+    execute, full_run_record, run_ok) with the stack handling stubbed out. Returns the outcome."""
+    from .. import runner
+    selected = runner.select(reg, tier, None)
+    skips = runner.slow_tier_skips(reg, tier, None, referenced)
+    results = runner.execute(selected, {}, skips, ensure=lambda *a: None, quiet=True)
+    meta = {"full_run": runner.is_full_run(tier, None), "tier": tier, "filter": [],
+            "slow_tier_skipped": [c.id for c in skips]}
+    doc = {"meta": meta, "checks": results}
+    fr = full_run_record(doc, referenced, [], reg)
+    doc["checks"].append(fr)
+    ok = runner.run_ok(doc, reg)
+    return {"tier": tier, "records": {r["id"]: (r["status"], r.get("message", "")) for r in doc["checks"]},
+            "report_full_run": fr["status"], "exit": 0 if ok else 1}
+
+
+@check("report.slow_tier_rule", order=2, capability="harness-reporting", stack="any", tier="quick")
+def slow_tier_rule(ctx):
+    """A full-tier run records a scenario-referenced slow check as skip "slow tier", report.full_run passes and the
+    exit code is 0; a slow-tier run executes it and passes only if it passes; any other skip fails a full run."""
+    from .. import runner
+    from ..registry import Check, CheckFail, CheckSkip
+
+    calls = []
+
+    def ok_fn(cid):
+        def f(_ctx):
+            calls.append(cid)
+            return {"ran": cid}
+        return f
+
+    def fail_fn(_ctx):
+        calls.append("t.slow")
+        raise CheckFail("synthetic slow failure", {"ran": "t.slow"})
+
+    def skip_fn(msg):
+        def f(_ctx):
+            raise CheckSkip(msg)
+        return f
+
+    def reg(**fns):
+        base = {"t.quick": ("quick", ok_fn("t.quick")), "t.full": ("full", ok_fn("t.full")),
+                "t.slow": ("slow", ok_fn("t.slow")), "t.slow_unreferenced": ("slow", ok_fn("t.slow_unreferenced"))}
+        base.update(fns)
+        return {i: Check(i, fn, n, "synthetic", "any", f"synthetic {t}", t, True)
+                for n, (i, (t, fn)) in enumerate(sorted(base.items()))}
+
+    referenced = {"t.quick", "t.full", "t.slow"}
+    cases = {}
+    calls.clear()
+    cases["A_full_tier"] = _simulate(reg(), "full", referenced) | {"executed": list(calls)}
+    calls.clear()
+    cases["B_slow_tier_pass"] = _simulate(reg(), "slow", referenced) | {"executed": list(calls)}
+    calls.clear()
+    cases["C_slow_tier_slow_check_fails"] = _simulate(reg(**{"t.slow": ("slow", fail_fn)}), "slow", referenced) \
+        | {"executed": list(calls)}
+    cases["D_full_tier_full_check_skips"] = _simulate(reg(**{"t.full": ("full", skip_fn("no reason"))}), "full",
+                                                      referenced)
+    # a non-slow check can't get the slow-tier exemption by imitating its message
+    cases["E_full_tier_forged_slow_message"] = _simulate(
+        reg(**{"t.full": ("full", skip_fn(runner.SLOW_SKIP_MSG))}), "full", referenced)
+
+    A, B, C, D, E = (cases[k] for k in sorted(cases))
+    probs = []
+    if A["records"].get("t.slow", ("",))[0] != "skip" or "slow tier" not in A["records"]["t.slow"][1]:
+        probs.append(f"A: full run recorded t.slow as {A['records'].get('t.slow')}, want skip 'slow tier'")
+    if "t.slow" in A["executed"]:
+        probs.append("A: full run executed the slow check")
+    if "t.slow_unreferenced" in A["records"]:
+        probs.append("A: an unreferenced slow check was recorded in a full run")
+    if A["report_full_run"] != "pass" or A["exit"] != 0:
+        probs.append(f"A: full run report.full_run={A['report_full_run']} exit={A['exit']}, want pass / 0")
+    if "t.slow" not in B["executed"] or B["records"].get("t.slow", ("",))[0] != "pass":
+        probs.append(f"B: slow run did not execute+pass t.slow ({B['records'].get('t.slow')})")
+    if B["report_full_run"] != "pass" or B["exit"] != 0:
+        probs.append(f"B: slow run report.full_run={B['report_full_run']} exit={B['exit']}, want pass / 0")
+    if C["records"].get("t.slow", ("",))[0] != "fail" or C["report_full_run"] != "fail" or C["exit"] != 1:
+        probs.append(f"C: failing slow check in a slow run: t.slow={C['records'].get('t.slow')} "
+                     f"report.full_run={C['report_full_run']} exit={C['exit']}, want fail / fail / 1")
+    if D["records"].get("t.full", ("",))[0] != "skip" or D["report_full_run"] != "fail" or D["exit"] != 1:
+        probs.append(f"D: skipped full check in a full run: report.full_run={D['report_full_run']} exit={D['exit']}, "
+                     "want fail / 1")
+    if E["report_full_run"] != "fail" or E["exit"] != 1:
+        probs.append(f"E: forged slow-tier message on a full check: report.full_run={E['report_full_run']} "
+                     f"exit={E['exit']}, want fail / 1")
+
+    # the live registry: which scenario-referenced slow checks a real full run will record as skip
+    live_ref = runner.referenced_ids()
+    live = [c.id for c in runner.slow_tier_skips(REGISTRY, "full", None, live_ref)]
+    want = sorted(i for i in live_ref if i in REGISTRY and REGISTRY[i].tier == "slow")
+    if sorted(live) != want:
+        probs.append(f"live registry: full-run slow skips {sorted(live)} != referenced slow checks {want}")
+    if runner.slow_tier_skips(REGISTRY, "slow", None, live_ref):
+        probs.append("live registry: a slow run would skip slow checks")
+    ev = {"cases": cases, "live_full_run_slow_skips": live, "live_referenced_slow_checks": want, "problems": probs,
+          "code": "runner.select/slow_tier_skips/execute/run_ok + reporting.full_run_record (the paths `hs run` uses)"}
+    require(not probs, f"{len(probs)} slow-tier rule violation(s)", **ev)
+    return ev

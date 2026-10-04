@@ -19,6 +19,7 @@ MYSQL_DATA = DATA / "mysql"
 CLIENT_DATA = DATA / "client-data"
 DOWNLOADS = DATA / "downloads"
 PATCHES = ROOT / "patches" / "core"
+BOTS_PATCHES = ROOT / "patches" / "playerbots"   # mod-playerbots patch queue (ADR-0008), applied like PATCHES
 MODULES = ROOT / "modules"
 OUT = HARNESS / "out"
 RESULTS = HARNESS / "results.json"
@@ -67,6 +68,11 @@ GM_PASS = "hsgm"
 TEST_USER = "HSTEST"
 TEST_PASS = "hstest"
 TEST_CHAR = "Hstester"
+# Companion checks (m2-living-world comp.*): a separate GM-level (security 2) harness account and character, so the
+# HSTEST fixtures stay untouched. playerbots gives GM senders control of bots (PlayerbotSecurity.cpp).
+COMP_USER = "HSCOMP"
+COMP_PASS = "hscomp"
+COMP_CHAR = "Hscomp"
 
 BREW = Path("/opt/homebrew")
 

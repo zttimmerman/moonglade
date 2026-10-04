@@ -1,9 +1,9 @@
-# Spec Delta: world-population
+# world-population Specification
 
 ## Purpose
 Make the world feel inhabited: AI players visibly present and active in every starting zone and capital, without a human anywhere near them.
 
-## ADDED Requirements
+## Requirements
 
 ### Requirement: Population in starting zones and capitals
 With the population profile active and after a warm-up of at most 10 minutes from `hs up`, random bots SHALL be online in every race's starting zone and every capital city. The zone set comes from the client's DBC/`game_tele` data at runtime.
@@ -34,3 +34,21 @@ Ambient bots SHALL move and act even with no real player nearby.
 - **WHEN** Zach logs into a starting zone and a capital
 - **THEN** they see bots moving around, fighting and questing, and they look plausible (names, gear, behaviour)
 - [human-verify] "Feels populated" is a subjective experience the harness can't judge. This is checked at the next human gate.
+
+### Requirement: World size is one easy setting
+The population size SHALL be a single user setting with presets (`small`, `normal`, `large`, or a number) stored in a gitignored local settings file. `normal` (about 500 bots) is the default. `./play` SHALL start the living world at the configured size by default. Scaling down SHALL need only changing that setting (it's also intended as an option for the future front-menu screen). Harness checks keep their own fixed profiles and never read the user's setting.
+
+#### Scenario: Scaling down works with one setting
+- **GIVEN** the settings file sets the world size to `small`
+- **WHEN** the stack starts the way `./play` starts it
+- **THEN** the number of random bots online after warm-up is within 5% of the `small` preset's size, the population profile (not the 10-bot test profile) is active, and with no settings file the `normal` preset is used
+- Check: `pop.size_setting`
+
+### Requirement: Fresh bot world each session
+Each population start SHALL reset random bots' levels and timers so they redistribute into starting zones and capitals (names, races and classes are kept). Only random-bot accounts are touched; player and harness accounts and characters are unchanged.
+
+#### Scenario: Fresh start touches only bots
+- **GIVEN** a population start
+- **WHEN** the fresh-world reset runs
+- **THEN** random-bot characters are back at the configured low levels, and checksums of all non-bot accounts and characters are identical before and after
+- Check: `pop.fresh_start_scope`

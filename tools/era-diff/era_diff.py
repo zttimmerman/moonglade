@@ -24,7 +24,6 @@ import hashlib
 import json
 import math
 import sqlite3
-import struct
 import sys
 import zipfile
 from collections import Counter, defaultdict
@@ -32,6 +31,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "harness"))
+from hslib import dbc as _hs_dbc  # noqa: E402  (shared WDBC reader)
 
 VM_ZIP = ROOT / "data/downloads/vmangos-db-sqlite.zip"
 VM_DIR = ROOT / "data/vmangos"
@@ -119,21 +119,11 @@ class AC:
 
 
 def read_dbc(name):
-    """Minimal WDBC reader -> list of tuples of uint32 (fields), plus string block."""
-    data = (DBC_DIR / name).read_bytes()
-    magic, nrec, nfield, recsize, strsize = struct.unpack("<4s4I", data[:20])
-    assert magic == b"WDBC", name
-    recs = []
-    for i in range(nrec):
-        off = 20 + i * recsize
-        recs.append(struct.unpack_from(f"<{nfield}I", data, off))
-    strings = data[20 + nrec * recsize:]
-    return recs, strings
+    """WDBC reader (moved to harness/hslib/dbc.py, m2-living-world task 1.1) -> (records, string block)."""
+    return _hs_dbc.read_dbc(name, DBC_DIR)
 
 
-def dbc_string(strings, off):
-    end = strings.index(b"\0", off)
-    return strings[off:end].decode("utf-8", "replace")
+dbc_string = _hs_dbc.dbc_string
 
 
 # --------------------------------------------------------------------------- helpers

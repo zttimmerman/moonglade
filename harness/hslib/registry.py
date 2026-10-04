@@ -24,6 +24,7 @@ class Check:
     doc: str = ""
     tier: str = "quick"  # "quick" | "full" | "slow" (TIERS); see harness-reporting "Test tiers"
     tier_declared: bool = False   # False = the check relied on the default; report.tiers_declared fails it
+    profile: str | None = None    # config profile a stack="up" check needs (None = config.DEFAULT_PROFILE)
 
 
 # Tiers in inclusion order: `--tier X` runs every check whose tier is X or earlier in this tuple.
@@ -40,14 +41,16 @@ def tiers_for(run_tier: str) -> tuple[str, ...]:
 REGISTRY: dict[str, Check] = {}
 
 
-def check(id: str, order: int, capability: str, stack: str = "any", tier: str | None = None):
+def check(id: str, order: int, capability: str, stack: str = "any", tier: str | None = None,
+          profile: str | None = None):
     """Register a check. Every check should pass `tier=` explicitly; omitting it defaults to "quick" but is
-    recorded as undeclared, which report.tiers_declared fails."""
+    recorded as undeclared, which report.tiers_declared fails. `profile` (config.PROFILES) is the config profile a
+    stack="up" check needs; the runner restarts a stack running with another one."""
     def deco(fn):
         if id in REGISTRY:
             raise RuntimeError(f"duplicate check id {id}")
         REGISTRY[id] = Check(id, fn, order, capability, stack, (fn.__doc__ or "").strip(),
-                             tier if tier is not None else "quick", tier is not None)
+                             tier if tier is not None else "quick", tier is not None, profile)
         return fn
     return deco
 
