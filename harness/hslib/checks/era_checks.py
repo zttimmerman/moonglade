@@ -76,7 +76,12 @@ def default_on(ctx):
     require(not prof.get("era"), "the default profile overrides EraProfile settings", **ev)
     require(dist_val == "1", "the module's .conf.dist does not default EraProfile.Enable to 1", **ev)
     require(ev["rendered_value"] == "1", "rendered mod_era_profile.conf does not have EraProfile.Enable = 1", **ev)
+    ev["expected_tables"] = sorted(E.era_diff().BASELINE_COLS)
+    ev["failed_lines"] = [l for l in lines if E.FAILED_RE.search(l)]
+    require(not ev["failed_lines"], "the module logged a FAILED line (an apply or verify query failed)", **ev)
     require(any(E.ACTIVE_RE.search(l) for l in lines), "worldserver log has no 'Vanilla mode ACTIVE' line", **ev)
+    require(sorted(tables) == ev["expected_tables"], "the module did not report a verified count line for every "
+                                                     "table it applies", **ev)
     require(tables and all(t["mode"] == "vanilla" and t["differing"] == 0 and t["at_vanilla"] == t["side_rows"]
                            for t in tables.values()),
             "an applied table is not fully at its vanilla values", **ev)
@@ -159,15 +164,21 @@ ELITE_CREATURES = (678, 436, 623)    # spec: Mosh'Ogg Mauler, Blackrock Shadowca
 ELITE_RANKS = (1, 2, 3)              # elite, rare-elite, world boss (SharedDefines.h CreatureEliteType)
 
 
+def _base_stock(table: str, key_cols: list[str], cols: list[str], key: tuple) -> dict:
+    """One row's stock values from the pinned core's base SQL (E.stock_from_base_sql), independent of the module's
+    baseline table and revert. Fails when the update SQL may have changed the row (no trustworthy stock value)."""
+    st = E.stock_from_base_sql(table, key_cols, cols, {key})
+    if key not in st["values"]:
+        raise E.EraError(f"{table} {key}: no trustworthy base-SQL stock value",
+                         guarded={"/".join(map(str, k)): f for k, f in st["guarded"].items()},
+                         missing=st["missing"])
+    return st["values"][key] | {"source": str((E.BASE_SQL_DIR / f"{table}.sql").relative_to(P.ROOT))}
+
+
 def _stock_creature(entry: int) -> dict:
-    """Stock rank/HealthModifier of an in-scope creature: the module's captured baseline (the live stock row before
-    its first apply), else the live row (the module never applied it)."""
-    r = db.query(f"SELECT `rank`, HealthModifier FROM era_baseline_creature_template WHERE entry = {entry}", "world")
-    src = "era_baseline_creature_template"
-    if not r:
-        r = db.query(f"SELECT `rank`, HealthModifier FROM creature_template WHERE entry = {entry}", "world")
-        src = "creature_template (not captured)"
-    return {"rank": int(r[0][0]), "HealthModifier": float(r[0][1]), "source": src}
+    """Stock rank/HealthModifier of a creature, from the pinned core's base SQL (not the module's baseline)."""
+    r = _run(lambda: _base_stock("creature_template", ["entry"], ["rank", "HealthModifier"], (entry,)))
+    return {"rank": int(r["rank"]), "HealthModifier": float(r["HealthModifier"]), "source": r["source"]}
 
 
 def _template_shape(entry: int) -> dict:
@@ -269,13 +280,10 @@ UNCHANGED_RIDING = ("Expert Riding", "Artisan Riding", "Cold Weather Flying")   
 
 
 def _stock_item(entry: int) -> dict:
-    r = db.query(f"SELECT RequiredLevel, RequiredSkillRank, BuyPrice FROM era_baseline_item_template WHERE entry = "
-                 f"{entry}", "world")
-    src = "era_baseline_item_template"
-    if not r:
-        r = db.query(f"SELECT RequiredLevel, RequiredSkillRank, BuyPrice FROM item_template WHERE entry = {entry}", "world")
-        src = "item_template (not captured)"
-    return {"RequiredLevel": int(r[0][0]), "RequiredSkillRank": int(r[0][1]), "BuyPrice": int(r[0][2]), "source": src}
+    """Stock level/riding rank/price of an item, from the pinned core's base SQL (not the module's baseline)."""
+    cols = ["RequiredLevel", "RequiredSkillRank", "BuyPrice"]
+    r = _run(lambda: _base_stock("item_template", ["entry"], cols, (entry,)))
+    return {c: int(r[c]) for c in cols} | {"source": r["source"]}
 
 
 def vm_riding() -> dict:
@@ -435,7 +443,8 @@ def _reset_toggle_state() -> dict:
 
 def mode_expectations(src: dict) -> dict:
     """Spot values each mode must show, from the sources: XP needed at level 20, quest 10's XP, item 2411's level and
-    price, creature 678's rank. vanilla = VMaNGOS; stock = AC base SQL / QuestXP.dbc / the module's captured baseline."""
+    price, creature 678's rank. vanilla = VMaNGOS; stock = the pinned core's base SQL / QuestXP.dbc (never the
+    module's own baseline table, so a wrong revert shows)."""
     vm_xp, ac_xp = E.vm_xp_for_level(), E.ac_stock_xp_for_level()
     vi, si = E.vm_item(SPOT_ITEM), _stock_item(SPOT_ITEM)
     vc, sc = E.vm_creature(SPOT_CREATURE), _stock_creature(SPOT_CREATURE)
@@ -511,12 +520,11 @@ def toggle_roundtrip(ctx):
 
 def report_scope() -> dict:
     """In-scope rows per touched table and the values vanilla mode must give them, from era-diff's report rows (the
-    same category functions that write tools/era-diff/out/report.json), with the elite-HP scope decision applied
-    here: a HealthModifier change counts only for creatures whose VMaNGOS rank is elite/rare-elite/boss
-    (design.md "Elite HP scope"). quest_template has no in-scope rows: quest XP is a runtime hook."""
+    same category functions that write tools/era-diff/out/report.json): rank from outdoor_elite, HealthModifier from
+    elite_hp (VMaNGOS multiplier verbatim for VMaNGOS elite ranks, design.md "Elite HP scope"), so the expected
+    counts follow era-diff. quest_template has no in-scope rows: quest XP is a runtime hook."""
     ed = E.era_diff()
     c = ed.Ctx()
-    vmc = c.vm_creatures()
     out = {t: {} for t in ("player_xp_for_level", "creature_template", "item_template", "trainer_spell",
                            "quest_template")}
     used = {}
@@ -528,15 +536,13 @@ def report_scope() -> dict:
         if r["status"] == "change":
             out["creature_template"].setdefault((r["entry"],), {})["rank"] = r["proposed"]
             used["outdoor_elite rank"] = used.get("outdoor_elite rank", 0) + 1
-    hp_left_out = []
-    for r in ed.cat_creature_stats(c):
-        if r["status"] == "change" and r["field"] == "HealthModifier":
-            if vmc[r["entry"]]["rank"] in ELITE_RANKS:
-                out["creature_template"].setdefault((r["entry"],), {})["HealthModifier"] = float(r["proposed"])
-                used["creature_stats HealthModifier (VMaNGOS elite)"] = used.get(
-                    "creature_stats HealthModifier (VMaNGOS elite)", 0) + 1
-            else:
-                hp_left_out.append(r["entry"])
+    elite_hp_review = []
+    for r in ed.cat_elite_hp(c):
+        if r["status"] == "change":
+            out["creature_template"].setdefault((r["entry"],), {})["HealthModifier"] = float(r["proposed"])
+            used["elite_hp HealthModifier"] = used.get("elite_hp HealthModifier", 0) + 1
+        else:
+            elite_hp_review.append({"entry": r["entry"], "name": r["name"], "reason": r["reason"]})
     for r in ed.cat_mount_items(c):
         if r["status"] == "change":
             out["item_template"].setdefault((r["entry"],), {})[r["field"]] = r["proposed"]
@@ -549,7 +555,7 @@ def report_scope() -> dict:
                 for sp in r["ac_spell_ids"]:
                     if (t, sp) in live:
                         out["trainer_spell"].setdefault((t, sp), {})[r["field"]] = r["proposed"]
-    return {"rows": out, "report_rows_used": used, "hp_rows_left_out (VMaNGOS non-elite)": sorted(hp_left_out)}
+    return {"rows": out, "report_rows_used": used, "elite_hp_needs_review": elite_hp_review, "ctx": c}
 
 
 SCOPE_KEYS = {"player_xp_for_level": ["Level"], "creature_template": ["entry"], "item_template": ["entry"],
@@ -584,17 +590,70 @@ def _same(a: str, b) -> bool:
         return str(a) == str(b)
 
 
+def off_vs_base_sql(off: dict, scope_rows: dict, era_cols: dict) -> dict:
+    """Independent stock reference for the vanilla-off phase: every in-scope row's module columns, as the live world
+    DB holds them with EraProfile.Enable = 0 (the module's revert), must equal the pinned core's base SQL
+    (E.stock_from_base_sql), not the module's own baseline table. Rows the update SQL may have changed are guarded
+    (listed with their files, not compared)."""
+    out = {}
+    for t, rows in scope_rows.items():
+        if not rows:
+            continue
+        keys = set(rows)
+        st = E.stock_from_base_sql(t, SCOPE_KEYS[t], era_cols[t], keys)
+        wrong = []
+        for k, base in sorted(st["values"].items()):
+            if k not in off[t]:
+                wrong.append({"key": k, "off": None, "base_sql": base})
+                continue
+            live = dict(zip(era_cols[t], off[t][k][2]))
+            if any(not _same(live[c], base[c]) for c in era_cols[t]):
+                wrong.append({"key": k, "off": live, "base_sql": base})
+        out[t] = {"in_scope": len(keys), "compared": len(st["values"]),
+                  "guarded": {"/".join(map(str, k)): f for k, f in sorted(st["guarded"].items())},
+                  "missing_from_base_sql": st["missing"], "wrong": wrong}
+    return out
+
+
+def elite_stock_hp(c, off: dict, on: dict) -> dict:
+    """Elite-HP rule, checked on the live rows: every era-diff in-scope creature (creature_scope: outdoor, 1-60) that
+    has an elite rank (1-3) with vanilla mode on and an elite VMaNGOS rank must have VMaNGOS's HealthModifier
+    (verbatim), so no creature is elite in vanilla mode with its stock HP where VMaNGOS's differs. Exempt, and listed:
+    creatures whose live `exp` is not 0 (AC HP base basehp1/2, which VMaNGOS's multiplier does not describe; era-diff
+    cat_elite_hp marks them needs-review)."""
+    vm = c.vm_creatures()
+    exp = {int(e): int(x) for e, x in db.query("SELECT entry, exp FROM creature_template", "world")}
+    viol, exempt, checked = [], [], 0
+    for e, (ok, _why) in sorted(c.creature_scope().items()):
+        k = (e,)
+        if ok is not True or k not in on["creature_template"] or vm[e]["rank"] not in ELITE_RANKS:
+            continue
+        rank_on, hm_on = on["creature_template"][k][2]
+        if int(rank_on) not in ELITE_RANKS:
+            continue
+        checked += 1
+        hm_off = off["creature_template"][k][2][1] if k in off["creature_template"] else None
+        if _same(hm_on, vm[e]["health_multiplier"]):
+            continue
+        row = {"entry": e, "rank_on": int(rank_on), "HealthModifier_on": hm_on, "HealthModifier_off": hm_off,
+               "vmangos": vm[e]["health_multiplier"], "exp": exp.get(e), "stock_hp": _same(hm_on, hm_off)}
+        (exempt if exp.get(e) != 0 else viol).append(row)
+    return {"rule": elite_stock_hp.__doc__.split("\n")[0], "elite_in_scope_checked": checked,
+            "violations": viol, "exempt_exp_not_0": exempt}
+
+
 @check("era.scope_guard", order=147, capability="era-profile", stack="up", tier="full")
 def scope_guard(ctx):
     """Every out-of-scope row of creature_template, quest_template, item_template, trainer_spell and
     player_xp_for_level hashes identically with vanilla mode off and on; the rows that change are exactly the
     era-diff report's in-scope rows (count and keys, elite-HP scope applied), only in the module's columns, to the
-    report's values."""
+    report's values. With vanilla off the in-scope rows equal the pinned core's base SQL (independent of the module's
+    baseline), and with vanilla on no in-scope elite keeps a HealthModifier other than VMaNGOS's."""
     ed = E.era_diff()
     scope = report_scope()
     era_cols = {t: [x for x, _ in ed.BASELINE_COLS.get(t, [])] for t in SCOPE_KEYS}
     ev = {"report": {"rows_used": scope["report_rows_used"],
-                     "hp_rows_left_out (VMaNGOS non-elite)": scope["hp_rows_left_out (VMaNGOS non-elite)"],
+                     "elite_hp_needs_review (stay stock)": scope["elite_hp_needs_review"],
                      "expected_changed_rows": {t: len(v) for t, v in scope["rows"].items()}},
           "module_columns": era_cols}
     ev["to_off"] = stack.ensure_profile(WOTLK_PROFILE)
@@ -636,6 +695,17 @@ def scope_guard(ctx):
             bad.append(f"{t}: in-scope rows changed outside the module's columns ({len(in_other_cols)}), hold wrong "
                        f"values ({len(wrong_vals)}) or are missing ({len(missing)})")
     ev["tables"] = tables
+    ev["off_vs_base_sql"] = off_vs_base_sql(off, scope["rows"], era_cols)
+    for t, r in ev["off_vs_base_sql"].items():
+        if r["wrong"]:
+            bad.append(f"{t}: {len(r['wrong'])} in-scope rows with vanilla off differ from the pinned base SQL "
+                       f"(first {r['wrong'][0]})")
+        if not r["compared"]:
+            bad.append(f"{t}: no in-scope row could be compared with the base SQL")
+    ev["elite_hp"] = elite_stock_hp(scope["ctx"], off, on)
+    if ev["elite_hp"]["violations"]:
+        bad.append(f"{len(ev['elite_hp']['violations'])} in-scope creatures are elite with vanilla on but lack "
+                   f"VMaNGOS's HealthModifier: {[v['entry'] for v in ev['elite_hp']['violations']][:20]}")
     ev["mismatch"] = bad
     require(any(E.OFF_RE.search(l) for l in ev["off_log"]), "vanilla mode did not report OFF for the off snapshot", **ev)
     require(any(E.ACTIVE_RE.search(l) for l in ev["on_log"]), "vanilla mode did not report ACTIVE for the on snapshot",

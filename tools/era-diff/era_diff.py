@@ -58,6 +58,10 @@ SPELL_EFFECT_LEARN_SPELL = 36
 CLASS_DK_MASK = 32
 
 RANK_NAMES = {0: "normal", 1: "elite", 2: "rare-elite", 3: "boss", 4: "rare"}
+# Gate 1 Decision 3 "Outdoor elites: restored together with their elite HP" (design.md "Elite HP scope"): vanilla
+# HealthModifier goes to creatures whose VMaNGOS rank is one of these (cat_elite_hp). Rank values: AC SharedDefines.h
+# CreatureEliteType (0 normal, 1 elite, 2 rare-elite, 3 world boss, 4 rare); VMaNGOS uses the same values.
+ELITE_RANKS = (1, 2, 3)
 
 # Columns of each AC world table that mod-era-profile may overwrite in place (startup apply/revert, design.md) and
 # therefore captures into era_baseline_<table> before its first apply. Keep in sync with EMIT_TABLES below and with
@@ -652,6 +656,52 @@ def cat_creature_stats(c):
     return out
 
 
+def cat_elite_hp(c):
+    """Elite HP (Gate 1 Decision 3 "restored together with their elite HP"; design.md "Elite HP scope"): the VMaNGOS
+    health_multiplier, verbatim, for every in-scope (outdoor 1-60) creature whose VMaNGOS rank is elite, rare-elite or
+    boss and whose multiplier differs from AC's HealthModifier. This is what --emit-sql writes; it supersedes the
+    creature_stats HealthModifier rows for emission.
+    Why verbatim, including rows creature_stats marks "level range differs": VMaNGOS creature_classlevelstats.health
+    equals AC basehp0 for every class at levels 1-60 (category creature_base_stats is empty for health; memo #4), and
+    both cores compute HP as base[class, spawned level] x multiplier (AC CreatureData.h GenerateHealth), so the
+    multiplier means the same thing at any level and needs no level range to transfer. Rows where the two cores give
+    the creature a different unit_class keep the verbatim multiplier too (the module never changes unit_class): the
+    multiplier is what the spec transfers; their absolute HP follows AC's class base table (noted per row).
+    Exception (needs-review, stays stock): AC exp != 0, where AC's HP base is basehp1/basehp2 (TBC/WotLK base tables),
+    which VMaNGOS's multiplier does not describe."""
+    vm, ac = c.vm_creatures(), c.ac_creatures()
+    vcls, acls = c.classlevel()
+    out = []
+    for e, (ok, why) in c.creature_scope().items():
+        if ok is not True:
+            continue
+        v, a = vm[e], ac[e]
+        if v["rank"] not in ELITE_RANKS or abs(v["health_multiplier"] - a["HealthModifier"]) <= 1e-4:
+            continue
+        lv_vm, lv_ac = f"{v['level_min']}-{v['level_max']}", f"{a['minlevel']}-{a['maxlevel']}"
+        extra = dict(rank_vm=v["rank"], rank_ac=a["rank"], levels_vm=lv_vm, levels_ac=lv_ac,
+                     unit_class_vm=v["unit_class"], unit_class_ac=a["unit_class"], exp_ac=a["exp"])
+        if a["exp"] != 0:
+            out.append(review("elite_hp", "creature_template", e, a["name"], "HealthModifier",
+                              v["health_multiplier"], a["HealthModifier"],
+                              f"AC exp={a['exp']} uses basehp{a['exp']} (not the vanilla base table); VMaNGOS "
+                              "multiplier not transferable", **extra))
+            continue
+        notes = []
+        if lv_vm != lv_ac:
+            notes.append("level range differs (multiplier transfers: base tables equal at every level 1-60)")
+        if v["unit_class"] != a["unit_class"]:
+            vb = vcls.get((v["unit_class"], a["minlevel"]))
+            ab = acls.get((a["unit_class"], a["minlevel"]))
+            notes.append(f"unit_class differs (VMaNGOS {v['unit_class']}, AC {a['unit_class']}): at level "
+                         f"{a['minlevel']} VMaNGOS HP {round(vb['health'] * v['health_multiplier']) if vb else '?'}, "
+                         f"AC HP with this multiplier {math.ceil(ab['hp0'] * v['health_multiplier']) if ab else '?'}")
+        out.append(row("elite_hp", "creature_template", e, a["name"], "HealthModifier", v["health_multiplier"],
+                       a["HealthModifier"], v["health_multiplier"], "sql:UPDATE creature_template.HealthModifier",
+                       note="; ".join(notes), **extra))
+    return out
+
+
 def cat_creature_base_stats(c):
     """creature_classlevelstats (class, level<=60): VMaNGOS health vs AC basehp0, armor."""
     vcls, acls = c.classlevel()
@@ -854,6 +904,7 @@ CATEGORIES = {
     "quest_money": cat_quest_money,
     "outdoor_elite": cat_outdoor_elite,
     "creature_stats": cat_creature_stats,
+    "elite_hp": cat_elite_hp,
     "creature_base_stats": cat_creature_base_stats,
     "mount_items": cat_mount_items,
     "riding_training": cat_riding_training,
@@ -872,18 +923,6 @@ NOT_IN_DB = {
 # --------------------------------------------------------------------------- --emit-sql (m3 task 1.2)
 SQL_DIR = ROOT / "modules/mod-era-profile/data/sql/db-world"
 QUEST_XP_KEEP_PCT = 5       # Gate 1 Decision 2: quests whose VMaNGOS XP is within +-5% of AC's keep AC's XP
-# Gate 1 Decision 3 "Outdoor elites: restored together with their elite HP" (orchestrator scope decision, m3 task 2.3,
-# design.md "Elite HP scope"): a creature_stats HealthModifier change is emitted only for creatures whose VMaNGOS rank
-# is an elite rank. Rank values: AC SharedDefines.h CreatureEliteType (0 normal, 1 elite, 2 rare-elite, 3 world boss,
-# 4 rare); VMaNGOS uses the same values (RANK_NAMES).
-ELITE_RANKS = (1, 2, 3)
-
-
-def elite_hp_in_scope(vm_rank):
-    """Elite-HP scope rule: HealthModifier is applied only where the VMaNGOS rank is elite, rare-elite or boss."""
-    return vm_rank in ELITE_RANKS
-
-
 def sql_lit(v):
     """Deterministic SQL literal: NULL, integers as-is, floats with 4 decimals, strings single-quoted."""
     if v is None:
@@ -913,7 +952,7 @@ EMIT_TABLES = {
     "era_creature_template": (
         "creature_template", [("entry", "INT UNSIGNED")],
         [("rank", "TINYINT UNSIGNED", "VMaNGOS creature_template.rank; NULL = keep AC"),
-         ("HealthModifier", "FLOAT", "derived from VMaNGOS health_multiplier (era_diff cat_creature_stats); only VMaNGOS elite ranks (ELITE_RANKS); NULL = keep AC")],
+         ("HealthModifier", "FLOAT", "VMaNGOS creature_template.health_multiplier, verbatim (era_diff cat_elite_hp): VMaNGOS elite ranks whose multiplier differs; NULL = keep AC")],
         "Gate 1 #3/#4: outdoor 1-60 creatures: vanilla rank, and vanilla HealthModifier only where the VMaNGOS rank "
         "is elite/rare-elite/boss (elite HP); damage/armor deferred."),
     "era_item_template": (
@@ -966,9 +1005,8 @@ def emit_rows(c, snap):
     for r in cat_outdoor_elite(c):
         if r["status"] == "change":
             cre.setdefault(r["entry"], {})["rank"] = r["proposed"]
-    vmc = c.vm_creatures()
-    for r in cat_creature_stats(c):
-        if r["status"] == "change" and r["field"] == "HealthModifier" and elite_hp_in_scope(vmc[r["entry"]]["rank"]):
+    for r in cat_elite_hp(c):
+        if r["status"] == "change":
             cre.setdefault(r["entry"], {})["HealthModifier"] = float(r["proposed"])
     rows["era_creature_template"] = sorted(
         (e, v.get("rank"), v.get("HealthModifier"), snap, "creature_template", f"entry={e}")

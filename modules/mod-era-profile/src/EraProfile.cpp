@@ -102,10 +102,22 @@ namespace
         return r && r->Fetch()[0].Get<uint64>() > 0;
     }
 
+    // Set by Count() when a query fails. A failed COUNT(*) must never read as "0 rows differing": WorldDatabase.Query
+    // returns no result both on an error and on an empty result, and COUNT(*) always returns one row, so no result
+    // means the query failed (AzerothCore aborts only on some errnos, MySQLConnection::_HandleMySQLErrno; the rest are
+    // logged as "Unhandled MySQL errno" and the query is skipped). ApplyOne treats any failed count as a failed verify.
+    bool g_queryFailed = false;
+
     uint64 Count(std::string const& sql)
     {
         QueryResult r = WorldDatabase.Query(sql);
-        return r ? r->Fetch()[0].Get<uint64>() : 0;
+        if (!r)
+        {
+            g_queryFailed = true;
+            LOG_ERROR("server.loading", "[mod-era-profile] query failed (counted as a verification failure): {}", sql);
+            return 0;
+        }
+        return r->Fetch()[0].Get<uint64>();
     }
 
     // Mechanism 1 for one table. Returns true when every captured row holds the value the mode wants and (mode 1)
@@ -123,6 +135,7 @@ namespace
             }
         }
 
+        g_queryFailed = false;
         std::vector<std::string> keyT, colT, notVanilla;
         for (auto const& k : s.keys)
             keyT.push_back("t." + Quoted(k));
@@ -169,10 +182,15 @@ namespace
         uint64 sideCaptured = Count("SELECT COUNT(*) FROM " + Quoted(s.side) + " v JOIN " + Quoted(base) + " b ON " +
                                     OnKeys(s, "v", "b"));
         uint64 atVanilla = Count("SELECT COUNT(*)" + from + " WHERE " + looksApplied);
-        bool ok = wrong == 0 && (!enabled || sideCaptured == sideRows);
-        LOG_INFO("server.loading", "[mod-era-profile] {}: mode {}, {} side-table rows, {} captured into {} ({} new), "
-                 "{} rows at vanilla values, {} rows differing from the mode", s.target, enabled ? "vanilla" : "stock",
-                 sideRows, sideCaptured, base, captured, atVanilla, wrong);
+        bool const queryFailed = g_queryFailed;
+        bool ok = !queryFailed && wrong == 0 && (!enabled || sideCaptured == sideRows);
+        if (queryFailed)
+            LOG_ERROR("server.loading", "[mod-era-profile] {}: mode {}: a capture/verify query failed, so the counts "
+                      "below are not trustworthy", s.target, enabled ? "vanilla" : "stock");
+        else
+            LOG_INFO("server.loading", "[mod-era-profile] {}: mode {}, {} side-table rows, {} captured into {} ({} new), "
+                     "{} rows at vanilla values, {} rows differing from the mode", s.target,
+                     enabled ? "vanilla" : "stock", sideRows, sideCaptured, base, captured, atVanilla, wrong);
         if (suspicious)
             LOG_ERROR("server.loading", "[mod-era-profile] {}: {} in-scope rows already hold their vanilla value but "
                       "have no captured baseline (was vanilla data applied outside the module?); they were not "

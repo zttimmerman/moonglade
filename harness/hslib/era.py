@@ -25,6 +25,7 @@ AC_XP_SQL = P.CORE_SRC / "data/sql/base/db_world/player_xp_for_level.sql"
 LOG_TAG = "[mod-era-profile]"
 ACTIVE_RE = re.compile(r"\[mod-era-profile\] Vanilla mode ACTIVE \(EraProfile\.Enable = 1\)")
 OFF_RE = re.compile(r"\[mod-era-profile\] Vanilla mode OFF \(EraProfile\.Enable = 0\)")
+FAILED_RE = re.compile(r"\[mod-era-profile\] (Vanilla mode FAILED|.*query failed|.*apply did not verify)")
 TABLE_LINE_RE = re.compile(r"\[mod-era-profile\] (\w+): mode (\w+), (\d+) side-table rows, (\d+) captured into \S+ "
                            r"\((\d+) new\), (\d+) rows at vanilla values, (\d+) rows differing from the mode")
 UPDATE_S = 15.0          # a GM change shows up in our update fields within one or two map updates; generous bound
@@ -457,6 +458,64 @@ def update_sql_mentions(table: str, ids: list[int]) -> dict[int, list[str]]:
                         if rel not in out[i]:
                             out[i].append(rel)
     return out
+
+
+_SQL_COMMENT = re.compile(r"--[^\n]*|/\*.*?\*/", re.S)
+_STMT_FULL_ROW = re.compile(r"\s*(INSERT|REPLACE|DELETE)\b", re.I)
+
+
+def update_sql_touches(table: str, key_cols: list[str], cols: list[str], keys: set[tuple]) -> dict[tuple, list[str]]:
+    """{key: [files]} for the rows of `table` whose stock value of `cols` the world-DB update SQL may have changed
+    after the pinned base SQL (same roots as update_sql_mentions: core updates and other modules' world SQL, not
+    mod-era-profile). A statement touches a key when it names `table` and either (a) contains every number of the key
+    and names one of `cols` or is a full-row INSERT/REPLACE/DELETE, or (b) names one of `cols` and none of `key_cols`
+    (a broad UPDATE: it touches every key). Coarse on purpose: a false positive only drops a row from a base-SQL
+    comparison, and the comparing check reports every dropped row with its files."""
+    roots = [P.CORE_SRC / "data/sql/updates/db_world", P.CORE_SRC / "data/sql/updates/pending_db_world",
+             P.BOTS_SRC / "data/sql/world"] + \
+            [d / "data/sql/db-world" for d in sorted(P.MODULES.iterdir()) if d.name != "mod-era-profile"]
+    out = {k: [] for k in keys}
+    pat = re.compile(rf"\b{re.escape(table)}\b")
+    colp = re.compile(r"\b(" + "|".join(map(re.escape, cols)) + r")\b", re.I)
+    keyp = re.compile(r"\b(" + "|".join(map(re.escape, key_cols)) + r")\b", re.I)
+    num = re.compile(r"(?<![\d.])\d+(?![\d.])")
+    for root in roots:
+        for f in sorted(root.rglob("*.sql")) if root.exists() else []:
+            text = f.read_text(errors="replace")
+            if not pat.search(text):
+                continue
+            rel = str(f.relative_to(P.ROOT))
+            for stmt in text.split(";"):
+                if not pat.search(stmt):
+                    continue
+                names_col = bool(colp.search(stmt))
+                if names_col and not keyp.search(stmt):
+                    hit = keys
+                elif names_col or _STMT_FULL_ROW.match(_SQL_COMMENT.sub(" ", stmt)):
+                    nums = {int(x) for x in num.findall(stmt)}
+                    hit = [k for k in keys if all(int(x) in nums for x in k)]
+                else:
+                    continue
+                for k in hit:
+                    if rel not in out[k]:
+                        out[k].append(rel)
+    return out
+
+
+def stock_from_base_sql(table: str, key_cols: list[str], cols: list[str], keys: set[tuple]) -> dict:
+    """Stock AzerothCore values of `cols` for `keys`, read from the pinned core's base SQL, independent of the module
+    (its baseline table and its revert). {"values": {key: {col: str}}, "guarded": {key: [files]} (rows the update SQL
+    may have changed, update_sql_touches: no trustworthy base value), "missing": [keys absent from the base SQL]}.
+    player_xp_for_level comes from ac_stock_xp_for_level (its own two-column dump)."""
+    if table == "player_xp_for_level":
+        xp = ac_stock_xp_for_level()
+        base = {(lvl,): {"Experience": str(v)} for lvl, v in xp.items() if (lvl,) in keys}
+    else:
+        base = {k: {c: r[c] for c in cols} for k, r in ac_base_rows(table, key_cols, keys).items()}
+    touched = update_sql_touches(table, key_cols, cols, keys)
+    guarded = {k: v for k, v in touched.items() if v}
+    return {"values": {k: v for k, v in base.items() if k not in guarded}, "guarded": guarded,
+            "missing": sorted(k for k in keys if k not in base)}
 
 
 # ----------------------------------------------------------------------------------------- creature HP (AC formula)
