@@ -2,7 +2,8 @@
 --
 -- The stock 3.3.5a login screen (animated backdrop, music, era logo) turned into a single-player title menu
 -- (design.md "Menu layout"): one centred column over a subtle dark panel.
---   Main:     Continue (the current profile, its name small underneath; preselected), Profiles, Settings, Extras, Quit
+--   Main:     Continue (preselected; under it the last-played character, "Arthas · Level 23 Paladin", computed by the
+--             launcher; clicking it presses Continue), Profiles, Settings, Extras, Quit
 --   Profiles: every profile, the current one marked; choosing one makes it Continue's target; Back
 --   Settings: Game options (the stock option panels), Login screen < name > (backdrop, logo and music switch live), Back
 --   Extras:   Cinematics, Credits, About (read-only: game and Hearthstone versions, current world), Back
@@ -127,7 +128,7 @@ local MENUS = {};
 MENUS.main = { back = nil, items = function()
 	local cur = HSFrontMenu_CurrentProfile();
 	return {
-		{ text = "Continue", sub = cur and pname(cur) or "No profile: start from the Hearthstone app",
+		{ text = "Continue", context = cur and (cur.context or pname(cur)) or "No profile: start from the Hearthstone app",
 		  disabled = not cur, action = function() HSFrontMenu_Continue("continue"); end },
 		{ text = "Profiles", action = function() HSFrontMenu_Open("profiles"); end },
 		{ text = "Settings", action = function() HSFrontMenu_Open("settings"); end },
@@ -180,7 +181,8 @@ function HSFrontMenu_AboutText()
 	local gold, white = "|cffffd100", "|cffffffff";
 	local function line(k, v) return gold .. k .. "|r  " .. white .. (v or "unknown") .. "|r"; end
 	local t = {
-		line("Game:", "World of Warcraft " .. (version or "?") .. " (build " .. (build or "?") .. ", " .. (date or "?") .. ")"),
+		line("Game:", "World of Warcraft " .. (version or "?") .. " (" .. (build or "?") .. ")"),
+		"|cff9d9d9d" .. (date or "") .. "|r",
 		"",
 		line("Hearthstone:", (a.version or "?") .. " (" .. (a.commit or "?") .. ")"),
 		line("Server core:", a.core),
@@ -207,7 +209,7 @@ function HSFrontMenu_Render()
 	if ( state.sel > #items ) then state.sel = #items; end
 	local top = menu.title and -42 or -18;
 	if ( menu.title ) then HSMenuTitle:SetText(menu.title); HSMenuTitle:Show(); else HSMenuTitle:Hide(); end
-	HSMenuSub:Hide();
+	HSContinueContext:Hide();
 	HSMenuSelLabel:Hide();
 	HSArrowLeft:Hide();
 	HSArrowRight:Hide();
@@ -226,21 +228,21 @@ function HSFrontMenu_Render()
 		local it = items[i];
 		if ( it ) then
 			slot:ClearAllPoints();
-			slot:SetPoint("TOP", HSMenuPanel, "TOP", it.selector and 48 or 0, y);
+			slot:SetPoint("TOP", HSMenuPanel, "TOP", it.selector and 48 or 0, y);   -- centres label+arrows+button
 			slot:SetText(it.text);
 			if ( it.disabled ) then slot:Disable(); else slot:Enable(); end
 			if ( i == state.sel ) then slot:LockHighlight(); else slot:UnlockHighlight(); end
 			slot:Show();
 			y = y - SLOT_H - SLOT_GAP;
-			if ( it.sub ) then
-				HSMenuSub:ClearAllPoints();
-				HSMenuSub:SetPoint("TOP", slot, "BOTTOM", 0, 2);
-				HSMenuSub:SetText(it.sub);
-				HSMenuSub:Show();
-				y = y - 12;
+			if ( it.context ) then          -- tight under its button, then a clearly larger gap before the next
+				HSContinueContext:ClearAllPoints();
+				HSContinueContext:SetPoint("TOP", slot, "BOTTOM", 0, 3);
+				HSContinueContextText:SetText(it.context);
+				HSContinueContext:Show();
+				y = y - 14 - 10;
 			end
 			if ( it.selector ) then
-				slot:SetWidth(150);
+				slot:SetWidth(170);
 				HSArrowLeft:ClearAllPoints();
 				HSArrowLeft:SetPoint("RIGHT", slot, "LEFT", 2, 0);
 				HSArrowRight:ClearAllPoints();
@@ -258,8 +260,26 @@ function HSFrontMenu_Render()
 			slot:Hide();
 		end
 	end
+	HSFrontMenu_ContinueBrightness();
 	HSMenuPanel:SetHeight(-y + 10);
 	HSMenuPanel:Show();
+end
+
+-- The context line brightens with Continue: when Continue is the selection or the mouse is over either of them.
+function HSFrontMenu_ContinueBrightness()
+	if ( state.menu == "main" and (state.sel == 1 or state.continueHover) ) then
+		HSContinueContextText:SetTextColor(1.0, 0.95, 0.75);
+	else
+		HSContinueContextText:SetTextColor(0.6, 0.5, 0.3);
+	end
+	if ( state.menu == "main" ) then
+		if ( state.continueHover or state.sel == 1 ) then HSMenuSlot1:LockHighlight(); else HSMenuSlot1:UnlockHighlight(); end
+	end
+end
+
+function HSFrontMenu_ContinueHover(on)
+	state.continueHover = on;
+	HSFrontMenu_ContinueBrightness();
 end
 
 function HSFrontMenu_Open(name, sel)

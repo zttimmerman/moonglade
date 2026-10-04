@@ -12,12 +12,18 @@
 			<OnClick>
 				HSFrontMenu_SlotClicked(self);
 			</OnClick>
+			<OnEnter>
+				if ( self:GetID() == 1 ) then HSFrontMenu_ContinueHover(true); end
+			</OnEnter>
+			<OnLeave>
+				if ( self:GetID() == 1 ) then HSFrontMenu_ContinueHover(false); end
+			</OnLeave>
 		</Scripts>
 	</Button>
 
 	<!-- The whole front menu: one centred column in the lower middle, over a subtle dark panel -->
 	<Frame name="HSMenuPanel" parent="AccountLoginUI" hidden="true">
-		<Size x="340" y="280"/>
+		<Size x="380" y="280"/>
 		<Anchors>
 			<Anchor point="BOTTOM">
 				<Offset>
@@ -47,10 +53,9 @@
 						</Anchor>
 					</Anchors>
 				</FontString>
-				<FontString name="HSMenuSub" inherits="GlueFontNormalSmall" text=""/>
-				<FontString name="HSMenuSelLabel" inherits="GlueFontNormal" text="" hidden="true"/>
+								<FontString name="HSMenuSelLabel" inherits="GlueFontNormal" text="" hidden="true"/>
 				<FontString name="HSMenuText" inherits="GlueFontHighlightSmall" justifyH="CENTER" text="" hidden="true">
-					<Size x="310" y="0"/>
+					<Size x="350" y="0"/>
 				</FontString>
 			</Layer>
 		</Layers>
@@ -61,6 +66,26 @@
 			<Button name="HSMenuSlot4" inherits="HSMenuSlotTemplate" id="4" hidden="true"/>
 			<Button name="HSMenuSlot5" inherits="HSMenuSlotTemplate" id="5" hidden="true"/>
 			<Button name="HSMenuSlot6" inherits="HSMenuSlotTemplate" id="6" hidden="true"/>
+			<!-- Continue's context line (last-played character): part of Continue; clicking it presses Continue -->
+			<Button name="HSContinueContext" hidden="true">
+				<Size x="300" y="16"/>
+				<Layers>
+					<Layer level="ARTWORK">
+						<FontString name="HSContinueContextText" inherits="GlueFontNormalSmall" setAllPoints="true" text=""/>
+					</Layer>
+				</Layers>
+				<Scripts>
+					<OnClick>
+						HSFrontMenu_Activate(1);
+					</OnClick>
+					<OnEnter>
+						HSFrontMenu_ContinueHover(true);
+					</OnEnter>
+					<OnLeave>
+						HSFrontMenu_ContinueHover(false);
+					</OnLeave>
+				</Scripts>
+			</Button>
 			<Button name="HSArrowLeft" hidden="true">
 				<Size x="32" y="32"/>
 				<Scripts>

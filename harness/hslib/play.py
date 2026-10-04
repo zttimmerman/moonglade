@@ -302,8 +302,9 @@ class Loop:
             from . import frontmenu
             self.profiles_dir = launch.client_dir()
             self.rec["client"]["profiles"] = frontmenu.write(
-                self.profiles_dir, [{"name": login["account"].upper(), "account": login["account"],
-                                     "password": login["password"]}],
+                self.profiles_dir, frontmenu.with_context([{"name": login["account"].upper(),
+                                                           "account": login["account"],
+                                                           "password": login["password"]}]),
                 default=login["account"], test=frontmenu.test_hook_from_env(), about=frontmenu.about_info())
         say("Starting the game client..." if args_ is None else f"Starting the test stand-in client ({name})...")
         proc = launch.start_client(args_, cwd)
