@@ -416,7 +416,7 @@ def _set_known_state(src: dict) -> dict:
     ev["session"] = s.ev
     want_xp = E.vanilla_quest_xp(src, TOGGLE_REWARDED)
     snap, ok, dt = E.F.poll(lambda: char_snapshot(guid), lambda v: v["online"] == 0 and v["level"] == TOGGLE_LEVEL
-                            and v["xp"] == want_xp and [str(TOGGLE_IN_LOG), "3"] == (v["quest_status"][:1] or [[]])[0][:2]
+                            and v["xp"] == want_xp and any(r[:2] == [str(TOGGLE_IN_LOG), "3"] for r in v["quest_status"])
                             and [str(TOGGLE_REWARDED), "1"] in v["quest_rewarded"], timeout=30)
     ev |= {"expected": {"level": TOGGLE_LEVEL, "xp": want_xp, "rewarded": TOGGLE_REWARDED, "in_log_incomplete":
                         TOGGLE_IN_LOG}, "snapshot": snap, "saved": ok, "wait_s": dt}
