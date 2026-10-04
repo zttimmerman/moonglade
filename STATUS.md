@@ -8,7 +8,7 @@ _Updated 2026-10-04 (M3 merged; launcher .app next)._
 **In flight**
 | Work | Branch / checkout | State | If its agent is gone |
 |---|---|---|---|
-| Launcher `.app` | (spec being written) | Next up after M3. Logo source `env/branding/logo-source.jpeg` | — |
+| Launcher `.app` | `change/launcher-app` (HEAD d563459, pushed), **main checkout**, in `harness/active-changes` | B18: icon (generator, ring fit, transparent, deterministic), `hs app`, AppKit launcher, `app.icon` + `app.bundle_valid` pass (quick green). **Blocked on Zach:** macOS asks "Hearthstone would like to access files in your Documents folder" (repo is in ~/Documents); until he clicks Allow, the app's child processes block, so the 4 runtime `app.*` checks and the full tier can't run. Ad-hoc signed with designated requirement `identifier "local.hearthstone.app"` so one Allow survives rebuilds (weaker identity, accepted for a personal app) | After Zach allows: resume a builder for the 4 runtime checks ×3 + counterexamples + unfiltered full, then a fresh verifier |
 
 **At the M4 human gate, Zach reviews** two performance-budget spec loosenings recorded in the M2 proposal: budget 4.0 GB RSS → 6.0 GB max(RSS, footprint) plus a 7.0 GB stack limit, with host-free made recorded-only (commit 7005613, attributed to Zach); "largest N that fits" → "default fits + larger sizes measured" (ab6447a, my inference from Zach picking ~500). **F18:** playerbots 0001 `Execute` returns false after a successful offline removal (cosmetic, debug stat only). **M3 DONE (2026-10-04, PR #10):** vanilla mode on by default; two verifier PASSes (22ef40e slow 68/0; 028fecd full 61/0 after B17). Open for Zach: play vanilla mode (human-verify). At the gate: 14442 Hunter Thunderhorn stays stock HP (AC exp=1 → TBC base HP); 6 class-mismatched creatures (2647, 4844, 5647, 6213, 7872, 7874) are ~10–20% off vanilla absolute HP. **F19:** tripwire in `era.scope_guard` if the `exp != 0` exemption count grows beyond era-diff's needs-review count. **F20:** pin the VMaNGOS zip sha256 in fork.lock (today only the URL is pinned; the hash lives in the generated SQL header). **For Zach when playing vanilla mode (from the M3 verifier):** switching vanilla→WotLK lowers XP thresholds, so a character may level up on its next XP gain; the game client may show stale item tooltips after a toggle (cache); over-level quest XP follows VMaNGOS float rounding (e.g. 811 not 810). **M2 DONE (2026-10-03, PR #9):** two verifier PASSes (eca9cb7 slow run 60/0; a01699a re-verify incl. client checks); ADR-0007/0008 accepted. Still open: 3 M2 `[human-verify]` scenarios for Zach's next play session (living world, companions, playability). Verifier-2 notes: Orgrimmar is now the weakest capital (6-8; dips to 4 at the later snapshot); `pop.size_setting` doesn't exercise a population world of another N; `lifecycle.down` passes despite the F15 shutdown segfault. New F-items from B13: **F15** upstream worldserver shutdown segfault (`GameObject::RemoveFromWorld` ← `MapMgr::UnloadAll`, after population sessions; seen before the patches); **F16** checks whisper `reset botAI` because companion strategies persist per bot (note for human-verify: real companions keep their last orders). **F17 (backlog, Zach 2026-10-03):** upstream our fixes (core 0002 → AzerothCore / the playerbots fork, playerbots 0001 → mod-playerbots) as a PR or at least an issue, *only after* reading each repo's contributing guide, issue templates and triage norms, so we don't clutter their trackers. Nothing gets posted without Zach's OK.
 
@@ -23,36 +23,29 @@ _Updated 2026-10-04 (M3 merged; launcher .app next)._
 
 _Last updated: 2026-10-02 (session 2): M1 done_
 
-## Current milestone: M2 Living world (next), plus tooling/tiers/spike
-M0 Foundation is **done**: verifier PASS (cycle 4), human gate passed 2026-10-01, archived as `openspec/changes/archive/2026-10-02-m0-foundation-harness`, and its specs merged into `openspec/specs/`.
+## Current milestone: launcher `.app` → front menu → M4 solo dungeons
+Done: M0 (gate passed), Gate 1 (signed), M1 `./play`, M2 living world (PR #9), M3 vanilla mode (PR #10), plus re-tooling, harness tiers, core server-mail guard, login-screen spike. Zach still to play: M2 + M3 `[human-verify]` scenarios.
 
 ## Task board
-| Task | State | Notes |
+**Done:** M0, Gate 1, M1, Ghidra tooling, harness tiers, core server-mail guard (ADR-0006), login-screen spike, M2 (ADR-0007/0008), M3. Details in `openspec/changes/archive/` and git history.
+
+**Open follow-ups (F-items), roughly by value:**
+| Item | Priority | Notes |
 |---|---|---|
-| M0 Foundation | **done / archived** | 4 verifier cycles (FAILs fixed: playerbots_active weak check; client.inspect ignored unrecorded binaries) |
-| Gate 1 | **signed 2026-10-01** | vanilla mode on by default, easily toggleable (memo) |
-| M1 `./play` | **done / archived** (verifier PASS cycle 2; Zach's Wi-Fi-off demo passed 2026-10-02) | personal account `PLAYER` (env/player.json), sandbox-exec offline proof, procs.py replaces ps |
-| Ghidra tooling + skills | **done / archived** (verifier PASS cycle 2) | `hs re`, `hs ghidra-install`, 4 project skills; run budget: 2 full runs/change |
-| F9 re-tooling verifier nits | todo (low) | readonly path check: use resolved `is_relative_to`; JDK assertion `>=21` explicitly; harness check for wine no-adoption rule (needs scratch params like ghidra.install) |
-| Harness tiers | **done / archived** (verifier PASS) | `hs run --tier quick` ~36 s (builders' loop); full ~9.5 min; `--force-clean` ~13 min (required once per merge); test logout ~20 s → <1 s |
-| F10 tiers verifier nits | todo | enforce force-clean at merge in the harness (e.g. a merge-gate flag/check), not just the verifier brief; keep the from-empty build log (don't let `build.clean_smart` overwrite it) |
-| Core server-mail guard (ADR-0006) | **done / merged** (PR #6) | first core patch; M2 unblocked |
-| F14 `hs upstream-check` | todo | list new commits, issues and PRs in the core fork, upstream AzerothCore and mod-playerbots since our `fork.lock` pins (esp. fixes for our patches/known issues). Run periodically and before writing any patch |
-| F13 MPQ guard hard-link edge | todo (low) | refuse an existing destination with link count > 1; NFD fallback for a missing non-ASCII root (unreachable today) |
-| F12 keep the Mac awake during harness runs | partly in M2 (B13 adds `caffeinate -s`); **a closed lid still sleeps the Mac: keep the lid open during long runs** | a mysqld abort ("Semaphore wait > 600 s") happened while the display slept during spike Phase B; B11's later runs under `caffeinate -d -i -u` were clean. Wrap `hs run`/`./play`/long builder runs in caffeinate (or `IOPMAssertion`); add a check |
-| F11 server-mail relog misdelivery check | todo | behavioural check: second char on test account, A→B fast relog, no misdelivered mail (requirement narrowed in core-server-mail-guard, logged) |
-| Login-screen spike | **done / merged** (PR #7) | report: docs/research/login-screen-spike.md |
-| Login-screen spike (old row) | superseded | Q1: custom GlueXML from a patch MPQ with an unmodified Wow.exe? (Wow.exe has "GlueXML has corrupt signature" strings). Q2: are the TBC/Vanilla login backdrops and music in the 3.3.5a MPQs (background picker)? Needs an MPQ reader |
-| F8 M1 verifier nits | todo (low) | smoke picks `wow[0]` (pick the persistent/oldest pid); `play_processes()` matches any cmdline with 'hslib.play'; real Wow.exe exit path only human-verified |
-| M2 living world | spec written | `openspec/changes/m2-living-world` |
-| M3 vanilla mode | spec written; task 1.1 done (RewXP verified) | branch `change/m3-vanilla-mode` |
-| F2 `report.full_run` proves files written only externally | todo (low) | |
-| F5 mtld3d shader cache in `client/`; possible colour banding (HDR on) | todo (low) | |
-| F6 setup reproducibility | todo | Brewfile, `hs bootstrap`, `docs/setup.md` |
-| F7 verifier-4 nits | todo (low) | smoke's 30 s measured from the launcher, not Wow.exe's own start (Wow.exe ~27 s old at end); stale docstrings (launch_smoke, `_require_wine`); coverage can't see an unlisted change with no ticked tasks (process rule covers it) |
+| F15 worldserver shutdown segfault (`GameObject::RemoveFromWorld` ← `MapMgr::UnloadAll`) | med | upstream bug, seen after population sessions; `lifecycle.down` passes despite it; check upstream first |
+| F14 `hs upstream-check` | med | new commits/issues/PRs in the core fork, AzerothCore and mod-playerbots since our pins; run before any patch |
+| F11 server-mail relog misdelivery check | med | second char, fast A→B relog, no misdelivered mail |
+| F10 enforce `--force-clean` at merge in the harness; keep the from-empty build log | med | |
+| F6 setup reproducibility (Brewfile, `hs bootstrap`, docs/setup.md) | med | prerequisite for the portable app |
+| F17 upstream our fixes (PR or issue) | low, needs Zach's OK | only after learning each repo's process |
+| F19 tripwire on the `era.scope_guard` `exp != 0` exemption count; F20 pin the VMaNGOS zip sha256 in fork.lock | low | |
+| F16 companions keep last orders across logins (checks reset them) | note | human-verify note |
+| F18 playerbots 0001 `Execute` returns false after offline removal | low | cosmetic |
+| F2, F5, F7, F8, F9, F13 verifier nits | low | see git history of this table for detail |
+| F12 keep-awake | done-ish | `caffeinate -s` + Zach's `pmset disablesleep 1` |
 
 ## Last full harness result
-2026-10-02, HEAD `48cd8a9`: **27 pass / 0 fail**, exit 0 (mine, plus 2 verifier runs). About 7 min per full run. Disk free about 22 GB.
+2026-10-04, M3 re-verify at `028fecd`: unfiltered `--tier full --force-clean` **61 pass / 0 fail** (7 slow skipped by design); last slow run 2026-10-03 at `22ef40e`: **68 / 0**. Post-merge quick tier on main: 37 pass / 1 skip.
 
 ## North star (Zach, 2026-10-02)
 Offline WoW that feels like **one single-player app**, with many moving parts behind the scenes. Target front end: the **in-client modified login screen** (profiles/saves/options, auto-login, backdrop picker), reached via a launcher-side menu first. Client binary changes are expected over time, each with its own ADR and Zach's yes (§2/§11). **If the launcher pre-screen (step 1) feels janky, reconvene with Zach about jumping straight to the exe-patched in-client screen (step 2).**
@@ -62,23 +55,24 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 - `harness/active-changes` lists the changes being built or verified; only those (plus archived specs) gate `report.coverage` / `report.full_run`.
 
 ## Known issues / notes for later milestones
-- **Upstream core crash (found by B9, 2026-10-02):** a logout within milliseconds of login segfaults worldserver. `src/server/scripts/World/server_mail.cpp:29` `OnPlayerLogin` queues async SELECTs whose callbacks call `SendServerMail(session->GetPlayer(), …)` (line 58) with no null check. The harness works around it (`fixtures.settle_login`). **M2 prerequisite:** an ADR plus a minimal core patch (null-guard) before scaling the bot population, since bots log in and out often.
-- The playerbots command server (`AiPlayerbot.CommandServerPort`) binds 0.0.0.0 with no address option. It's disabled. If M2/M4 scripting wants it, it needs a module patch to bind 127.0.0.1, and an ADR.
-- M0 bot population is capped at 10 random bots (`config.py`). M2 must define the real budget (see research doc §5).
-- Probe logout takes about 20 s (logout timer, since the test account isn't GM). Warden packets are ignored, which is fine for short sessions.
-- The era-diff tool couldn't read VMaNGOS source to confirm what `RewXP` means, because a web fetch was denied. It's flagged in the memo.
+- The playerbots command server (`AiPlayerbot.CommandServerPort`) binds 0.0.0.0 with no address option, so it's disabled. If scripting needs it: a module patch binding 127.0.0.1, plus an ADR.
+- Rosetta's `oahd` can wedge (2026-10-03): every untranslated x86_64 binary, Wine included, hangs unkillably in state U. Fix: Zach runs `sudo killall oahd`; reboot is the fallback.
+- The app needs macOS Documents-folder permission (repo is in ~/Documents); granted 2026-10-04 for `local.hearthstone.app`. Don't change the bundle id or designated requirement, or macOS re-prompts.
 
-## Backlog (later rounds)
-- **Player-centred population spike (Zach, 2026-10-03):** make the player's zone feel busier without pop-in. Idea: keep the world-wide population, but bias bot placement toward the player's level band and current zone, lower the update rate of bots far from the player (verify which mod-playerbots settings do this, e.g. the "active alone" scaling, before relying on them), and possibly raise the total N using the measured headroom (N=1500 fit). Rejected: bots exist only in the player's zone (pop-in, no living world, empty starting zones/capitals). Zone liveliness is [human-verify]. Pairs with the world-size option in the front menu.
-- **Transmog spike** (Zach, 2026-10-03): evaluate `azerothcore/mod-transmog` (AGPL-3.0, Rochet2-based; catalogue id 74011079). **Target = as modern-retail as possible:** account-wide appearance collection, and **outfits saved independently of items (Midnight-style)**, applied on top of current gear. Questions: what the module does vs the target; configure/extend vs our own module (ADR if core); a retail-like wardrobe UI via a normal AddOn + addon messages (confirm with read-only RE that AddOns aren't blocked by the FrameXML/AddOn signature path); interplay with bots and vanilla mode. Don't assume module features; establish them.
-- **Front menu** (target state, see North star). Options include world size (population presets). Step 1: a launcher-side menu (`.app`: profiles/saves/options, the launcher types the login, backdrop/music swap via a data-only patch MPQ). Step 2: the in-client screen, which needs a Wow.exe signature-check patch on a copy (ADR when we get there). Spike phase A: GlueXML is RSA/MD5-signed and verified each load; backdrops (WotLK/TBC/Dark Portal) and music are present and unsigned. Saves: light (per account) vs true save files (separate DBs), to decide later.
-- Mac `.app` launcher for `./play` (right after the spike); optional stopgap where the launcher types the login.
-- F6 setup reproducibility: Brewfile, `hs bootstrap`, docs/setup.md.
-- In-game single-player settings menu: toggle leveling pace/difficulty (vanilla vs WotLK, per character?) without SQL swaps or restarts. Zach's idea from Gate 1.
-- Era profile extras descoped from v1: class mount quests, vanilla quest levels, vanilla quest gold, creature damage/armor (needs a researched mapping).
-- Separate mount switch (split mounts out of vanilla mode) if wanted.
-- WoWSilicon client perf patches (libSiliconPatch etc.): needs §2 opened via an ADR; FPS A/B test first. Tech-debt / M5.
-- Verify VMaNGOS `RewXP` semantics against VMaNGOS source (assumed in the memo).
+## Roadmap and backlog (groomed 2026-10-04)
+**Now:** launcher `.app` (in flight) → **front menu step 1** (launcher-side profiles/saves/options incl. world size + vanilla toggle; reconvene if janky) → **M4 solo dungeons** (scaling for 1 player + bots; human gate: Zach plays two dungeons; review M2 budget loosenings there).
+
+**M5 (after M4), proposed order:**
+1. **Solo-first feature audit (Zach, 2026-10-04).** Principle: every MMO feature either serves solo play or gets hidden. Hide: global chat channels, trade/LFG/guild-recruitment noise, anything waiting on strangers. Keep: visible bots, instant groups, useful systems. Mostly config/module work.
+2. **In-client unified login screen (front menu step 2), fast follow (Zach, 2026-10-04).** Profiles/saves/options/auto-login/backdrop picker inside the game's own login screen, built on a revertable derived "play client" (`env/client-play/`, APFS clone of the pristine `client/` + `patches/client/` queue). **ADR-0009 accepted (Zach, 2026-10-04).** Given this, front menu step 1 stays thin: the profile/account/options/auto-login backend that step 2 reuses, with minimal launcher UI.
+3. **Auction house with real listings.** Evaluate first: does mod-playerbots' random-bot economy post to the AH at all, and AzerothCore's AH-bot module (seeds listings from item data, can buy players' items). Pick the less invasive one; listings priced from data, not invented.
+4. **Transmog spike.** `azerothcore/mod-transmog` (AGPL-3.0). Target as modern-retail as possible: account-wide appearance collection, outfits saved independently of items (Midnight-style). Evaluate what the module gives vs needs building; client UI limits.
+5. **LLM companions spike (Zach, 2026-10-04).** Local model (e.g. Ollama), toggleable, off the main path, time-boxed. Use it for companion orders in plain language, personality/banter, lore comments: a few calls a minute, not the 500-bot population. Measure memory/latency next to the server + Wine. Goal: companions *better than* human party members, not fake strangers. M4 companions come first.
+6. **In-game single-player settings menu** (Gate 1 idea): toggle pacing/difficulty without SQL swaps or restarts; may fold into the front menu step 2 (in-client login screen, needs a Wow.exe patch ADR + Zach's yes).
+7. **Player-centred population** (busier around the player, no pop-in; details in git history of this section).
+8. **Portable standalone `.app`** (Zach, 2026-10-04): deterministic `hs package` (+ skill) building a self-contained app from `main` (server, modules, Wine runtime, client, seed DB); saves (characters + auth DBs, client WTF settings) kept outside the bundle in ~/Library/Application Support; tens of GB; Apple Silicon only; another Mac needs right-click Open + TCC prompts; personal use only. Needs F6 first.
+
+**Later / tech debt:** era extras (class mount quests, vanilla quest levels and gold, creature damage/armor, separate mount switch); WoWSilicon client perf patches (needs a §2 ADR, FPS A/B first); the F-items above.
 
 ## Correction log
 **2026-10-01, target correction from Zach.** The target is WotLK 3.3.5a (build 12340), all content through 80 (Outland, Northrend, DKs). The era profile adjusts 1–60 pacing and difficulty only. VMaNGOS is a read-only data reference. CLAUDE.md §1/§2/§7 updated.
@@ -91,9 +85,7 @@ Audit of everything created so far (specs, ADRs, tasks, kickoff split, harness c
 - **M0 specs, design, tasks, ADR-0001/0002/0003, verifier agent, harness code**: no vanilla or VMaNGOS-as-codebase assumption found. All target 3.3.5a build 12340 (client-data v20.0 is 3.3.5a data).
 
 ## Open questions for Zach
-1. **Client + CrossOver** aren't on this Mac (no `Wow.exe` found, no CrossOver.app). Both are needed for the M0 human gate. Where's your 3.3.5a enUS client? Need the path.
-2. **Disk:** ~44 GB free before this project; the build, data, and DB use about 12 GB, and the client needs ~17 GB more. Tight.
-3. GitHub fork: the fork lives in-repo as pinned SHA + patch queue (ADR-0001). Want a GitHub remote for this repo? Not needed for progress.
+When convenient: play M2 + M3 (living world, companions, smoothness, vanilla pacing/elites); first double-click of `Hearthstone.app` once its verifier passes.
 
 ## Environment notes
 - Node 20 needed for `openspec` (`~/.nvm/versions/node/v20.20.1/bin`); default shell node is 16.
