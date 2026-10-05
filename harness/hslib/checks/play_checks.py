@@ -128,6 +128,12 @@ def remaining(stand_in: StandIn | None = None) -> dict:
     return r
 
 
+def human_lines(text: str) -> str:
+    """./play's output without its machine-readable `[stage] {json}` lines (launcher-polish), so a tail kept as
+    evidence still holds the human lines a check asserts on."""
+    return "\n".join(l for l in text.splitlines() if not l.startswith("[stage] "))
+
+
 def is_clear(r: dict) -> bool:
     return not any(r.values())
 
@@ -638,7 +644,7 @@ def player_account(ctx):
             rc, _ = s.wait_exit(timeout=300)
             rec = last_record(s.proc.pid)
             last_text = play.LAST.read_text() if play.LAST.exists() else ""
-            run |= {"exit_code": rc, "output": out.read_text(errors="replace")[-2500:],
+            run |= {"exit_code": rc, "output": human_lines(out.read_text(errors="replace"))[-2500:],
                     "record_account": rec.get("account"), "record_prepare_accounts": (rec.get("prepare") or {}).get("accounts"),
                     "outcome": rec.get("outcome"), "_last_text": last_text}
             runs.append(run)
