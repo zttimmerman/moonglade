@@ -10,14 +10,15 @@
 // event) shows the same message. Quitting the app (Dock menu, Cmd-Q, SIGTERM) asks the play loop to stop (SIGTERM),
 // which closes the game and shuts the server down, then exits.
 //
-// Test hook: with HS_APP_TEST_HOOK=<file> in the environment, no window or dialog is shown; every status/dialog the
+// Test hook: with HS_APP_TEST_HOOK=<file> in the environment, no dialog is shown (launcher-polish: the non-modal loading
+// window still is, so activation behaves as in real use); every status/dialog the
 // app would show, and its exit code, is appended to <file> as one JSON object per line. The harness's app.* checks
 // always set it (via `open --env`), so harness runs never pop up real dialogs.
 //
 // launcher-polish (openspec/changes/launcher-polish, ADR-0010):
 // - Loading window with stages: the play loop prints `[stage] {json}` lines (harness/hslib/stages.py); the window
 //   shows the stage label, a determinate bar for the whole start (never moving backward; it creeps within a stage
-//   that has no measurable progress), the latest [play] line and "AI players: N / M online". Each stage line is
+//   that has no measurable progress), and the latest [play] line (the bots stage's heading is "AI players: N / M online"). Each stage line is
 //   recorded as a hook event {"kind":"stage", ...} (play's own timestamp as "play_t").
 // - One Dock icon: the game's Wine process runs as an accessory app (the shim, harness/app/dockshim.m), so this
 //   launcher stays the only Hearthstone icon. When the game's first window appears (the shim posts
@@ -67,7 +68,6 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
 @property BOOL clientStarted;
 // loading stages
 @property(strong) NSTextField *stageLabel;
-@property(strong) NSTextField *botsLabel;
 @property(strong) NSProgressIndicator *bar;
 @property(strong) NSTimer *barTimer;
 @property(strong) NSDictionary *stage;          // the latest stage event
@@ -157,15 +157,9 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     detail.textColor = [NSColor secondaryLabelColor];
     detail.frame = NSMakeRect(124, 58, 372, 56);
     [root addSubview:detail];
-    NSTextField *bots = [NSTextField labelWithString:@""];
-    bots.font = [NSFont systemFontOfSize:11 weight:NSFontWeightMedium];
-    bots.textColor = [NSColor secondaryLabelColor];
-    bots.frame = NSMakeRect(124, 30, 372, 18);
-    [root addSubview:bots];
     self.stageLabel = title;
     self.bar = bar;
     self.statusDetail = detail;
-    self.botsLabel = bots;
     self.statusWindow = w;
     [w center];
     self.barTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 target:self selector:@selector(animateBar)
@@ -176,7 +170,8 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     [self record:@{@"kind": @"status", @"id": ident, @"text": text}];
     [self ensureWindow];
     if (!self.stage) self.stageLabel.stringValue = text;
-    if ([self testMode]) return;
+    // shown in test mode too (dialogs aren't): a launcher with a key window keeps activation while loading, as in
+    // real use, so the hand-off checks exercise the real path
     [NSApp activateIgnoringOtherApps:YES];
     [self.statusWindow makeKeyAndOrderFront:nil];
 }
@@ -222,13 +217,6 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
         label = [NSString stringWithFormat:@"%@  %d%%", label, (int)lround([frac doubleValue] * 100)];
     if ([ev[@"state"] isEqual:@"failed"]) label = [NSString stringWithFormat:@"Stopped: %@", label];
     if (!self.stopRequested) self.stageLabel.stringValue = label;
-    NSDictionary *bots = [ev[@"bots"] isKindOfClass:[NSDictionary class]] ? ev[@"bots"] : nil;
-    if (bots) {
-        id on = bots[@"online"], of = bots[@"target"];
-        self.botsLabel.stringValue = [NSString stringWithFormat:@"AI players: %@ / %@ online",
-                                      [on isKindOfClass:[NSNumber class]] ? on : @"?",
-                                      [of isKindOfClass:[NSNumber class]] ? of : @"?"];
-    }
     if ([sid isEqual:@"ready"]) {
         NSDictionary *win = [ev[@"window"] isKindOfClass:[NSDictionary class]] ? ev[@"window"] : nil;
         if (win[@"pid"]) [self gameWindowUp:[win[@"pid"] intValue] via:@"ready_stage"];
@@ -498,11 +486,11 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     }
     self.game = g;
     self.handedOff = YES;
-    [self hideStatus];
-    [self record:@{@"kind": @"status", @"id": @"hidden", @"text": @"loading window hidden: the game window is up"}];
     [self record:@{@"kind": @"handoff", @"game_pid": @(pid), @"via": via, @"launcher_active": @(NSApp.isActive),
                    @"game_policy": @(g.activationPolicy)}];
-    [self forwardFocus:@"handoff" attempt:0];
+    [self forwardFocus:@"handoff" attempt:0];        // first, while the loading window still holds activation
+    [self hideStatus];
+    [self record:@{@"kind": @"status", @"id": @"hidden", @"text": @"loading window hidden: the game window is up"}];
 }
 
 - (BOOL)gameAlive { return self.game && !self.game.terminated; }
@@ -549,9 +537,9 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
                                                                       options:NSDistributedNotificationDeliverImmediately];
         [self record:@{@"kind": @"reopen_note", @"why": why}];
     }
-    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.15 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-        [self forwardFocus:why attempt:0];
-    });
+    // at once, while we still hold activation: a launcher with no window on screen doesn't keep it for long (the
+    // window server hands focus to the app with the topmost window), and only the active app can yield it
+    [self forwardFocus:why attempt:0];
 }
 
 - (void)applicationDidBecomeActive:(NSNotification *)n {

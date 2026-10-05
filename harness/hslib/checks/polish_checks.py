@@ -90,27 +90,44 @@ def is_ours(a: dict) -> bool:
     return str(a.get("exe", "")).startswith(str(RUNTIME) + "/") or a.get("bundle") == A.BUNDLE_ID
 
 
-class LsSampler(threading.Thread):
-    """lsappinfo list as fast as it goes (>= 10 Hz needed), keeping this runtime's Wine processes and our launcher."""
+class LsSampler:
+    """lsappinfo list as fast as it goes (>= 10 Hz needed), keeping this runtime's Wine processes and our launcher.
+    Two staggered worker threads, so one slow lsappinfo call (Wine start-up load) doesn't leave a gap."""
+
+    WORKERS = 2
+    PERIOD = 0.06
 
     def __init__(self):
-        super().__init__(daemon=True, name="ls-sampler")
         self.samples: list[dict] = []
         self.stop_ev = threading.Event()
+        self.lock = threading.Lock()
+        self.threads = [threading.Thread(target=self._run, args=(i * self.PERIOD / self.WORKERS,), daemon=True,
+                                         name=f"ls-sampler-{i}") for i in range(self.WORKERS)]
 
-    def run(self):
+    def _run(self, offset: float):
+        if self.stop_ev.wait(offset):
+            return
         while not self.stop_ev.is_set():
             t = time.time()
             try:
                 apps = [a for a in lsappinfo_list() if is_ours(a)]
             except Exception as e:  # noqa: BLE001
                 apps = [{"error": str(e)}]
-            self.samples.append({"t": round(t, 3), "apps": apps})
-            time.sleep(max(0.0, 0.06 - (time.time() - t)))
+            with self.lock:
+                self.samples.append({"t": round(t, 3), "apps": apps})
+            time.sleep(max(0.0, self.PERIOD - (time.time() - t)))
+
+    def start(self):
+        for th in self.threads:
+            th.start()
 
     def stop(self):
         self.stop_ev.set()
-        self.join(timeout=5)
+        for th in self.threads:
+            if th.is_alive():
+                th.join(timeout=5)
+        with self.lock:
+            self.samples.sort(key=lambda s: s["t"])
 
 
 class Sampler(threading.Thread):
@@ -364,6 +381,25 @@ def _session(ctx_key: str = "app") -> dict:
     return ev
 
 
+def app_name(pid) -> str | None:
+    if not pid:
+        return None
+    try:
+        return Path(procs.path(int(pid)) or "").name or None
+    except (TypeError, ValueError):
+        return None
+
+
+def _no_thief(ev: dict, front_pids: list, allowed: set, out: dict, when: str):
+    """GIVEN "without user input": no third app (the user's, or one activating itself) took activation during the
+    step. macOS 14+ only lets the active app hand activation over, so such an app makes the THEN impossible."""
+    thieves = sorted({p for p in front_pids if p and p not in allowed})
+    out["third_party_frontmost"] = [{"pid": p, "app": app_name(p)} for p in thieves]
+    require(not thieves, f"GIVEN not met: another app ({', '.join(str(app_name(p)) for p in thieves)}) took "
+            f"activation {when} (user input or an app activating itself); macOS only lets the active app hand "
+            "activation over, so no hand-off can be judged", **out)
+
+
 def _focus_given(ev: dict, part: dict | None = None):
     require(not ev.get("screen_locked_at_start") and not ev.get("screen_locked_at_end"),
             "GIVEN not met: the Mac's screen is locked (loginwindow is frontmost), so no app can be activated; "
@@ -415,6 +451,14 @@ def verify_handoff(ev: dict) -> dict:
     hidden = [e for e in ev["events"] if e.get("kind") == "status" and e.get("id") == "hidden"]
     out["hidden_events"] = hidden
     _focus_given(ev, out)
+    # a third app holding activation when the window appeared (the launcher wasn't active at the hand-off) makes the
+    # THEN impossible: report it as the GIVEN failing, not the hand-off
+    ho = next((e for e in ev["handoff_events"] if e.get("kind") == "handoff"), None)
+    act = next((e for e in ev["handoff_events"] if e.get("kind") == "activate"), None)
+    if not (ev["front_after_window_s"] is not None and ev["front_after_window_s"] <= FOCUS_LIMIT_S) \
+            and ho and ho.get("launcher_active") is False:
+        _no_thief(ev, [act.get("frontmost_pid")] if act else [], {ev["notepad_pid"], ev["launcher_pid"]}, out,
+                  "from the launcher before the game window appeared")
     t_hidden = datetime.fromisoformat(hidden[0]["t"].replace("Z", "+00:00")).timestamp() if hidden else None
     out["hidden_after_window_s"] = round(t_hidden - ev["t_window"], 2) if t_hidden else None
     require(hidden and out["hidden_after_window_s"] <= FOCUS_LIMIT_S, "the loading window wasn't hidden within 2 s", **out)
@@ -430,6 +474,7 @@ def verify_reopen(ev: dict) -> dict:
     out["front_samples"] = r["front_samples"][:40]
     _focus_given(ev, out)
     require(r["front_before"] != np and r["front_before"] in r["finder_pids"], "GIVEN not met: Finder wasn't frontmost", **out)
+
     require(r["front_after_s"] is not None and r["front_after_s"] <= FOCUS_LIMIT_S,
             "the stand-in wasn't frontmost within 2 s of the reopen", **out)
     require(not [d for d in r["dialogs_after"] if d.get("id") == "already_running"], "an \"already running\" dialog was shown", **out)
