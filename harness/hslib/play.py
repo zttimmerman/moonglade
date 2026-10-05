@@ -321,8 +321,13 @@ class Loop:
         self.rec["world"] = world
         st.profile = world["profile"]
         st.world_lines_of = st._world_lines_of()
+        from .clientbuild import PLAY as PLAYER_CLIENT
+        # harness runs (test account) never write the resolution into the player's own play client; scratch play
+        # clients ($HS_PLAY_CLIENT_DIR) get it as a player's would (client.resolution_default)
+        own = launch.client_dir().resolve() == PLAYER_CLIENT.resolve()
         man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts,
-                                 profile=world["profile"], population_n=world["population_n"], stages=st)
+                                 profile=world["profile"], population_n=world["population_n"], stages=st,
+                                 set_resolution=not (self.args.account == "test" and own))
         self.rec["prepare"] = {k: ev[k] for k in ("restarted_world", "stack", "fixtures", "accounts", "prefix",
                                                   "binaries_match_manifest_before", "resolution") if k in ev}
         self.man = man

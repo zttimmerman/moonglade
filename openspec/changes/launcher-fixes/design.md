@@ -83,6 +83,11 @@ UI-scaling side effects), out of scope here.
   Display: `NSScreen.mainScreen` via JXA (points, backingScaleFactor, safeAreaInsets.top). Ownership marker:
   `<play client>/WTF/hs-resolution.json` (the value the launcher last wrote; WTF/ survives play-client rebuilds).
   Absent value or value == marker: the launcher may (re)write; anything else is the player's and is left alone.
+  The marker is written whole (tmp + rename), first with the old and the pending value, then the new one, so a kill
+  between the marker and Config.wtf writes still leaves both values recognised as ours.
+  Harness runs with the test account on the player's own env/client-play skip it (`prepare(set_resolution=False)`,
+  recorded as skipped): only the player's own launches, or a scratch play client, get the default. (Found when a
+  builder run of app.single_instance wrote it into env/client-play; that write was reverted.)
   An error reading the display never blocks a launch (recorded, no new [play] line). Test-only `$HS_TEST_DISPLAY`
   (scratch play client only; ./play refuses it without --allow-test-client-dir).
 - The login checks' marker reader (`playclient_util.marker`) now scales with the screenshot height (UI = 768 units),
@@ -104,7 +109,7 @@ UI-scaling side effects), out of scope here.
   ordered front without activation). The shared app session now ends with a quit request as from the Dock
   (`NSRunningApplication -terminate`) instead of the stand-in exiting (app.launch_lifecycle still covers the game
   exiting). `client.resolution_default` (full tier; real client in part B). `login.fresh_menu_waits` (F25) on the
-  shared Continue run, which gains a screenshot at 19 s (just before the Continue at 20 s). F26: GUI_PATHS gains
+  shared Continue run, which gains a screenshot at 17 s (before the Continue at 20 s; the file lands up to ~1 s after the act, so 3 s of margin). F26: GUI_PATHS gains
   play_checks.py, procs.py, paths.py, util.py, config.py, runner.py, frontmenu.py, clientbuild.py, clientcfg.py,
   resolution.py.
 - `app.single_instance` (a) now opens a second *instance* (`open -n`): a plain reopen during loading no longer shows

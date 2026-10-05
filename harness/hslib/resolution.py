@@ -102,7 +102,7 @@ def current(client_dir: Path) -> str | None:
 def marker(client_dir: Path) -> dict | None:
     try:
         d = json.loads((Path(client_dir) / "WTF" / MARKER).read_text())
-        return d if isinstance(d, dict) and isinstance(d.get("value"), str) else None
+        return d if isinstance(d, dict) and isinstance(d.get("value") or d.get("pending"), str) else None
     except (OSError, ValueError):
         return None
 
@@ -117,18 +117,26 @@ def apply(client_dir: Path, d: dict | None = None, default: str = DEFAULT) -> di
     want = choose(d, default)
     have, mk = current(client_dir), marker(client_dir)
     ev = {"display": d, "chosen": want, "before": have, "marker_before": mk, "default": default}
-    if have is not None and not (mk and mk["value"] == have):
+    ours = {mk.get("value"), mk.get("pending")} - {None} if mk else set()
+    if have is not None and have not in ours:
         return ev | {"action": "kept_player", "value": have}
+    mp = client_dir / "WTF" / MARKER
+    mp.parent.mkdir(parents=True, exist_ok=True)
+
+    def mark(**kw):                     # written whole (tmp + rename): a kill never leaves half a marker
+        tmp = mp.with_name(mp.name + ".hs-tmp")
+        tmp.write_text(json.dumps({"display": d, "default": default, "written": time.strftime("%Y-%m-%dT%H:%M:%S"),
+                                   **kw}, indent=2) + "\n")
+        os.replace(tmp, mp)
     if have == want:
         action = "kept_ours"
     else:
         action = "set" if have is None else "repicked"
+        # pending first: killed between the two writes, the next launch still knows both values are ours
+        mark(value=have, pending=want)
         cfg = _config(client_dir)
         old = cfg.read_bytes() if cfg.exists() else b""
         new, _detail = clientcfg._update_config(old, {KEY: want})
         ev["write"] = clientcfg._write_if_changed(cfg, new)
-    mp = client_dir / "WTF" / MARKER
-    mp.parent.mkdir(parents=True, exist_ok=True)
-    mp.write_text(json.dumps({"value": want, "display": d, "default": default,
-                              "written": time.strftime("%Y-%m-%dT%H:%M:%S")}, indent=2) + "\n")
+    mark(value=want)
     return ev | {"action": action, "value": want}

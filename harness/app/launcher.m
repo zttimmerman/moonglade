@@ -697,8 +697,20 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     self.bar.doubleValue = 0;
     // on top of other windows without taking focus from whatever the player is doing now
     [self.statusWindow orderFrontRegardless];
-    [self record:@{@"kind": @"shutdown_window", @"state": @"shown", @"why": why,
-                   @"visible": @(self.statusWindow.visible), @"onscreen": @([self windowOnScreen])}];
+    [self recordShown:why attempt:0];
+}
+
+// "shown" is recorded once the window server has it on screen (it lags orderFront by a display cycle), or after 1 s
+- (void)recordShown:(NSString *)why attempt:(int)attempt {
+    BOOL on = [self windowOnScreen];
+    if (!on && attempt < 20 && self.statusWindow.visible) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self recordShown:why attempt:attempt + 1];
+        });
+        return;
+    }
+    [self record:@{@"kind": @"shutdown_window", @"state": @"shown", @"why": why, @"waited_s": @(attempt * 0.05),
+                   @"visible": @(self.statusWindow.visible), @"onscreen": @(on)}];
 }
 
 - (void)onShutdown:(NSDictionary *)ev {

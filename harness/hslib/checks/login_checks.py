@@ -98,14 +98,16 @@ def _hook_refused() -> dict:
 # own clauses, unchanged, on that run's evidence; a session runs once per harness process (again for each `--only`
 # invocation), so evidence is always from this run, and each run starts from "nothing running" (verified).
 _SESSIONS: dict = {}
-PRE_CONTINUE_SHOT_S = 19
+PRE_CONTINUE_SHOT_S = 17
+CONTINUE_AT_S = 20
 # Continue run: the menu waits (screenshot at 4 s), one Continue at 20 s, a screenshot at character select at 40 s.
 # login.no_glue_errors' script as it was; login.auto_login's single Continue moves from 3 s to 20 s after the menu,
 # so its 90 s limit (measured from the client's start, as before) leaves the client less time, not more.
-# launcher-fixes (F25): plus a screenshot at 19 s, just before the Continue, so login.fresh_menu_waits can show that no
-# login happened between the client's start and the Continue (the screenshot's file time bounds the Continue).
+# launcher-fixes (F25): plus a screenshot at 17 s, before the Continue, so login.fresh_menu_waits can show that no login
+# happened between the client's start and the Continue. The screenshot's file time bounds it: the file lands up to
+# ~1 s after the act (measured: first login 0.11 s after a 19 s shot's file time), so 3 s ahead leaves a margin.
 CONTINUE_GLUE = {"marker": True, "script": [{"t": 4, "act": "shot"}, {"t": PRE_CONTINUE_SHOT_S, "act": "shot"},
-                                            {"t": 20, "act": "continue"}, {"t": 40, "act": "shot"}]}
+                                            {"t": CONTINUE_AT_S, "act": "continue"}, {"t": 40, "act": "shot"}]}
 CHARSELECT_WAIT = 120          # no_glue_errors' wait for the character list (as before)
 CHARSELECT_ALIVE_S = 20        # spec: the client doesn't quit by itself through 20 s at character select
 # Menu-waits run = the backdrop check's restart: no Continue, screenshots ~5 s and ~65 s after the menu showed
@@ -282,11 +284,13 @@ def verify_fresh_menu_waits(ev: dict) -> dict:
             "GIVEN not met: the scratch play client wasn't freshly built and never used", **out)
     glue = fs.get("glue_test") or {}
     acts = sorted(glue.get("script", []), key=lambda a: a["t"])
-    cont = next((a["t"] for a in acts if a["act"] == "continue"), None)
-    shots_before = [a["t"] for a in acts if a["act"] == "shot" and cont is not None and a["t"] < cont]
+    shots = [a["t"] for a in acts if a["act"] == "shot"]
     out["script"] = acts
-    require(cont is not None and shots_before, "the run's script has no screenshot before its Continue", **out)
-    idx = len(shots_before) - 1                    # the screenshot just before the Continue
+    # the run's own Continue (CONTINUE_AT_S) and the screenshot taken before it; anything else in the script is
+    # what the check is looking for (e.g. a Continue injected earlier)
+    require({"t": CONTINUE_AT_S, "act": "continue"} in acts and PRE_CONTINUE_SHOT_S in shots,
+            "the run's script lacks its Continue or the screenshot before it", **out)
+    idx = shots.index(PRE_CONTINUE_SHOT_S)         # the screenshot before the Continue
     mt = ev.get("screenshot_mtimes") or []
     require(len(mt) > idx and len(ev.get("screens") or []) > idx, "the screenshot before the Continue is missing",
             **out)
@@ -300,7 +304,6 @@ def verify_fresh_menu_waits(ev: dict) -> dict:
             "first_connection_log_line": first,
             "first_connection_after_pre_shot_s": round(first[0] - t_pre, 2) if first else None,
             "connection_lines_before_pre_shot": [c for c in conn if c[0] <= t_pre][:5]}
-    require(pre.get("main_menu_up") is True, "the menu wasn't up just before the Continue", **out)
     base = (ev.get("account_at_client_start") or {}).get("last_login")
     early = [s for s in ev.get("account_samples_abs") or [] if s[0] <= t_pre and (s[1] != base or s[2])]
     out["account_samples_before_pre_shot"] = [s for s in ev.get("account_samples_abs") or [] if s[0] <= t_pre][-5:]
@@ -308,6 +311,7 @@ def verify_fresh_menu_waits(ev: dict) -> dict:
     require(not out["connection_lines_before_pre_shot"],
             "the client connected to the authserver before the Continue (connection.log)", **out)
     require(not early, "the account logged in before the Continue (last_login / online)", **out)
+    require(pre.get("main_menu_up") is True, "the menu wasn't up before the Continue (screenshot marker)", **out)
     require(first and first[0] > t_pre and ev.get("login_seen"),
             "no login came after the Continue (nothing to tell a waiting menu from a dead one)", **out)
     return out
