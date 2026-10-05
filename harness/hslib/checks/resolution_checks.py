@@ -222,3 +222,70 @@ def resolution_default(ctx):
     require(ev["player_config_sha_after"] == ev["player_config_sha_before"], "the player's play client config changed",
             **ev)
     return ev
+
+
+# ---------------------------------------------------------------- the player's own play client is never written by
+# a harness run (verifier FAIL 2026-10-05: play.player_account would have added the resolution to it)
+
+def player_config_sha() -> str | None:
+    """sha256 of the player's own env/client-play/WTF/Config.wtf (None if absent)."""
+    return _sha(clientbuild.PLAY / "WTF" / "Config.wtf")
+
+
+def player_marker_exists() -> bool:
+    return (clientbuild.PLAY / "WTF" / R.MARKER).exists()
+
+
+GATE_CASES = [
+    # (label, argv, environ, client: "own" | "scratch", may write?)
+    ("plain ./play (the player)", [], {}, "own", True),
+    ("the app (the player)", [], {"HS_FROM_APP": "1", "HS_APP_BUNDLE": "/x/Hearthstone.app"}, "own", True),
+    ("play.player_account: --account player --client-cmd + $HS_PLAYER_FILE",
+     ["--account", "player", "--client-cmd", "/tmp/x.bat"], {"HS_PLAYER_FILE": "/tmp/p.json"}, "own", False),
+    ("--client-cmd alone", ["--client-cmd", "/tmp/x.bat"], {}, "own", False),
+    ("--account test (client.stock_mode, app.shim_perf)", ["--account", "test"], {}, "own", False),
+    ("any check's subprocess ($HS_HARNESS_RUN)", [], {"HS_HARNESS_RUN": "1"}, "own", False),
+    ("scratch settings ($HS_SETTINGS)", [], {"HS_SETTINGS": "/tmp/s.json"}, "own", False),
+    ("pinned profile ($HS_PROFILE)", [], {"HS_PROFILE": "m0"}, "own", False),
+    ("shim test knob", [], {"HSDOCK_TEST_FLICKER_MS": "100"}, "own", False),
+    ("--world-datadir", ["--world-datadir", "/nonexistent"], {}, "own", False),
+    ("scratch play client (client.resolution_default)", ["--account", "test", "--allow-test-client-dir"],
+     {"HS_PLAY_CLIENT_DIR": "/tmp/check-play-res", "HS_HARNESS_RUN": "1"}, "scratch", True),
+]
+
+
+def verify_gate(gate_fn=None) -> dict:
+    from .. import play as PL
+    gate_fn = gate_fn or PL.resolution_gate
+    rows, bad = {}, []
+    for label, argv, environ, which, want in GATE_CASES:
+        client = clientbuild.PLAY if which == "own" else P.ENV / "check-play-res"
+        g = gate_fn(PL._parse(argv), client, environ)
+        rows[label] = {"argv": argv, "env": sorted(environ), "client": which, "apply": g["apply"], "want": want,
+                       "signs": g.get("harness_signs")}
+        if g["apply"] != want:
+            bad.append(label)
+    require(not bad, f"the resolution gate is wrong for: {bad}", cases=rows)
+    return {"cases": rows}
+
+
+@check("client.resolution_gate", order=385, capability=CAP, stack="any", tier="quick")
+def resolution_gate(ctx):
+    """The play loop writes the resolution default into the player's own env/client-play/ only from a genuine
+    player launch (the app or plain ./play); every harness-shaped launch (test arguments, $HS_HARNESS_RUN, scratch
+    settings, pinned profile, shim test knobs, the player-account check's --client-cmd + $HS_PLAYER_FILE) is a
+    no-op there; a scratch play client still gets it."""
+    return verify_gate()
+
+
+@check("client.player_config_untouched", order=999, capability=CAP, stack="any", tier="quick")
+def player_config_untouched(ctx):
+    """Last check of every run: the player's own env/client-play/WTF/Config.wtf is byte-identical to the start of
+    the run (sha256 recorded by the runner), so no check wrote it."""
+    start = (ctx or {}).get("player_config_sha256_start", "missing")
+    now = player_config_sha()
+    ev = {"file": str(clientbuild.PLAY / "WTF" / "Config.wtf"), "sha256_at_run_start": start, "sha256_now": now,
+          "launcher_marker_present": player_marker_exists()}
+    require(start != "missing", "the runner didn't record the player's config at the start of the run", **ev)
+    require(now == start, "a check changed the player's own play client config during this run", **ev)
+    return ev

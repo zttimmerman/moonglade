@@ -541,7 +541,7 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: 
     ev["client_config"] = {"changed_files": cfg["changed_files"],
                            "config_wtf": next(c for c in cfg["changes"] if c["kind"] == "Config.wtf")}
     if is_play_client() and not set_resolution:
-        ev["resolution"] = {"skipped": "harness test-account run on the player's own play client"}
+        ev["resolution"] = {"skipped": "not a genuine player launch, and this is the player's own play client"}
     elif is_play_client():          # launcher-fixes: a resolution matching the display, unless the player chose one
         from . import resolution
         try:

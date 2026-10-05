@@ -145,3 +145,19 @@ spins the run loop so the list and policies are current, and streams JSON lines.
 0.25 s) and the same Foreground-sample failure. With `yes > /dev/null` x2 running: 3/3 sessions at 36.2 / 36.5 /
 36.8 Hz, max gaps 0.100 / 0.076 / 0.054 s; the 100 ms forced flicker (HSDOCK_TEST_FLICKER_MS=100) still fails
 (20 Foreground samples).
+
+## Verifier FAIL fixes (B23, cycle 1, 2026-10-05)
+- **The player's own play client is written only by a genuine player launch.** `play.resolution_gate`: on
+  env/client-play/ the default applies only when the launch has no harness signs: no `--client-cmd`,
+  `--world-datadir`, `--allow-test-client-dir`, `--account test`, and none of `$HS_HARNESS_RUN` (set by `hs run` for
+  every check's subprocesses), `$HS_PLAYER_FILE`, `$HS_PLAYER_DEFAULT_NAME`, `$HS_SETTINGS`, `$HS_PROFILE`,
+  `$HS_CLIENT_DIR`, `$HS_GLUE_TEST`, `$HS_PLAY_SKIP_PATCHES`, `$HSDOCK_TEST*`. The app and plain ./play qualify;
+  scratch play clients always get it. (The old account-only gate let play.player_account write it.)
+  Recorded in play-last.json as `resolution_gate`. Guards: `client.resolution_gate` (quick; the decision for
+  11 launch shapes), `client.player_config_untouched` (quick, order 999: the player's Config.wtf sha256 at the end of
+  every run equals the runner's record at its start), and play.player_account asserts the hash before/after.
+- **GUI path rule is dependency-based** (runner.py): GUI inputs = harness/app/*, play, harness/hs,
+  checks/lssampler.m, plus the transitive static import closure of GUI_ROOTS (polish_checks, app_checks, play, app,
+  dockshim, __main__, runner), computed at evaluation time; if it can't be computed the rule fails closed (GUI
+  checks run). Today that is 47 modules, i.e. nearly all of hslib: changing almost any harness module runs the GUI
+  tier in a full run.

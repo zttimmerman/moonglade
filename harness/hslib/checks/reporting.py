@@ -544,7 +544,8 @@ def gui_tier_rule(ctx):
     a changed GUI path every gui check runs and a failing or skipped one fails report.full_run (also a GUI path that
     changed although the GUI checks were skipped, and a forged "gui tier" skip message); `--tier gui` runs exactly
     the gui checks. launcher-fixes (F26): a change touching only a shared helper of the GUI session (procs.py, in a
-    scratch git repo) is a GUI path change, and a full run then runs every gui check."""
+    scratch git repo) is a GUI path change, and a full run then runs every gui check. The rule is dependency-based
+    (runner.import_closure of the GUI roots, evaluated now): settings.py alone and stack.py alone also run them."""
     from .. import runner
     from ..registry import Check, CheckFail, CheckSkip
 
@@ -594,7 +595,11 @@ def gui_tier_rule(ctx):
     G = sim("G_full_check_forges_skip_msg", reg(**{"t.full": ("full", False, skip_fn(runner.GUI_SKIP_MSG))}), "full")
     H = sim("H_tier_gui", reg(), "gui")
     I = sim("I_gui_rule_unknown", reg(), "full", None)
-    K = sim("K_full_only_procs_changed", reg(), "full", ["harness/hslib/procs.py"])
+    K = sim("K_full_only_procs_changed", reg(), "full", runner.gui_paths_matching(["harness/hslib/procs.py"]))
+    # verifier 2026-10-05 (F26): settings.py (dock_policy -> launch.dock_env) and stack.py (stack.down(on_stage=),
+    # sampled by the session) alone must run the GUI checks too; the changed-GUI-path list comes from the live rule
+    K2 = sim("K2_full_only_settings_changed", reg(), "full", runner.gui_paths_matching(["harness/hslib/settings.py"]))
+    K3 = sim("K3_full_only_stack_changed", reg(), "full", runner.gui_paths_matching(["harness/hslib/stack.py"]))
     J = sim("J_slow_no_gui_change", reg(), "slow")
 
     probs = []
@@ -619,9 +624,10 @@ def gui_tier_rule(ctx):
         probs.append(f"H: --tier gui report.full_run={rec(H, 'report.full_run')} exit={H['exit']}, want skip / 0")
     if sorted(set(I["executed"]) & set(gui_ids)) != gui_ids:
         probs.append(f"I: GUI rule unknown (git failed) but GUI checks not run (must fail closed): {I['executed']}")
-    if sorted(set(K["executed"]) & set(gui_ids)) != gui_ids or K["gui_skipped"]:
-        probs.append(f"K: only procs.py changed but the GUI checks didn't all run: executed={K['executed']} "
-                     f"gui_skipped={K['gui_skipped']}")
+    for name, case in (("K procs.py", K), ("K2 settings.py", K2), ("K3 stack.py", K3)):
+        if sorted(set(case["executed"]) & set(gui_ids)) != gui_ids or case["gui_skipped"]:
+            probs.append(f"{name}: only it changed but the GUI checks didn't all run: executed={case['executed']} "
+                         f"gui_skipped={case['gui_skipped']}")
     if J["gui_skipped"] != gui_ids or J["report_full_run"] != "pass":
         probs.append(f"J: slow run with no GUI change: gui_skipped={J['gui_skipped']} "
                      f"report.full_run={J['report_full_run']}")
@@ -629,7 +635,11 @@ def gui_tier_rule(ctx):
     # the path rule itself: pattern matching and git's view of a real (scratch) repo
     shared = ("harness/hslib/procs.py", "harness/hslib/paths.py", "harness/hslib/util.py", "harness/hslib/config.py",
               "harness/hslib/runner.py", "harness/hslib/frontmenu.py", "harness/hslib/clientbuild.py",
-              "harness/hslib/checks/play_checks.py")          # launcher-fixes (F26): the GUI session's shared helpers
+              "harness/hslib/checks/play_checks.py",          # launcher-fixes (F26): the GUI session's shared helpers
+              "harness/hslib/settings.py", "harness/hslib/stack.py", "harness/hslib/clientinst.py",
+              "harness/hslib/population.py", "harness/hslib/fixtures.py", "harness/hslib/db.py", "harness/hslib/soap.py",
+              "harness/hslib/registry.py", "harness/hs", "harness/hslib/checks/playclient_util.py",
+              "harness/hslib/checks/lssampler.m")             # verifier 2026-10-05: by import closure / entry points
     match = {p: runner.gui_paths_matching([p]) for p in ("harness/app/launcher.m", "harness/app/dockshim.m",
                                                           "harness/hslib/checks/polish_checks.py", "play",
                                                           "harness/hslib/era.py", "playbook.md", "openspec/x.md",

@@ -243,6 +243,34 @@ def choose_world(say=say) -> dict:
     return world
 
 
+# Signs of a harness (or developer test) run rather than the player starting the game: test arguments, and the
+# environment switches the harness sets (HS_HARNESS_RUN is set by `hs run` for every check's subprocesses).
+HARNESS_ENV = ("HS_HARNESS_RUN", "HS_PLAYER_FILE", "HS_PLAYER_DEFAULT_NAME", "HS_SETTINGS", "HS_PROFILE",
+               "HS_CLIENT_DIR", "HS_GLUE_TEST", "HS_PLAY_SKIP_PATCHES")
+
+
+def harness_signs(args, environ=None) -> list[str]:
+    """Why this ./play isn't a genuine player launch ([] = it is)."""
+    environ = os.environ if environ is None else environ
+    signs = [f"--{k.replace('_', '-')}" for k in ("client_cmd", "world_datadir") if getattr(args, k, None)]
+    if getattr(args, "allow_test_client_dir", False):
+        signs.append("--allow-test-client-dir")
+    if getattr(args, "account", "player") != "player":
+        signs.append(f"--account {args.account}")
+    signs += [f"${k}" for k in HARNESS_ENV if environ.get(k)]
+    signs += [f"${k}" for k in sorted(environ) if k == "HSDOCK_TEST" or k.startswith("HSDOCK_TEST_")]
+    return signs
+
+
+def resolution_gate(args, client: Path, environ=None) -> dict:
+    """launcher-fixes: may this launch write the resolution default into `client`? Scratch play clients: yes. The
+    player's own env/client-play/: only from a genuine player launch."""
+    from .clientbuild import PLAY as PLAYER_CLIENT
+    own = Path(client).resolve() == PLAYER_CLIENT.resolve()
+    signs = harness_signs(args, environ)
+    return {"players_own_client": own, "harness_signs": signs, "apply": not (own and signs)}
+
+
 class Loop:
     def __init__(self, args):
         self.args = args
@@ -321,13 +349,14 @@ class Loop:
         self.rec["world"] = world
         st.profile = world["profile"]
         st.world_lines_of = st._world_lines_of()
-        from .clientbuild import PLAY as PLAYER_CLIENT
-        # harness runs (test account) never write the resolution into the player's own play client; scratch play
-        # clients ($HS_PLAY_CLIENT_DIR) get it as a player's would (client.resolution_default)
-        own = launch.client_dir().resolve() == PLAYER_CLIENT.resolve()
+        # the player's own play client gets the resolution default only from a genuine player launch (the app, or
+        # ./play with no test arguments); harness runs never write it there. Scratch play clients
+        # ($HS_PLAY_CLIENT_DIR) get it as a player's would (client.resolution_default).
+        gate = resolution_gate(self.args, launch.client_dir())
+        self.rec["resolution_gate"] = gate
         man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts,
                                  profile=world["profile"], population_n=world["population_n"], stages=st,
-                                 set_resolution=not (self.args.account == "test" and own))
+                                 set_resolution=gate["apply"])
         self.rec["prepare"] = {k: ev[k] for k in ("restarted_world", "stack", "fixtures", "accounts", "prefix",
                                                   "binaries_match_manifest_before", "resolution") if k in ev}
         self.man = man

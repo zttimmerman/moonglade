@@ -622,6 +622,8 @@ def player_account(ctx):
     env = {"HS_PLAYER_FILE": str(pfile), "HS_PLAYER_DEFAULT_NAME": SCRATCH_PLAYER}
     try:
         runs = []
+        from .resolution_checks import player_config_sha, player_marker_exists
+        ev["player_config_before"] = {"sha256": player_config_sha(), "marker": player_marker_exists()}
         for i in (1, 2):
             for f in (s.started, s.stop_file):
                 f.unlink(missing_ok=True)
@@ -649,6 +651,10 @@ def player_account(ctx):
                     "outcome": rec.get("outcome"), "_last_text": last_text}
             runs.append(run)
             require(up["up"] and rc == 0, f"run {i}: ./play didn't complete normally", runs=runs, **ev)
+        # launcher-fixes: this runs the player-account path on the player's own play client; it must not write it
+        ev["player_config_after"] = {"sha256": player_config_sha(), "marker": player_marker_exists()}
+        require(ev["player_config_after"] == ev["player_config_before"],
+                "the player-account run changed the player's own play client config (resolution default)", **ev)
         pw = json.loads(pfile.read_text())["password"]
         for r in runs:
             r["password_in_play_last_json"] = pw in r.pop("_last_text")
