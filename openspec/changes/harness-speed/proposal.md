@@ -12,7 +12,7 @@ Zach (2026-10-05): balance thorough checks with build/verify speed; waiting on r
    - `--tier gui` runs them alone. `report.full_run` accepts a by-design gui skip only when no such path changed.
 2. **Faster full tier, nothing dropped.**
    - Profile the full tier per check, then cut wall time without removing or weakening any check: shared client sessions where scenarios allow, reuse a running server instead of restarting, ordering to avoid redundant ups/downs.
-   - Target: at least 30% less wall time for an unfiltered full run on the same machine, measured before and after.
+   - Target (revised 2026-10-05, see spec-change log): timing recorded per run; an unfiltered full run may not be more than 10% slower than the baseline. Measured result: ~6–8% faster.
 3. **F24.** `prefix_processes()` counts only this user's Wine/Wow processes (executable in the pinned runtime or the client/play client), not unrelated processes that merely hold a file open under the prefix.
 
 ## Capabilities
@@ -23,4 +23,4 @@ Zach (2026-10-05): balance thorough checks with build/verify speed; waiting on r
 Harness only. No server, client, module or app behaviour changes.
 
 ## Spec-change log
-(none yet)
+- 2026-10-05 (human decision, Zach): the full-run speed target changed from "≥30% faster than baseline" to "timing recorded, ≤110% of baseline" (a loosening, approved by Zach in chat). Reason: B22's profile showed ~half the full run is ~25 cold ./play/app lifecycles (~35 s each: server boot, client start, shutdown) that the play-launcher/app scenarios require, plus spec-mandated waits; the best honest result without loosening any check was ~6–8%. The bigger velocity gains came from the run-budget change (no builder full run) and the GUI tier. Next speed lever: a second isolated test stack (backlog).
