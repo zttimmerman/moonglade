@@ -38,6 +38,7 @@ RUNTIME_DIR = P.ENV / "wowsilicon-r17"
 SAMPLE_HZ_MIN = 10
 AFTER_WINDOW_S = 5.0
 FOCUS_LIMIT_S = 2.0
+NOTHING_ON_SCREEN_S = 0.3     # hand-off: longest moment with neither the loading window nor the game window on screen
 # [play] lines as they were before launcher-polish (main at 1ba1d3b): every line a run prints must match one of
 # these say() templates, so the terminal output is unchanged
 PLAY_LINES_BASE = "1ba1d3b"
@@ -49,7 +50,24 @@ PLAY_LINES_FILES = ("harness/hslib/play.py", "harness/hslib/launch.py")
 def screen_locked() -> bool:
     out = subprocess.run(["/usr/sbin/ioreg", "-n", "Root", "-d1", "-a"], capture_output=True, text=True).stdout
     m = re.search(r"<key>CGSSessionScreenIsLocked</key>\s*<(true|false)/>", out)
-    return bool(m and m.group(1) == "true")
+    c = re.search(r"<key>IOConsoleLocked</key>\s*<(true|false)/>", out)
+    return bool((m and m.group(1) == "true") or (c and c.group(1) == "true"))
+
+
+def display_asleep() -> bool | None:
+    r = subprocess.run(["osascript", "-l", "JavaScript", "-e",
+                        'ObjC.import("CoreGraphics"); $.CGDisplayIsAsleep($.CGMainDisplayID())'],
+                       capture_output=True, text=True, timeout=20)
+    v = r.stdout.strip()
+    return None if v not in ("0", "1", "true", "false") else v in ("1", "true")
+
+
+def display_state() -> dict:
+    """The GIVEN of GUI measurements: screen unlocked and display awake (a locked screen changes how much the game
+    renders: Wow.exe's login-screen CPU was ~92 % locked vs ~77 % unlocked in the 2026-10-05 verifier run)."""
+    st = {"t": round(time.time(), 3), "locked": screen_locked(), "display_asleep": display_asleep()}
+    st["ok"] = st["locked"] is False and st["display_asleep"] is False
+    return st
 
 
 def lsappinfo_list() -> list[dict]:
@@ -152,6 +170,61 @@ class Sampler(threading.Thread):
     def stop(self):
         self.stop_ev.set()
         self.join(timeout=5)
+
+
+_JXA_WINDOW_LOOP = """
+ObjC.import('CoreGraphics'); ObjC.import('Foundation');
+var out = $.NSFileHandle.fileHandleWithStandardOutput;
+var end = Date.now() + %d;
+while (Date.now() < end) {
+  var l = ObjC.castRefToObject($.CGWindowListCopyWindowInfo($.kCGWindowListOptionOnScreenOnly, 0));
+  var row = [];
+  for (var i = 0; i < l.count; i++) { var w = l.objectAtIndex(i), b = w.objectForKey('kCGWindowBounds');
+    var lay = ObjC.unwrap(w.objectForKey('kCGWindowLayer')), wd = ObjC.unwrap(b.objectForKey('Width')),
+        ht = ObjC.unwrap(b.objectForKey('Height'));
+    if (lay == 0 && wd >= 200 && ht >= 150) row.push([ObjC.unwrap(w.objectForKey('kCGWindowOwnerPID')), wd, ht]); }
+  out.writeData($.NSString.alloc.initWithUTF8String(JSON.stringify([Date.now() / 1000, row]) + '\\n')
+                .dataUsingEncoding($.NSUTF8StringEncoding));
+  delay(0.04);
+}
+"""
+
+
+class WindowSampler(threading.Thread):
+    """Every on-screen normal window (owner pid, size) ~20 times a second from one long-lived osascript, so a moment
+    with no Hearthstone window on screen can be measured."""
+
+    def __init__(self, max_s: int = 900):
+        super().__init__(daemon=True, name="window-sampler")
+        self.proc = subprocess.Popen(["osascript", "-l", "JavaScript", "-e", _JXA_WINDOW_LOOP % (max_s * 1000)],
+                                     stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        self.samples: list = []
+
+    def run(self):
+        for line in self.proc.stdout:
+            try:
+                self.samples.append(json.loads(line))
+            except ValueError:
+                pass
+
+    def stop(self):
+        if self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        self.join(timeout=5)
+
+
+def handoff_windows(samples: list, launcher_pid: int, game_pid: int, t_from: float, t_to: float) -> list:
+    """[t, loading window on screen, game window on screen] per sample in [t_from, t_to]."""
+    rows = []
+    for t, wins in samples:
+        if t_from <= t <= t_to:
+            rows.append([round(t, 3), any(p == launcher_pid for p, _w, _h in wins),
+                         any(p == game_pid and w >= 300 and h >= 200 for p, w, h in wins)])
+    return rows
 
 
 def post_note(name: str) -> dict:
@@ -272,6 +345,8 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
     try:
         ls.start()
         dbs.start()
+        wins = WindowSampler()
+        wins.start()
         ev["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat),
                               env={"HS_PROFILE": profile, "HS_SETTINGS": str(sfile), **(env or {})})
         require(ev["open"]["rc"] == 0, "`open` failed to launch the app", **ev)
@@ -286,7 +361,10 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
         while time.time() < t_win + AFTER_WINDOW_S:
             time.sleep(0.1)
         ls.stop()
+        wins.stop()
         ev["ls_samples"] = ls.samples
+        ev["handoff_windows"] = handoff_windows(wins.samples, (_launchers(A.APP) or [{}])[0].get("pid"), win["pid"],
+                                                t_win - 15, t_win + AFTER_WINDOW_S)
         ev["apps_at_window"] = [a for a in lsappinfo_list() if is_ours(a)]
         ev["notepad_pid"] = win["pid"]
         launchers = _launchers(A.APP)
@@ -352,6 +430,8 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
     finally:
         ls.stop()
         dbs.stop()
+        if "wins" in locals():
+            wins.stop()
         stop_launchers(A.APP)
         s.cleanup()
 
@@ -462,6 +542,23 @@ def verify_handoff(ev: dict) -> dict:
     t_hidden = datetime.fromisoformat(hidden[0]["t"].replace("Z", "+00:00")).timestamp() if hidden else None
     out["hidden_after_window_s"] = round(t_hidden - ev["t_window"], 2) if t_hidden else None
     require(hidden and out["hidden_after_window_s"] <= FOCUS_LIMIT_S, "the loading window wasn't hidden within 2 s", **out)
+    # no blank moment: the loading window is still on screen when the game window first is (or the gap is <= 0.3 s)
+    rows = ev["handoff_windows"]
+    load_t = [t for t, l, _g in rows if l]
+    game_first = next((t for t, _l, g in rows if g), None)
+    before = [t for t in load_t if game_first is not None and t <= game_first]
+    up_at_first = bool(game_first is not None and any(l for t, l, g in rows if t == game_first))
+    gaps = [b[0] - a[0] for a, b in zip(rows, rows[1:])]
+    out |= {"loading_window_last_seen_before_game_window": max(before) if before else None,
+            "game_window_first_seen": game_first, "loading_window_up_when_game_window_appeared": up_at_first,
+            "nothing_on_screen_s": (0.0 if up_at_first else round(game_first - max(before), 3)) if before else None,
+            "window_samples": len(rows), "window_sample_max_gap_s": round(max(gaps), 3) if gaps else None}
+    require(before and game_first, "the window samples don't show the loading window and then the game window", **out)
+    require(out["window_sample_max_gap_s"] is not None and out["window_sample_max_gap_s"] <= 0.25,
+            "window sampling had a gap > 0.25 s", **out)
+    require(out["nothing_on_screen_s"] <= NOTHING_ON_SCREEN_S,
+            f"nothing of Hearthstone's was on screen for {out['nothing_on_screen_s']} s between the loading window "
+            f"and the game window (limit {NOTHING_ON_SCREEN_S} s)", **out)
     require(ev["front_after_window_s"] is not None and ev["front_after_window_s"] <= FOCUS_LIMIT_S,
             "the stand-in didn't become frontmost within 2 s of its window", **out)
     return out
@@ -541,6 +638,19 @@ def verify_bots(st: list[dict], db_samples: list, target: int) -> dict:
     return out
 
 
+TERMINAL_ONLY = ("Ctrl-C",)          # play-loop wording that only makes sense in a terminal
+
+
+def verify_details(events: list[dict]) -> dict:
+    """The loading window's detail lines (the play loop's [play] lines) use app wording, not terminal wording."""
+    det = [e["text"] for e in events if e.get("kind") == "detail"]
+    bad = [d for d in det if any(w in d for w in TERMINAL_ONLY)]
+    out = {"detail_lines": det, "terminal_wording": bad}
+    require(det, "no detail lines were shown", **out)
+    require(not bad, "the loading window showed terminal wording (Ctrl-C)", **out)
+    return out
+
+
 def verify_shim_scope(ev: dict, shim: str | None = None) -> dict:
     shim = shim or str(dockshim.DYLIB)
     sp = Path(shim).resolve()
@@ -611,6 +721,7 @@ def loading_stages(ctx):
     st = stage_events(ev["events"])
     out = verify_stage_sequence(st)
     out["bots"] = verify_bots(st, ev["db_online_samples"], config.population_n())
+    out["details"] = verify_details(ev["events"])
     require(ev["app_exit_code"] == 0 and is_clear(ev["remaining_after"]), "the session didn't end cleanly",
             app_exit_code=ev["app_exit_code"], remaining=ev["remaining_after"], **out)
     return out
@@ -868,6 +979,7 @@ def perf_run(policy: str, ev_runs: list) -> dict:
     sfile = tmp / "settings.json"
     sfile.write_text(json.dumps({"dock_policy": policy}))
     try:
+        run["display_states"] = states = [display_state()]
         run["up"] = {k: v for k, v in stack.up(profile="m0").items() if k in ("profile", "worldserver")}
         run["open"] = open_app(A.APP, hook, "--account", "test", env={"HS_PROFILE": "m0", "HS_SETTINGS": str(sfile)})
         t0 = time.time()
@@ -896,9 +1008,14 @@ def perf_run(policy: str, ev_runs: list) -> dict:
                 break
             samples.append(round(100 * (cur[1] - prev[1]) / (cur[0] - prev[0]), 1))
             prev = cur
+            if len(samples) % 5 == 0:          # every ~10 s, kept out of the CPU intervals
+                states.append(display_state())
+                prev = (time.time(), cpu_seconds(wow))
         require(len(samples) >= PERF_MEASURE_S / PERF_CPU_EVERY_S - 2, f"Wow.exe died during the measurement ({policy})",
                 run=run, samples=samples)
-        run |= {"cpu_samples_pct": samples, "cpu_median_pct": statistics.median(samples)}
+        states.append(display_state())
+        run |= {"cpu_samples_pct": samples, "cpu_median_pct": statistics.median(samples),
+                "display_ok": all(x["ok"] for x in states)}
         shim = shim_log_lines(launching["play_t"], wow)
         run["shim_loaded_in_wow"] = bool(shim)
         run["shim_log_head"] = shim[:6]
@@ -916,6 +1033,12 @@ def perf_run(policy: str, ev_runs: list) -> dict:
 def verify_perf(runs: list[dict]) -> dict:
     by = {p: [r for r in runs if r["policy"] == p] for p in ("accessory", "off")}
     out: dict = {"runs": runs}
+    bad = [{"run": i, "policy": r["policy"], "states": [x for x in r.get("display_states", []) if not x["ok"]][:3]}
+           for i, r in enumerate(runs) if not r.get("display_ok") or not r.get("display_states")]
+    out["runs_not_unlocked_and_awake"] = bad
+    require(not bad, f"GIVEN not met: the screen was locked or the display asleep during {len(bad)} run(s) "
+            f"({', '.join(str(b['run']) + ':' + b['policy'] for b in bad)}), so the runs aren't comparable "
+            "(keep the screen unlocked and the display awake, e.g. caffeinate -d)", **out)
     for p in by:
         require(len(by[p]) == PERF_RUNS, f"expected {PERF_RUNS} runs with dock_policy={p}", **out)
     require(all(r["shim_loaded_in_wow"] for r in by["accessory"]) and not any(r["shim_loaded_in_wow"] for r in by["off"]),
@@ -927,8 +1050,20 @@ def verify_perf(runs: list[dict]) -> dict:
     out |= {"startup_median_s": st, "cpu_median_pct": cpu, "startup_tolerance_s": round(tol_st, 2),
             "cpu_tolerance_pp": round(tol_cpu, 2), "startup_delta_s": round(st["accessory"] - st["off"], 2),
             "cpu_delta_pp": round(cpu["accessory"] - cpu["off"], 2)}
+    # adjacent pairs (runs come in back-to-back with/without pairs): the median paired difference must be within
+    # the same tolerances too, which cancels slow drift across the half hour
+    pairs = []
+    for a, b in zip(runs[0::2], runs[1::2]):
+        w, o = (a, b) if a["policy"] == "accessory" else (b, a)
+        pairs.append({"startup_delta_s": round(w["time_to_first_window_s"] - o["time_to_first_window_s"], 2),
+                      "cpu_delta_pp": round(w["cpu_median_pct"] - o["cpu_median_pct"], 2)})
+    out["pairs"] = pairs
+    out["pair_median_startup_delta_s"] = statistics.median(p["startup_delta_s"] for p in pairs)
+    out["pair_median_cpu_delta_pp"] = statistics.median(p["cpu_delta_pp"] for p in pairs)
     require(abs(out["startup_delta_s"]) <= tol_st, "time to first window with the shim is outside the tolerance", **out)
     require(abs(out["cpu_delta_pp"]) <= tol_cpu, "login-screen CPU with the shim is outside the tolerance", **out)
+    require(abs(out["pair_median_startup_delta_s"]) <= tol_st, "paired startup difference outside the tolerance", **out)
+    require(abs(out["pair_median_cpu_delta_pp"]) <= tol_cpu, "paired CPU difference outside the tolerance", **out)
     return out
 
 
@@ -945,6 +1080,8 @@ def shim_perf(ctx):
         for i in range(PERF_RUNS):
             for policy in (("accessory", "off") if i % 2 == 0 else ("off", "accessory")):
                 perf_run(policy, runs)
+                if not runs[-1].get("display_ok"):        # stop early: the GIVEN already failed
+                    return verify_perf(runs)
     except CheckFail as e:
         raise CheckFail(str(e), {"runs": runs, **e.evidence})
     return verify_perf(runs)

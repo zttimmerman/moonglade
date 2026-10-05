@@ -26,7 +26,7 @@
 //   activation is handed to the game (yieldActivationToApplication: + activateFromApplication:). From then on a
 //   Dock/Finder click (reopen) or activating the launcher (Cmd-Tab) posts local.hearthstone.reopen (the shim
 //   unminimises the game window) and hands activation to the game again, instead of "already running".
-// - Test-only, honoured only with the test hook: HS_APP_TEST_DISABLE=handoff,forward,reopen_note (counterexamples
+// - Test-only, honoured only with the test hook: HS_APP_TEST_DISABLE=handoff,forward,reopen_note,early_hide (counterexamples
 //   that switch one of those off) and HS_APP_SNAPSHOT_DIR=<dir> (renders the loading window, which test mode never
 //   puts on screen, to <dir>/NNN-<stage>.png at each stage event; previews without Screen Recording permission).
 #import <Cocoa/Cocoa.h>
@@ -81,6 +81,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
 @property(strong) NSRunningApplication *game;
 @property BOOL handedOff;
 @property double lastForward;
+@property double handoffAt;
 @end
 
 @implementation HSLauncher
@@ -239,6 +240,12 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     [png writeToFile:f atomically:YES];
 }
 
+// The play loop's lines are written for a terminal; a few read wrong in the app's window.
+- (NSString *)appWording:(NSString *)msg {
+    return [msg stringByReplacingOccurrencesOfString:@"Press Ctrl-C here to stop everything."
+                                          withString:@"To stop everything, quit Hearthstone from the Dock."];
+}
+
 - (void)hideStatus {
     [self.statusWindow orderOut:nil];
 }
@@ -382,10 +389,15 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
         NSString *msg = [l substringFromIndex:7];
         [self.playLines addObject:msg];
         if (self.playLines.count > 50) [self.playLines removeObjectAtIndex:0];
-        if (!self.handedOff && !self.stopRequested) self.statusDetail.stringValue = msg;
+        if (!self.handedOff && !self.stopRequested) {
+            self.statusDetail.stringValue = [self appWording:msg];
+            [self record:@{@"kind": @"detail", @"text": self.statusDetail.stringValue}];
+        }
         if (!self.clientStarted && [msg hasPrefix:@"The game is starting"]) {
             self.clientStarted = YES;                 // the window stays until the game's window is up (hand-off)
             [self record:@{@"kind": @"status", @"id": @"client_launched", @"text": msg}];
+            if ([self.disabled containsObject:@"early_hide"])   // test-only counterexample: hide here, as before
+                [self hideLoading:@"at client launch (test switch early_hide)"];
         }
     }
 }
@@ -489,8 +501,47 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     [self record:@{@"kind": @"handoff", @"game_pid": @(pid), @"via": via, @"launcher_active": @(NSApp.isActive),
                    @"game_policy": @(g.activationPolicy)}];
     [self forwardFocus:@"handoff" attempt:0];        // first, while the loading window still holds activation
+    // the loading window stays until the game's window is on screen and the game is frontmost (or 5 s), so there's
+    // never a moment with nothing of Hearthstone's on screen
+    self.handoffAt = [NSDate timeIntervalSinceReferenceDate];
+    [self pollHide];
+}
+
+- (void)pollHide {
+    if (!self.statusWindow.visible || ![self gameAlive]) return;
+    BOOL win = [self gameWindowOnScreen];
+    BOOL front = [[NSWorkspace sharedWorkspace] frontmostApplication].processIdentifier == self.game.processIdentifier;
+    double waited = [NSDate timeIntervalSinceReferenceDate] - self.handoffAt;
+    if ((win && front) || waited > 5.0) {
+        [self hideLoading:(win && front) ? @"game window on screen and frontmost"
+                                         : [NSString stringWithFormat:@"timeout (window %d, frontmost %d)", win, front]];
+        return;
+    }
+    [self performSelector:@selector(pollHide) withObject:nil afterDelay:0.05];
+}
+
+- (void)hideLoading:(NSString *)why {
     [self hideStatus];
-    [self record:@{@"kind": @"status", @"id": @"hidden", @"text": @"loading window hidden: the game window is up"}];
+    [self record:@{@"kind": @"status", @"id": @"hidden", @"text": @"loading window hidden: the game window is up",
+                   @"why": why}];
+}
+
+// The game owns an on-screen, normal-level window of real size (window server list: owner pid and bounds only, no
+// Screen Recording permission involved).
+- (BOOL)gameWindowOnScreen {
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionOnScreenOnly | kCGWindowListExcludeDesktopElements,
+                                                 kCGNullWindowID);
+    if (!list) return NO;
+    BOOL found = NO;
+    for (NSDictionary *w in (__bridge NSArray *)list) {
+        if ([w[(id)kCGWindowOwnerPID] intValue] != self.game.processIdentifier) continue;
+        if ([w[(id)kCGWindowLayer] intValue] != 0) continue;
+        CGRect b;
+        if (!CGRectMakeWithDictionaryRepresentation((__bridge CFDictionaryRef)w[(id)kCGWindowBounds], &b)) continue;
+        if (b.size.width >= 300 && b.size.height >= 200) { found = YES; break; }
+    }
+    CFRelease(list);
+    return found;
 }
 
 - (BOOL)gameAlive { return self.game && !self.game.terminated; }
