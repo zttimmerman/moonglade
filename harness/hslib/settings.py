@@ -11,7 +11,15 @@ on every start. Intended as a front-menu option later.
     {"client": "patched" | "stock"}   (in-client-login, ADR-0009) which game client ./play and the app run:
         patched = the play client env/client-play/ (built from client/ + patches/client/; the default),
         stock   = the untouched client/, exactly as before the play client existed.
-    Change it with `harness/hs client-mode stock|patched`."""
+    Change it with `harness/hs client-mode stock|patched`.
+
+    {"dock_policy": "accessory" | "regular" | "off"}   (launcher-polish, ADR-0010) how the game shows in the Dock
+        when it runs from Hearthstone.app:
+        accessory = no Dock icon of its own; the Hearthstone icon brings it forward (the default),
+        regular   = the game keeps its own Dock icon, named Hearthstone with our logo (option B: Wine's menus and
+                    native full screen as before),
+        off       = no shim at all (Wine's "wine" icon, as before launcher-polish).
+    The environment variable HSDOCK_POLICY overrides it. Change it with `harness/hs dock-policy <value>`."""
 import json
 import os
 from pathlib import Path
@@ -105,3 +113,31 @@ def set_client_mode(value: str) -> dict:
     path().parent.mkdir(parents=True, exist_ok=True)
     path().write_text(json.dumps(data, indent=2) + "\n")
     return client_mode()
+
+
+DOCK_POLICIES = ("accessory", "regular", "off")
+DEFAULT_DOCK_POLICY = "accessory"
+DOCK_ENV = "HSDOCK_POLICY"
+
+
+def dock_policy() -> dict:
+    """{"policy": accessory|regular|off, "source": env|settings|default, "file": path}."""
+    if os.environ.get(DOCK_ENV):
+        raw, source = os.environ[DOCK_ENV], "env"
+    else:
+        raw = load().get("dock_policy")
+        source = "settings" if raw is not None else "default"
+    policy = DEFAULT_DOCK_POLICY if raw is None else str(raw).strip().lower()
+    if policy not in DOCK_POLICIES:
+        raise SettingsError(f"dock_policy {raw!r} ({source}): use one of {list(DOCK_POLICIES)}")
+    return {"policy": policy, "source": source, "file": str(path())}
+
+
+def set_dock_policy(value: str) -> dict:
+    if value not in DOCK_POLICIES:
+        raise SettingsError(f"dock_policy {value!r}: use one of {list(DOCK_POLICIES)}")
+    data = load()
+    data["dock_policy"] = value
+    path().parent.mkdir(parents=True, exist_ok=True)
+    path().write_text(json.dumps(data, indent=2) + "\n")
+    return dock_policy()

@@ -112,7 +112,13 @@ def main(argv=None) -> int:
                                             "client, default) or stock (the untouched client/)")
     cm.add_argument("value", nargs="?", choices=["patched", "stock"])
 
-    sub.add_parser("app", help="build dist/Hearthstone.app (double-clickable launcher for ./play; launcher-app)")
+    dp = sub.add_parser("dock-policy", help="show or set how the game shows in the Dock when run from the app: "
+                                            "accessory (one Hearthstone icon, default), regular (the game keeps "
+                                            "its own Hearthstone-labelled icon) or off (no shim; ADR-0010)")
+    dp.add_argument("value", nargs="?", choices=["accessory", "regular", "off"])
+
+    sub.add_parser("app", help="build dist/Hearthstone.app (double-clickable launcher for ./play; launcher-app) "
+                               "and the Wine host shim env/dockshim/hsdock.dylib (ADR-0010)")
     ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns from env/branding/logo-source.jpeg")
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
 
@@ -315,6 +321,15 @@ def main(argv=None) -> int:
         from . import settings
         try:
             _print(settings.set_client_mode(a.value) if a.value else settings.client_mode())
+        except settings.SettingsError as e:
+            log(str(e))
+            return 1
+        return 0
+
+    if a.cmd == "dock-policy":
+        from . import settings
+        try:
+            _print(settings.set_dock_policy(a.value) if a.value else settings.dock_policy())
         except settings.SettingsError as e:
             log(str(e))
             return 1

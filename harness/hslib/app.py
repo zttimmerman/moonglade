@@ -11,6 +11,8 @@
         _CodeSignature/            ad-hoc signature (`codesign -s -`, designated requirement = the bundle identifier;
                                    see DESIGNATED), checked with `codesign --verify --deep --strict`
 
+Also builds the Wine host shim env/dockshim/hsdock.dylib (dockshim.py, ADR-0010), outside the bundle.
+
 Writes only inside the repo: the bundle is assembled in dist/.build/ and moved into place; compiler and codesign
 temp files go to env/app-build/tmp (TMPDIR), which is removed afterwards. Nothing is installed anywhere; Zach drags
 the app to /Applications or the Dock himself if he wants. `app.bundle_valid` runs this under a sandbox profile that
@@ -121,6 +123,12 @@ def build() -> dict:
         _run(["/usr/bin/codesign", "--force", "--sign", "-", "--timestamp=none", f"-r={DESIGNATED}", stage],
              env, ev, "codesign")
         _run(["/usr/bin/codesign", "--verify", "--deep", "--strict", stage], env, ev, "codesign --verify")
+        # the Wine host shim (ADR-0010) lives in env/dockshim/, outside the bundle, client/ and the runtime
+        from . import dockshim
+        try:
+            ev["dockshim"] = dockshim.build()
+        except dockshim.ShimBuildError as e:
+            raise AppBuildError(str(e), ev) from None
         if APP.exists():
             shutil.rmtree(APP)
         DIST.mkdir(exist_ok=True)
