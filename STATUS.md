@@ -61,7 +61,7 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 - The app needs macOS Documents-folder permission (repo is in ~/Documents); granted 2026-10-04 for `local.hearthstone.app`. Don't change the bundle id or designated requirement, or macOS re-prompts.
 
 ## Roadmap and backlog (groomed 2026-10-04)
-**Now:** in-client login screen (done) → comp.assists flake fix (F23) → **launcher polish** (change `launcher-polish`; ADR-0010 Wine host shim accepted by Zach 2026-10-04, option A: one Dock icon; loading screen with stages, launches when the world is ready and shows the bot count; builds after the login verifier frees the stack) → **harness speed** (GUI tier: focus checks run only when launcher/app/shim change + periodic sweep; profile and trim the full tier, e.g. shared client sessions, reuse a running server; measure before/after) → **launcher fixes** (small) → **save backups** (small; protects characters before serious play) → **M4 solo dungeons** (human gate: Zach plays two dungeons; review M2 budget loosenings there).
+**Now:** in-client login screen (done) → comp.assists flake fix (F23) → **launcher polish** (change `launcher-polish`; ADR-0010 Wine host shim accepted by Zach 2026-10-04, option A: one Dock icon; loading screen with stages, launches when the world is ready and shows the bot count; builds after the login verifier frees the stack) → **harness speed** (GUI tier: focus checks run only when launcher/app/shim change + periodic sweep; profile and trim the full tier, e.g. shared client sessions, reuse a running server; measure before/after) → **launcher fixes** (small) → **save backups** (small; protects characters before serious play) → **seamless experience** (front menu step 3; see below) → **M4 solo dungeons** (human gate: Zach plays two dungeons; review M2 budget loosenings there).
 
 **M5 (after M4), proposed order:**
 1. **Solo-first feature audit (Zach, 2026-10-04).** Principle: every MMO feature either serves solo play or gets hidden. Hide: global chat channels, trade/LFG/guild-recruitment noise, anything waiting on strangers. Keep: visible bots, instant groups, useful systems. Mostly config/module work.
@@ -105,6 +105,14 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 **Second isolated test stack (Zach, 2026-10-05; decide after harness speed):** a parallel server instance on other ports with an APFS-cloned DB, so the next change's builder can test while the current one verifies, or the full tier splits in two. Limited by 16 GB RAM (two m0 worlds fit, not two 500-bot worlds); GUI focus checks can't parallelize.
 
 **Launcher fixes (Zach play test, 2026-10-05), next small change after harness speed:** (1) bug: clicking Hearthstone while the loading window is up shows "already running" instead of bringing the loading window forward; reopen should bring forward whatever is showing. (2) shutdown window: on Dock Quit the game closes at once but the app lingers silently while the server stops; show a "Saving and shutting down the world… please don't force-quit" window until done. (3) full screen looks stretched: no `gxResolution` is set, so the client uses a 4:3 default on a 3024×1964 display; client config should choose a resolution matching the display aspect. Zach confirmed: Cmd-Tab works, full screen works, Dock Quit works, loading window looks good, clicking Hearthstone brings the game forward.
+
+**Seamless experience (front menu step 3; Zach, 2026-10-05; queued after save backups, before M4).** Principle: nothing on screen says server/realm/connecting/account unless the player opens a details view.
+- After Continue: themed loading overlay ("Entering Azeroth…") instead of the stock Connecting/Authenticating/Success dialogs (GlueXML, covered by patch 0001).
+- Character select: hide the realm name and Change Realm; relabel Enter World → Play, Back → Main Menu.
+- Server-sent text: welcome message/announcements off or rewritten (server config).
+- In-game wording via an addon renaming global strings at runtime (Logout → Exit to Menu, "Disconnected from server" → game terms); any real FrameXML file change needs its own ADR + Zach's yes.
+- Errors: friendly message + Try again / Back to menu + a small "Show details" link with the real error and log path; each failure mapped to a helpful action. Launcher side likewise.
+- Later option: "skip straight into the world" with the last character, off by default.
 
 **Later / tech debt:** era extras (class mount quests, vanilla quest levels and gold, creature damage/armor, separate mount switch); WoWSilicon client perf patches (needs a §2 ADR, FPS A/B first); the F-items above.
 
