@@ -6,7 +6,7 @@
   "properties": {
     "meta": {
       "type": "object",
-      "required": ["started", "finished", "repo_sha", "fork_lock", "host", "full_run", "tier"],
+      "required": ["started", "finished", "repo_sha", "fork_lock", "host", "full_run", "tier", "timing"],
       "properties": {
         "started": {"type": "string"},
         "finished": {"type": "string"},
@@ -14,8 +14,11 @@
         "fork_lock": {"type": "object", "required": ["core_sha", "playerbots_sha"]},
         "host": {"type": "object", "required": ["platform", "machine"]},
         "full_run": {"type": "boolean"},
-        "tier": {"enum": ["quick", "full", "slow"]},
-        "force_clean": {"type": "boolean"}
+        "tier": {"enum": ["quick", "full", "slow", "gui"]},
+        "force_clean": {"type": "boolean"},
+        "timing": {"type": "object", "required": ["per_check_s", "checks_sum_s", "total_wall_s", "top10"],
+                   "properties": {"per_check_s": {"type": "object"}, "checks_sum_s": {"type": "number"},
+                                  "top10": {"type": "array"}}}
       }
     },
     "checks": {

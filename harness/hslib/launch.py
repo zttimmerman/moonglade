@@ -172,15 +172,53 @@ def _pids_with_open_files_under(*roots: Path) -> set[int]:
     return pids
 
 
-def prefix_processes() -> list[dict]:
-    """Processes belonging to this repo's prefix, found three ways:
-    1. holding a file in this prefix's wineserver dir (lsof; covers all Windows processes),
-    2. environment contains exactly WINEPREFIX=<env/wineprefix> (ps -E; covers wine64/wineserver),
-    3. any Whisky-Wine process whose command line runs Wow.exe (conservative: counted as ours).
+def _runtime_roots() -> tuple[str, ...]:
+    """The pinned Wine runtime's root (paths.WINE_BIN's parent: bin/, lib/wine/x86_64-unix/wine, the preloader),
+    spelled as configured and resolved, each with a trailing "/" as path boundary."""
+    root = P.WINE_BIN.parent
+    return tuple(sorted({str(root).rstrip("/") + "/", str(root.resolve()).rstrip("/") + "/"}))
+
+
+def process_scope(pid: int, roots: tuple[str, ...] | None = None, max_depth: int = 64) -> str | None:
+    """Why pid counts as one of this runtime's Wine/Wow processes (F24), or None if it doesn't:
+    "runtime_exe"        its executable lives under the pinned runtime (wine, wineserver, the preloader; Windows
+                         programs such as Wow.exe run as the runtime's wine binary, whatever their argv says);
+    "runtime_descendant" a child (at any depth) of such a process, e.g. a helper Wine started;
+    "exe_unreadable"     its executable path can't be read (e.g. exiting): counted, so leftover detection fails
+                         closed rather than missing a real Wine process.
+    A process whose executable is readable and lies outside the runtime, with no runtime ancestor, is not ours even
+    if it holds a file open under the prefix (macOS's StorageManagementService did, and failed client.launch_smoke)."""
+    from . import procs
+    roots = roots or _runtime_roots()
+    exe = procs.path(pid)
+    if exe is None:
+        return "exe_unreadable"
+    if exe.startswith(roots):
+        return "runtime_exe"
+    cur, seen = procs.ppid(pid), {pid}
+    for _ in range(max_depth):
+        if not cur or cur <= 1 or cur in seen:
+            return None
+        seen.add(cur)
+        pe = procs.path(cur)
+        if pe and pe.startswith(roots):
+            return "runtime_descendant"
+        cur = procs.ppid(cur)
+    return None
+
+
+def prefix_processes(excluded: list | None = None) -> list[dict]:
+    """This user's Wine/Wow processes of this repo's prefix. A process is a candidate when any of these holds:
+    1. it holds a file in this prefix's wineserver dir or under the prefix (lsof; covers all Windows processes),
+    2. its environment contains exactly WINEPREFIX=<env/wineprefix> (covers wine64/wineserver),
+    3. it is a process of the runtime whose command line runs Wow.exe (conservative: counted as ours);
+    and a candidate counts only if process_scope() places it in the pinned runtime (F24: an unrelated process that
+    merely has a file open under the prefix is not ours). Candidates left out are appended to `excluded` if given.
     Processes of other prefixes ([redacted]) have a different server dir and WINEPREFIX."""
     tag = f"WINEPREFIX={P.WINEPREFIX}"
     sd = server_dir()
     by_lsof = (_lsof_pids(sd) if sd else set()) | _pids_with_open_files_under(P.WINEPREFIX, *([sd] if sd else []))
+    roots = _runtime_roots()
     found = []
     for pid, rest in _ps_env():
         if pid == os.getpid():
@@ -196,9 +234,14 @@ def prefix_processes() -> list[dict]:
                 cut = cmd.find(marker)
                 if cut > 0:
                     cmd = cmd[:cut]
-            found.append({"pid": pid, "cmd": cmd[:200],
-                          "via": [k for k, v in (("server_dir", pid in by_lsof), ("env", env_match),
-                                                  ("wow_cmd", wow_match)) if v]})
+            via = [k for k, v in (("server_dir", pid in by_lsof), ("env", env_match), ("wow_cmd", wow_match)) if v]
+            scope = process_scope(pid, roots)
+            if scope is None:
+                if excluded is not None:
+                    from . import procs
+                    excluded.append({"pid": pid, "cmd": cmd[:200], "via": via, "exe": procs.path(pid)})
+                continue
+            found.append({"pid": pid, "cmd": cmd[:200], "via": via, "scope": scope})
     return found
 
 

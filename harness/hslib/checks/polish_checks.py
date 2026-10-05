@@ -322,11 +322,14 @@ _SESSIONS: dict = {}
 
 
 def app_session(settings: dict | None = None, env: dict | None = None, profile: str = "population",
-                key: str = "app") -> dict:
-    """One app run with the notepad stand-in; returns its evidence (memoised per key)."""
+                key: str = "app", focus: bool = True) -> dict:
+    """One app run with the notepad stand-in; returns its evidence (memoised per key). `focus` adds the steps only
+    the gui checks judge (harness-reporting "GUI tier"): Dock/window sampling across the hand-off, waiting for the
+    stand-in to be frontmost, Finder + reopen, minimise + reopen. Without them the run never activates another app,
+    so a full run that skips the gui checks doesn't take the user's focus."""
     if key in _SESSIONS:
         return _SESSIONS[key]
-    ev: dict = {"profile": profile, "settings": settings or {}, "env": env or {}}
+    ev: dict = {"profile": profile, "settings": settings or {}, "env": env or {}, "focus_steps": focus}
     _SESSIONS[key] = ev
     build_app(ev)
     require_clear(ev)
@@ -343,10 +346,11 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
     t_start = time.time()
     ev["t_start"] = round(t_start, 3)
     try:
-        ls.start()
+        if focus:
+            ls.start()
+            wins = WindowSampler()
+            wins.start()
         dbs.start()
-        wins = WindowSampler()
-        wins.start()
         ev["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat),
                               env={"HS_PROFILE": profile, "HS_SETTINGS": str(sfile), **(env or {})})
         require(ev["open"]["rc"] == 0, "`open` failed to launch the app", **ev)
@@ -355,16 +359,18 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
         if not win:
             ev |= {"events": hook.events(), "app_log": _log_since(off)[-3000:], "tcc_prompts": tcc_prompts(since)}
             require(False, "the stand-in's window never appeared under the app", **ev)
-        ev["front_after_window_s"], ev["front_samples"] = wait_front(win["pid"], FOCUS_LIMIT_S + 1.0)
+        if focus:
+            ev["front_after_window_s"], ev["front_samples"] = wait_front(win["pid"], FOCUS_LIMIT_S + 1.0)
         ev["handoff_events"] = [e for e in hook.events() if e.get("kind") in ("handoff", "activate", "window_note")
                                 or e.get("id") == "hidden"]
-        while time.time() < t_win + AFTER_WINDOW_S:
-            time.sleep(0.1)
-        ls.stop()
-        wins.stop()
-        ev["ls_samples"] = ls.samples
-        ev["handoff_windows"] = handoff_windows(wins.samples, (_launchers(A.APP) or [{}])[0].get("pid"), win["pid"],
-                                                t_win - 15, t_win + AFTER_WINDOW_S)
+        if focus:
+            while time.time() < t_win + AFTER_WINDOW_S:
+                time.sleep(0.1)
+            ls.stop()
+            wins.stop()
+            ev["ls_samples"] = ls.samples
+            ev["handoff_windows"] = handoff_windows(wins.samples, (_launchers(A.APP) or [{}])[0].get("pid"),
+                                                    win["pid"], t_win - 15, t_win + AFTER_WINDOW_S)
         ev["apps_at_window"] = [a for a in lsappinfo_list() if is_ours(a)]
         ev["notepad_pid"] = win["pid"]
         launchers = _launchers(A.APP)
@@ -374,43 +380,10 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
         ev["launchctl_dyld"] = subprocess.run(["/bin/launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
                                               capture_output=True, text=True).stdout.strip()
 
-        # reopen with another app frontmost
-        ev["reopen"] = r = {}
-        subprocess.run([OPEN, "-a", "Finder"], capture_output=True, text=True, timeout=30)
-        t0 = time.time()
-        while time.time() - t0 < 5 and frontmost_pid() == win["pid"]:
-            time.sleep(0.1)
-        r["front_before"] = frontmost_pid()
-        r["finder_pids"] = [a["pid"] for a in lsappinfo_list() if a.get("bundle") == "com.apple.finder"]
-        n_dialogs = len(hook.find("dialog"))
-        r["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat),
-                             env={"HS_PROFILE": profile, "HS_SETTINGS": str(sfile), **(env or {})})
-        r["front_after_s"], r["front_samples"] = wait_front(win["pid"], FOCUS_LIMIT_S + 1.0)
-        time.sleep(0.5)
-        r["dialogs_after"] = hook.find("dialog")[n_dialogs:]
-        r["apps_after"] = [a for a in lsappinfo_list() if is_ours(a)]
-        r["events"] = [e for e in hook.events() if e.get("kind") in ("reopen", "reopen_note", "activate", "became_active")]
-
-        # minimise (test-only shim notification), then reopen
-        ev["unminimize"] = u = {}
-        u["minimize_note"] = post_note("local.hearthstone.test.minimize")
-        t0 = time.time()
-        while time.time() - t0 < 5 and big_windows(win["pid"]):
-            time.sleep(0.2)
-        time.sleep(1.0)                                  # let the minimise animation finish
-        u["onscreen_after_minimize"] = big_windows(win["pid"])
-        u["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat),
-                             env={"HS_PROFILE": profile, "HS_SETTINGS": str(sfile), **(env or {})})
-        t0 = time.time()
-        u["onscreen_after_reopen"], u["onscreen_after_s"] = [], None
-        while time.time() - t0 < FOCUS_LIMIT_S + 3:
-            w = big_windows(win["pid"])
-            if w:
-                u["onscreen_after_reopen"], u["onscreen_after_s"] = w, round(time.time() - t0, 2)
-                break
-            time.sleep(0.2)
-        u["front_after_s"], u["front_samples"] = wait_front(win["pid"], FOCUS_LIMIT_S + 1.0)
-        u["shim_log"] = shim_log_lines(t_start, win["pid"])
+        if focus:
+            _focus_steps(ev, win, hook, s, sfile, profile, env, t_start)
+        else:
+            ev["reopen"] = ev["unminimize"] = {"skipped": "gui checks not run (no focus steps)"}
 
         # quit: the stand-in exits, everything stops
         s.stop_file.write_text("quit")
@@ -436,6 +409,47 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
         s.cleanup()
 
 
+def _focus_steps(ev: dict, win: dict, hook, s, sfile, profile: str, env: dict | None, t_start: float) -> None:
+    """The gui checks' steps of the app session: Finder frontmost then reopen; minimise then reopen."""
+    # reopen with another app frontmost
+    ev["reopen"] = r = {}
+    subprocess.run([OPEN, "-a", "Finder"], capture_output=True, text=True, timeout=30)
+    t0 = time.time()
+    while time.time() - t0 < 5 and frontmost_pid() == win["pid"]:
+        time.sleep(0.1)
+    r["front_before"] = frontmost_pid()
+    r["finder_pids"] = [a["pid"] for a in lsappinfo_list() if a.get("bundle") == "com.apple.finder"]
+    n_dialogs = len(hook.find("dialog"))
+    r["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat),
+                         env={"HS_PROFILE": profile, "HS_SETTINGS": str(sfile), **(env or {})})
+    r["front_after_s"], r["front_samples"] = wait_front(win["pid"], FOCUS_LIMIT_S + 1.0)
+    time.sleep(0.5)
+    r["dialogs_after"] = hook.find("dialog")[n_dialogs:]
+    r["apps_after"] = [a for a in lsappinfo_list() if is_ours(a)]
+    r["events"] = [e for e in hook.events() if e.get("kind") in ("reopen", "reopen_note", "activate", "became_active")]
+
+    # minimise (test-only shim notification), then reopen
+    ev["unminimize"] = u = {}
+    u["minimize_note"] = post_note("local.hearthstone.test.minimize")
+    t0 = time.time()
+    while time.time() - t0 < 5 and big_windows(win["pid"]):
+        time.sleep(0.2)
+    time.sleep(1.0)                                  # let the minimise animation finish
+    u["onscreen_after_minimize"] = big_windows(win["pid"])
+    u["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat),
+                         env={"HS_PROFILE": profile, "HS_SETTINGS": str(sfile), **(env or {})})
+    t0 = time.time()
+    u["onscreen_after_reopen"], u["onscreen_after_s"] = [], None
+    while time.time() - t0 < FOCUS_LIMIT_S + 3:
+        w = big_windows(win["pid"])
+        if w:
+            u["onscreen_after_reopen"], u["onscreen_after_s"] = w, round(time.time() - t0, 2)
+            break
+        time.sleep(0.2)
+    u["front_after_s"], u["front_samples"] = wait_front(win["pid"], FOCUS_LIMIT_S + 1.0)
+    u["shim_log"] = shim_log_lines(t_start, win["pid"])
+
+
 def scan_process_env() -> dict:
     """Which of this user's processes carry DYLD_INSERT_LIBRARIES / HSDOCK_POLICY (readable environments only)."""
     out = {"with_dyld_insert": [], "with_hsdock": []}
@@ -454,8 +468,16 @@ def scan_process_env() -> dict:
     return out
 
 
-def _session(ctx_key: str = "app") -> dict:
-    ev = app_session(key=ctx_key) if ctx_key not in _SESSIONS else _SESSIONS[ctx_key]
+def _session(ctx_key: str = "app", focus: bool = False) -> dict:
+    """The shared app session. gui checks ask for `focus` (the session with the focus steps); the other checks reuse
+    whichever session this process ran, or run one without the focus steps. A session without them is never used
+    for a gui check: a new one with them is run instead."""
+    ev = _SESSIONS.get(ctx_key)
+    if ev is not None and focus and not ev.get("focus_steps"):
+        del _SESSIONS[ctx_key]
+        ev = None
+    if ev is None:
+        ev = app_session(key=ctx_key, focus=focus)
     if not ev.get("ok"):
         raise CheckFail(f"the shared app session failed: {ev.get('session_error')}", ev)
     return ev
@@ -682,34 +704,34 @@ def client_inspect() -> dict:
 
 # ---------------------------------------------------------------- app checks
 
-@check("app.single_dock_icon", order=392, capability=CAP_APP, stack="down", tier="full")
+@check("app.single_dock_icon", order=392, capability=CAP_APP, stack="down", tier="full", gui=True)
 def single_dock_icon(ctx):
     """App + notepad stand-in: lsappinfo has the stand-in as a UIElement named Hearthstone, the launcher as the only
     Foreground process with bundle id local.hearthstone.app, no other prefix process Foreground; sampled at >= 10 Hz
     from the Wine host's start to 5 s after the window, no prefix process is ever Foreground."""
-    ev = _session()
+    ev = _session(focus=True)
     return verify_single_dock(ev)
 
 
-@check("app.handoff_focus", order=393, capability=CAP_APP, stack="down", tier="full")
+@check("app.handoff_focus", order=393, capability=CAP_APP, stack="down", tier="full", gui=True)
 def handoff_focus(ctx):
     """When the stand-in's first window appears, the loading window is hidden and the stand-in is frontmost within
     2 s, without user input."""
-    return verify_handoff(_session())
+    return verify_handoff(_session(focus=True))
 
 
-@check("app.reopen_focuses_game", order=394, capability=CAP_APP, stack="down", tier="full")
+@check("app.reopen_focuses_game", order=394, capability=CAP_APP, stack="down", tier="full", gui=True)
 def reopen_focuses_game(ctx):
     """Stand-in up, Finder frontmost: reopening the app through LaunchServices makes the stand-in frontmost within
     2 s, shows no "already running" dialog, and the launcher stays the single Hearthstone Dock icon."""
-    return verify_reopen(_session())
+    return verify_reopen(_session(focus=True))
 
 
-@check("app.reopen_unminimizes", order=396, capability=CAP_APP, stack="down", tier="full")
+@check("app.reopen_unminimizes", order=396, capability=CAP_APP, stack="down", tier="full", gui=True)
 def reopen_unminimizes(ctx):
     """Stand-in window minimised by the shim's test notification: reopening the app puts it back on screen and
     frontmost."""
-    return verify_unminimize(_session())
+    return verify_unminimize(_session(focus=True))
 
 
 @check("app.loading_stages", order=397, capability=CAP_APP, stack="down", tier="full")
