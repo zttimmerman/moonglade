@@ -37,6 +37,8 @@ FACTION_MASK_PLAYER = 1     # DBCEnums.h; FactionTemplateEntry::IsHostileToPlaye
 FT_HOSTILE_MASK = 5         # FactionTemplate.dbc field 5 = hostileMask (DBCStructure.h FactionTemplateEntry)
 QUEST_FLAGS_SHARABLE = 0x8  # QuestDef.h; Player::CanShareQuest requires it
 ISOLATION_YD = 30           # creature rule: no other hostile spawn this close (adds made comp.assists racy)
+MOVE_WAYPOINT = 2           # creature.MovementType: WAYPOINT_MOTION_TYPE (MotionMaster.h MovementGeneratorType; 0 idle, 1 random)
+UNIT_FLAG_IN_COMBAT = 0x80000   # UnitDefines.h; set while the unit is in combat with anything (CombatManager)
 
 
 class CompanionError(Exception):
@@ -176,9 +178,11 @@ def pick_quest() -> dict:
 CREATURE_RULE = ("hostile creature near the master: creature_template.faction's FactionTemplate.dbc hostileMask has "
                  "FACTION_MASK_PLAYER; rank 0 (normal); npcflag 0; maxlevel in [master level - 3, master level - 1]; "
                  "no unit_flags 0x2|0x100|0x2000000 (non-attackable, immune to PC, not selectable) and no "
-                 "flags_extra 0x2 (civilian); no other hostile spawn within 30 yd (2D), so one creature fights the master; "
-                 "the spawn on the master's map nearest the master's start point that is alive "
-                 "and at full health right now (`.npc info <spawn>`), so an earlier kill doesn't block the check")
+                 "flags_extra 0x2 (civilian); creature.MovementType not 2 (waypoint walkers never stand still, see READY_RULE); "
+                 "no other hostile spawn within 30 yd (2D), so one creature fights the master; "
+                 "the spawn on the master's map nearest the master's start point that is alive, "
+                 "at full health and not in combat right now (`.npc info <spawn>`: health, Unit Flags without "
+                 "UNIT_FLAG_IN_COMBAT), so an earlier kill or another unit's fight doesn't block the check")
 
 
 def creature_candidates(level: int = LEVEL, tele: str = START_TELE, n: int = 10) -> list[dict]:
@@ -190,7 +194,7 @@ def creature_candidates(level: int = LEVEL, tele: str = START_TELE, n: int = 10)
         f"SELECT c.guid, c.id, ct.name, ct.minlevel, ct.maxlevel, ct.faction, c.position_x, c.position_y, "
         f"c.position_z, SQRT(POW(c.position_x-({t['x']}),2)+POW(c.position_y-({t['y']}),2)+POW(c.position_z-({t['z']}),2)) d "
         f"FROM creature c JOIN creature_template ct ON ct.entry = c.id WHERE c.map = {t['map']} AND ct.rank = 0 "
-        f"AND ct.npcflag = 0 AND ct.maxlevel BETWEEN {level - 3} AND {level - 1} "
+        f"AND ct.npcflag = 0 AND ct.maxlevel BETWEEN {level - 3} AND {level - 1} AND c.MovementType <> {MOVE_WAYPOINT} "
         f"AND (ct.unit_flags & {0x2 | 0x100 | 0x2000000}) = 0 AND (ct.flags_extra & 2) = 0 "
         f"AND ct.faction IN ({fac}) AND NOT EXISTS (SELECT 1 FROM creature o JOIN creature_template ot ON ot.entry = o.id "
         f"WHERE o.map = c.map AND o.guid <> c.guid AND ot.faction IN ({fac}) "
@@ -277,6 +281,32 @@ def pick_follow_points(tele: str = START_TELE) -> tuple[dict, dict]:
     raise CompanionError("no game_tele pair matches the rule", rule=FOLLOW_RULE)
 
 
+READY_RULE = ("the picked creature right before the master engages it (comp.assists, F23): alive at full health, "
+              "Unit Flags without UNIT_FLAG_IN_COMBAT (`.npc info`), no SMSG_ATTACKSTART / combat-log event with it "
+              "as attacker or victim since the master reached the staging point, and standing still (two consecutive "
+              "`.npc info` positions, >= READY_POLL_S apart, within READY_STILL_YD 2D); the master is then teleported onto that live "
+              "position. Why: the creatures wander (creature.MovementType 1); teleporting onto a stale position left "
+              "the master up to ~11 yd from the creature, which then sometimes didn't attack the master until the "
+              "companion arrived and attacked it instead (design.md, F23)")
+READY_S = 30            # a wander pause comes within a few seconds; a fight with another unit ends (death or reset)
+READY_POLL_S = 0.3      # >= the server's visibility notify delay (DynamicVisibility.h, 300 ms below 500 sessions)
+READY_STILL_YD = 0.05
+
+
+def creature_fights(events: list[dict], guid: int) -> list[dict]:
+    """Probe combat events (SMSG_ATTACKSTART, combat-log hits) with the creature as attacker or victim."""
+    return [e for e in events if e["kind"] in ("attack_start", "melee_damage", "spell_damage")
+            and guid in (e["attacker"], e["victim"])]
+
+
+def creature_ready(info: dict, prev: dict | None, fights: list[dict]) -> bool:
+    """READY_RULE for one `.npc info` sample (prev = the sample before it, fights = creature_fights since staging)."""
+    if not (info.get("health") and info["health"] == info.get("max_health") and info.get("in_combat") is False
+            and not fights and prev and info.get("pos") and prev.get("pos")):
+        return False
+    return math.hypot(info["pos"]["x"] - prev["pos"]["x"], info["pos"]["y"] - prev["pos"]["y"]) <= READY_STILL_YD
+
+
 # ----------------------------------------------------------------------------- the session
 
 NUM = r"(-?\d+(?:\.\d+)?)"
@@ -302,8 +332,10 @@ def parse_npc_info(lines: list[str]) -> dict:
     g = re.search(r"current GUID: GUID Full: 0x([0-9a-fA-F]+)", text)
     h = re.search(r"\(max\): (\d+)\. \(current\): (\d+)\.", text)
     p = re.search(rf"Position: {NUM} {NUM} {NUM}\.", text)      # LANG_NPCINFO_POSITION (acore_string 544)
+    f = re.search(r"Unit Flags: (\d+)\.", text)                 # LANG_NPCINFO_FLAGS (acore_string 542), GetUnitFlags()
     return {"guid": int(g.group(1), 16) if g else None, "max_health": int(h.group(1)) if h else None,
-            "health": int(h.group(2)) if h else None,
+            "health": int(h.group(2)) if h else None, "unit_flags": int(f.group(1)) if f else None,
+            "in_combat": bool(int(f.group(1)) & UNIT_FLAG_IN_COMBAT) if f else None,
             "pos": {"x": float(p.group(1)), "y": float(p.group(2)), "z": float(p.group(3))} if p else None,
             "raw": lines[:6]}
 
@@ -469,15 +501,43 @@ class Session:
         m = re.search(r"DB GUID: (\d+)", "\n".join(info["raw"]))
         return info | {"spawn_id": int(m.group(1)) if m else None}
 
-    def pick_live_creature(self) -> dict:
+    def pick_live_creature(self, exclude: set | None = None) -> dict:
         tried = []
-        for c in creature_candidates(self.level, self.tele):
+        for c in creature_candidates(self.level, self.tele, n=20):
+            if c["spawn_id"] in (exclude or ()):
+                continue
             info = self.npc_info(c["spawn_id"])
             tried.append({"spawn_id": c["spawn_id"], "health": info["health"], "max": info["max_health"]})
-            if info["guid"] and info["health"] and info["health"] == info["max_health"]:
+            tried[-1]["in_combat"] = info["in_combat"]
+            if info["guid"] and info["health"] and info["health"] == info["max_health"] and info["in_combat"] is False:
                 return c | {"guid": info["guid"], "npc_info": info, "rule": CREATURE_RULE, "tried": tried}
-        raise CompanionError("no live, unhurt creature among the rule's nearest candidates", rule=CREATURE_RULE,
+        raise CompanionError("no live, unhurt creature out of combat among the rule's nearest candidates", rule=CREATURE_RULE,
                              tried=tried)
+
+    def wait_creature_ready(self, spawn_id: int, guid: int, since: int, timeout: float = READY_S) -> dict:
+        """READY_RULE: poll `.npc info <spawn>` every READY_POLL_S until creature_ready() holds for the latest sample;
+        returns {"ok", "snapshot" (the ready sample), "samples", "elapsed_s", "dead"}. `since` is the probe event mark
+        from which combat events involving the creature count as "another unit's fight"."""
+        t0, samples, prev = time.time(), [], None
+        while True:
+            info = self.npc_info(spawn_id)
+            fights = creature_fights(self.ws.events_since(since), guid)
+            moved = (round(math.hypot(info["pos"]["x"] - prev["pos"]["x"], info["pos"]["y"] - prev["pos"]["y"]), 2)
+                     if prev and info.get("pos") and prev.get("pos") else None)
+            samples.append({"t": round(time.time() - t0, 2), "health": info["health"], "max": info["max_health"],
+                            "unit_flags": info["unit_flags"], "in_combat": info["in_combat"], "moved_yd": moved,
+                            "pos": info["pos"], "combat_events": len(fights)})
+            if info["health"] == 0 or info["guid"] is None:
+                return {"ok": False, "dead": True, "elapsed_s": round(time.time() - t0, 1), "samples": samples[-10:],
+                        "combat_events": fights[:10]}
+            if creature_ready(info, prev, fights):
+                return {"ok": True, "dead": False, "elapsed_s": round(time.time() - t0, 1), "snapshot": info,
+                        "samples": samples[-10:], "combat_events": fights[:10]}
+            if time.time() - t0 > timeout:
+                return {"ok": False, "dead": False, "elapsed_s": round(time.time() - t0, 1), "samples": samples[-10:],
+                        "combat_events": fights[:10]}
+            prev = info
+            time.sleep(READY_POLL_S)
 
     def summon(self, name: str) -> list[str]:
         return self.ws.command(f".summon {name}", settle=0.5, timeout=5)

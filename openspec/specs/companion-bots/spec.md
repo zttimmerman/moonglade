@@ -43,3 +43,12 @@ Companions SHALL accept shared quests and make progress on them.
 - **WHEN** Zach adds two companions and quests for about 15 minutes
 - **THEN** the companions follow, fight, heal and loot sensibly, and they make questing easier rather than more annoying
 - [human-verify] Companion quality is judged by playing. This is checked at the next human gate.
+
+### Requirement: Assist check is stable
+The harness check for "Companion fights the master's target" SHALL establish its precondition deterministically, so it doesn't fail because another unit (player, bot or creature) interferes with the chosen target.
+
+#### Scenario: Fifteen consecutive passes
+- **GIVEN** the m0 test world
+- **WHEN** `comp.assists` runs 15 times in a row in isolation, and once in an unfiltered full tier
+- **THEN** every run passes, every run's evidence shows the chosen creature wasn't in combat with any other unit before the fight, and the existing counterexamples (passive companion, companion not near, master attacks) still fail
+- Check: `comp.assists`
