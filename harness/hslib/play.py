@@ -70,7 +70,8 @@ EXIT_OK, EXIT_FAIL, EXIT_BUSY, EXIT_CRASH = 0, 1, 2, 3
 
 
 def say(msg: str) -> None:
-    print(f"[play] {msg}", flush=True)
+    from .stages import write_line        # one write per line: the world-progress thread prints [stage] lines too
+    write_line(f"[play] {msg}")
 
 
 def _now() -> str:
@@ -208,7 +209,10 @@ GLUE_TEST_ENV = "HS_GLUE_TEST"        # test-only GlueXML hook (frontmenu.py); n
 SKIP_ENV = "HS_PLAY_SKIP_PATCHES"      # test-only (counterexamples): build the scratch play client without these patches
 
 
-FROM_APP_ENV = "HS_FROM_APP"           # set by Hearthstone.app (launcher.m); its output goes to env/logs/app.log
+FROM_APP_ENV = launch.FROM_APP_ENV     # set by Hearthstone.app (launcher.m); its output goes to env/logs/app.log
+WINDOW_POLL_S = 0.5                    # launching -> ready: how often to look for the client's first window
+BOTS_POLL_S = 2.0                      # how often the launching stage refreshes the (informational) bot count
+READY_FALLBACK_S = 120                 # a client with no window (the .bat stand-in) is "ready" after this long
 
 
 def shown_password(login: dict) -> str:
@@ -233,7 +237,7 @@ def choose_world(say=say) -> dict:
     launch.ensure_world; pop.size_setting drives these same two functions."""
     from . import settings
     world = settings.play_world()
-    if world["profile"] == "population":
+    if world["profile"] == "population" and isinstance(world["source"], dict):   # not for a pinned $HS_PROFILE
         say(f"World size: {world['source']['setting']} ({world['population_n']} AI players; change it with "
             "`harness/hs world-size small|normal|large|<number>`).")
     return world
@@ -247,6 +251,8 @@ class Loop:
         self.rec: dict = {"pid": os.getpid(), "started": _now(), "argv": sys.argv[1:],
                           "client_cmd": str(args.client_cmd) if args.client_cmd else None,
                           "client_started": False, "steps": []}
+        from .stages import Stages
+        self.stages = Stages()
 
     # -- signals
     def on_signal(self, signum, _frame):
@@ -307,11 +313,15 @@ class Loop:
                 return ensure_player_account(login)
         say("Starting Hearthstone.")
         self.step("prepare")
+        st = self.stages
+        st.start("prepare")
         client = self.select_client()
         world = choose_world()
         self.rec["world"] = world
+        st.profile = world["profile"]
+        st.world_lines_of = st._world_lines_of()
         man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts,
-                                 profile=world["profile"], population_n=world["population_n"])
+                                 profile=world["profile"], population_n=world["population_n"], stages=st)
         self.rec["prepare"] = {k: ev[k] for k in ("restarted_world", "stack", "fixtures", "accounts", "prefix",
                                                   "binaries_match_manifest_before") if k in ev}
         self.man = man
@@ -330,8 +340,10 @@ class Loop:
                                                            "account": login["account"],
                                                            "password": login["password"]}]),
                 default=login["account"], test=hook, about=frontmenu.about_info())
+        st.start("launching")
         say("Starting the game client..." if args_ is None else f"Starting the test stand-in client ({name})...")
         proc = launch.start_client(args_, cwd)
+        t_client = time.time()
         self.rec["client_started"] = True
         self.step("client_started", launcher_pid=proc.pid, args=args_ or ["Wow.exe"])
         if auto:
@@ -344,8 +356,28 @@ class Loop:
         say("When you quit the game, everything shuts down by itself. Press Ctrl-C here to stop everything.")
 
         # Wine runs the client as `start.exe /exec <program>`, which waits for the program and returns its
-        # Windows exit code; then make sure no client process outlived it.
+        # Windows exit code; then make sure no client process outlived it. Until the client's first window is on
+        # screen, the launching stage polls for it (and the bot count, informational); then `ready`.
+        ready, next_win, next_bots = False, 0.0, time.time() + BOTS_POLL_S
         while proc.poll() is None:
+            now = time.time()
+            if not ready and now >= next_win:
+                next_win = now + WINDOW_POLL_S
+                win = launch.client_window()
+                if win:
+                    ready = True
+                    self.rec["client_window"] = {**win, "after_client_start_s": round(time.time() - t_client, 2)}
+                    st.start("ready", window=win, after_client_start_s=self.rec["client_window"]["after_client_start_s"])
+                    st.done("ready")
+                    st.save_calibration()
+                elif now - t_client > READY_FALLBACK_S:        # a windowless stand-in: don't keep the bar waiting
+                    ready = True
+                    st.start("ready", window=None, after_client_start_s=round(now - t_client, 2))
+                    st.done("ready")
+            if not ready and now >= next_bots:
+                next_bots = now + BOTS_POLL_S
+                st.extra["bots"] = launch.bot_count()
+                st.progress("launching", None)
             time.sleep(0.5)
         seen, misses = [], 0
         while misses < 2:                  # debounce: absent in two consecutive samples, 1 s apart
@@ -428,6 +460,13 @@ def main(argv=None) -> int:
             say(f"{var} is set: that's a test switch for the harness, not for playing. "
                 f"Unset it (`unset {var}`) and run ./play again.")
             return EXIT_FAIL
+    # the Wine host shim's test-only knobs (ADR-0010) only ever reach a --client-cmd stand-in, never the game
+    for var in sorted(k for k in os.environ if k == "HSDOCK_TEST" or k.startswith("HSDOCK_TEST_")):
+        if not args.client_cmd:
+            say(f"{var} is set: that's a test switch for the harness, not for playing. "
+                f"Unset it (`unset {var}`) and run ./play again.")
+            return EXIT_FAIL
+    launch.allow_dock_test(args.client_cmd is not None)
     try:
         fd, lock = acquire_lock()
     except Busy as b:
@@ -447,6 +486,7 @@ def main(argv=None) -> int:
         except Interrupted as e:
             rc = 128 + e.signum
             loop.rec["outcome"] = "interrupted"
+            loop.stages.stop_world_watch()
             say("Ctrl-C received." if e.signum == signal.SIGINT else f"Stop request received ({e}).")
         except stack.StackError as e:
             loop.rec |= {"outcome": "startup_failed", "error": str(e), "log_excerpt": e.log_excerpt}
@@ -475,6 +515,10 @@ def main(argv=None) -> int:
         rc = 128 + e.signum
         loop.rec.setdefault("outcome", "interrupted")
     finally:
+        if loop.rec.get("outcome") in ("startup_failed", "error"):    # the stage it stopped at, for the launcher
+            loop.stages.fail(loop.rec.get("error") or "")
+            loop.rec["stage"] = loop.stages.failed_stage()
+        loop.stages.stop_world_watch()
         loop.cleaning = True                 # from here on the handler never raises...
         for s in HANDLED:
             signal.signal(s, signal.SIG_IGN)  # ...and cleanup's subprocesses ignore a second Ctrl-C too

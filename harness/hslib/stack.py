@@ -247,13 +247,15 @@ def auth_up(timeout):
     return {"authserver": "started", "pid": proc.pid}
 
 
-def world_up(timeout):
+def world_up(timeout, on_stage=None):
     procs = stack_processes()["worldserver"]
     if procs:
         if _wait(soap_ready, 30):
             return {"worldserver": "already running", "pids": procs}
         raise StackError(f"worldserver running (pids {procs}) but SOAP not answering", excerpt("worldserver"))
     proc = _spawn("worldserver")
+    if on_stage:                    # worldserver.out was just truncated by _spawn: progress can follow it from here
+        on_stage("world", "spawned", log=str(LOG["worldserver"]), pid=proc.pid)
     t0 = time.time()
     ok = _wait(soap_ready, timeout, interval=2.0, watch_pid=proc.pid)
     if not ok:
@@ -320,10 +322,13 @@ def describe_world(rp: dict | None) -> str:
 
 
 def up(world_datadir: Path | None = None, timeout: int | None = None, profile: str | None = None,
-       population_n: int | None = None) -> dict:
+       population_n: int | None = None, on_stage=None) -> dict:
     """Start the stack with a config profile (config.PROFILES; default $HS_PROFILE or "m0"); `population_n` sizes
     the population profile (./play passes the user's world-size setting). If a worldserver is already running it
-    is left alone (idempotent `hs up`); callers that need a specific profile use `ensure_profile`."""
+    is left alone (idempotent `hs up`); callers that need a specific profile use `ensure_profile`.
+    on_stage(stage, state, **kw), if given, hears the loading stages (stages.py): database/login/world start and
+    done, and world "spawned" (with the log path) once the worldserver process exists."""
+    stage = on_stage or (lambda *a, **k: None)
     if not (P.SERVER_BIN / "worldserver").exists():
         raise StackError("server not built; run `harness/hs build` first")
     name = config.profile_name(profile)
@@ -340,16 +345,22 @@ def up(world_datadir: Path | None = None, timeout: int | None = None, profile: s
     n = config.population_n(population_n) if name == "population" else None
     info = {"first_run": first_run, "profile": name, "population_n": n,
             "config": list(config.write_all(world_datadir, profile=name, population_n=n))}
+    stage("database", "start")
     info |= mysql_up()
+    stage("database", "done")
+    stage("login", "start")
     ensure_realmlist()          # before authserver: it refuses to start if every realm has flag 3
     info |= auth_up(timeout)
     ensure_realmlist()          # first run: auth DB only exists once authserver created it
     info["gm_account_id"] = ensure_gm_account()
+    stage("login", "done")
+    stage("world", "start", first_run=first_run)
     if name == "population" and not was_running and db_exists("playerbots"):
         from . import population      # "fresh world": re-roll random bots before they log in (population.py)
         info["fresh_start"] = population.fresh_start()
-    w = world_up(timeout)
+    w = world_up(timeout, on_stage=on_stage)
     info |= w
+    stage("world", "done")
     if not was_running and w.get("worldserver") == "started":
         PROFILE_FILE.write_text(json.dumps({"profile": name, "n": n, "digest": config.profile_digest(name, n),
                                             "pid": w["pid"]}))

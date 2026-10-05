@@ -68,13 +68,48 @@ class LaunchError(RuntimeError):
         self.evidence = evidence or {}
 
 
-def wine_env() -> dict:
+FROM_APP_ENV = "HS_FROM_APP"          # set by Hearthstone.app (launcher.m) for its play loop
+APP_BUNDLE_ENV = "HS_APP_BUNDLE"      # the launcher's bundle path (for its icon)
+DOCK_TOKEN = str(P.ROOT)              # object of the launcher <-> shim distributed notifications
+_dock_test = False                    # ./play --client-cmd (a test stand-in): the shim's test-only hooks may run
+
+
+def allow_dock_test(on: bool) -> None:
+    """./play with a --client-cmd stand-in: pass HSDOCK_TEST=1 (+ HSDOCK_TEST_* knobs) to the shim."""
+    global _dock_test
+    _dock_test = bool(on)
+
+
+def dock_env() -> dict:
+    """The Wine host shim's environment for the game client's Wine process (ADR-0010), or {} when it's off.
+    App runs (HS_FROM_APP=1): the dock policy setting (default accessory: no Dock icon of its own). Terminal
+    ./play: name + icon only (regular), so the game keeps a normal Dock icon. Never set anywhere else."""
+    from . import dockshim, settings
+    pol = settings.dock_policy()
+    if pol["policy"] == "off":
+        return {}
+    app = os.environ.get(FROM_APP_ENV) == "1"
+    bundle_icon = Path(os.environ.get(APP_BUNDLE_ENV, "")) / "Contents/Resources/AppIcon.icns"
+    icon = bundle_icon if app and os.environ.get(APP_BUNDLE_ENV) and bundle_icon.is_file() \
+        else P.ROOT / "branding" / "AppIcon.icns"
+    env = {"DYLD_INSERT_LIBRARIES": dockshim.ensure_built(),
+           "HSDOCK_POLICY": pol["policy"] if app else "regular",
+           "HSDOCK_NAME": "Hearthstone", "HSDOCK_ICON": str(icon), "HSDOCK_LOG": str(dockshim.LOG),
+           "HSDOCK_TOKEN": DOCK_TOKEN}
+    if _dock_test:
+        env["HSDOCK_TEST"] = "1"
+        env |= {k: v for k, v in os.environ.items() if k.startswith("HSDOCK_TEST_")}
+    return env
+
+
+def wine_env(client: bool = False) -> dict:
     """Environment for every Wine call (ADR-0004): WINEPREFIX of the selected layer, WINEDEBUG=fixme-all
     (HS_WINEDEBUG overrides), msync, no Mono/Gecko/menu builder, plus the layer's own variables. For the
     default `mtld3d` layer that's d3d9=b (builtin mtld3d, D3D9->Metal), large-address-aware, and the
-    runtime's external dylib path."""
+    runtime's external dylib path. client=True (start_client only): plus the Wine host shim (dock_env)."""
     env = {k: v for k, v in os.environ.items()
-           if not k.startswith(("WINE", "DXVK_", "MVK_", "MTL_", "D3DM_"))}
+           if not k.startswith(("WINE", "DXVK_", "MVK_", "MTL_", "D3DM_", "HSDOCK_"))
+           and k != "DYLD_INSERT_LIBRARIES"}
     env.update({
         "WINEPREFIX": str(P.WINEPREFIX),
         # HS_WINEDEBUG overrides the channel spec for diagnosis (e.g. "fixme-all,fixme+d3d_shader,warn+d3d_shader")
@@ -89,6 +124,8 @@ def wine_env() -> dict:
         else:
             env[k] = v
     env["WINEDLLOVERRIDES"] = ";".join(overrides)
+    if client:
+        env |= dock_env()
     return env
 
 
@@ -259,7 +296,7 @@ def start_client(args: list[str] | None = None, cwd: Path | None = None) -> subp
     _stamp(f"start {' '.join(args)} (cwd {cwd})")
     lf = _logf()
     try:
-        return subprocess.Popen([str(WINE), *args], cwd=cwd, env=wine_env(), stdout=lf,
+        return subprocess.Popen([str(WINE), *args], cwd=cwd, env=wine_env(client=True), stdout=lf,
                                 stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True)
     finally:
         lf.close()
@@ -303,6 +340,49 @@ out.join("\\n")
 """
 
 
+def all_onscreen_windows() -> list[dict]:
+    """Every on-screen window (owner pid, size, layer), via the window server (no Screen Recording permission).
+    [] if the window server can't be asked (e.g. under a sandbox): callers treat that as "no window yet"."""
+    try:
+        r = subprocess.run(["osascript", "-l", "JavaScript", "-e", _JXA_WINDOWS], capture_output=True, text=True,
+                           timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return []
+    wins = []
+    for line in r.stdout.splitlines():
+        parts = line.split()
+        if len(parts) == 4 and parts[0].isdigit():
+            wins.append({"pid": int(parts[0]), "width": int(float(parts[1])), "height": int(float(parts[2])),
+                         "layer": int(parts[3])})
+    return wins
+
+
+def is_wine_host(pid: int) -> bool:
+    """pid runs this layer's Wine (its executable lives under the runtime). Windows processes rewrite their argv and
+    environment, so the executable path is what identifies them."""
+    from . import procs
+    exe = procs.path(pid) or ""
+    return exe.startswith(str(P.WINE_BIN.parent.resolve()) + "/") or exe.startswith(str(P.WINE_BIN.parent) + "/")
+
+
+CLIENT_WINDOW_MIN = (300, 200)     # a real game/stand-in window (Wow.exe opens >= 640x480; notepad ~924x697)
+
+
+def client_window() -> dict | None:
+    """The first on-screen layer-0 window of at least CLIENT_WINDOW_MIN owned by a process of this prefix, as
+    {"pid", "width", "height"}; None if there's none yet. Used by ./play for launching -> ready."""
+    cands = [w for w in all_onscreen_windows()
+             if w["layer"] == 0 and w["width"] >= CLIENT_WINDOW_MIN[0] and w["height"] >= CLIENT_WINDOW_MIN[1]
+             and is_wine_host(w["pid"])]
+    if not cands:
+        return None
+    mine = {p["pid"] for p in prefix_processes()}          # this prefix only (not another Wine of the same runtime)
+    for w in cands:
+        if w["pid"] in mine:
+            return {"pid": w["pid"], "width": w["width"], "height": w["height"]}
+    return None
+
+
 def onscreen_windows(pid: int) -> list[dict]:
     """On-screen windows owned by pid, via the window server (no Screen Recording permission needed)."""
     r = subprocess.run(["osascript", "-l", "JavaScript", "-e", _JXA_WINDOWS], capture_output=True, text=True, timeout=20)
@@ -314,7 +394,7 @@ def onscreen_windows(pid: int) -> list[dict]:
     return wins
 
 def ensure_world(say=log, world_datadir: Path | None = None, profile: str | None = None,
-                 population_n: int | None = None) -> dict:
+                 population_n: int | None = None, stages=None) -> dict:
     """The stack step of `prepare` (./play, `hs launch`): start the stack with `profile` / `population_n` if it
     isn't running. When a profile is asked for (./play passes its world-size setting) and a worldserver left
     running by `hs up`, a harness run or an earlier session holds another profile or size, restart the world server
@@ -332,16 +412,48 @@ def ensure_world(say=log, world_datadir: Path | None = None, profile: str | None
         st = stack.stack_processes()
     if all(st.values()):
         ev["stack"] = "already up"
+        if stages:
+            for sid in ("database", "login", "world"):
+                stages.skip(sid)
         say("The game server is already running.")
     else:
         say("Starting the game server (database, login server, world server). This takes a minute or two...")
-        ev["stack"] = {"up": stack.up(world_datadir=world_datadir, profile=profile, population_n=population_n)}
+        ev["stack"] = {"up": stack.up(world_datadir=world_datadir, profile=profile, population_n=population_n,
+                                      on_stage=stages.on_stack if stages else None)}
         say("The game server is ready.")
     return ev
 
 
+def bot_target() -> int | None:
+    """How many random AI players the running world aims for (its profile's AiPlayerbot.MaxRandomBots)."""
+    from . import config, stack
+    rp = stack.running_profile()
+    if not rp:
+        return None
+    try:
+        if rp["profile"] == "population":
+            return config.population_n(rp.get("n"))
+        return int(config.overrides(rp["profile"])["playerbots"]["AiPlayerbot.MaxRandomBots"])
+    except (KeyError, ValueError, TypeError):
+        return None
+
+
+def bot_count() -> dict:
+    """{"online": random bots online in the DB, "target": the world's target}; online None if the DB can't say."""
+    from . import population
+    try:
+        online = population.online_bots()
+    except Exception:  # noqa: BLE001  (informational only: never fail the start over the bot count)
+        online = None
+    return {"online": online, "target": bot_target()}
+
+
+def bots_label(b: dict) -> str:
+    return f"AI players: {b['online'] if b.get('online') is not None else '?'} / {b.get('target') or '?'} online"
+
+
 def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: str | None = None,
-            population_n: int | None = None) -> tuple[dict, dict]:
+            population_n: int | None = None, stages=None) -> tuple[dict, dict]:
     """Everything before starting the client, shared by `hs launch` and `./play`: stack up (if needed) →
     client-config (+ Wine defaults) → accounts → Wine prefix → binaries match the manifest. `accounts` makes
     sure the login exists (default: the harness fixtures, test account + character; `./play` passes its
@@ -365,16 +477,26 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: 
         raise LaunchError("Wow.exe is already running in this prefix; quit it first "
                           "(or `WINEPREFIX=env/wineprefix wineserver -k`)", ev | {"running": already})
 
-    ev |= ensure_world(say, world_datadir, profile, population_n)
-    say("Pointing the game client at this computer (127.0.0.1)...")
-    cfg = configure(client_dir(), defaults=WINE_DEFAULTS)
-    ev["client_config"] = {"changed_files": cfg["changed_files"],
-                           "config_wtf": next(c for c in cfg["changes"] if c["kind"] == "Config.wtf")}
+    ev |= ensure_world(say, world_datadir, profile, population_n, stages=stages)
+    if stages:
+        # informational only (Zach, 2026-10-04): the game launches when the world is ready, bots keep arriving
+        b = bot_count()
+        stages.extra["bots"] = b
+        frac = round(min(b["online"] / b["target"], 1.0), 4) if b["online"] is not None and b["target"] else None
+        stages.start("bots", label=bots_label(b), fraction=frac)
+        stages.done("bots", label=bots_label(b))
+        stages.start("account")
     if accounts is None:
         say(f"Making sure the test account ({P.TEST_USER}) and character ({P.TEST_CHAR}) exist...")
         ev["fixtures"] = fixtures.ensure()
     else:
         ev["accounts"] = accounts()
+    if stages:
+        stages.start("game_setup")
+    say("Pointing the game client at this computer (127.0.0.1)...")
+    cfg = configure(client_dir(), defaults=WINE_DEFAULTS)
+    ev["client_config"] = {"changed_files": cfg["changed_files"],
+                           "config_wtf": next(c for c in cfg["changes"] if c["kind"] == "Config.wtf")}
     ev["prefix"] = ensure_prefix()
 
     hashes_before = _binary_hashes(man)

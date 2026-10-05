@@ -70,6 +70,14 @@ def ppid(pid: int) -> int | None:
     return struct.unpack_from("I", buf.raw, 16)[0]
 
 
+def path(pid: int) -> str | None:
+    """The executable's path (proc_pidpath), None if the process is gone or unreadable. Unlike argv it survives a
+    program rewriting its arguments (Wine shows Windows paths such as C:\\windows\\system32\\notepad.exe)."""
+    buf = ctypes.create_string_buffer(4096)
+    n = _libproc.proc_pidpath(pid, buf, 4096)
+    return buf.value.decode(errors="replace") if n > 0 else None
+
+
 def is_zombie(pid: int) -> bool:
     raw = _sysctl([CTL_KERN, KERN_PROC, KERN_PROC_PID, pid], _KINFO_SIZE)
     return bool(raw) and len(raw) > _P_STAT_OFF and raw[_P_STAT_OFF] == SZOMB
