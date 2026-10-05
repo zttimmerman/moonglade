@@ -16,6 +16,8 @@ FOLLOW_NEAR_YD = 15
 FOLLOW_S = 60
 ASSIST_ENGAGE_S = 20
 ASSIST_AGGRO_S = 15    # setup: the creature attacks the master after the teleport (aggressive creature, aggro radius)
+ASSIST_PICK_TRIES = 4  # creatures tried before giving up (busy / never still / no staging point; design.md F23)
+ASSIST_RETRY_S = 2.0   # re-teleport onto the creature if it hasn't attacked yet (measured: 0.3 s when landing on it)
 ASSIST_NEAR_YD = 10    # GIVEN "companion near": within 10 yd of the master at the staging point before the fight
 ASSIST_NEAR_S = 30     # `.summon` puts it beside the master at once; generous bound for the summon + `.gps` polls
 ASSIST_DEATH_S = 60    # the spec gives no time for the kill; 60 s after the master entered combat (measured: ~10 s)
@@ -117,8 +119,10 @@ def _by(guid, victim):
 @check("comp.assists", order=132, capability="companion-bots", stack="up", tier="full")
 def assists(ctx):
     """GIVEN: the master and its warrior companion stand together (companion summoned and within 10 yd, `.gps`) at a
-    staging point 35 yd from a hostile, level-appropriate creature (SQL/DBC rules), with no combat yet. WHEN: the
-    master is GM-teleported onto the creature and it attacks (the master enters combat). THEN: within 20 s the
+    staging point 35 yd from a hostile, level-appropriate creature (SQL/DBC rules), with no combat yet, and the
+    creature is standing still, unhurt and out of combat with no fight against any other unit seen (`.npc info`
+    Unit Flags, probe combat events; READY_RULE). WHEN: the master is GM-teleported onto the creature's live position
+    and it attacks the master before any other unit (the master enters combat). THEN: within 20 s the
     companion attacks that creature (SMSG_ATTACKSTART / combat log, attacker = companion) and the creature dies
     (`.npc info` health 0) while the master sends no attack, spell or command other than `.npc info` and deals no
     damage."""
@@ -130,46 +134,81 @@ def assists(ctx):
         add = _run(lambda: s.addclass("warrior"))
         bot = add["bot"]
         ev["add"] = {k: v for k, v in add.items() if k != "group_list"}
-        cr = _run(s.pick_live_creature)
-        ev["creature_picked"] = cr
         rule_entries = {c["entry"] for c in C.creature_candidates(n=500)}
-        p = cr["npc_info"]["pos"] or cr["spawn"]
-        # GIVEN: master + companion together near the creature, before any fight
         start = s.gps()
         require("x" in start, "precondition: no `.gps` position for the master", gps=start, **ev)
-        stage = _run(lambda: C.staging_point(p, start, start["map"]))
-        ev["staging_point"] = stage
-        stage_mark = s.ws.mark()
-        ev["go_stage"] = s.ws.command(f".go xyz {stage['x']:.2f} {stage['y']:.2f}", settle=0.5, timeout=5)
-        tps = s.ws.wait_event(lambda e: e["kind"] == "teleport_near", stage_mark, timeout=5)
-        require(tps is not None, "precondition: staging teleport not received/acked", **ev)
-        s.ws.heartbeat(tps["x"], tps["y"], tps["z"])
-        ev["summon"] = s.summon(bot["name"])
-        near = s.wait_near(bot["guid"], ASSIST_NEAR_YD, ASSIST_NEAR_S)
-        ev["companion_near_before_fight"] = {"ok": near["ok"], "elapsed_s": near["elapsed_s"],
-                                             "last_sample": near["samples"][-1]}
-        require(near["ok"], f"precondition: companion not within {ASSIST_NEAR_YD} yd of the master at the staging "
-                f"point within {ASSIST_NEAR_S} s", **ev)
-        me = near["samples"][-1]["master"]
-        ev["master_to_creature_before_fight_yd"] = round(math.hypot(me["x"] - p["x"], me["y"] - p["y"]), 1)
-        early = [e for e in s.ws.events_since(stage_mark) if e["kind"] in ("attack_start", "melee_damage", "spell_damage")
-                 and {bot["guid"], s.guid} & {e["attacker"], e["victim"]}]
-        ev["combat_before_fight"] = early[:10]
-        require(not early, "precondition: the master or companion was already in combat at the staging point", **ev)
+        # GIVEN: master + companion together near a creature that is free right before the fight (F23). A candidate
+        # that gets busy (another unit, e.g. a patrolling guard, fights or kills it), never stands still, or has no
+        # staging point is set aside and the next one is tried (ASSIST_PICK_TRIES); see design.md.
+        skipped, ready, cr = [], None, None
+        for _ in range(ASSIST_PICK_TRIES):
+            cr = _run(lambda: s.pick_live_creature(exclude={x["spawn_id"] for x in skipped}))
+            ev["creature_picked"] = cr
+            p = cr["npc_info"]["pos"] or cr["spawn"]
+            try:
+                stage = C.staging_point(p, start, start["map"])
+            except C.CompanionError as e:
+                skipped.append({"spawn_id": cr["spawn_id"], "why": str(e), "tried": e.evidence.get("tried")})
+                continue
+            ev["staging_point"] = stage
+            stage_mark = s.ws.mark()
+            ev["go_stage"] = s.ws.command(f".go xyz {stage['x']:.2f} {stage['y']:.2f}", settle=0.5, timeout=5)
+            tps = s.ws.wait_event(lambda e: e["kind"] == "teleport_near", stage_mark, timeout=5)
+            require(tps is not None, "precondition: staging teleport not received/acked", **ev)
+            s.ws.heartbeat(tps["x"], tps["y"], tps["z"])
+            ev["summon"] = s.summon(bot["name"])
+            near = s.wait_near(bot["guid"], ASSIST_NEAR_YD, ASSIST_NEAR_S)
+            ev["companion_near_before_fight"] = {"ok": near["ok"], "elapsed_s": near["elapsed_s"],
+                                                 "last_sample": near["samples"][-1]}
+            require(near["ok"], f"precondition: companion not within {ASSIST_NEAR_YD} yd of the master at the staging "
+                    f"point within {ASSIST_NEAR_S} s", **ev)
+            me = near["samples"][-1]["master"]
+            ev["master_to_creature_before_fight_yd"] = round(math.hypot(me["x"] - p["x"], me["y"] - p["y"]), 1)
+            early = [e for e in s.ws.events_since(stage_mark) if e["kind"] in ("attack_start", "melee_damage",
+                     "spell_damage") and {bot["guid"], s.guid} & {e["attacker"], e["victim"]}]
+            ev["combat_before_fight"] = early[:10]
+            require(not early, "precondition: the master or companion was already in combat at the staging point", **ev)
+            # the creature is free: standing still, unhurt, out of combat, no fight with any other unit seen since the
+            # staging point (READY_RULE); the master will land on its live position
+            ready = s.wait_creature_ready(cr["spawn_id"], cr["guid"], stage_mark)
+            if ready["ok"]:
+                break
+            skipped.append({"spawn_id": cr["spawn_id"], "why": "died" if ready["dead"] else
+                            f"not standing still, unhurt and out of combat within {C.READY_S} s",
+                            "samples": ready["samples"][-3:], "combat_events": ready["combat_events"][:5]})
+        ev["creatures_set_aside"] = skipped
+        require(ready is not None, f"precondition: none of {ASSIST_PICK_TRIES} creatures had a staging point", **ev)
+        ev["creature_ready"] = {k: v for k, v in ready.items() if k != "snapshot"} | {"rule": C.READY_RULE}
+        require(ready["ok"], f"precondition: none of {ASSIST_PICK_TRIES} creatures was standing still, unhurt and out "
+                "of combat before the fight", **ev)
+        snap = ready["snapshot"]
+        before = C.creature_fights(s.ws.events_since(stage_mark), cr["guid"])
+        ev["creature_before_fight"] = {"health": snap["health"], "max_health": snap["max_health"],
+                                       "unit_flags": snap["unit_flags"], "in_combat": snap["in_combat"],
+                                       "combat_events_since_staging": before[:10], "pos": snap["pos"]}
+        require(snap["in_combat"] is False and snap["health"] == snap["max_health"] and not before,
+                "precondition: the creature was in combat with another unit before the fight", **ev)
+        q = snap["pos"]
         # WHEN: the master enters combat with the creature
         since = s.ws.mark()
-        ev["go"] = s.ws.command(f".go xyz {p['x']:.2f} {p['y']:.2f} {p['z']:.2f}", settle=0.5, timeout=5)
-        tp = s.ws.wait_event(lambda e: e["kind"] == "teleport_near", since, timeout=5)
-        ev["teleport_event"] = tp
-        require(tp is not None, "master teleport not received/acked", **ev)
-        s.ws.heartbeat(tp["x"], tp["y"], tp["z"])   # report our position once landed, as a client does
-        # "the master enters combat with that creature": the first creature that attacks the master after the
-        # teleport (usually the picked one; a neighbour of the same rule can aggro first). It must match the rule.
+        # "the master enters combat with that creature": the picked creature attacks the master after the teleport,
         # seen as SMSG_ATTACKSTART or a combat-log hit on the master (right after a teleport the ATTACKSTART can
-        # precede the creature becoming visible to us, so only the hit arrives)
-        aggro = s.ws.wait_event(lambda e: e["kind"] in ("attack_start", "melee_damage", "spell_damage")
-                                and e["victim"] == s.guid and W.guid_high(e["attacker"]) == W.HIGHGUID_UNIT,
-                                since, timeout=ASSIST_AGGRO_S)
+        # precede the creature becoming visible to us, so only the hit arrives). If it hasn't after ASSIST_RETRY_S
+        # (before the companion can arrive: >= 3.6 s measured), the master is put back onto its live position.
+        attacked = lambda e: (e["kind"] in ("attack_start", "melee_damage", "spell_damage") and e["victim"] == s.guid
+                              and W.guid_high(e["attacker"]) == W.HIGHGUID_UNIT)
+        aggro, tries, deadline = None, [], time.time() + ASSIST_AGGRO_S
+        while aggro is None and time.time() < deadline:
+            mark = s.ws.mark()
+            go = s.ws.command(f".go xyz {q['x']:.2f} {q['y']:.2f} {q['z']:.2f}", settle=0.5, timeout=5)
+            tp = s.ws.wait_event(lambda e: e["kind"] == "teleport_near", mark, timeout=5)
+            tries.append({"go": go, "teleport_event": tp, "target": q})
+            require(tp is not None, "master teleport not received/acked", engage_attempts=tries, **ev)
+            s.ws.heartbeat(tp["x"], tp["y"], tp["z"])   # report our position once landed, as a client does
+            aggro = s.ws.wait_event(attacked, since, timeout=max(0.1, min(ASSIST_RETRY_S, deadline - time.time())))
+            if aggro is None and time.time() < deadline:
+                q = s.npc_info(cr["spawn_id"]).get("pos") or q
+        ev["engage_attempts"], ev["teleport_event"] = tries, tries[0]["teleport_event"]
         ev["master_enters_combat"] = aggro
         if aggro is None:
             ev["combat_events"] = [e for e in s.ws.events_since(since) if e["kind"] in
@@ -178,6 +217,11 @@ def assists(ctx):
         cg = aggro["attacker"]
         require(W.guid_entry(cg) in rule_entries, "precondition: the creature fighting the master doesn't match the "
                 "rule (hostile, normal, level-appropriate)", rule_entries=sorted(rule_entries), **ev)
+        require(cg == cr["guid"], "precondition: the creature fighting the master isn't the picked one", **ev)
+        first = next((e for e in C.creature_fights(s.ws.events_since(stage_mark), cg) if e["attacker"] == cg), None)
+        ev["creature_first_attack"] = first
+        require(first is not None and first["victim"] == s.guid,
+                "precondition: the creature attacked another unit before the master", **ev)
         t0 = aggro["t"]
         s.ws.set_selection(cg)              # the master targets it; from here on it does nothing
         ev["creature"] = s.npc_info()       # the selected creature: spawn id, GUID, health
