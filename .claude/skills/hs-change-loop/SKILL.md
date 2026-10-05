@@ -25,6 +25,21 @@ Lesson: the server-mail crash we spent ~1 h patching was already fixed upstream 
 - Builders that need runtime (server, client, Wine) work in the main checkout; only one agent owns the stack at a time. Research or docs builders can use `isolation: "worktree"`.
 - A builder's report is not evidence (§10).
 
+## Builder pre-verification checklist (shift-left; Zach, 2026-10-04)
+Builders run this before handing over and put a short pass/fail line per item in their report. It doesn't replace the verifier; it removes the predictable misses that cost whole verify rounds. Each item comes from a real verifier catch on this project.
+1. **Test switches can't leak.** Every env var or flag a check uses is refused by normal entry points (`./play`, the app, `hs`) unless an explicit test flag is passed, and never applies to the PLAYER account. Prove it with a refusal run. (in-client-login: `HS_GLUE_TEST`.)
+2. **No secrets in output.** Grep everything the change produces (`env/logs/*`, `results.json`, `summary.md`, `app.log`, check evidence, git history) for the PLAYER password (read it from `env/player.json` without printing it) and the test password. Credential files are 0600, never inside `client/`, removed on exit, and any stale copy is removed at start.
+3. **Kill-safe.** SIGKILL the new flow mid-run: nothing sensitive or stale is left that the next run doesn't heal, and the next run works.
+4. **Checks can fail, on this run's evidence.** Every new or changed check has at least one counterexample run that makes it FAIL. Evidence must come from this run (timestamps or pids newer than the run's start), never from stale or historical artifacts. (M2: the coalesced crash report.)
+5. **Existing checks not loosened.** Any edit to an existing check is listed with why it isn't a loosening.
+6. **GIVEN really holds.** Preconditions are established before the WHEN (M2: comp.assists summon order); "running server" scenarios observe the server, not just the DB.
+7. **Fail-closed.** Self-verification code treats query or IO errors as failure, never as "0 differences" (M3: `Count()`).
+8. **Data provenance (§7).** No hand-typed game values: names, classes, numbers come from VMaNGOS, AC base SQL or DBCs, with citations.
+9. **Scope guards.** `client.inspect` passes; `env/player.json`, `env/settings.json` and PLAYER (last_login) are untouched; nothing is written outside the repo; TCC, bundle id and designated requirement are untouched; build inputs have changed only as intended (`--force-clean` if so).
+10. **Repeat, and report oddities.** Each new or changed check passes ≥3 times. Any unexplained failure is reported as such, never dismissed as "probably a human" without confirming.
+11. **Clean up.** Scratch dirs and test accounts removed, stack down, no stray Wine/Wow/server processes, disk checked.
+12. **Docs match code.** design.md describes what was built (M-launcher: osascript vs AppKit drift).
+
 ## Verify
 - Use the `verifier` agent type and give it only: spec deltas, `git diff <last-verified>..HEAD -- harness/ …`, and the harness command.
 - **Run budget (agreed with Zach, 2026-10-02): 2 full runs per change.** My pre-check is 1 full run (the quick tier once tiers land); the verifier does **1 full run** plus **≥5 repeats of only the checks the change adds or touches** (flakiness where it changed), plus counterexamples showing each new check can fail, plus independent checks outside the harness.
