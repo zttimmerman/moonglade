@@ -707,7 +707,7 @@ def _snapshot(name: str) -> dict:
             "characters": db.query(f"SELECT * FROM characters WHERE account={aid} ORDER BY guid", "characters")}
 
 
-@check("play.player_account_untouched", order=370, capability=CAP, stack="up", tier="full")
+@check("play.player_account_untouched", order=151, capability=CAP, stack="up", tier="full")
 def player_account_untouched(ctx):
     """A personal account (scratch, created by ./play's own account step, with one character) is byte-identical —
     auth row incl. salt/verifier, account_access, rbac permissions, characters — before and after the fixture reset that

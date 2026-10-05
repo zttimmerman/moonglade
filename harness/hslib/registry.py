@@ -25,16 +25,23 @@ class Check:
     tier: str = "quick"  # "quick" | "full" | "slow" (TIERS); see harness-reporting "Test tiers"
     tier_declared: bool = False   # False = the check relied on the default; report.tiers_declared fails it
     profile: str | None = None    # config profile a stack="up" check needs (None = config.DEFAULT_PROFILE)
+    gui: bool = False             # needs exclusive screen focus (harness-reporting "GUI tier"); see runner.gui_tier_skips
 
 
 # Tiers in inclusion order: `--tier X` runs every check whose tier is X or earlier in this tuple.
 TIERS = ("quick", "full", "slow")
+# `--tier gui` (harness-reporting "GUI tier") is a run tier, not a check tier: it runs exactly the checks marked gui
+# (whatever their check tier), and is never a full run.
+RUN_TIERS = TIERS + ("gui",)
 
 
 def tiers_for(run_tier: str) -> tuple[str, ...]:
-    """Check tiers executed by `hs run --tier run_tier` (quick → quick; full → quick+full; slow → all)."""
+    """Check tiers executed by `hs run --tier run_tier` (quick → quick; full → quick+full; slow → all;
+    gui → all tiers, narrowed to gui-marked checks by runner.select)."""
+    if run_tier == "gui":
+        return TIERS
     if run_tier not in TIERS:
-        raise ValueError(f"unknown tier {run_tier!r}; expected one of {TIERS}")
+        raise ValueError(f"unknown tier {run_tier!r}; expected one of {RUN_TIERS}")
     return TIERS[: TIERS.index(run_tier) + 1]
 
 
@@ -42,15 +49,16 @@ REGISTRY: dict[str, Check] = {}
 
 
 def check(id: str, order: int, capability: str, stack: str = "any", tier: str | None = None,
-          profile: str | None = None):
+          profile: str | None = None, gui: bool = False):
     """Register a check. Every check should pass `tier=` explicitly; omitting it defaults to "quick" but is
     recorded as undeclared, which report.tiers_declared fails. `profile` (config.PROFILES) is the config profile a
-    stack="up" check needs; the runner restarts a stack running with another one."""
+    stack="up" check needs; the runner restarts a stack running with another one. `gui=True` marks a check that needs
+    exclusive screen focus: full runs skip it by design unless a GUI path changed (runner.gui_tier_skips)."""
     def deco(fn):
         if id in REGISTRY:
             raise RuntimeError(f"duplicate check id {id}")
         REGISTRY[id] = Check(id, fn, order, capability, stack, (fn.__doc__ or "").strip(),
-                             tier if tier is not None else "quick", tier is not None, profile)
+                             tier if tier is not None else "quick", tier is not None, profile, gui)
         return fn
     return deco
 
