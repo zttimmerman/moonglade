@@ -1,11 +1,11 @@
-# Client setup (macOS, Whisky's Wine, repo-local prefix)
+# Client setup (macOS, WoWSilicon Wine runtime + mtld3d, repo-local prefix)
 
 How to install the Windows WotLK 3.3.5a (build 12340) client into this repo and run it against the local Hearthstone server. The client binary is never patched. Only `Data/<locale>/realmlist.wtf` and `WTF/Config.wtf` are changed. The Wine layer is described in [ADR-0004](adr/0004-wine-layer-whisky.md).
 
 ## Prerequisites
 
-- **Whisky.app**, opened once so it has downloaded its Wine (`~/Library/Application Support/com.isaacmarovitz.Whisky/Libraries/Wine/bin/wine64`). The harness uses those Wine binaries directly. It never opens Whisky, never uses or changes your Whisky bottles, and never changes Whisky's settings.
-- **Rosetta 2** (Whisky's Wine is x86_64): `softwareupdate --install-rosetta` if `arch -x86_64 /usr/bin/true` fails.
+- **The pinned Wine runtime**: run `harness/hs wine-install`. It downloads WoWSilicon's Wine runtime r17 (Wine 11.13 with mtld3d, D3D9 to Metal; URL and SHA-256 in `fork.lock`), verifies it and unpacks it into `env/wowsilicon-r17/`. The prefix is `env/wineprefix-mtld3d/`. Whisky.app is not needed; its Wine 7.7 is only an optional A/B layer (`HS_WINE=whisky`, ADR-0004).
+- **Rosetta 2** (the Wine runtime is x86_64): `softwareupdate --install-rosetta` if `arch -x86_64 /usr/bin/true` fails.
 - **A 3.3.5a enUS client** as a zip or a folder, for example `~/Downloads/[redacted]_3.3.5a.zip`.
 - **About 19 GB of free disk** for a first install. The client is about 17.9 GB.
 
@@ -75,16 +75,12 @@ Logs: server logs are in `env/logs/` (`Server.log`, `worldserver.out`), Wine/cli
 harness/hs launch
 ```
 
-This starts the stack if it isn't up, runs `client-config`, creates the test account and character, and creates the Wine prefix `env/wineprefix` on first use (about 30 s). It then checks the client binaries against the manifest and starts `Wow.exe` under Wine, detached. Wine output goes to `env/logs/wine.log`. It prints the login:
-
-- Account: `HSTEST`
-- Password: `hstest`
-- Character: `Hstester`
+This starts the stack if it isn't up, runs `client-config`, creates the test account and character, and creates the Wine prefix `env/wineprefix-mtld3d` on first use (about 30 s). It then checks the client binaries against the manifest and starts `Wow.exe` under Wine, detached. Wine output goes to `env/logs/wine.log`. It prints the login: the harness test account `HSTEST` and its character. The test credentials are defined in `harness/hslib/paths.py` (`TEST_USER`, `TEST_PASS`, `TEST_CHAR`). Every full harness run deletes and recreates that account, so never play on it.
 
 To quit, close the WoW window, or stop everything in this prefix:
 
 ```
-WINEPREFIX="$PWD/env/wineprefix" "$HOME/Library/Application Support/com.isaacmarovitz.Whisky/Libraries/Wine/bin/wineserver" -k
+WINEPREFIX="$PWD/env/wineprefix-mtld3d" env/wowsilicon-r17/.wine-runtime/bin/wineserver -k
 ```
 
 `harness/hs down` stops the server stack.
@@ -95,7 +91,7 @@ WINEPREFIX="$PWD/env/wineprefix" "$HOME/Library/Application Support/com.isaacmar
 harness/hs launch --smoke
 ```
 
-The smoke test launches the client, requires the Wine `Wow.exe` process to still be running after 30 s with no crash report and no `WowError.exe`, then runs `wineserver -k` for this prefix and requires that no Wine or Wow.exe process from `env/wineprefix` remains. A WoW window appears briefly. The harness check `client.launch_smoke` runs exactly this.
+The smoke test launches the client, requires the Wine `Wow.exe` process to still be running after 30 s with no crash report and no `WowError.exe`, then runs `wineserver -k` for this prefix and requires that no Wine or Wow.exe process from `env/wineprefix-mtld3d` remains. A WoW window appears briefly. The harness check `client.launch_smoke` runs exactly this.
 
 ## Troubleshooting
 
