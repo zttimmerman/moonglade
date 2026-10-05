@@ -60,7 +60,7 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 - The app needs macOS Documents-folder permission (repo is in ~/Documents); granted 2026-10-04 for `local.hearthstone.app`. Don't change the bundle id or designated requirement, or macOS re-prompts.
 
 ## Roadmap and backlog (groomed 2026-10-04)
-**Now:** in-client login screen (verifying) → **launcher polish** (change `launcher-polish`; ADR-0010 Wine host shim accepted by Zach 2026-10-04, option A: one Dock icon; loading screen with stages, launches when the world is ready and shows the bot count; builds after the login verifier frees the stack) → **M4 solo dungeons** (human gate: Zach plays two dungeons; review M2 budget loosenings there).
+**Now:** in-client login screen (verifying) → **launcher polish** (change `launcher-polish`; ADR-0010 Wine host shim accepted by Zach 2026-10-04, option A: one Dock icon; loading screen with stages, launches when the world is ready and shows the bot count; builds after the login verifier frees the stack) → **save backups** (small; protects characters before serious play) → **M4 solo dungeons** (human gate: Zach plays two dungeons; review M2 budget loosenings there).
 
 **M5 (after M4), proposed order:**
 1. **Solo-first feature audit (Zach, 2026-10-04).** Principle: every MMO feature either serves solo play or gets hidden. Hide: global chat channels, trade/LFG/guild-recruitment noise, anything waiting on strangers. Keep: visible bots, instant groups, useful systems. Mostly config/module work.
@@ -89,6 +89,15 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 **Retail-style shared tagging (Zach play test, 2026-10-04):** in 3.3.5 a mob belongs to whoever hits it first, so at startup the bots sweep starting-zone quest mobs and the player has to wait. Target: retail behaviour, where any same-faction player who damages a mob gets kill/quest credit (and loot eligibility), for all mobs, not just elites. Check upstream modules/issues first (AzerothCore, mod-playerbots); likely a module using kill/credit hooks; a cheaper interim could be fewer or staggered bots in starting zones at startup.
 
 **Front-menu follow-ups (Zach, 2026-10-04):** a setting to swap the WoW logo on the login screen; creating profiles from the menu; world size + vanilla mode in Settings (next change).
+
+**New ideas, Zach's order (2026-10-04):**
+1. **Save backups**: auto-snapshot the player's characters (characters + auth rows for the profile's account, plus client WTF settings) on each quit, keep the last N with timestamps, restore from the menu (Extras → Backups) with confirmation. Proposed slot: a small change right after launcher polish, before M4, so serious play is protected.
+2. **Companion roster**: a few named companions that persist, level with the player and keep their gear across sessions (RPG party members); pairs with M4 and the LLM companions spike.
+3. **Difficulty and pace presets**: XP-rate slider and enemy-difficulty presets (story / normal / hard) in Settings, alongside vanilla mode.
+4. **Journey recap**: time played, levels gained and zones visited since last session, on Continue or About; extends the last-played line.
+5. **Controller support**: gamepad play via a 3.3.5 backport of a controller addon (e.g. ConsolePort) if it works under Wine; spike first.
+6. **Relaxed dungeon lockouts for solo play**: rerun dungeons freely; small server config; pairs with M4.
+(Not added: hardcore mode toggle; Zach didn't pick it.)
 
 **Later / tech debt:** era extras (class mount quests, vanilla quest levels and gold, creature damage/armor, separate mount switch); WoWSilicon client perf patches (needs a §2 ADR, FPS A/B first); the F-items above.
 
