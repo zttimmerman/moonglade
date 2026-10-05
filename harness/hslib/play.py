@@ -423,10 +423,11 @@ def main(argv=None) -> int:
         say(f"{PLAY_CLIENT_ENV} is set ({os.environ[PLAY_CLIENT_ENV]}): that's a test copy of the play client. "
             f"Unset it (`unset {PLAY_CLIENT_ENV}`) and run ./play again.")
         return EXIT_FAIL
-    if os.environ.get(GLUE_TEST_ENV) and not args.allow_test_client_dir:
-        say(f"{GLUE_TEST_ENV} is set: that's a test hook for the harness, not for playing. "
-            f"Unset it (`unset {GLUE_TEST_ENV}`) and run ./play again.")
-        return EXIT_FAIL
+    for var in (GLUE_TEST_ENV, SKIP_ENV):            # test-only switches; refused before anything happens
+        if os.environ.get(var) and not args.allow_test_client_dir:
+            say(f"{var} is set: that's a test switch for the harness, not for playing. "
+                f"Unset it (`unset {var}`) and run ./play again.")
+            return EXIT_FAIL
     try:
         fd, lock = acquire_lock()
     except Busy as b:

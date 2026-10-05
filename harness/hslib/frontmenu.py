@@ -188,6 +188,10 @@ def remove(client_dir: Path) -> dict:
         p = archive_path(Path(client_dir))
     except Exception as e:  # noqa: BLE001
         return {"removed": False, "why": str(e)}
-    existed = p.exists()
+    tmp = p.with_name(p.name + ".hs-new")             # a write killed mid-way leaves this (0600, holds logins)
+    existed, tmp_existed = p.exists(), tmp.exists()
     p.unlink(missing_ok=True)
-    return {"archive": str(p), "removed": existed}
+    tmp.unlink(missing_ok=True)
+    gone = (existed and not p.exists(), tmp_existed and not tmp.exists())   # what was really deleted, checked after
+    return {"archive": str(p), "removed": any(gone), "archive_removed": gone[0], "partial_write_removed": gone[1],
+            "left_behind": [str(x) for x in (p, tmp) if x.exists()]}
