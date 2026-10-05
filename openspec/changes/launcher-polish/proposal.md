@@ -31,3 +31,4 @@ New `harness/app/dockshim.m` (or similar), launcher.m changes, `launch.wine_env(
 
 ## Spec-change log
 - 2026-10-04 (before build): `app.single_dock_icon` also samples from Wine-host start to 5 s after the window at ≥10 Hz and fails on any Foreground sample, so a momentary Wine Dock icon flash is caught (Zach asked about flicker). A tightening.
+- 2026-10-05 (B21): `app.shim_scope` wording clarified. The shim is loaded for the game's Wine host in both app and terminal runs (terminal = name + icon only, as the proposal and `play.dock_identity` already require); the old text said "only in app runs", which contradicted `play.dock_identity`. The scope limit (game host only, never global) is unchanged, so this isn't a loosening.

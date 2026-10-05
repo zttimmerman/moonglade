@@ -38,7 +38,7 @@ When the game runs from Hearthstone.app, the Dock SHALL show exactly one icon fo
 
 #### Scenario: The shim stays in the runtime layer
 - **GIVEN** any play run
-- **THEN** `client.inspect` passes; the shim file lives outside `client/` and outside `env/wowsilicon-r17/` (whose pinned hash is unchanged); `DYLD_INSERT_LIBRARIES` is set only in the Wine environment of app runs, not globally (`launchctl getenv DYLD_INSERT_LIBRARIES` is empty); Wow.exe is byte-identical to before
+- **THEN** `client.inspect` passes; the shim file lives outside `client/` and outside `env/wowsilicon-r17/` (whose pinned hash is unchanged); `DYLD_INSERT_LIBRARIES` is set only in the environment of the Wine host processes the play loop starts for the game (app runs: accessory policy; terminal `./play`: name and icon only), never for other processes and never globally (`launchctl getenv DYLD_INSERT_LIBRARIES` is empty); Wow.exe is byte-identical to before
 - Check: `app.shim_scope`
 
 #### Scenario: No performance cost
