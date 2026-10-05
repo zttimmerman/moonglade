@@ -55,3 +55,6 @@ CONCERNS: <weakened checks, missing coverage, spec ambiguities — not FAILs but
 ```
 
 Overall VERDICT is PASS only if every non-HUMAN scenario is PASS.
+
+## Don't leave things on Zach's screen (2026-10-05)
+Zach uses this Mac. Prefer the harness's own test switches (`HS_APP_TEST_DISABLE`, `HSDOCK_TEST*`, test hooks) for GUI counterexamples. Don't build ad-hoc GUI programs that appear in the Dock or menu bar. If one is truly unavoidable, it must run as a background app (LSUIElement / accessory activation policy, never Regular), and before you finish confirm no Dock tiles, windows or processes of yours remain. Lesson: a one-off `flick` test program run 30 times left ~20 ghost icons in Zach's Dock.

@@ -37,7 +37,7 @@ Builders run this before handing over and put a short pass/fail line per item in
 8. **Data provenance (§7).** No hand-typed game values: names, classes, numbers come from VMaNGOS, AC base SQL or DBCs, with citations.
 9. **Scope guards.** `client.inspect` passes; `env/player.json`, `env/settings.json` and PLAYER (last_login) are untouched; nothing is written outside the repo; TCC, bundle id and designated requirement are untouched; build inputs have changed only as intended (`--force-clean` if so).
 10. **Repeat, and report oddities.** Each new or changed check passes ≥3 times. Any unexplained failure is reported as such, never dismissed as "probably a human" without confirming.
-11. **Clean up.** Scratch dirs and test accounts removed, stack down, no stray Wine/Wow/server processes, disk checked.
+11. **Clean up.** No ad-hoc GUI programs that appear in Zach's Dock; use the harness's test switches (a verifier's throwaway `flick` program left ~20 ghost Dock icons, 2026-10-05). Scratch dirs and test accounts removed, stack down, no stray Wine/Wow/server processes, disk checked.
 12. **Docs match code.** design.md describes what was built (M-launcher: osascript vs AppKit drift).
 
 ## Verify
