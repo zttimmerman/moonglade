@@ -6,7 +6,7 @@ stretched sideways ("night elf wide"). The client sizes its window (and so its b
 `gxResolution`, so a value with the full-screen aspect ratio removes the stretch.
 
 What the launcher does before each launch of a play client (never client/), in `launch.prepare`:
-- reads the display: the main screen's size in points, its Retina scale, and the strip a full-screen window doesn't
+- reads the display the game opens on (the primary display, with the menu bar): its size in points, its Retina scale, and the strip a full-screen window doesn't
   get (the camera housing: `safeAreaInsets.top`). The full-screen area is what the game fills in macOS full screen.
 - picks `<w>x<h>` with that area's aspect ratio (DEFAULT, measured in design.md: the area in Retina pixels; the
   client still renders at the size of the window it fits on screen, see design.md).
@@ -34,8 +34,11 @@ KEY = "gxResolution"
 TEST_ENV = "HS_TEST_DISPLAY"
 DEFAULT = "native"                         # "native" (Retina pixels) or "half" (points); decided in design.md
 _SPEC = re.compile(r"^(\d{3,5})x(\d{3,5})@(\d+(?:\.\d+)?)(?:/(\d+(?:\.\d+)?))?$")
-_JXA = ("ObjC.import('AppKit'); var s = $.NSScreen.mainScreen; var f = s.frame; var i = s.safeAreaInsets; "
-        "JSON.stringify({w: f.size.width, h: f.size.height, scale: s.backingScaleFactor, top: i.top})")
+# The screen the game opens on: Wine's primary monitor is the macOS primary display, the one with the menu bar
+# (NSScreen.screens[0], i.e. CGMainDisplayID), not NSScreen.mainScreen (whichever screen has keyboard focus).
+_JXA = ("ObjC.import('AppKit'); var all = $.NSScreen.screens; var s = all.objectAtIndex(0); var f = s.frame; "
+        "var i = s.safeAreaInsets; JSON.stringify({w: f.size.width, h: f.size.height, scale: s.backingScaleFactor, "
+        "top: i.top, screens: all.count, name: ObjC.unwrap(s.localizedName)})")
 
 
 class ResolutionError(RuntimeError):
@@ -62,7 +65,7 @@ def display() -> dict:
         r = subprocess.run(["osascript", "-l", "JavaScript", "-e", _JXA], capture_output=True, text=True, timeout=20)
         d = json.loads(r.stdout)
         return {"points": [int(d["w"]), int(d["h"])], "scale": float(d["scale"]), "top_inset": float(d.get("top") or 0),
-                "source": "NSScreen.mainScreen"}
+                "source": "NSScreen.screens[0] (primary display)", "name": d.get("name"), "screens": int(d.get("screens") or 0)}
     except (OSError, subprocess.SubprocessError, ValueError, KeyError, TypeError) as e:
         raise ResolutionError(f"couldn't read the display: {e}") from None
 

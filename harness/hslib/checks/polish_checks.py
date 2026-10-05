@@ -108,44 +108,64 @@ def is_ours(a: dict) -> bool:
     return str(a.get("exe", "")).startswith(str(RUNTIME) + "/") or a.get("bundle") == A.BUNDLE_ID
 
 
+LSSAMPLER_SRC = Path(__file__).with_name("lssampler.m")
+LSSAMPLER_BIN = P.ENV / "tools" / "lssampler"
+
+
+def lssampler_bin() -> str:
+    """The compiled test-only sampler (env/tools/lssampler), rebuilt when its source changed."""
+    import hashlib
+    stamp = LSSAMPLER_BIN.with_suffix(".sha256")
+    want = hashlib.sha256(LSSAMPLER_SRC.read_bytes()).hexdigest()
+    if not (LSSAMPLER_BIN.is_file() and stamp.is_file() and stamp.read_text().strip() == want):
+        LSSAMPLER_BIN.parent.mkdir(parents=True, exist_ok=True)
+        sdk = subprocess.run(["/usr/bin/xcrun", "--show-sdk-path"], capture_output=True, text=True).stdout.strip()
+        r = subprocess.run(["/usr/bin/clang", "-isysroot", sdk, "-fobjc-arc", "-O2", "-framework", "Cocoa",
+                            str(LSSAMPLER_SRC), "-o", str(LSSAMPLER_BIN)], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise CheckFail(f"couldn't build the LaunchServices sampler: {r.stderr[-500:]}")
+        stamp.write_text(want + "\n")
+    return str(LSSAMPLER_BIN)
+
+
 class LsSampler:
-    """lsappinfo list as fast as it goes (>= 10 Hz needed), keeping this runtime's Wine processes and our launcher.
-    Two staggered worker threads, so one slow lsappinfo call (Wine start-up load) doesn't leave a gap."""
+    """LaunchServices' view of this runtime's Wine processes and our launcher, >= 20 Hz, from one long-lived helper
+    process (lssampler.m: NSWorkspace runningApplications + activationPolicy, run loop spun between samples) that
+    streams JSON lines. launcher-fixes: replaces a `lsappinfo list` subprocess per sample, which left gaps > 0.25 s
+    under CPU load. Samples keep the old shape: {"t", "apps": [{"pid", "type", "exe", "bundle", "name"}]}."""
 
-    WORKERS = 2
-    PERIOD = 0.06
+    PERIOD_MS = 25
 
-    def __init__(self):
+    def __init__(self, max_s: int = 900):
         self.samples: list[dict] = []
-        self.stop_ev = threading.Event()
-        self.lock = threading.Lock()
-        self.threads = [threading.Thread(target=self._run, args=(i * self.PERIOD / self.WORKERS,), daemon=True,
-                                         name=f"ls-sampler-{i}") for i in range(self.WORKERS)]
+        self.max_s = max_s
+        self.proc = None
+        self.thread = threading.Thread(target=self._read, daemon=True, name="ls-sampler")
 
-    def _run(self, offset: float):
-        if self.stop_ev.wait(offset):
-            return
-        while not self.stop_ev.is_set():
-            t = time.time()
+    def _read(self):
+        for line in self.proc.stdout:
             try:
-                apps = [a for a in lsappinfo_list() if is_ours(a)]
-            except Exception as e:  # noqa: BLE001
-                apps = [{"error": str(e)}]
-            with self.lock:
-                self.samples.append({"t": round(t, 3), "apps": apps})
-            time.sleep(max(0.0, self.PERIOD - (time.time() - t)))
+                t, rows = json.loads(line)
+            except ValueError:
+                continue
+            self.samples.append({"t": round(t, 3), "apps": [{"pid": p, "type": ty, "exe": exe, "bundle": b or None,
+                                                             "name": n} for p, ty, exe, b, n in rows]})
 
     def start(self):
-        for th in self.threads:
-            th.start()
+        self.proc = subprocess.Popen([lssampler_bin(), str(self.PERIOD_MS), str(self.max_s), str(RUNTIME) + "/",
+                                      A.BUNDLE_ID], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        self.thread.start()
 
     def stop(self):
-        self.stop_ev.set()
-        for th in self.threads:
-            if th.is_alive():
-                th.join(timeout=5)
-        with self.lock:
-            self.samples.sort(key=lambda s: s["t"])
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        if self.thread.is_alive():
+            self.thread.join(timeout=5)
+        self.samples.sort(key=lambda s: s["t"])
 
 
 class Sampler(threading.Thread):

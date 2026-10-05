@@ -30,6 +30,7 @@ GUI_PATHS = (
     "play",                                   # the ./play entry point
     "harness/hslib/checks/polish_checks.py",  # the gui checks and their shared app session
     "harness/hslib/checks/app_checks.py",     # open_app / Hook / build_app used by that session
+    "harness/hslib/checks/lssampler.m",       # the session's LaunchServices sampler (app.single_dock_icon)
     # launcher-fixes (F26): the shared helpers that session runs on
     "harness/hslib/checks/play_checks.py",    # StandIn (the notepad stand-in's base), remaining/is_clear
     "harness/hslib/procs.py",                 # process table, launcher / prefix discovery

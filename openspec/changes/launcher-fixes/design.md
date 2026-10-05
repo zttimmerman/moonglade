@@ -115,3 +115,33 @@ UI-scaling side effects), out of scope here.
 - `app.single_instance` (a) now opens a second *instance* (`open -n`): a plain reopen during loading no longer shows
   "already running" (this change's requirement), so "already running" is exercised where it still applies, the
   second launch.
+
+## Dynamic on any display (B23, follow-up after Zach, 2026-10-05)
+- Nothing is fixed to this Mac: at each launch `resolution.display()` reads the display the game will open on, via
+  `NSScreen.screens[0]`: size in points, `backingScaleFactor`, `safeAreaInsets.top` (0 without a camera housing).
+  Value = (width, height − top inset) × scale (the native decision). Examples, from client.resolution_default's
+  cases: notched 14" 1512x982@2 inset 33 → 3024x1898; 16:10 laptop 1440x900@2 → 2880x1800; external 1920x1080@1
+  → 1920x1080; ultrawide 3440x1440@1 → 3440x1440; 2560x1440 at scale 2 → 5120x2880, at scale 1 → 2560x1440.
+- **What the client takes:** the real client was given 1024x768 up to 7680x4320 (also 6880x2880, 6016x3384,
+  3440x1440); it always opened a window of the value's shape that fits the screen, e.g. 6880x2880 → 1504x630
+  (aspect 2.387), so no size cap is needed. The check's "client takes it" range is 640x480 to 7680x4320, and its end-to-end
+  part runs the real client at 6880x2880 (ultrawide at scale 2) and 1920x1080 (16:9 at scale 1).
+- **Several displays:** Wine's primary monitor is the macOS primary display (`CGMainDisplayID`, the one with the
+  menu bar = `NSScreen.screens[0]`) and the client opens its window there, so that is the display read. Not
+  `NSScreen.mainScreen`: that's whichever screen has keyboard focus. Moving the game window to another display and
+  going full screen there uses that display's shape, which the launcher doesn't follow mid-session; set the
+  primary display in System Settings > Displays, or pick a resolution in the game. (Single-display Mac here, so the
+  multi-display choice is from Wine's documented behaviour, not tested on hardware.)
+- **The display changes between launches** (another primary display, a monitor plugged in, a scaling change): the
+  next launch reads it again and, if the value is still the launcher's own (the marker), re-picks it; a value the
+  player set is never touched.
+
+## Dock sampler (B23, follow-up; test-only)
+app.single_dock_icon's `LsSampler` was a `lsappinfo list` subprocess per sample (two staggered threads); under CPU
+load it left gaps of 0.30-0.39 s (limit 0.25 s). It is now one long-lived helper, `harness/hslib/checks/lssampler.m`
+(compiled on demand into env/tools/lssampler): every 25 ms it lists `NSWorkspace.runningApplications` for this runtime's
+processes and our launcher, maps `activationPolicy` to lsappinfo's types (Foreground / UIElement / BackgroundOnly),
+spins the run loop so the list and policies are current, and streams JSON lines. Same limits (>= 10 Hz, max gap
+0.25 s) and the same Foreground-sample failure. With `yes > /dev/null` x2 running: 3/3 sessions at 36.2 / 36.5 /
+36.8 Hz, max gaps 0.100 / 0.076 / 0.054 s; the 100 ms forced flicker (HSDOCK_TEST_FLICKER_MS=100) still fails
+(20 Foreground samples).
