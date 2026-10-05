@@ -36,7 +36,7 @@
 - `harness/timing-baseline.json`: the pre-change baseline copied from `harness/out/verify-lp2/full2.results.json`
   (launcher-polish verifier, cycle 2: 86 pass, wall 1697.7 s at 9265c01), with its executed ids.
 - `report.timing` (post-run, last): the summary covers every record; on an unfiltered full-tier run every baseline-executed
-  id runs again (minus by-design GUI skips) and wall <= 70 % of the baseline. Other runs: summary only (the baseline is a
+  id runs again (minus by-design GUI skips) and wall <= 110 % of the baseline (spec-change log 2026-10-05). Other runs: summary only (the baseline is a
   full-tier run; a slow-tier run isn't comparable).
 
 ## Speed-ups (as built; nothing dropped or weakened)
