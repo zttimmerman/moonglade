@@ -1,0 +1,33 @@
+{
+  "id": "0001",
+  "kind": "binary",
+  "title": "GlueXML signature result counts as OK",
+  "adr": "docs/adr/0009-client-patch-overlay.md (accepted 2026-10-04; appendix A pins these bytes)",
+  "file": "Wow.exe",
+  "build": "3.3.5a (12340)",
+  "input_sha256": "aa63a5750d60ef16746c686b3d5e26876d98953eab08b1c026cd0faf78e88cb8",
+  "output_sha256": "614e55ccdc3ffb3fac4d71c8609e38f0266394f0ded54a8cd860bcbbf75652e6",
+  "edits": [
+    {
+      "offset": "0x000d9be5",
+      "va": "0x004da7e5",
+      "original": "83f8",
+      "replacement": "eb4e",
+      "function": "GlueMgr_LoadGlueXML @0x004da5f0",
+      "before_asm": "cmp eax, 3 (83 f8 03); ja 0x004da81e; jmp [4*eax+0x004da9b4]  -- switch on XML_VerifyTocSignature's result (0 missing / 1 corrupt / 2 modified quit; 3 OK -> 0x004da835)",
+      "after_asm": "jmp short 0x004da835 (eb 4e)  -- always take the result-3 (OK) path; the next 3 bytes become unreachable",
+      "why": "makes a missing/corrupt/modified GlueXML signature behave as result 3, the same target the jump table already uses for OK (table @0x004da9b4 entry 3 = 0x004da835)"
+    },
+    {
+      "offset": "0x000d9ceb",
+      "va": "0x004da8eb",
+      "original": "0f852dffffff",
+      "replacement": "909090909090",
+      "function": "GlueMgr_LoadGlueXML @0x004da5f0",
+      "before_asm": "jne 0x004da81e  -- after XML_LoadToc, the 16-byte memcmp of the live MD5 of the loaded tree against the signed MD5 from the .sig; nonzero -> App_Quit(9)",
+      "after_asm": "6 x nop  -- fall through to the normal post-load path (0x004da8f1, glue Lua registration)",
+      "why": "without it the second, silent MD5 comparison quits right after a modified tree loads (login-screen spike, Q1 pseudocode)"
+    }
+  ],
+  "untouched": "FrameXML (FUN_0052a980), AddOn signature handling (FUN_005f79a0), XML_VerifyTocSignature itself and every other byte of Wow.exe"
+}

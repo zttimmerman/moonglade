@@ -103,6 +103,15 @@ def main(argv=None) -> int:
                     help="launch, require Wow.exe alive after 30 s, then stop it and every prefix process")
     la.add_argument("--smoke-seconds", type=int, default=30, help=argparse.SUPPRESS)
 
+    cb = sub.add_parser("client-build", help="build the play client env/client-play/ from client/ + patches/client/ "
+                                             "(ADR-0009; client/ is never written)")
+    cb.add_argument("--skip", action="append", metavar="ID", help="leave a patch out of the queue (e.g. 0001); revert")
+    cb.add_argument("--dest", type=Path, help=argparse.SUPPRESS)          # test-only: scratch play client
+    cb.add_argument("--force", action="store_true", help="rebuild even if the stamp says it's up to date")
+    cm = sub.add_parser("client-mode", help="show or set which client ./play and the app run: patched (the play "
+                                            "client, default) or stock (the untouched client/)")
+    cm.add_argument("value", nargs="?", choices=["patched", "stock"])
+
     sub.add_parser("app", help="build dist/Hearthstone.app (double-clickable launcher for ./play; launcher-app)")
     ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns from env/branding/logo-source.jpeg")
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
@@ -296,6 +305,19 @@ def main(argv=None) -> int:
         except BrokenPipeError:                       # e.g. `| head`
             import os
             os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        return 0
+
+    if a.cmd == "client-build":
+        from . import clientbuild
+        return clientbuild.cli(a.dest, a.skip, a.force)
+
+    if a.cmd == "client-mode":
+        from . import settings
+        try:
+            _print(settings.set_client_mode(a.value) if a.value else settings.client_mode())
+        except settings.SettingsError as e:
+            log(str(e))
+            return 1
         return 0
 
     if a.cmd == "app":

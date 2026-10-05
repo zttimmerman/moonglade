@@ -161,6 +161,8 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
     doc["meta"]["wall_s"] = round(time.time() - t_start, 1)
     doc["meta"]["counts"] = {s: sum(1 for r in doc["checks"] if r["status"] == s) for s in ("pass", "fail", "error", "skip")}
     doc["meta"]["ok"] = run_ok(doc)
+    from .util import redact
+    doc = redact(doc)                     # no passwords in results.json / summary.md (check output tails etc.)
     P.RESULTS.write_text(json.dumps(doc, indent=2, default=str))
     P.SUMMARY.write_text(summary_md(doc))
     log(f"wrote {P.RESULTS} and {P.SUMMARY}")

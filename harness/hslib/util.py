@@ -82,3 +82,68 @@ def awake_assertions(pid: int | None) -> list[str]:
         return []
     r = subprocess.run(["pmset", "-g", "assertions"], capture_output=True, text=True, errors="replace", timeout=20)
     return [l.strip() for l in r.stdout.splitlines() if f"pid {pid}(" in l]
+
+
+# ---------------------------------------------------------------- keeping passwords out of reports
+
+_PW_RE = __import__("re").compile(r"""(?i)((?<!set )password(?:["']?\s*[:=]\s*["']?|\s+))([^\s"',()][^\s"',]*)""")
+
+
+def _known_secrets() -> list[str]:
+    """The player's real password (env/player.json, read-only) and $HS_PLAYER_FILE's, when present."""
+    import json
+    import os
+    from pathlib import Path
+    from . import paths as P
+    out = []
+    for f in {P.ENV / "player.json", *([Path(os.environ["HS_PLAYER_FILE"])] if os.environ.get("HS_PLAYER_FILE") else [])}:
+        try:
+            pw = str(json.loads(Path(f).read_text())["password"])
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+        if len(pw) >= 6:
+            out.append(pw)
+    return out
+
+
+_GM_PW_RE = __import__("re").compile(
+    r"(?i)(account\s+create\s+\S+\s+)(\S+)|(account\s+set\s+password\s+\S+\s+)(\S+)(\s+)(\S+)")
+
+
+def _gm_sub(m):
+    if m.group(1):
+        return m.group(1) + "[redacted]"
+    return m.group(3) + "[redacted]" + m.group(5) + "[redacted]"
+
+
+def _fixed_secrets() -> list:
+    """The harness's own account passwords (paths.py), matched as whole words and case-sensitively, so names such as
+    HSTEST or Hstester stay readable."""
+    import re
+    from . import paths as P
+    return [re.compile(rf"(?<![A-Za-z0-9]){re.escape(pw)}(?![A-Za-z0-9])") for pw in (P.TEST_PASS, P.GM_PASS, P.COMP_PASS)]
+
+
+def redact(obj, secrets: list[str] | None = None):
+    """A copy of obj (dicts/lists/strings) with every "password <value>" / "password": "<value>" value and every
+    known secret replaced by [redacted]. Used on harness results before they're written."""
+    secrets = _known_secrets() if secrets is None else secrets
+
+    fixed = _fixed_secrets()
+
+    def s(x: str) -> str:
+        x = _GM_PW_RE.sub(_gm_sub, x)               # GM commands: account create <name> <pw>, account set password
+        x = _PW_RE.sub(lambda m: m.group(1) + "[redacted]", x)
+        for rx in fixed:
+            x = rx.sub("[redacted]", x)
+        for sec in secrets:
+            x = x.replace(sec, "[redacted]")
+        return x
+    if isinstance(obj, str):
+        return s(obj)
+    if isinstance(obj, dict):
+        return {k: (("[redacted]" if str(k).lower() == "password" and isinstance(v, str) else redact(v, secrets)))
+                for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [redact(v, secrets) for v in obj]
+    return obj

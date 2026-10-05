@@ -53,3 +53,14 @@ def top_zone(areas: dict[int, dict], area_id: int) -> int | None:
         seen.add(area_id)
         area_id = areas[area_id]["parent"]
     return area_id if area_id in areas else None
+
+
+# ChrClasses.dbc, ChrClassesEntryfmt "nxixssss..." (DBCfmt.h:35): 0 ClassID, 4 name[enUS] (the struct comment in
+# DBCStructure.h says 5-20, but the format string puts the 16 locale names at 4-19; read back: 1 -> "Warrior").
+CLASS_ID, CLASS_NAME = 0, 4
+
+
+def class_names(dbc_dir: Path = DBC_DIR) -> dict[int, str]:
+    """{class id: English class name} from the game's own ChrClasses.dbc."""
+    recs, strings = read_dbc("ChrClasses.dbc", dbc_dir)
+    return {r[CLASS_ID]: dbc_string(strings, r[CLASS_NAME]) for r in recs}

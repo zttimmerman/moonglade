@@ -22,6 +22,14 @@ Test-only: `--account test` uses the harness test account + character instead (t
 `--client-cmd FILE` runs FILE (a Windows .bat/.cmd/.exe, outside client/) instead of Wow.exe under
 the same Wine layer and prefix, so harness checks can drive the loop without the GUI. `--world-datadir`
 forwards to `stack.up` to provoke a startup failure. Each run writes env/run/play-last.json (harness evidence).
+
+Client (in-client-login, ADR-0009): the setting `client` (env/settings.json, or $HS_SETTINGS; `hs client-mode`) picks
+the game client. `patched` (default): the play client env/client-play/, (re)built from client/ + patches/client/ by
+`clientbuild.build` (a no-op when up to date), whose login screen lists the profiles and logs in by itself; the
+profile file with the login is generated into the play client at each start and removed at cleanup (frontmenu.py).
+`stock`: the untouched client/, exactly as before (type the login). Test-only: $HS_PLAY_CLIENT_DIR builds/uses a
+scratch play client instead of env/client-play/ (needs --allow-test-client-dir), $HS_PLAY_SKIP_PATCHES leaves
+patches out of that scratch build (counterexamples), $HS_GLUE_TEST passes the GlueXML test hook (frontmenu.py).
 """
 from __future__ import annotations
 
@@ -195,6 +203,30 @@ def client_processes(name: str) -> list[dict]:
             if name in p["cmd"].lower() and "start.exe" not in p["cmd"].lower()]
 
 
+PLAY_CLIENT_ENV = "HS_PLAY_CLIENT_DIR"
+GLUE_TEST_ENV = "HS_GLUE_TEST"        # test-only GlueXML hook (frontmenu.py); needs --allow-test-client-dir, test account
+SKIP_ENV = "HS_PLAY_SKIP_PATCHES"      # test-only (counterexamples): build the scratch play client without these patches
+
+
+FROM_APP_ENV = "HS_FROM_APP"           # set by Hearthstone.app (launcher.m); its output goes to env/logs/app.log
+
+
+def shown_password(login: dict) -> str:
+    """The password as ./play prints it: in a terminal, the password (the player needs it to type it in); in an app
+    run, where every line lands in env/logs/app.log, a pointer to the file that holds it instead."""
+    if os.environ.get(FROM_APP_ENV):
+        return "(see harness/hslib/paths.py TEST_PASS)" if login["account"].upper() == P.TEST_USER \
+            else f"(in {player_file()})"
+    return login["password"]
+
+
+def play_client_dir() -> Path:
+    """env/client-play/, or $HS_PLAY_CLIENT_DIR (test-only scratch play client; ./play needs --allow-test-client-dir)."""
+    from .clientbuild import PLAY
+    v = os.environ.get(PLAY_CLIENT_ENV)
+    return Path(v).resolve() if v else PLAY
+
+
 def choose_world(say=say) -> dict:
     """Which world ./play starts: the living world at the user's world size (env/settings.json, or $HS_SETTINGS),
     unless $HS_PROFILE pins a profile (M2 2.2). Loop.run passes the result to launch.prepare, whose stack step is
@@ -224,6 +256,35 @@ class Loop:
         self.rec["signal"] = {"name": signal.Signals(signum).name, "at": _now()}
         raise Interrupted(signum)
 
+    # -- which game client (in-client-login): the play client (patched) or client/ (stock)
+    def select_client(self) -> dict:
+        from . import clientbuild, settings
+        if os.environ.get("HS_CLIENT_DIR"):
+            info = {"mode": "override", "dir": str(launch.client_dir()), "why": "HS_CLIENT_DIR (test-only)"}
+        else:
+            mode = settings.client_mode()["mode"]
+            if mode == "patched":
+                dest = play_client_dir()
+                skip = tuple(x for x in os.environ.get(SKIP_ENV, "").split(",") if x)
+                if skip and not os.environ.get(PLAY_CLIENT_ENV):
+                    raise clientbuild.ClientBuildError(f"${SKIP_ENV} is test-only and needs ${PLAY_CLIENT_ENV}")
+                b = clientbuild.build(dest=dest, skip=skip)
+                launch.select_client(dest)
+                info = {"mode": mode, "dir": str(dest), "built": b["built"], "reason": b.get("reason"),
+                        "outputs": b["stamp"]["outputs"], "state": b["stamp"].get("state")}
+                if b["built"]:
+                    say("Prepared the game client (play client with the Hearthstone login screen).")
+            else:
+                launch.select_client(None)
+                info = {"mode": mode, "dir": str(P.CLIENT)}
+        # a login file left behind by a killed ./play (SIGKILL skips cleanup) goes before anything else happens
+        from . import frontmenu
+        stale = [frontmenu.remove(d) for d in {play_client_dir(), launch.client_dir()}
+                 if (d / "hs-build.json").is_file()]
+        info["stale_profiles_removed"] = [x for x in stale if x.get("removed")]
+        self.rec["client"] = info
+        return info
+
     def step(self, name: str, **kw):
         self.rec["steps"].append({"step": name, "at": _now(), **kw})
 
@@ -239,13 +300,14 @@ class Loop:
                                    "file_created": new}
             if new:
                 say(f"Created your personal login (saved in {player_file()}, keep it):")
-                print(f"\n      Account:  {login['account']}\n      Password: {login['password']}\n", flush=True)
+                print(f"\n      Account:  {login['account']}\n      Password: {shown_password(login)}\n", flush=True)
 
             def accounts():
                 say(f"Making sure your account ({login['account']}) exists...")
                 return ensure_player_account(login)
         say("Starting Hearthstone.")
         self.step("prepare")
+        client = self.select_client()
         world = choose_world()
         self.rec["world"] = world
         man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts,
@@ -254,13 +316,31 @@ class Loop:
                                                   "binaries_match_manifest_before") if k in ev}
         self.man = man
 
+        from .clientinst import sha256_file
+        self.rec["client"]["exe"] = str(launch.client_dir() / "Wow.exe")
+        self.rec["client"]["exe_sha256"] = sha256_file(launch.client_dir() / "Wow.exe")
+        auto = client["mode"] == "patched"
+        if auto:
+            from . import frontmenu
+            self.profiles_dir = launch.client_dir()
+            # the GlueXML test hook only ever reaches a test-account run (main() also refuses it without the flag)
+            hook = frontmenu.test_hook_from_env() if self.args.account == "test" else None
+            self.rec["client"]["profiles"] = frontmenu.write(
+                self.profiles_dir, frontmenu.with_context([{"name": login["account"].upper(),
+                                                           "account": login["account"],
+                                                           "password": login["password"]}]),
+                default=login["account"], test=hook, about=frontmenu.about_info())
         say("Starting the game client..." if args_ is None else f"Starting the test stand-in client ({name})...")
         proc = launch.start_client(args_, cwd)
         self.rec["client_started"] = True
         self.step("client_started", launcher_pid=proc.pid, args=args_ or ["Wow.exe"])
-        say(f"The game is starting. Log in with account {login['account']} and password {login['password']}"
-            + (f" (character {login['character']})." if "character" in login else
-               ". Create a character on the realm if you don't have one yet."))
+        if auto:
+            say(f"The game is starting. On its login screen, press Continue (or Enter) to play as "
+                f"{login['account'].upper()}; nothing to type.")
+        else:
+            say(f"The game is starting. Log in with account {login['account']} and password {shown_password(login)}"
+                + (f" (character {login['character']})." if "character" in login else
+                   ". Create a character on the realm if you don't have one yet."))
         say("When you quit the game, everything shuts down by itself. Press Ctrl-C here to stop everything.")
 
         # Wine runs the client as `start.exe /exec <program>`, which waits for the program and returns its
@@ -297,6 +377,9 @@ class Loop:
         clean: dict = {}
         if launch.prefix_processes():
             clean["stop_prefix"] = launch.stop_prefix()
+        if getattr(self, "profiles_dir", None):        # the generated login file lives only while the game runs
+            from . import frontmenu
+            clean["profiles_removed"] = frontmenu.remove(self.profiles_dir)
         clean["down"] = stack.down()
         remaining = self.leftovers()
         if remaining:                       # one more pass, e.g. a component that came up during an aborted start
@@ -306,7 +389,7 @@ class Loop:
             remaining = self.leftovers()
         clean["remaining"] = remaining
         if self.rec.get("client_started") and getattr(self, "man", None):
-            clean["binaries_match_manifest_after"] = launch._binary_hashes(self.man) == self.man["binaries_sha256"]
+            clean["binaries_match_manifest_after"] = launch._binary_hashes(self.man) == launch.expected_binaries(self.man)
         self.rec["cleanup"] = clean
         self.step("cleanup_done")
         return remaining
@@ -336,6 +419,15 @@ def main(argv=None) -> int:
         say(f"HS_CLIENT_DIR is set ({os.environ['HS_CLIENT_DIR']}): that points the game at a test copy of the client, "
             "not your real one. Unset it (`unset HS_CLIENT_DIR`) and run ./play again.")
         return EXIT_FAIL
+    if os.environ.get(PLAY_CLIENT_ENV) and not args.allow_test_client_dir:
+        say(f"{PLAY_CLIENT_ENV} is set ({os.environ[PLAY_CLIENT_ENV]}): that's a test copy of the play client. "
+            f"Unset it (`unset {PLAY_CLIENT_ENV}`) and run ./play again.")
+        return EXIT_FAIL
+    for var in (GLUE_TEST_ENV, SKIP_ENV):            # test-only switches; refused before anything happens
+        if os.environ.get(var) and not args.allow_test_client_dir:
+            say(f"{var} is set: that's a test switch for the harness, not for playing. "
+                f"Unset it (`unset {var}`) and run ./play again.")
+            return EXIT_FAIL
     try:
         fd, lock = acquire_lock()
     except Busy as b:
@@ -369,9 +461,16 @@ def main(argv=None) -> int:
             loop.rec |= {"outcome": "startup_failed", "error": str(e)}
             say(f"Couldn't set up your login: {e}")
         except Exception as e:  # noqa: BLE001
-            loop.rec |= {"outcome": "error", "error": f"{type(e).__name__}: {e}", "traceback": traceback.format_exc()}
-            say(f"Something went wrong: {type(e).__name__}: {e}")
-            traceback.print_exc()
+            from .clientbuild import ClientBuildError
+            if isinstance(e, ClientBuildError):
+                loop.rec |= {"outcome": "startup_failed", "error": str(e), "evidence": e.evidence}
+                say(f"Couldn't prepare the game client: {e}")
+                say("To play with the untouched client instead: `harness/hs client-mode stock`.")
+            else:
+                loop.rec |= {"outcome": "error", "error": f"{type(e).__name__}: {e}",
+                             "traceback": traceback.format_exc()}
+                say(f"Something went wrong: {type(e).__name__}: {e}")
+                traceback.print_exc()
     except Interrupted as e:                 # a signal that landed inside one of the handlers above
         rc = 128 + e.signum
         loop.rec.setdefault("outcome", "interrupted")

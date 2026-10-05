@@ -38,3 +38,21 @@
 - `client.inspect` keeps guarding `client/`; a new check guards `env/client-play/`.
 - A foundation for later patches (e.g. WoWSilicon perf patches, other UI work), each needing its own ADR and Zach's yes.
 - Risk: the patched client could behave differently in ways the checks don't see. Mitigated by keeping stock mode one setting away, plus human-verify play sessions.
+
+## Appendix A (2026-10-04): patch 0001 bytes, pinned
+Record: `patches/client/0001-gluexml-signature.json`. Pinned by builder B19 from the disassembly of a **copy** (`env/re/bin/Wow.exe`, read-only per ADR-0005; `objdump -d` over the copy, cross-checked with the spike's Ghidra listing). `client/` was not touched.
+
+- Input: `Wow.exe` 3.3.5a (12340), SHA-256 `aa63a5750d60ef16746c686b3d5e26876d98953eab08b1c026cd0faf78e88cb8`.
+- Output: SHA-256 `614e55ccdc3ffb3fac4d71c8609e38f0266394f0ded54a8cd860bcbbf75652e6`.
+- Two edits, 8 bytes in total, both inside `GlueMgr_LoadGlueXML` (@0x004da5f0):
+
+| File offset | VA | Original | New | Before | After |
+|---|---|---|---|---|---|
+| `0x000d9be5` | `0x004da7e5` | `83 f8` | `eb 4e` | `cmp eax,3` / `ja 0x004da81e` / `jmp [4*eax+0x004da9b4]`: the switch on `XML_VerifyTocSignature`'s result (0 missing, 1 corrupt, 2 modified all quit) | `jmp short 0x004da835`: always the result-3 (OK) path. The jump table @0x004da9b4 already sends 3 there (entries 0x004da7f1 / 0x004da7fe / 0x004da80b / **0x004da835**). The next 3 bytes become unreachable. |
+| `0x000d9ceb` | `0x004da8eb` | `0f 85 2d ff ff ff` | `90 90 90 90 90 90` | `jne 0x004da81e`: after `XML_LoadToc`, the 16-byte compare of the live MD5 of the loaded tree with the signed MD5 from the `.sig`; a difference quits (`App_Quit(9)`) | six `nop`s: fall through to the normal post-load path (0x004da8f1, glue Lua registration) |
+
+Why this edit: the design's "make the result behave as 3" needs both points. Forcing the switch alone would load a modified tree and then quit at the second, silent MD5 compare (the spike's Q1 pseudocode; the spike's recommendation names both decision points). Making `XML_VerifyTocSignature` (@0x008165e0) return 3 instead would touch a function FrameXML (FUN_0052a980) and the AddOn loader (FUN_005f79a0) share, so FrameXML and AddOn signature handling would change too; the two edits above sit in the GlueXML-only caller and leave every other byte, the verifier, FrameXML and AddOns as they were. A stock, correctly signed GlueXML still follows exactly the same path as before (result 3 → 0x004da835; equal MD5 → fall-through).
+
+Verification: `harness/hs client-build` refuses unless the input hash and both original byte runs match, then checks the output hash; the patched copy's disassembly shows `jmp 0x4da835` at 0x004da7e5 and six `nop`s at 0x004da8eb. Runtime: the play client loads our GlueXML (patch 0002) with no `Logs/GlueXML.log` entry and no quit (in-client-login checks).
+
+Found while pinning (no change needed): the client saves `WTF/Config.wtf` only when its settings-dirty flag (@0x00ca19f8) is set, from the save routine @0x00767100. Glue code reaches it on entering the world (`EnterWorld` @0x004dc510 → 0x004d9bd0 → 0x00767100); quitting from the login or character screen wrote nothing in our runs. So the front menu's remembered choices (last profile = the stock saved account name; backdrop = the stock saved account list) persist once the player enters the world.

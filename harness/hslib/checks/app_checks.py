@@ -323,8 +323,9 @@ class Hook:
         return ex[-1]["code"] if ex else None
 
 
-def open_app(bundle: Path, hook: Hook, *args: str) -> dict:
-    cmd = [OPEN, "--env", f"{A.HOOK_ENV}={hook.path}", *[x for k, v in PINNED.items() for x in ("--env", f"{k}={v}")],
+def open_app(bundle: Path, hook: Hook, *args: str, env: dict | None = None) -> dict:
+    cmd = [OPEN, "--env", f"{A.HOOK_ENV}={hook.path}",
+           *[x for k, v in {**PINNED, **(env or {})}.items() for x in ("--env", f"{k}={v}")],
            str(bundle), "--args", *args]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
     return {"cmd": " ".join(cmd), "rc": r.returncode, "output": (r.stdout + r.stderr).strip()}
@@ -437,7 +438,12 @@ def lifecycle(bundle: Path, ev: dict, tag: str) -> dict:
     off, since = _log_size(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     try:
         t_start = time.time()
-        ev["open"] = open_app(bundle, hook, "--account", "test", "--client-cmd", str(s.bat))
+        # stock client setting (scratch settings file): the play loop then prints a login line, the case where a
+        # password could reach app.log (asserted at the end)
+        settings = s.dir / "settings.json"
+        settings.write_text(json.dumps({"client": "stock"}))
+        ev["open"] = open_app(bundle, hook, "--account", "test", "--client-cmd", str(s.bat),
+                              env={"HS_SETTINGS": str(settings)})
         require(ev["open"]["rc"] == 0, "`open` failed to launch the app", **ev)
         up = wait_app_client_up(s, hook, off, since)
         ev["client_up"] = up
@@ -476,6 +482,12 @@ def lifecycle(bundle: Path, ev: dict, tag: str) -> dict:
         require(ev["graceful_halt"]["ok"], "the stack didn't shut down gracefully", **ev)
         require(is_clear(ev["remaining_after"]), "something from this repo is still running", **ev)
         require(not ev["new_terminal_processes"], "a Terminal window/process was started", **ev)
+        # in-client-login: an app run never writes a password into app.log (play.shown_password)
+        text = _log_since(off)
+        ev["login_line_in_app_log"] = [l[-160:] for l in text.splitlines() if "Log in with account" in l]
+        ev["password_in_app_log"] = f"password {P.TEST_PASS}" in text.lower()
+        require(ev["login_line_in_app_log"], "the stock-mode login line didn't reach app.log (nothing to test)", **ev)
+        require(not ev["password_in_app_log"], "the play loop wrote the password into app.log", **ev)
         return ev
     finally:
         stop_launchers(bundle)

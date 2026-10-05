@@ -1,0 +1,18 @@
+{
+  "id": "0002",
+  "kind": "mpq",
+  "title": "Hearthstone front menu (GlueXML): profile list, auto-login with cancel, backdrop picker",
+  "adr": "docs/adr/0009-client-patch-overlay.md (data patches; needs binary patch 0001 to load)",
+  "archive": "Data/{locale}/patch-{locale}-4.MPQ",
+  "files": {
+    "Interface\\GlueXML\\HSFrontMenu.xml": "client-mods/glue/HSFrontMenu.xml",
+    "Interface\\GlueXML\\HSFrontMenu.lua": "client-mods/glue/HSFrontMenu.lua",
+    "Interface\\GlueXML\\HSProfiles.lua": "client-mods/glue/HSProfiles.lua"
+  },
+  "toc": {
+    "inside": "Interface\\GlueXML\\GlueXML.toc",
+    "source": "the client's own effective copy (highest-priority archive of the base client), read at build time, never committed",
+    "insert_before": "GlueLocalizationPost.xml",
+    "add": ["HSFrontMenu.xml"]
+  }
+}
