@@ -511,7 +511,7 @@ def launch_lifecycle(ctx):
 def startup_failure(ctx):
     """With an unusable worldserver DataDir, the opened app never starts the client, records an error dialog naming
     the problem (the play loop's error and the server's own cause) and the app.log path, exits nonzero, and leaves
-    nothing running."""
+    nothing running. launcher-polish: its stage events stop at world and the dialog names "Loading the world"."""
     bad = "/nonexistent/hs-app-failfast"
     ev: dict = {"bundle": str(A.APP), "world_datadir": bad}
     build_app(ev)
@@ -554,10 +554,22 @@ def startup_failure(ctx):
         require(str(A.LOG) in text, "the error dialog doesn't give the log path", dialog=text, **ev)
         require(not s.started.exists() and not launches, "the client was started despite the failed startup", **ev)
         require(is_clear(ev["remaining_after"]), "something from this repo is still running", **ev)
+        verify_failure_stage(ev, text)            # launcher-polish: the stage it stopped at
         return ev
     finally:
         stop_launchers(A.APP)
         s.cleanup()
+
+
+def verify_failure_stage(ev: dict, text: str) -> None:
+    """launcher-polish "Failures name the stage": the stage events stop at world and the dialog names it."""
+    st = [e for e in ev["events"] if e.get("kind") == "stage"]
+    ev["stage_events"] = [{k: e.get(k) for k in ("id", "state")} for e in st]
+    require(st and st[-1]["id"] == "world" and not [e for e in st if e["id"] in
+                                                     ("bots", "account", "game_setup", "launching", "ready")],
+            "the stage events don't stop at world", dialog=text, **ev)
+    require("Loading the world" in text, "the error dialog doesn't name the stage \"Loading the world\"", dialog=text, **ev)
+    require(str(A.LOG) in text, "the error dialog doesn't give the log path", dialog=text, **ev)
 
 
 @check("app.single_instance", order=384, capability=CAP, stack="down", tier="full")

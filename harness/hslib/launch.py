@@ -341,8 +341,13 @@ out.join("\\n")
 
 
 def all_onscreen_windows() -> list[dict]:
-    """Every on-screen window (owner pid, size, layer), via the window server (no Screen Recording permission)."""
-    r = subprocess.run(["osascript", "-l", "JavaScript", "-e", _JXA_WINDOWS], capture_output=True, text=True, timeout=20)
+    """Every on-screen window (owner pid, size, layer), via the window server (no Screen Recording permission).
+    [] if the window server can't be asked (e.g. under a sandbox): callers treat that as "no window yet"."""
+    try:
+        r = subprocess.run(["osascript", "-l", "JavaScript", "-e", _JXA_WINDOWS], capture_output=True, text=True,
+                           timeout=20)
+    except (OSError, subprocess.SubprocessError):
+        return []
     wins = []
     for line in r.stdout.splitlines():
         parts = line.split()
