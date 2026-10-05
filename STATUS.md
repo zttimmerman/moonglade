@@ -61,7 +61,7 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 - The app needs macOS Documents-folder permission (repo is in ~/Documents); granted 2026-10-04 for `local.hearthstone.app`. Don't change the bundle id or designated requirement, or macOS re-prompts.
 
 ## Roadmap and backlog (groomed 2026-10-04)
-**Now:** in-client login screen (done) → comp.assists flake fix (F23) → **launcher polish** (change `launcher-polish`; ADR-0010 Wine host shim accepted by Zach 2026-10-04, option A: one Dock icon; loading screen with stages, launches when the world is ready and shows the bot count; builds after the login verifier frees the stack) → **save backups** (small; protects characters before serious play) → **M4 solo dungeons** (human gate: Zach plays two dungeons; review M2 budget loosenings there).
+**Now:** in-client login screen (done) → comp.assists flake fix (F23) → **launcher polish** (change `launcher-polish`; ADR-0010 Wine host shim accepted by Zach 2026-10-04, option A: one Dock icon; loading screen with stages, launches when the world is ready and shows the bot count; builds after the login verifier frees the stack) → **harness speed** (GUI tier: focus checks run only when launcher/app/shim change + periodic sweep; profile and trim the full tier, e.g. shared client sessions, reuse a running server; measure before/after) → **save backups** (small; protects characters before serious play) → **M4 solo dungeons** (human gate: Zach plays two dungeons; review M2 budget loosenings there).
 
 **M5 (after M4), proposed order:**
 1. **Solo-first feature audit (Zach, 2026-10-04).** Principle: every MMO feature either serves solo play or gets hidden. Hide: global chat channels, trade/LFG/guild-recruitment noise, anything waiting on strangers. Keep: visible bots, instant groups, useful systems. Mostly config/module work.
@@ -101,6 +101,8 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 (Not added: hardcore mode toggle; Zach didn't pick it.)
 
 **App icon for macOS 26 (2026-10-05):** macOS 26 frames icons that aren't the standard rounded square on a grey plate (seen in the loading window, likely the Dock too). Make a squircle version of Zach's logo (e.g. gold ring on a dark backdrop filling the shape) via the icon generator.
+
+**Second isolated test stack (Zach, 2026-10-05; decide after harness speed):** a parallel server instance on other ports with an APFS-cloned DB, so the next change's builder can test while the current one verifies, or the full tier splits in two. Limited by 16 GB RAM (two m0 worlds fit, not two 500-bot worlds); GUI focus checks can't parallelize.
 
 **Later / tech debt:** era extras (class mount quests, vanilla quest levels and gold, creature damage/armor, separate mount switch); WoWSilicon client perf patches (needs a §2 ADR, FPS A/B first); the F-items above.
 
