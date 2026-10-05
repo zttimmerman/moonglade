@@ -197,8 +197,8 @@ def _ps_stats(pid: int) -> dict:
 def _require_wine():
     for b in (WINE, WINESERVER):
         if not os.access(b, os.X_OK):
-            raise LaunchError(f"Wine layer missing: {b} (ADR-0004 expects Whisky's bundled Wine; "
-                              f"install Whisky.app and open it once so it downloads its Wine)")
+            raise LaunchError(f"Wine layer missing: {b} (ADR-0004: run `harness/hs wine-install` to fetch the pinned "
+                              f"Wine runtime; HS_WINE=whisky needs Whisky.app's Wine)")
 
 
 def _installed_client() -> dict:

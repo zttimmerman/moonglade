@@ -14,13 +14,13 @@ It's a personal project, and nothing it produces is redistributed. **The WoW cli
 - **Hearthstone.app:** a double-clickable launcher for `./play`.
 - **In-client login screen:** the Continue / Profiles / Settings / Extras menu inside the game's own login screen, running on a patched, revertable copy of the client.
 
-**Next:** fixing a flaky companion check (F23), then launcher polish (one Dock icon, a loading screen with stages), save backups, and **M4 solo dungeons**. Zach still has to play the M2/M3 "human-verify" scenarios. The live roadmap, task board and known issues are in **[STATUS.md](STATUS.md)**.
+**Next:** fixing a flaky companion check (F23), then launcher polish (one Dock icon, a loading screen with stages), save backups, and **M4 solo dungeons**. Zach still has to play the "human-verify" scenarios: M2 (living world, companions), M3 (vanilla mode), the in-client login screen (Continue, backdrop picker, About) and the first double-click of Hearthstone.app. The live roadmap, task board and known issues are in **[STATUS.md](STATUS.md)**.
 
 ## Requirements
 
 - An **Apple Silicon Mac**. It's developed on an M2 Pro with 16 GB RAM running macOS 26.6.
-- About **45 GB of free disk**: 17 GB for the client, about 9 GB for sources, the build, data and the database, plus room to spare. The play client is a copy-on-write clone, so it costs almost nothing extra. `hs client-install` refuses to start with less than 19 GB free.
-- **Xcode Command Line Tools**, **Rosetta 2** (the Wine runtime is x86_64), and **Homebrew** at `/opt/homebrew` with `cmake mysql boost openssl@3 readline ccache python`. The harness needs Python 3.10+ and uses only the standard library.
+- About **29 GB of disk** measured on the dev Mac (17 GB client, the rest sources, build, data and database; plus 2.7 GB more for the dev-only `baseline/`), plus headroom. The play client is a copy-on-write clone, so it costs almost nothing extra. `hs client-install` refuses to start with less than 19 GB free.
+- **Xcode Command Line Tools**, **Rosetta 2** (the Wine runtime is x86_64), and **Homebrew** at `/opt/homebrew` with `cmake mysql boost openssl@3 readline ccache python`. `harness/hs` and `./play` run the `python3` on your PATH, which must be **3.10 or newer** (Homebrew's, once `brew shellenv` is loaded); the harness uses only the standard library.
 - Optional: **Node 20** for the `openspec` CLI (development only), `openjdk@21` for Ghidra, and `gh`.
 - Your own **WoW 3.3.5a (12340) enUS Windows client**, as a zip or a folder.
 
@@ -28,13 +28,16 @@ It's a personal project, and nothing it produces is redistributed. **The WoW cli
 
 ## Setup from a fresh clone
 
-Setup is **manual today**. Automating it (a Brewfile, `hs bootstrap`) is tracked as **F6** in STATUS.md. The short version is below. **[docs/setup.md](docs/setup.md)** has every step explained, with the "TODO: confirm" spots marked.
+Setup is **manual today**. Automating it (a Brewfile, `hs bootstrap`) is tracked as **F6** in STATUS.md. The short version is below. **[docs/setup.md](docs/setup.md)** has every step explained, with any unverified spots marked.
 
 ```sh
 # 1. tools
 xcode-select --install
 softwareupdate --install-rosetta
+# install Homebrew (https://brew.sh), then put it on PATH (add this line to ~/.zprofile to keep it):
+eval "$(/opt/homebrew/bin/brew shellenv)"
 brew install cmake mysql boost openssl@3 readline ccache python
+python3 --version         # must say 3.10 or newer
 
 # 2. clone (private repo)
 git clone https://github.com/zttimmerman/[redacted].git
@@ -43,10 +46,11 @@ cd [redacted]
 # 3. build the pinned server (clones pinned sources into vendor/, applies patches/, installs into server/)
 harness/hs build
 
-# 4. server data (no hs command for this yet; see docs/setup.md, TODO: confirm the zip layout)
+# 4. server data (no hs command for this yet; unzips flat into Cameras dbc maps mmaps vmaps)
 mkdir -p data/downloads data/client-data
 curl -L -o data/downloads/Data.zip "$(grep '^client_data_url=' fork.lock | cut -d= -f2-)"
 unzip -q data/downloads/Data.zip -d data/client-data
+rm data/downloads/Data.zip   # ~1.1 GB, no longer needed
 
 # 5. first server start: initializes the repo's own MySQL (127.0.0.1:3307, data/mysql/) and the databases.
 #    The first time can take a long while (the harness allows up to 30 min).
@@ -78,7 +82,7 @@ harness/hs app            # -> dist/Hearthstone.app
 - **`dist/Hearthstone.app`** (build it with `harness/hs app`). Double-click it, or drag it to `/Applications` or the Dock, and it still finds the repo. It shows a small "starting" window, then the game. Quitting the game (or quitting the app from the Dock) shuts everything down. If something fails, a dialog tells you what went wrong and points you to the log.
   - **First launch:** macOS asks whether Hearthstone may access your **Documents folder**, because the repo lives in `~/Documents`. Allow it. The permission is tied to the app's bundle id `local.hearthstone.app`, so it survives rebuilds. Don't change the bundle id, or macOS will ask again.
   - The Dock shows two icons today: Hearthstone, and Wine's process for the game. Clicking Hearthstone says "already running", and the Wine icon brings the game forward. A fix for this is accepted (ADR-0010) and is part of the upcoming launcher polish.
-- **`./play`** in a terminal does the same thing and prints its progress. The terminal stays busy while you play. Ctrl-C stops everything cleanly. Exit codes: `0` normal quit, `1` startup problem, `2` already running, `3` the client crashed, `130`/`143` Ctrl-C/SIGTERM.
+- **`./play`** in a terminal does the same thing and prints its progress. The terminal stays busy while you play. Ctrl-C stops everything cleanly. Exit codes: `0` normal quit, `1` startup problem, `2` already running, `3` the client crashed, `129`/`130`/`143` SIGHUP/Ctrl-C/SIGTERM.
 
 Both start the database, the login server and the world server, then wait until they're ready, make sure your account exists and open the game. With the ~500-bot world, startup takes a while.
 
@@ -87,7 +91,7 @@ Both start the database, the login server and the world server, then wait until 
 With the default `patched` client, the login screen is Hearthstone's menu. There are no username or password boxes:
 - **Continue** (preselected) logs you straight in to character select. The line under it shows your last-played character, for example "Arthas · Level 23 Paladin".
 - **Profiles:** pick which profile Continue uses. Today there's one profile, from `env/player.json`. Creating profiles from the menu is on the list.
-- **Settings:** the game's own option panels, plus the login screen look: the WotLK, TBC or Vanilla (Dark Portal) backdrop with its music.
+- **Settings:** the game's own option panels, plus the login screen look: **Lich King**, **Burning Crusade** or **Classic** (the Dark Portal scene). Each switches the backdrop, logo and music together.
 - **Extras:** Cinematics, Credits, and **About** (game and Hearthstone versions, the commit and pins, and the current world: size and vanilla mode on/off).
 - **Quit.**
 
@@ -109,13 +113,13 @@ harness/hs client-mode patched         # the play client with the Hearthstone me
 
 These are saved in `env/settings.json` and read on every start.
 
-**Vanilla mode** is **on by default**. Switching it takes effect at the next server start, and it never changes a character's level, XP, items or quests. Moving these two settings into the menu's Settings screen is the next front-menu change. **TODO: confirm** the supported way to turn vanilla mode off for `./play`. Today the switch is `EraProfile.Enable` in `modules/mod-era-profile/conf/mod_era_profile.conf.dist`, which `hs build` installs into `server/etc/modules/`. The server config is regenerated from that `.dist` on every start. There is no `hs` command for it yet.
+**Vanilla mode** is **on by default**. Switching it takes effect at the next server start, and it never changes a character's level, XP, items or quests. **There is no supported off-switch yet.** It's coming with the next front-menu change (world size and vanilla mode in Settings). The least-bad manual workaround: set `EraProfile.Enable = 0` in `server/etc/modules/mod_era_profile.conf.dist`. The server config is re-rendered from that file on every start, and the next `harness/hs build` overwrites it (back to on). Don't edit the repo copy under `modules/mod-era-profile/conf/`: that changes a build input and makes the `era.default_on` check fail. Don't use `HS_PROFILE=wotlk` either: it's a test hook that drops the world to 10 bots and ignores your world size.
 
 Things to know when switching: going from vanilla to WotLK lowers the XP thresholds, so a character may level up on its next XP gain. Item tooltips can look stale until the client cache refreshes.
 
 ### Companions
 
-Add and dismiss companions with chat commands: `.playerbots bot addclass <class>` (e.g. `priest`) and `.playerbots bot remove <name>`. These are the commands the harness checks use (`harness/hslib/companion.py`). **TODO: confirm** they work on the non-GM `PLAYER` account. The checks run on a GM-level test account. Companions keep their last orders across sessions.
+Add and dismiss companions with chat commands: `.playerbots bot addclass <class>` (e.g. `priest`) and `.playerbots bot remove <name>`. These are the commands the harness checks use (`harness/hslib/companion.py`). They should work on the non-GM `PLAYER` account per the code (`.playerbots bot` is a player-level command and `AiPlayerbot.AddClassCommand` defaults to 1), but the harness doesn't exercise that (its checks use a GM-level test account), so confirm in play. Companions keep their last orders across sessions.
 
 ## Troubleshooting
 
@@ -130,8 +134,8 @@ Add and dismiss companions with chat commands: `.playerbots bot addclass <class>
   WINEPREFIX="$PWD/env/wineprefix-mtld3d" env/wowsilicon-r17/.wine-runtime/bin/wineserver -k
   ```
   (Known nit F21: a mistyped `./play` argument also exits with 2, so the app would wrongly say "already running".)
-- **The patched client misbehaves.** Go back to the untouched client with `harness/hs client-mode stock`. You'll see the classic login screen. Log in with the account and password from `env/player.json`. `harness/hs client-mode patched` switches back. To rebuild the play client from scratch, delete `env/client-play/` and run `harness/hs client-build`. `client/` itself is never modified.
-- **The client is stuck on "connecting".** Check `harness/hs status`, then run `harness/hs client-config client` again (`docs/client-setup.md`).
+- **The patched client misbehaves.** Go back to the untouched client with `harness/hs client-mode stock`. You'll see the classic login screen. Log in with the account and password from `env/player.json`. `harness/hs client-mode patched` switches back. To rebuild the play client, run `harness/hs client-build --force`; it keeps the play client's `WTF/` (your saved choices and game settings). Deleting `env/client-play/` also works but **resets those settings**. `client/` itself is never modified.
+- **The client is stuck on "connecting".** Check `harness/hs status` and `env/logs/Auth.log`. `./play` re-points the client it launches at localhost on every start, so this is rarely the config. To fix it by hand anyway: `harness/hs client-config env/client-play` (patched mode) or `harness/hs client-config client` (stock mode).
 - **The client crashes at startup.** Read the crash report in `Errors/` and the tail of `env/logs/wine.log`. Then run `harness/hs run --only client.inspect` to check for damaged client files. `.claude/skills/hs-client-debugging/SKILL.md` lists known causes.
 - **Known harmless:** the worldserver can segfault *while shutting down* after a population session (F15, an upstream bug). It doesn't affect play.
 
@@ -169,8 +173,8 @@ Add and dismiss companions with chat commands: `.playerbots bot addclass <class>
 
 **Tiers.** Each check is tagged quick, full or slow:
 - `--tier quick` runs only the quick checks. The spec bound is under 3 min. The last run took 78 s (2026-10-05).
-- `--tier full` is the default and the merge gate. It runs quick and full checks and takes about **25 min** (1526 s, 76 pass, on 2026-10-05). Most of that time goes to the clean build, the client smoke test and the companion and population checks.
-- `--tier slow` runs everything, including bot warm-ups and the 10-minute performance soak. It took about **31 min** on 2026-10-03, before the M3 and login-screen checks were added, so it's longer now.
+- `--tier full` is the default and the merge gate. It runs quick and full checks and takes about **25 min** (1526 s, 76 pass, on 2026-10-05). Most of that time goes to checks that launch the real client (login screen, play loop, app), plus a from-empty build when build inputs change (about 3.5 min with ccache).
+- `--tier slow` runs everything, including bot warm-ups and the 10-minute performance soak. The last slow run (68/0, 2026-10-03, `22ef40e`) predates the M3 and login-screen checks; expect well over 30 min.
 
 Only one agent or person owns the running stack at a time. `--leave-up` keeps it running at the end. The harness uses its own accounts (`HSTEST`, `HSCOMP`, `HS_GM`) and never touches `PLAYER` or `env/player.json`.
 
@@ -214,7 +218,7 @@ The practical procedure, run budget and pre-verification checklist are in `.clau
 | `.claude/` | skills (procedures), the verifier agent, session hooks |
 | `CLAUDE.md`, `STATUS.md`, `KICKOFF.md` | standing rules, live status, milestone definitions |
 
-Generated and gitignored, never committed: `vendor/` (pinned sources), `build/`, `server/` (installed server), `data/` (`mysql/`, `client-data/`, `downloads/`, `vmangos/`), `client/` (your client), `env/` (runtime: `settings.json`, `player.json`, `client-manifest.json`, `client-play/`, `wowsilicon-r17/`, `wineprefix-*/`, `logs/`, `run/`, `re/`, Ghidra), `dist/` (the app), and `harness/out/`, `harness/results.json`, `harness/summary.md`.
+Generated and gitignored, never committed: `vendor/` (pinned sources), `build/`, `server/` (installed server), `data/` (`mysql/`, `client-data/`, `downloads/`, `vmangos/`), `client/` (your client), `env/` (runtime: `settings.json`, `player.json`, `client-manifest.json`, `client-play/`, `wowsilicon-r17/`, `wineprefix-*/`, `logs/`, `run/`, `re/`, Ghidra), `dist/` (the app), `baseline/` (dev-only, 2.7 GB: the unpatched baseline server built by the `core.login_logout_race_baseline` check, `harness/hslib/baseline.py`), and `harness/out/`, `harness/results.json`, `harness/summary.md`.
 
 ## Docs index
 

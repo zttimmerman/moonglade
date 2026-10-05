@@ -1,6 +1,6 @@
 # Setting up Hearthstone on a fresh Mac
 
-These are the steps to go from a fresh clone to playing, in order. They're **manual today**. Automating them (a Brewfile, an `hs bootstrap` command) is follow-up **F6** in [STATUS.md](../STATUS.md). Until that lands, this page is the reference. Anything the repo doesn't spell out is marked **TODO: confirm**. Check those steps by hand and fix this page once you've done them.
+These are the steps to go from a fresh clone to playing, in order. They're **manual today**. Automating them (a Brewfile, an `hs bootstrap` command) is follow-up **F6** in [STATUS.md](../STATUS.md). Until that lands, this page is the reference. Anything not yet verified is marked **unverified**. Check it by hand and fix this page once you have.
 
 Every command runs from the repo root.
 
@@ -9,7 +9,7 @@ Every command runs from the repo root.
 | | |
 |---|---|
 | **Mac** | Apple Silicon. Developed and measured on an Apple M2 Pro with 16 GB RAM, macOS 26.6 (ADR-0002, `docs/research/m2-population-tuning.md`). 16 GB is enough for the default ~500-bot world, though memory is tight (see `openspec/specs/performance-budget/spec.md`). |
-| **Disk** | About 45 GB free for everything, measured on the dev Mac (2026-10-05). The table below breaks it down. |
+| **Disk** | About 29 GB measured on the dev Mac (2026-10-05; plus 2.7 GB for the dev-only `baseline/`), plus headroom. `hs client-install` needs 19 GB free at the moment it runs. The table below breaks it down. |
 | **Network** | Needed only during setup, to clone the pinned sources and download data and the Wine runtime. Playing is fully offline. |
 | **A WoW client** | **Not included.** You supply your own Windows **3.3.5a (build 12340) enUS** client, as a zip or a folder. |
 
@@ -29,6 +29,7 @@ Disk use per part (measured with `du -sh`, 2026-10-05):
 | `env/wineprefix-mtld3d/` | 0.3 GB | the Wine prefix |
 | `data/vmangos/` + `data/downloads/` | 0.2 GB | optional: VMaNGOS data, used only by vanilla-mode checks and the era-diff tool |
 | `server/` | 52 MB | installed server binaries and configs |
+| `baseline/` | 2.7 GB | dev-only: the unpatched baseline server built by the `core.login_logout_race_baseline` check (`harness/hslib/baseline.py`) |
 
 ## 1. Tools
 
@@ -42,8 +43,12 @@ Rosetta works if `arch -x86_64 /usr/bin/true` exits cleanly.
 Install [Homebrew](https://brew.sh) at its default `/opt/homebrew`. The build looks for its dependencies there (`harness/hslib/build.py`, `cmake_args()`). Then:
 
 ```sh
+eval "$(/opt/homebrew/bin/brew shellenv)"   # put Homebrew on PATH; add this line to ~/.zprofile to keep it
 brew install cmake mysql boost openssl@3 readline ccache python
+python3 --version                           # must report 3.10 or newer
 ```
+
+`harness/hs` and `./play` run whatever `python3` is first on your PATH, so make sure it's Homebrew's (or another 3.10+), not an older system one.
 
 These are the dev Mac's versions (`brew list --versions`, 2026-10-05): cmake 3.31.0, mysql 9.2.0, boost 1.92.0, openssl@3 3.6.x, readline 8.x, ccache 4.14.1, Python 3.14.7. The harness needs **Python 3.10 or newer** and uses only the standard library, so there's no `pip install` step. `hs app` refuses an older `python3`.
 
@@ -51,7 +56,7 @@ MySQL 9.x is newer than AzerothCore's documented minimum of 8.0. It works here. 
 
 **Optional:**
 - `brew install openjdk@21`, for Ghidra (`hs ghidra-install`, `hs re`). This is read-only client analysis, ADR-0005.
-- **Node 20** for the `openspec` CLI (`@fission-ai/openspec`, 1.14.0 on the dev Mac), needed only for development. The dev Mac uses nvm: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`. Its default shell Node is 16, which is too old. Installing it: `npm install -g @fission-ai/openspec` under Node 20 (**TODO: confirm**, since the repo doesn't record how it was installed).
+- **Node 20** for the `openspec` CLI (`@fission-ai/openspec`, 1.14.0 on the dev Mac), needed only for development. The dev Mac uses nvm: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`. Its default shell Node is 16, which is too old. Install it with `npm install -g @fission-ai/openspec` under Node 20.
 - `gh` (GitHub CLI), used by the development loop for PRs.
 
 Whisky.app is **not** needed. The default Wine layer is the pinned WoWSilicon runtime from step 5. Whisky's Wine 7.7 is only an optional A/B layer (`HS_WINE=whisky`, ADR-0004). The older parts of `docs/client-setup.md` still mention Whisky as a prerequisite, and that text predates ADR-0004's revision.
@@ -63,7 +68,7 @@ git clone https://github.com/zttimmerman/[redacted].git   # private repo
 cd [redacted]
 ```
 
-The repo lives in `~/Documents` on the dev Mac. That's why `Hearthstone.app` asks for Documents-folder access on its first launch (see the README's Troubleshooting section). Another location works too. **TODO: confirm** whether the macOS prompt changes outside `~/Documents`.
+The repo lives in `~/Documents` on the dev Mac. That's why `Hearthstone.app` asks for Documents-folder access on its first launch (see the README's Troubleshooting section). Another location should work too; whether the macOS prompt changes outside `~/Documents` is **unverified**.
 
 ## 3. Build the server
 
@@ -75,7 +80,7 @@ This clones the pinned sources into `vendor/` (core `mod-playerbots/azerothcore-
 
 - `harness/hs build --clean` does a from-empty build only when the build inputs changed (pins, patches, modules, cmake args, compiler). Otherwise it proves the install is current.
 - `harness/hs build --force-clean` always wipes `build/` first.
-- A rebuild with a warm ccache took about 3.5–5 min (harness-tiers proposal, 2026-10-02). **TODO: confirm** how long a cold first build takes.
+- A cold first build takes about 13 min with no ccache hits; a from-empty build with a warm ccache took 3 min 24 s (both 2026-10-02, `openspec/changes/archive/2026-10-02-core-server-mail-guard/design.md`).
 
 ## 4. Server data (client-data)
 
@@ -86,9 +91,10 @@ mkdir -p data/downloads data/client-data
 curl -L -o data/downloads/Data.zip "$(grep '^client_data_url=' fork.lock | cut -d= -f2-)"
 unzip -q data/downloads/Data.zip -d data/client-data
 ls data/client-data   # expect: Cameras  dbc  maps  mmaps  vmaps
+rm data/downloads/Data.zip   # ~1.1 GB, no longer needed
 ```
 
-**TODO: confirm** that the zip unpacks straight into those five folders. If it has a top-level folder, move its contents up. The server is configured with `DataDir = data/client-data` (`harness/hslib/config.py`), and the harness reads `data/client-data/dbc/`.
+The zip unpacks flat into those five folders (AzerothCore's own installer does the same: `vendor/azerothcore-wotlk/apps/installer/includes/functions.sh`). The server is configured with `DataDir = data/client-data` (`harness/hslib/config.py`), and the harness reads `data/client-data/dbc/`.
 
 **Optional, for development only:** the vanilla-mode checks and `tools/era-diff` read the pinned VMaNGOS database. Download it to the path the tool expects, and the tool unzips it into `data/vmangos/` by itself:
 
