@@ -251,8 +251,9 @@ class Loop:
         self.rec: dict = {"pid": os.getpid(), "started": _now(), "argv": sys.argv[1:],
                           "client_cmd": str(args.client_cmd) if args.client_cmd else None,
                           "client_started": False, "steps": []}
-        from .stages import Stages
+        from .stages import Shutdown, Stages
         self.stages = Stages()
+        self.shutdown = Shutdown()
 
     # -- signals
     def on_signal(self, signum, _frame):
@@ -323,7 +324,7 @@ class Loop:
         man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts,
                                  profile=world["profile"], population_n=world["population_n"], stages=st)
         self.rec["prepare"] = {k: ev[k] for k in ("restarted_world", "stack", "fixtures", "accounts", "prefix",
-                                                  "binaries_match_manifest_before") if k in ev}
+                                                  "binaries_match_manifest_before", "resolution") if k in ev}
         self.man = man
 
         from .clientinst import sha256_file
@@ -406,13 +407,18 @@ class Loop:
         """Close the client (Wine prefix) and stop the stack gracefully. Returns whatever is still running."""
         say("Shutting down... (closing the game and stopping the server; this takes up to a minute)")
         self.step("cleanup_start")
+        sd = self.shutdown                  # [shutdown] lines: the launcher's shutdown window (launcher-fixes)
         clean: dict = {}
         if launch.prefix_processes():
+            sd.send("shutdown_game", "start")
             clean["stop_prefix"] = launch.stop_prefix()
+            sd.send("shutdown_game", "done")
+        else:
+            sd.send("shutdown_game", "skipped")
         if getattr(self, "profiles_dir", None):        # the generated login file lives only while the game runs
             from . import frontmenu
             clean["profiles_removed"] = frontmenu.remove(self.profiles_dir)
-        clean["down"] = stack.down()
+        clean["down"] = stack.down(on_stage=sd.on_stack)
         remaining = self.leftovers()
         if remaining:                       # one more pass, e.g. a component that came up during an aborted start
             clean["down_retry"] = stack.down()
@@ -455,7 +461,8 @@ def main(argv=None) -> int:
         say(f"{PLAY_CLIENT_ENV} is set ({os.environ[PLAY_CLIENT_ENV]}): that's a test copy of the play client. "
             f"Unset it (`unset {PLAY_CLIENT_ENV}`) and run ./play again.")
         return EXIT_FAIL
-    for var in (GLUE_TEST_ENV, SKIP_ENV):            # test-only switches; refused before anything happens
+    from .resolution import TEST_ENV as DISPLAY_TEST_ENV
+    for var in (GLUE_TEST_ENV, SKIP_ENV, DISPLAY_TEST_ENV):   # test-only switches; refused before anything happens
         if os.environ.get(var) and not args.allow_test_client_dir:
             say(f"{var} is set: that's a test switch for the harness, not for playing. "
                 f"Unset it (`unset {var}`) and run ./play again.")
@@ -527,6 +534,7 @@ def main(argv=None) -> int:
         except Exception as e:  # noqa: BLE001
             remaining = [{"cleanup_error": f"{type(e).__name__}: {e}", "traceback": traceback.format_exc()}]
             loop.rec["cleanup_error"] = remaining[0]
+        loop.shutdown.finish(remaining)
         if remaining:
             say("WARNING: these are still running after shutdown:")
             for r in remaining:

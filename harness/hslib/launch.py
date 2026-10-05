@@ -540,6 +540,12 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: 
     cfg = configure(client_dir(), defaults=WINE_DEFAULTS)
     ev["client_config"] = {"changed_files": cfg["changed_files"],
                            "config_wtf": next(c for c in cfg["changes"] if c["kind"] == "Config.wtf")}
+    if is_play_client():            # launcher-fixes: a resolution matching the display, unless the player chose one
+        from . import resolution
+        try:
+            ev["resolution"] = resolution.apply(client_dir())
+        except resolution.ResolutionError as e:     # never block a launch over the default resolution
+            ev["resolution"] = {"error": str(e)}       # (no new [play] line: the play loop's wording stays as it was)
     ev["prefix"] = ensure_prefix()
 
     hashes_before = _binary_hashes(man)

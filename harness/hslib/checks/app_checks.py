@@ -323,8 +323,10 @@ class Hook:
         return ex[-1]["code"] if ex else None
 
 
-def open_app(bundle: Path, hook: Hook, *args: str, env: dict | None = None) -> dict:
-    cmd = [OPEN, "--env", f"{A.HOOK_ENV}={hook.path}",
+def open_app(bundle: Path, hook: Hook, *args: str, env: dict | None = None, new_instance: bool = False) -> dict:
+    """`open` the app through LaunchServices. new_instance: `open -n`, a second copy of the app process (a second
+    *launch*), instead of a reopen event to the running one."""
+    cmd = [OPEN, *(["-n"] if new_instance else []), "--env", f"{A.HOOK_ENV}={hook.path}",
            *[x for k, v in {**PINNED, **(env or {})}.items() for x in ("--env", f"{k}={v}")],
            str(bundle), "--args", *args]
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
@@ -595,7 +597,9 @@ def single_instance(ctx):
         first = _launchers(A.APP)
         play_before = [p["pid"] for p in play_processes()]
         stack_before, lock_before = stack.stack_processes(), play.LOCK.read_text().strip()
-        A_ev["open_second"] = open_app(A.APP, h2, "--account", "test", "--client-cmd", str(a2.bat))
+        # launcher-fixes: a reopen of the running app while it loads brings its loading window forward (no message,
+        # app.reopen_during_loading), so the "already running" case is a second launch: a second app process
+        A_ev["open_second"] = open_app(A.APP, h2, "--account", "test", "--client-cmd", str(a2.bat), new_instance=True)
         t0 = time.time()
         while time.time() - t0 < 30 and not (h1.find("dialog", "already_running") or h2.find("dialog", "already_running")):
             time.sleep(0.5)

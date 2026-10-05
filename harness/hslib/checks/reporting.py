@@ -484,7 +484,8 @@ def slow_tier_rule(ctx):
 
 # ----------------------------------------------------------------------------- GUI tier rule
 
-GUI_CHECKS = ("app.single_dock_icon", "app.handoff_focus", "app.reopen_focuses_game", "app.reopen_unminimizes")
+GUI_CHECKS = ("app.single_dock_icon", "app.handoff_focus", "app.reopen_focuses_game", "app.reopen_unminimizes",
+              "app.reopen_during_loading")
 
 
 def _scratch_repo_paths() -> dict:
@@ -522,6 +523,16 @@ def _scratch_repo_paths() -> dict:
         git("checkout", "-q", "main")
         (d / "play").write_text("#!/bin/sh\n")
         out["untracked_gui_file"] = m()
+        # launcher-fixes (F26): a change that touches only a shared helper of the GUI session
+        (d / "play").unlink()
+        (d / "harness" / "hslib" / "procs.py").write_text("# v1\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "procs base")
+        git("checkout", "-q", "-b", "change/procs")
+        (d / "harness" / "hslib" / "procs.py").write_text("# v2\n")
+        git("commit", "-q", "-am", "procs edit")
+        out["procs_only_change"] = m()
+        out["procs_only_change_all_paths"] = runner.changed_paths(d)["paths"]
     finally:
         shutil.rmtree(d, ignore_errors=True)
     return out
@@ -532,7 +543,8 @@ def gui_tier_rule(ctx):
     """A full run with no changed GUI path records every gui check as skip "gui tier" and report.full_run passes; with
     a changed GUI path every gui check runs and a failing or skipped one fails report.full_run (also a GUI path that
     changed although the GUI checks were skipped, and a forged "gui tier" skip message); `--tier gui` runs exactly
-    the gui checks."""
+    the gui checks. launcher-fixes (F26): a change touching only a shared helper of the GUI session (procs.py, in a
+    scratch git repo) is a GUI path change, and a full run then runs every gui check."""
     from .. import runner
     from ..registry import Check, CheckFail, CheckSkip
 
@@ -582,6 +594,7 @@ def gui_tier_rule(ctx):
     G = sim("G_full_check_forges_skip_msg", reg(**{"t.full": ("full", False, skip_fn(runner.GUI_SKIP_MSG))}), "full")
     H = sim("H_tier_gui", reg(), "gui")
     I = sim("I_gui_rule_unknown", reg(), "full", None)
+    K = sim("K_full_only_procs_changed", reg(), "full", ["harness/hslib/procs.py"])
     J = sim("J_slow_no_gui_change", reg(), "slow")
 
     probs = []
@@ -606,15 +619,23 @@ def gui_tier_rule(ctx):
         probs.append(f"H: --tier gui report.full_run={rec(H, 'report.full_run')} exit={H['exit']}, want skip / 0")
     if sorted(set(I["executed"]) & set(gui_ids)) != gui_ids:
         probs.append(f"I: GUI rule unknown (git failed) but GUI checks not run (must fail closed): {I['executed']}")
+    if sorted(set(K["executed"]) & set(gui_ids)) != gui_ids or K["gui_skipped"]:
+        probs.append(f"K: only procs.py changed but the GUI checks didn't all run: executed={K['executed']} "
+                     f"gui_skipped={K['gui_skipped']}")
     if J["gui_skipped"] != gui_ids or J["report_full_run"] != "pass":
         probs.append(f"J: slow run with no GUI change: gui_skipped={J['gui_skipped']} "
                      f"report.full_run={J['report_full_run']}")
 
     # the path rule itself: pattern matching and git's view of a real (scratch) repo
+    shared = ("harness/hslib/procs.py", "harness/hslib/paths.py", "harness/hslib/util.py", "harness/hslib/config.py",
+              "harness/hslib/runner.py", "harness/hslib/frontmenu.py", "harness/hslib/clientbuild.py",
+              "harness/hslib/checks/play_checks.py")          # launcher-fixes (F26): the GUI session's shared helpers
     match = {p: runner.gui_paths_matching([p]) for p in ("harness/app/launcher.m", "harness/app/dockshim.m",
                                                           "harness/hslib/checks/polish_checks.py", "play",
-                                                          "harness/hslib/era.py", "playbook.md", "openspec/x.md")}
-    want_match = {"harness/app/launcher.m", "harness/app/dockshim.m", "harness/hslib/checks/polish_checks.py", "play"}
+                                                          "harness/hslib/era.py", "playbook.md", "openspec/x.md",
+                                                          *shared)}
+    want_match = {"harness/app/launcher.m", "harness/app/dockshim.m", "harness/hslib/checks/polish_checks.py", "play",
+                  *shared}
     wrong = {p: v for p, v in match.items() if bool(v) != (p in want_match)}
     if wrong:
         probs.append(f"path rule: wrong matches {wrong}")
@@ -625,7 +646,9 @@ def gui_tier_rule(ctx):
         probs.append(f"scratch repo: {e}")
     if "error" not in repo:
         exp = {"clean": [], "non_gui_edit": [], "uncommitted_gui_edit": ["harness/app/launcher.m"],
-               "committed_gui_edit": ["harness/app/launcher.m"], "untracked_gui_file": ["play"]}
+               "committed_gui_edit": ["harness/app/launcher.m"], "untracked_gui_file": ["play"],
+               "procs_only_change": ["harness/hslib/procs.py"],
+               "procs_only_change_all_paths": ["harness/hslib/procs.py"]}
         bad = {k: repo.get(k) for k, v in exp.items() if repo.get(k) != v}
         if bad:
             probs.append(f"scratch repo: changed GUI paths {bad} != expected")

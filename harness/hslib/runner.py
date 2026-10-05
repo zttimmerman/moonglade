@@ -30,6 +30,17 @@ GUI_PATHS = (
     "play",                                   # the ./play entry point
     "harness/hslib/checks/polish_checks.py",  # the gui checks and their shared app session
     "harness/hslib/checks/app_checks.py",     # open_app / Hook / build_app used by that session
+    # launcher-fixes (F26): the shared helpers that session runs on
+    "harness/hslib/checks/play_checks.py",    # StandIn (the notepad stand-in's base), remaining/is_clear
+    "harness/hslib/procs.py",                 # process table, launcher / prefix discovery
+    "harness/hslib/paths.py",                 # every path the session uses (runtime, prefix, logs)
+    "harness/hslib/util.py",                  # log, keep_awake
+    "harness/hslib/config.py",                # profiles / world size of the session
+    "harness/hslib/runner.py",                # this rule and the GUI tier itself
+    "harness/hslib/frontmenu.py",             # the play loop's login file step (select_client)
+    "harness/hslib/clientbuild.py",           # the play loop's client selection
+    "harness/hslib/clientcfg.py",             # game_setup: the client config written before the client starts
+    "harness/hslib/resolution.py",            # game_setup: the resolution default
 )
 
 

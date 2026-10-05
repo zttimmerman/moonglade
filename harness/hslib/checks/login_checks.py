@@ -98,11 +98,14 @@ def _hook_refused() -> dict:
 # own clauses, unchanged, on that run's evidence; a session runs once per harness process (again for each `--only`
 # invocation), so evidence is always from this run, and each run starts from "nothing running" (verified).
 _SESSIONS: dict = {}
+PRE_CONTINUE_SHOT_S = 19
 # Continue run: the menu waits (screenshot at 4 s), one Continue at 20 s, a screenshot at character select at 40 s.
 # login.no_glue_errors' script as it was; login.auto_login's single Continue moves from 3 s to 20 s after the menu,
 # so its 90 s limit (measured from the client's start, as before) leaves the client less time, not more.
-CONTINUE_GLUE = {"marker": True, "script": [{"t": 4, "act": "shot"}, {"t": 20, "act": "continue"},
-                                            {"t": 40, "act": "shot"}]}
+# launcher-fixes (F25): plus a screenshot at 19 s, just before the Continue, so login.fresh_menu_waits can show that no
+# login happened between the client's start and the Continue (the screenshot's file time bounds the Continue).
+CONTINUE_GLUE = {"marker": True, "script": [{"t": 4, "act": "shot"}, {"t": PRE_CONTINUE_SHOT_S, "act": "shot"},
+                                            {"t": 20, "act": "continue"}, {"t": 40, "act": "shot"}]}
 CHARSELECT_WAIT = 120          # no_glue_errors' wait for the character list (as before)
 CHARSELECT_ALIVE_S = 20        # spec: the client doesn't quit by itself through 20 s at character select
 # Menu-waits run = the backdrop check's restart: no Continue, screenshots ~5 s and ~65 s after the menu showed
@@ -129,9 +132,14 @@ def continue_session() -> dict:
     try:
         require_given_clear(ev)
         scratch = fresh_scratch("login")
+        ev["fresh_scratch"] = {"dir": str(scratch), "existed_before_build": scratch.exists()}
         # a login file left behind by a killed ./play: the next run must remove it before anything else
         from .. import clientbuild
         clientbuild.build(dest=scratch)
+        ev["fresh_scratch"] |= {"connection_log_before": (scratch / "Logs" / "connection.log").exists(),
+                                "screenshots_before": len(screenshots(scratch)),
+                                "account_name_in_config_before": _config_value(scratch, "accountName"),
+                                "glue_test": CONTINUE_GLUE}
         stale = frontmenu.write(scratch, [{"name": "HSSTALE", "account": "HSSTALE", "password": "stale123"}], "HSSTALE")
         partial = frontmenu.archive_path(scratch).with_name(frontmenu.archive_path(scratch).name + ".hs-new")
         partial.write_bytes(b"partial write of a killed ./play")          # what a SIGKILL inside write() leaves
@@ -147,6 +155,7 @@ def continue_session() -> dict:
         # test account in through the protocol probe, so only a newer last_login counts
         base = account_state(P.TEST_USER)
         ev["account_at_client_start"] = base
+        ev["t_client_up"] = round(up["t"], 3)
         samples, alive = [], []
         hit = charsel = None
         t_wait = time.time()
@@ -157,6 +166,8 @@ def continue_session() -> dict:
             st |= {"t": round(time.time() - up["t"], 1),
                    "chars_received": bool(re.search(r"COP_GET_CHARACTERS code=\d+ result=TRUE", conn))}
             samples.append(st)
+            ev.setdefault("account_samples_abs", []).append(
+                [round(time.time(), 2), st.get("last_login"), st.get("online"), bool(conn.strip())])
             if run.proc.poll() is not None:          # the client quit and ./play shut down: stop waiting
                 hit = hit or {"play_exited": run.proc.returncode, **st}
                 break
@@ -182,6 +193,8 @@ def continue_session() -> dict:
         shots = screenshots(scratch)
         ev["screen"] = marker(shots[0]) if shots else None
         ev["screens"] = [marker(p) for p in shots]
+        ev["screenshot_mtimes"] = [round(p.stat().st_mtime, 3) for p in shots]
+        ev["connection_log_full"] = connection_log(scratch)
         ev["logs"] = glue_logs(scratch)
         _finish(run, ev)
         ev["stale_removed"] = ((ev["play_record"].get("client") or {}).get("stale_profiles_removed"))
@@ -243,6 +256,71 @@ def no_glue_errors(ctx):
     require(ev["alive_samples"]["dead"] == 0, "the client quit by itself", **ev)
     require(is_clear(ev["remaining_after"]), "something is still running", **ev)
     return ev
+
+
+def _conn_times(text: str, year: int) -> list[tuple[float, str]]:
+    """connection.log lines as (epoch, line); the client stamps local time "M/D HH:MM:SS.mmm" without a year."""
+    out = []
+    for l in text.splitlines():
+        m = re.match(r"^(\d{1,2})/(\d{1,2}) (\d{2}):(\d{2}):(\d{2})\.(\d{3})\s+(.*)$", l)
+        if m:
+            mo, d, hh, mi, ss, ms = (int(x) for x in m.groups()[:6])
+            t = time.mktime((year, mo, d, hh, mi, ss, 0, 0, -1)) + ms / 1000
+            out.append((round(t, 3), m.group(7).strip()))
+    return out
+
+
+def verify_fresh_menu_waits(ev: dict) -> dict:
+    """F25 on the Continue run's evidence: a freshly built scratch play client; between the client's start and the
+    Continue (bounded by the screenshot taken just before it) the client made no authserver connection (its own
+    connection.log) and the account shows no new login; the login comes only after that screenshot."""
+    fs = ev.get("fresh_scratch") or {}
+    out = {"fresh_scratch": fs, "t_client_up": ev.get("t_client_up"), "screens": ev.get("screens"),
+           "screenshot_mtimes": ev.get("screenshot_mtimes"), "account_at_client_start": ev.get("account_at_client_start")}
+    require(fs.get("existed_before_build") is False and fs.get("connection_log_before") is False
+            and fs.get("screenshots_before") == 0 and not fs.get("account_name_in_config_before"),
+            "GIVEN not met: the scratch play client wasn't freshly built and never used", **out)
+    glue = fs.get("glue_test") or {}
+    acts = sorted(glue.get("script", []), key=lambda a: a["t"])
+    cont = next((a["t"] for a in acts if a["act"] == "continue"), None)
+    shots_before = [a["t"] for a in acts if a["act"] == "shot" and cont is not None and a["t"] < cont]
+    out["script"] = acts
+    require(cont is not None and shots_before, "the run's script has no screenshot before its Continue", **out)
+    idx = len(shots_before) - 1                    # the screenshot just before the Continue
+    mt = ev.get("screenshot_mtimes") or []
+    require(len(mt) > idx and len(ev.get("screens") or []) > idx, "the screenshot before the Continue is missing",
+            **out)
+    t_pre = mt[idx]
+    pre = ev["screens"][idx]
+    t0 = ev["t_client_up"]
+    year = time.localtime(t0).tm_year
+    conn = _conn_times(ev.get("connection_log_full") or "", year)
+    first = conn[0] if conn else None
+    out |= {"pre_continue_screenshot": {"t": t_pre, "after_client_start_s": round(t_pre - t0, 1), "marker": pre},
+            "first_connection_log_line": first,
+            "first_connection_after_pre_shot_s": round(first[0] - t_pre, 2) if first else None,
+            "connection_lines_before_pre_shot": [c for c in conn if c[0] <= t_pre][:5]}
+    require(pre.get("main_menu_up") is True, "the menu wasn't up just before the Continue", **out)
+    base = (ev.get("account_at_client_start") or {}).get("last_login")
+    early = [s for s in ev.get("account_samples_abs") or [] if s[0] <= t_pre and (s[1] != base or s[2])]
+    out["account_samples_before_pre_shot"] = [s for s in ev.get("account_samples_abs") or [] if s[0] <= t_pre][-5:]
+    out["account_changes_before_pre_shot"] = early
+    require(not out["connection_lines_before_pre_shot"],
+            "the client connected to the authserver before the Continue (connection.log)", **out)
+    require(not early, "the account logged in before the Continue (last_login / online)", **out)
+    require(first and first[0] > t_pre and ev.get("login_seen"),
+            "no login came after the Continue (nothing to tell a waiting menu from a dead one)", **out)
+    return out
+
+
+@check("login.fresh_menu_waits", order=389, capability=CAP, stack="down", tier="full")
+def fresh_menu_waits(ctx):
+    """F25, on the shared Continue run: a freshly built, never-used scratch play client shows no authserver login
+    between the client's start and the Continue (connection.log and the account's last_login/online up to the
+    screenshot taken just before the Continue); the login follows the Continue."""
+    if "continue" not in _SESSIONS:
+        continue_session()
+    return verify_fresh_menu_waits(_session_ok("continue"))
 
 
 # ---------------------------------------------------------------- backdrop + menu waits

@@ -1,0 +1,160 @@
+"""client-connectivity: the play client's default resolution (openspec/changes/launcher-fixes; harness/hslib/resolution.py).
+
+Scratch play clients only (env/check-play-res*/); the player's env/client-play/ is never written (its Config.wtf is
+hashed before and after). Part A drives `resolution.apply` (the function `launch.prepare` calls) with injected
+displays; part B runs the real ./play + Wow.exe on a fresh scratch play client with an injected display
+($HS_TEST_DISPLAY, test-only) and reads the client's own back-buffer size from mtld3d's log ("present: guest WxH")."""
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+import shutil
+import subprocess
+import time
+from pathlib import Path
+
+from .. import clientbuild, launch, paths as P, play, resolution as R
+from ..registry import check, require
+from .play_checks import PLAY, is_clear, remaining, require_given_clear
+from .playclient_util import PlayRun, drop_scratch, fresh_scratch
+
+CAP = "client-connectivity"
+ASPECT_TOL = 0.02                            # spec: aspect ratio within 2%
+DESIGN = P.ROOT / "openspec" / "changes" / "launcher-fixes" / "design.md"
+DESIGN_ARCHIVED_GLOB = "openspec/changes/archive/*-launcher-fixes/design.md"
+D1 = R.parse_display("1512x982@2/32")       # this Mac's built-in display (notch strip 32 pt)
+D2 = R.parse_display("1920x1080@1/0")       # an external 16:9 monitor
+E2E_DISPLAY = "1600x1000@2/0"               # 16:10, distinguishable from the real display's full-screen area
+
+
+def _sha(p: Path) -> str | None:
+    return hashlib.sha256(p.read_bytes()).hexdigest() if p.exists() else None
+
+
+def design_decision() -> str | None:
+    """The native-vs-half-size default recorded in design.md ("Decision: default = half|native")."""
+    files = [DESIGN] + sorted(P.ROOT.glob(DESIGN_ARCHIVED_GLOB))
+    for f in files:
+        if f.exists():
+            m = re.search(r"Decision:\s*default\s*=\s*(half|native)\b", f.read_text())
+            if m:
+                return m.group(1)
+    return None
+
+
+def _close(value: str | None, d: dict) -> tuple[float | None, float]:
+    w, h = R.fullscreen_area(d)
+    a = R.aspect(value or "")
+    return a, w / h
+
+
+def verify_sequence(client: Path, decision: str | None) -> dict:
+    """GIVEN a play client with no resolution: prepare (display D1), prepare after the display changed (D2), prepare
+    after the player set their own value. Returns evidence; raises CheckFail."""
+    cfg = client / "WTF" / "Config.wtf"
+    text = cfg.read_text(errors="replace")
+    cfg.write_text("".join(l for l in text.splitlines(keepends=True) if not re.match(r"^\s*SET\s+gxResolution\s", l, re.I)))
+    (client / "WTF" / R.MARKER).unlink(missing_ok=True)
+    ev: dict = {"given": {"gxResolution": R.current(client), "marker": R.marker(client)}, "decision_in_design": decision}
+    require(ev["given"]["gxResolution"] is None and ev["given"]["marker"] is None,
+            "GIVEN not met: the scratch play client already has a resolution", **ev)
+    require(decision in ("half", "native"), "design.md records no native-vs-half-size decision", **ev)
+
+    s1 = R.apply(client, D1)
+    a1, want1 = _close(R.current(client), D1)
+    ev["first"] = {"apply": s1, "config_value": R.current(client), "aspect": a1, "display_aspect": round(want1, 4)}
+    require(s1["action"] == "set" and a1 and abs(a1 / want1 - 1) <= ASPECT_TOL,
+            "first launch: the written resolution doesn't match the display's aspect ratio within 2%", **ev)
+    require(R.current(client) == R.choose(D1, decision), "first launch: the value doesn't follow the design.md decision "
+            f"({decision}: {R.choose(D1, decision)})", **ev)
+
+    s2 = R.apply(client, D2)
+    a2, want2 = _close(R.current(client), D2)
+    ev["second"] = {"apply": s2, "config_value": R.current(client), "aspect": a2, "display_aspect": round(want2, 4)}
+    require(R.current(client) != ev["first"]["config_value"] and a2 and abs(a2 / want2 - 1) <= ASPECT_TOL,
+            "after the display changed, the resolution wasn't re-picked to match the new display", **ev)
+
+    player = "1280x1024"                                         # what the in-game Video options would write
+    t = cfg.read_text(errors="replace")
+    cfg.write_text(re.sub(r'(?im)^(\s*SET\s+gxResolution\s+)"[^"]*"', rf'\g<1>"{player}"', t))
+    before = cfg.read_bytes()
+    s3 = R.apply(client, D1)
+    ev["third"] = {"player_value": player, "apply": s3, "config_value": R.current(client),
+                   "file_unchanged": cfg.read_bytes() == before}
+    require(R.current(client) == player and ev["third"]["file_unchanged"],
+            "the player's own resolution was overwritten", **ev)
+    return ev
+
+
+def guest_sizes(text: str) -> list[list[int]]:
+    clean = re.sub(r"\x1b\[[0-9;]*m", "", text)
+    return [[int(a), int(b)] for a, b in re.findall(r"present: guest (\d+)x(\d+)", clean)]
+
+
+def e2e(ev: dict) -> dict:
+    """The real launch path: ./play (test account, fresh scratch play client, injected display) writes the value and
+    the real client opens with that aspect ratio (mtld3d's back buffer). Also: a normal ./play refuses the switch."""
+    r = subprocess.run([PLAY, "--world-datadir", "/nonexistent/hs-res-refuse"], cwd=P.ROOT, capture_output=True,
+                       text=True, timeout=300, env={**os.environ, R.TEST_ENV: E2E_DISPLAY, "HS_PROFILE": "m0"})
+    ev["refused"] = {"exit": r.returncode, "named": f"{R.TEST_ENV} is set" in r.stdout, "output": r.stdout[-300:]}
+    require(r.returncode != 0 and ev["refused"]["named"], f"a normal ./play accepted ${R.TEST_ENV}", **ev)
+    require_given_clear(ev)
+    scratch = fresh_scratch("res")
+    run = None
+    try:
+        clientbuild.build(dest=scratch)
+        ev["e2e_given"] = {"gxResolution": R.current(scratch), "marker": R.marker(scratch)}
+        require(ev["e2e_given"]["gxResolution"] is None, "GIVEN not met: the fresh scratch client has a resolution", **ev)
+        off = P.WINE_LOG.stat().st_size if P.WINE_LOG.exists() else 0
+        t0 = time.time()
+        run = PlayRun("res", scratch=scratch, extra_env={R.TEST_ENV: E2E_DISPLAY})
+        run.start()
+        up = run.wait_client()
+        require(up.get("up"), "the real Wow.exe never came up", output=run.output()[-2000:], **ev)
+        sizes: list = []
+        while time.time() - t0 < 300 and not sizes:
+            with open(P.WINE_LOG, errors="replace") as f:
+                f.seek(off)
+                sizes = guest_sizes(f.read())
+            time.sleep(1)
+        ev["stop"] = run.stop()
+        rec = run.record()
+        d = R.parse_display(E2E_DISPLAY)
+        value = R.current(scratch)
+        want = R.fullscreen_area(d)[0] / R.fullscreen_area(d)[1]
+        ev["e2e"] = {"display": E2E_DISPLAY, "config_value": value, "prepare_resolution": (rec.get("prepare") or {}).get(
+            "resolution"), "client_back_buffers": sizes, "display_aspect": round(want, 4),
+            "back_buffer_aspect": round(sizes[0][0] / sizes[0][1], 4) if sizes else None, "remaining_after": remaining()}
+        require((ev["e2e"]["prepare_resolution"] or {}).get("action") == "set" and value == R.choose(d),
+                "the launch didn't write the default resolution into the scratch play client", **ev)
+        require(sizes and abs(ev["e2e"]["back_buffer_aspect"] / want - 1) <= ASPECT_TOL,
+                "the real client didn't take the resolution's aspect ratio (mtld3d back buffer)", **ev)
+        require(is_clear(ev["e2e"]["remaining_after"]), "something is still running", **ev)
+        return ev
+    finally:
+        if run is not None:
+            run.cleanup()
+        drop_scratch(scratch)
+
+
+@check("client.resolution_default", order=386, capability=CAP, stack="down", tier="full")
+def resolution_default(ctx):
+    """A play client with no resolution (injected displays): the first launch writes a resolution with the display's
+    full-screen aspect ratio (within 2%) following design.md's native-vs-half decision; after the display changes it
+    is re-picked; a player's own value is left untouched. End to end, ./play writes it into a fresh scratch play
+    client and the real client opens with that aspect ratio. The player's env/client-play/ is never written."""
+    zach = clientbuild.PLAY / "WTF" / "Config.wtf"
+    ev: dict = {"player_config_sha_before": _sha(zach)}
+    scratch = fresh_scratch("resunit")
+    try:
+        clientbuild.build(dest=scratch)
+        ev["sequence"] = verify_sequence(scratch, design_decision())
+    finally:
+        drop_scratch(scratch)
+    e2e(ev)
+    ev["player_config_sha_after"] = _sha(zach)
+    require(ev["player_config_sha_after"] == ev["player_config_sha_before"], "the player's play client config changed",
+            **ev)
+    return ev

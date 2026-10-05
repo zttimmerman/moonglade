@@ -223,13 +223,16 @@ COLOR_INDEX = {"red": 0, "green": 1, "blue": 2}
 
 
 def marker(path: Path) -> dict:
-    """Decode the four marker squares (UI scale 1:1 at the client's 1024x768 window; HSTestMarker is anchored
-    TOPRIGHT -10,-10, 200x40, 40x40 squares at x = 0 / 53 / 106 / 159 from its left edge)."""
+    """Decode the four marker squares (HSTestMarker is anchored TOPRIGHT -10,-10, 200x40 UI units, 40x40 squares at
+    x = 0 / 53 / 106 / 159 from its left edge). The UI is 768 units high (no UI scale), so a unit is h/768 pixels:
+    1:1 in the client's old default 1024x768 window, larger since launcher-fixes gives the play client a resolution
+    with the display's aspect ratio."""
     w, h, px = _bmp_pixels(path)
-    cy = 10 + 20
-    left = w - 10 - 200
-    pts = {k: left + i * 53 + 20 for i, k in enumerate(("backdrop", "music", "menu", "errors"))}
-    raw = {k: _avg(px, x, cy) for k, x in pts.items()}
+    u = h / 768
+    cy = round((10 + 20) * u)
+    left = w - (10 + 200) * u
+    pts = {k: round(left + (i * 53 + 20) * u) for i, k in enumerate(("backdrop", "music", "menu", "errors"))}
+    raw = {k: _avg(px, x, cy, r=max(3, int(6 * u))) for k, x in pts.items()}
     cls = {k: _classify(v) for k, v in raw.items()}
     out = {"file": path.name, "size": [w, h], "rgb": raw, "colors": cls}
     out["backdrop"] = BACKDROP_KEYS[COLOR_INDEX[cls["backdrop"]]] if cls["backdrop"] in COLOR_INDEX else None

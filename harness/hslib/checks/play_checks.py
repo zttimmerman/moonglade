@@ -129,9 +129,9 @@ def remaining(stand_in: StandIn | None = None) -> dict:
 
 
 def human_lines(text: str) -> str:
-    """./play's output without its machine-readable `[stage] {json}` lines (launcher-polish), so a tail kept as
-    evidence still holds the human lines a check asserts on."""
-    return "\n".join(l for l in text.splitlines() if not l.startswith("[stage] "))
+    """./play's output without its machine-readable `[stage] {json}` (launcher-polish) and `[shutdown] {json}`
+    (launcher-fixes) lines, so a tail kept as evidence still holds the human lines a check asserts on."""
+    return "\n".join(l for l in text.splitlines() if not l.startswith(("[stage] ", "[shutdown] ")))
 
 
 def is_clear(r: dict) -> bool:
