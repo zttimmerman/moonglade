@@ -14,7 +14,7 @@ It's a personal project, and nothing it produces is redistributed. **The WoW cli
 - **Moonglade.app:** a double-clickable launcher for `./play`.
 - **In-client login screen:** the Continue / Profiles / Settings / Extras menu inside the game's own login screen, running on a patched, revertable copy of the client.
 
-**Next:** fixing a flaky companion check (F23), then launcher polish (one Dock icon, a loading screen with stages), save backups, and **M4 solo dungeons**. Zach still has to play the "human-verify" scenarios: M2 (living world, companions), M3 (vanilla mode), the in-client login screen (Continue, backdrop picker, About) and the first double-click of Moonglade.app. The live roadmap, task board and known issues are in **[STATUS.md](STATUS.md)**.
+**Next:** the **seamless experience** change (no server/realm/connecting wording on screen, plus a Saves entry in the in-game front menu), then **M4 solo dungeons**. Zach still has to play the "human-verify" scenarios (M2 living world and companions, M3 vanilla mode, the in-client login screen). The live roadmap, task board and known issues are in **[STATUS.md](STATUS.md)**.
 
 ## Requirements
 
@@ -121,7 +121,7 @@ Things to know when switching: going from vanilla to WotLK lowers the XP thresho
 
 Every time you quit the game, Moonglade backs up your save while it shuts down (the shutdown window shows "Backing up your save"; about 10 s with the default world). A backup holds your characters, your companions and the AI players (the `acore_characters`, `acore_auth` and `acore_playerbots` databases) plus your client's per-account settings (`WTF/Account/<ACCOUNT>/`: key bindings, macros, chat and addon settings). Game content and vanilla mode aren't part of it. Backups live in `env/backups/` (about 38 MB each). The last 10 are kept.
 
-**To restore one,** hold **Option** while you open Moonglade (Dock or Finder). Instead of starting the game it shows the Backups window: pick a backup, press **Restore…**, confirm, then **Play** or **Quit**. From a terminal: `./play --backups` lists them and `./play --backups restore <id>` restores one. A restore rewinds everything in the backup together and first saves a "before restore" safety backup of how things are now (the last 3 are kept), so you can undo it the same way. Restoring is refused while Moonglade is running, and a damaged backup is refused without changing anything. If a backup ever fails (for example, less than 2 GB free disk space), shutdown still completes, and the next start tells you why.
+**To restore one,** make sure Moonglade isn't running, then hold **Option** (⌥, "alt") while you click Moonglade in the Dock or double-click it in Finder, and keep holding until the Backups window appears. (Option-click is a stopgap; a Saves entry in the in-game front menu is planned.) Instead of starting the game it shows the Backups window: pick a backup, press **Restore…**, confirm, then **Play** or **Quit**. From a terminal: `./play --backups` lists them and `./play --backups restore <id>` restores one. A restore rewinds everything in the backup together and first saves a "before restore" safety backup of how things are now (the last 3 are kept), so you can undo it the same way. Restoring is refused while Moonglade is running, and a damaged backup is refused without changing anything. If a backup ever fails (for example, less than 2 GB free disk space), shutdown still completes, and the next start tells you why.
 
 ### Companions
 
