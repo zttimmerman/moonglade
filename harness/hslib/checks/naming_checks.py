@@ -49,6 +49,12 @@ BLIZZARD_CONTENT: tuple = ()
 ALLOW_LINES = (
     ("tools/rename-folder.sh", r'DEFAULT_OLD="\$HOME/Documents/repos/[redacted]"',
      "the folder-rename script's default source path is the old folder"),
+    ("tools/rename-folder.sh",
+     r'#   cd ~ && ~/Documents/repos/[redacted]/tools/rename-folder.sh +dry run: print the plan \(default\)',
+     "the folder-rename script's usage line runs it from the old folder"),
+    ("tools/rename-folder.sh",
+     r'#   cd ~ && ~/Documents/repos/[redacted]/tools/rename-folder.sh --apply +do it',
+     "the folder-rename script's usage line runs it from the old folder"),
     # Build inputs the rename brief kept out of scope ("no server, module, patch ... changes"): comment/title text
     # only, nothing a player sees. Renaming them changes build or client-patch inputs; left for a change that may.
     ("modules/mod-era-profile/conf/mod_era_profile.conf.dist",
@@ -238,9 +244,9 @@ def _guard_profile(path: Path, allowed: Path, tag: str) -> None:
 """)
 
 
-def run_script(prof: Path, *args) -> dict:
+def run_script(prof: Path, *args, cwd: Path | None = None) -> dict:
     r = subprocess.run([SANDBOX_EXEC, "-f", str(prof), "/bin/bash", str(SCRIPT), *map(str, args)],
-                       capture_output=True, text=True, timeout=120)
+                       capture_output=True, text=True, timeout=120, cwd=cwd)
     return {"args": list(map(str, args)), "rc": r.returncode, "stdout": r.stdout[-20000:], "stderr": r.stderr[-1500:]}
 
 
@@ -304,8 +310,10 @@ def rename_script(ctx):
     """In a temp dir only (sandboxed: writes outside it are denied and logged): the dry run exits 0, prints the plan
     and changes nothing; --apply moves the repo and its Claude Code data folders (repo + inside worktree) to the new
     encoded names, leaves decoys alone, and `git worktree list` shows every worktree at a valid path with working
-    links both ways; a second --apply onto an existing destination is refused and changes nothing; and an --apply
-    stopped after its first move (kill-safe) is finished by running --apply again."""
+    links both ways; a second --apply onto an existing destination is refused and changes nothing; an --apply
+    stopped after its first move (kill-safe) is finished by running --apply again; the script's own processes never
+    count as "still open" (and it prints the cd ~ instruction and the ~/.claude.json note), while another process
+    working inside the folder makes --apply refuse."""
     ev: dict = {"script": str(SCRIPT)}
     require(SCRIPT.is_file() and os.access(SCRIPT, os.X_OK), "tools/rename-folder.sh is missing or not executable", **ev)
     tmp = Path(tempfile.mkdtemp(prefix="hs-rename-")).resolve()
@@ -361,6 +369,27 @@ def rename_script(ctx):
         require(ev2["resume"]["rc"] == 0 and "resuming an interrupted --apply" in ev2["resume"]["stdout"],
                 "--apply after an interrupted run didn't resume", **ev)
         verify_applied(w2, data_before2, ev2, tmp / "w2" / "repos" / "other" / "keep.txt")
+
+        # busy list: the script's own process tree never counts (run with its cwd inside the folder: dry run lists
+        # nothing); another process working inside the folder does, and --apply is refused
+        w3 = scratch_world(tmp / "w3")
+        args3 = ("--claude-projects", w3["projects"], w3["old"], w3["new"])
+        ev["own_cwd_dry_run"] = r = run_script(prof, *args3, cwd=w3["old"])
+        require(r["rc"] == 0 and "Still open inside the folder" not in r["stdout"],
+                "the script listed its own processes as still open in the folder", **ev)
+        require("cd ~ && " in r["stdout"] and "--apply" in r["stdout"] and ".claude.json" in r["stdout"],
+                "the dry run doesn't print the cd ~ instruction and the ~/.claude.json note", **ev)
+        sleeper = subprocess.Popen(["/bin/sleep", "120"], cwd=w3["old"])
+        try:
+            before3 = tree_listing(tmp / "w3")
+            ev["busy_apply"] = r = run_script(prof, "--apply", *args3)
+            changed3 = sorted(k for k, v in tree_listing(tmp / "w3").items() if before3.get(k) != v)
+            ev["busy_apply_changed"] = changed3[:20]
+            require(r["rc"] != 0 and f"{sleeper.pid} sleep" in r["stdout"] and "REFUSED" in r["stderr"]
+                    and not changed3, "--apply with another process inside the folder wasn't refused", **ev)
+        finally:
+            sleeper.kill()
+            sleeper.wait()
 
         # refusal: destination exists -> nonzero, nothing changes
         (tmp / "w" / "repos" / "project-old").mkdir()

@@ -25,7 +25,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .. import app as A, config, dockshim, launch, paths as P, play, procs, stack, stages as S
+from .. import app as A, clientbuild, config, dockshim, launch, paths as P, play, procs, stack, stages as S
 from ..registry import CheckFail, check, require
 from .app_checks import (Hook, OPEN, _launchers, _log_since, _log_size, _play_pid, app_remaining, build_app, open_app,
                          require_clear, stop_launchers, tcc_prompts, wait_app_exit)
@@ -42,6 +42,7 @@ FOCUS_LIMIT_S = 2.0
 NOTHING_ON_SCREEN_S = 0.3     # hand-off: longest moment with neither the loading window nor the game window on screen
 # [play] lines as they were before launcher-polish (main at 1ba1d3b): every line a run prints must match one of
 # these say() templates, so the terminal output is unchanged
+PERF_SCRATCH = P.ENV / "check-play-shimperf"     # app.shim_perf's scratch play client (never env/client-play/)
 PLAY_LINES_BASE = "1ba1d3b"
 PLAY_LINES_FILES = ("harness/hslib/play.py", "harness/hslib/launch.py")
 # rename-moonglade (2026-10-05): the project name in those templates is mapped to the new one, and nothing else is.
@@ -1205,7 +1206,10 @@ def perf_run(policy: str, ev_runs: list) -> dict:
     try:
         run["display_states"] = states = [display_state()]
         run["up"] = {k: v for k, v in stack.up(profile="m0").items() if k in ("profile", "worldserver")}
-        run["open"] = open_app(A.APP, hook, "--account", "test", env={"HS_PROFILE": "m0", "HS_SETTINGS": str(sfile)})
+        # rename-moonglade cycle 2: the real client plays a scratch play client (built once by app.shim_perf), never
+        # the player's own env/client-play/ (play.py refuses a real-client test run there)
+        run["open"] = open_app(A.APP, hook, "--account", "test", "--allow-test-client-dir",
+                               env={"HS_PROFILE": "m0", "HS_SETTINGS": str(sfile), "HS_PLAY_CLIENT_DIR": str(PERF_SCRATCH)})
         t0 = time.time()
         launching, wow, t_win = None, None, None
         while time.time() - t0 < 300 and hook.exit_code() is None:
@@ -1300,6 +1304,9 @@ def shim_perf(ctx):
     build_app(ev)
     require_clear(ev)
     runs: list = []
+    from .playclient_util import drop_scratch, fresh_scratch
+    fresh_scratch(PERF_SCRATCH.name.removeprefix("check-play-"))
+    clientbuild.build(dest=PERF_SCRATCH)              # once, before the runs: no build time inside a measurement
     try:
         for i in range(PERF_RUNS):
             for policy in (("accessory", "off") if i % 2 == 0 else ("off", "accessory")):
@@ -1308,4 +1315,6 @@ def shim_perf(ctx):
                     return verify_perf(runs)
     except CheckFail as e:
         raise CheckFail(str(e), {"runs": runs, **e.evidence})
+    finally:
+        drop_scratch(PERF_SCRATCH)
     return verify_perf(runs)

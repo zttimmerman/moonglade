@@ -1,10 +1,11 @@
 #!/bin/bash
 # Rename the repo folder to its new project name, and move Claude Code's per-project data with it
-# (openspec/changes/rename-moonglade, design.md "Folder rename script"). Run it yourself, with Claude Code closed.
+# (openspec/changes/rename-moonglade, design.md "Folder rename script"). Run it yourself, with Claude Code closed,
+# from OUTSIDE the folder (a shell whose working directory is inside it counts as "still open" and is refused):
 #
-#   tools/rename-folder.sh                 dry run: print the plan, change nothing (the default)
-#   tools/rename-folder.sh --apply         do it
-#   tools/rename-folder.sh [--apply] [--claude-projects DIR] [OLD_REPO NEW_REPO]
+#   cd ~ && ~/Documents/repos/[redacted]/tools/rename-folder.sh            dry run: print the plan (default)
+#   cd ~ && ~/Documents/repos/[redacted]/tools/rename-folder.sh --apply    do it
+#   rename-folder.sh [--apply] [--claude-projects DIR] [OLD_REPO NEW_REPO]
 #
 # Defaults: OLD_REPO and NEW_REPO are the real folders below, DIR is ~/.claude/projects. The harness check
 # repo.rename_script only ever runs this against scratch paths in a temp dir.
@@ -33,7 +34,7 @@ while [ $# -gt 0 ]; do
   case "$1" in
     --apply) APPLY=1 ;;
     --claude-projects) shift; PROJECTS="${1:?--claude-projects needs a directory}" ;;
-    -h|--help) sed -n '2,22p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    -h|--help) sed -n '2,/^set -euo/p' "$0" | sed '$d' | sed 's/^# \{0,1\}//'; exit 0 ;;
     -*) echo "unknown option: $1" >&2; exit 2 ;;
     *) POS+=("$1") ;;
   esac
@@ -95,10 +96,15 @@ for w in ${LINKED[@]+"${LINKED[@]}"}; do
   case "$w/" in "$OLD"/*) add_move "$w" "$(newpath "$w")" ;; esac
 done
 
-# Claude Code (or anything else) still working inside the folder
-BUSY=$(lsof -a -d cwd -Fpcn 2>/dev/null | awk -v o="$OLD" '
-  /^p/ {pid=substr($0,2)} /^c/ {c=substr($0,2)}
-  /^n/ {n=substr($0,2); if (n==o || index(n, o "/")==1) print pid " " c " (" n ")"}' || true)
+# Claude Code (or anything else) still working inside the folder. This script's own process tree (itself and the
+# subshells, lsof and awk it starts) is left out; whatever started it (a shell, Claude Code) is not.
+# One lsof pass gives every process's cwd and parent pid (lsof -R); ps isn't used (setuid, refused under sandboxes).
+BUSY=$(lsof -a -d cwd -FpRcn 2>/dev/null | awk -v o="$OLD" -v self="$$" '
+  /^p/ {pid=substr($0,2)} /^R/ {par[pid]=substr($0,2)} /^c/ {c[pid]=substr($0,2)}
+  /^n/ {n=substr($0,2); if (n==o || index(n, o "/")==1) { hit[pid]=n } }
+  function mine(p,   q, k) { q = p; for (k = 0; k < 64 && q != "" && q != "0"; k++) { if (q == self) return 1; q = par[q] } return 0 }
+  END { for (p in hit) if (!mine(p)) print p " " c[p] " (" hit[p] ")" }' | sort -n || true)
+SELF_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
 echo "Rename plan ($([ $APPLY = 1 ] && echo APPLY || echo 'dry run: nothing will change; add --apply to do it')):"
 if [ $RESUME = 1 ]; then
@@ -126,11 +132,15 @@ if [ -n "$BUSY" ]; then
   echo "$BUSY" | sed 's/^/     /'
 fi
 
+echo "  Not moved: Claude Code's per-folder entries in ~/.claude.json (trust, allowed tools) are keyed by the path,"
+echo "  so Claude Code asks to trust the new folder once."
 if [ $APPLY = 0 ]; then
   [ -z "$BUSY" ] || echo "Close those (Claude Code included) before running with --apply."
+  echo "To do it: close Claude Code, then run from outside the folder:"
+  echo "  cd ~ && \"$SELF_PATH\" --apply"
   exit 0
 fi
-[ -z "$BUSY" ] || fail "processes are still working inside $OLD (close Claude Code first)"
+[ -z "$BUSY" ] || fail "processes are still working inside $OLD (close Claude Code, and run from outside: cd ~ && \"$SELF_PATH\" --apply)"
 
 # ---- apply
 if [ $RESUME = 0 ]; then
@@ -151,5 +161,6 @@ git -C "$NEW" worktree list | sed 's/^/  /'
 echo 'Done. Things that still remember the old path, to update by hand:'
 echo '  - a Dock or Finder sidebar item pointing at the old folder;'
 echo '  - the app: rebuild it (harness/hs app) so it records the new folder;'
-echo '  - Claude Code asks to trust the new folder once (its per-folder settings are keyed by path);'
+echo '  - Claude Code asks to trust the new folder once (its ~/.claude.json per-folder entries, trust and allowed tools,'
+echo '    are keyed by path and are not moved);'
 echo "  - the git remote, if the GitHub repo was renamed: git -C \"$NEW\" remote set-url origin <new url>."

@@ -484,8 +484,10 @@ def slow_tier_rule(ctx):
 
 # ----------------------------------------------------------------------------- GUI tier rule
 
+# rename-moonglade cycle 2: + app.names_running (the opened-app half of app.bundle_valid, split out so quick runs
+# never put windows on screen)
 GUI_CHECKS = ("app.single_dock_icon", "app.handoff_focus", "app.reopen_focuses_game", "app.reopen_unminimizes",
-              "app.reopen_during_loading")
+              "app.reopen_during_loading", "app.names_running")
 
 
 def _scratch_repo_paths() -> dict:

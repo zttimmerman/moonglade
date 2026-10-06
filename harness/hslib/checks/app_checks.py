@@ -386,9 +386,8 @@ def bundle_valid(ctx):
     names the executable (present, executable), the bundle identifier and the icon; codesign --verify --deep --strict
     passes on an ad-hoc signature; and no write outside the repo was attempted. rename-moonglade: CFBundleName and
     CFBundleDisplayName are Moonglade, the id is local.moonglade.app, the designated requirement is
-    `identifier "local.moonglade.app"`, the launcher/plist/shim carry no old-name text; opened with the stand-in,
-    the launcher's and the game process's LaunchServices display names are Moonglade and no launcher text it
-    shows says the old name."""
+    `identifier "local.moonglade.app"`, and the launcher/plist/shim carry no old-name text. (The opened-app half of
+    the scenario is app.names_running: it puts windows on screen, so it's a gui check, not quick.)"""
     ev: dict = {"cmd": f"{SANDBOX_EXEC} -f <guard.sb> {HS} app"}
     ev["healed_stale_test_launchers"] = heal_test_launchers()     # kill-safe: a killed earlier run's own session
     status = subprocess.run(["git", "-C", str(P.ROOT), "status", "--porcelain", "--", "branding/"],
@@ -434,10 +433,24 @@ def bundle_valid(ctx):
         require(A.APP.is_dir(), "dist/Moonglade.app doesn't exist after the build", **ev)
         verify_bundle(A.APP, ev)
         ev["build_window_started"] = t0.isoformat()
-        running_names(ev)
         return ev
     finally:
         shutil.rmtree(work, ignore_errors=True)
+
+
+@check("app.names_running", order=381, capability=CAP, stack="down", tier="full", gui=True)
+def names_running(ctx):
+    """rename-moonglade, the running half of "Built bundle and running app carry the new name": the freshly built app,
+    opened through LaunchServices with the notepad stand-in: the launcher's LaunchServices display name is Moonglade
+    (bundle id local.moonglade.app), the game process's is Moonglade, no status/dialog/stage text the launcher shows
+    says the old name, the app exits 0 and nothing is left running. gui: it puts the launcher and a Wine window on
+    screen, so quick runs never run it."""
+    ev: dict = {"healed_stale_test_launchers": heal_test_launchers()}   # kill-safe: a killed earlier run's session
+    build_app(ev)
+    pl = plistlib.loads((A.APP / "Contents" / "Info.plist").read_bytes())
+    verify_names(A.APP, pl, ev)                       # the bundle being opened is the renamed one
+    running_names(ev)
+    return ev
 
 
 # ---------------------------------------------------------------- runtime helpers

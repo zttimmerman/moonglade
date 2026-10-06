@@ -16,7 +16,7 @@ from .. import clientbuild, launch, paths as P
 from ..clientinst import load_manifest, mismatches, sha256_file
 from ..registry import check, require
 from .play_checks import is_clear, remaining, require_given_clear
-from .playclient_util import PlayRun, fresh_scratch
+from .playclient_util import PlayRun, drop_scratch, fresh_scratch
 
 CAP = "play-client"
 RECORD = clientbuild.QUEUE / "0001-gluexml-signature.json"
@@ -218,20 +218,30 @@ def _launched(run: PlayRun, ev_key: str, ev: dict) -> dict:
 @check("client.stock_mode", order=386, capability=CAP, stack="down", tier="full")
 def stock_mode(ctx):
     """With `client = stock` (scratch settings) the play loop launches the real client/Wow.exe (pristine hash); with
-    `client = patched` it launches env/client-play/Wow.exe (patched hash)."""
+    `client = patched` it launches the play client's Wow.exe (patched hash; a scratch play client built by the same
+    queue, since a check never runs the real game in the player's own env/client-play/)."""
     rec0001 = json.loads(RECORD.read_text())
     ev: dict = {}
     require_given_clear(ev)
     man = load_manifest()
-    for mode in ("stock", "patched"):
-        run = PlayRun(f"mode-{mode}", mode=mode)
-        try:
-            info = _launched(run, mode, ev)
-        finally:
-            run.cleanup()
-        require(info["client_up"].get("up"), f"{mode}: the real Wow.exe never came up", **ev)
+    # rename-moonglade cycle 2: the patched run plays a scratch play client built by the same queue (the real Wow.exe
+    # never runs in the player's own env/client-play/ from a check; play.py refuses that), so "the play client's
+    # Wow.exe" is the scratch's, with the same patch 0001 output hash env/client-play/Wow.exe has
+    scratch = fresh_scratch("mode-patched")
+    try:
+        for mode in ("stock", "patched"):
+            run = PlayRun(f"mode-{mode}", mode=mode, scratch=scratch if mode == "patched" else None)
+            try:
+                info = _launched(run, mode, ev)
+            finally:
+                run.cleanup()
+            require(info["client_up"].get("up"), f"{mode}: the real Wow.exe never came up", **ev)
+    finally:
+        drop_scratch(scratch)
     win = lambda p: "Z:" + str(p).replace("/", "\\")
-    stock_exe, play_exe = win(P.CLIENT / "Wow.exe").lower(), win(clientbuild.PLAY / "Wow.exe").lower()
+    stock_exe, play_exe = win(P.CLIENT / "Wow.exe").lower(), win(scratch / "Wow.exe").lower()
+    ev["player_play_client_exe_sha256"] = sha256_file(clientbuild.PLAY / "Wow.exe") \
+        if (clientbuild.PLAY / "Wow.exe").exists() else None
     s, pt = ev["stock"], ev["patched"]
     ev["expected"] = {"stock_exe": stock_exe, "stock_sha256": man["binaries_sha256"]["Wow.exe"],
                       "patched_exe": play_exe, "patched_sha256": rec0001["output_sha256"]}
@@ -240,7 +250,7 @@ def stock_mode(ctx):
     require((s["record_client"] or {}).get("exe_sha256") == man["binaries_sha256"]["Wow.exe"]
             and (s["record_client"] or {}).get("mode") == "stock", "stock mode's exe hash isn't the pristine one", **ev)
     require(any(c.lower().startswith(play_exe) for c in pt.get("wow_cmd", [])),
-            "patched mode didn't launch env/client-play/Wow.exe", **ev)
+            "patched mode didn't launch the play client's Wow.exe (scratch play client)", **ev)
     require((pt["record_client"] or {}).get("exe_sha256") == rec0001["output_sha256"],
             "patched mode's exe hash isn't patch 0001's output", **ev)
     ev["remaining_after"] = remaining()
