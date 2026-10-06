@@ -101,7 +101,7 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 6. **Relaxed dungeon lockouts for solo play**: rerun dungeons freely; small server config; pairs with M4.
 (Not added: hardcore mode toggle; Zach didn't pick it.)
 
-**App icon for macOS 26 (2026-10-05):** macOS 26 frames icons that aren't the standard rounded square on a grey plate (seen in the loading window, likely the Dock too). Make a squircle version of Zach's logo (e.g. gold ring on a dark backdrop filling the shape) via the icon generator.
+**App icon for macOS 26 (2026-10-05; see Moonglade icon):** macOS 26 frames icons that aren't the standard rounded square on a grey plate (seen in the loading window, likely the Dock too). Make a squircle version of Zach's logo (e.g. gold ring on a dark backdrop filling the shape) via the icon generator.
 
 **Second isolated test stack (Zach, 2026-10-05; decide after harness speed):** a parallel server instance on other ports with an APFS-cloned DB, so the next change's builder can test while the current one verifies, or the full tier splits in two. Limited by 16 GB RAM (two m0 worlds fit, not two 500-bot worlds); GUI focus checks can't parallelize.
 
@@ -114,6 +114,8 @@ Offline WoW that feels like **one single-player app**, with many moving parts be
 - In-game wording via an addon renaming global strings at runtime (Logout → Exit to Menu, "Disconnected from server" → game terms); any real FrameXML file change needs its own ADR + Zach's yes.
 - Errors: friendly message + Try again / Back to menu + a small "Show details" link with the real error and log path; each failure mapped to a helpful action. Launcher side likewise.
 - Later option: "skip straight into the world" with the last character, off by default.
+
+**Moonglade icon (Zach, 2026-10-05):** keep the current gold-ring icon for now. Zach's Moonglade emblem (`env/branding/moonglade-source.jpeg`, 2048² JPEG, gitignored; original in ~/Downloads) is too detailed for small sizes; mock-ups showed it unreadable at ≤32 px, and a crop lost the W. Later: a simple mark designed for small sizes (bold crescent + clean W on dark navy) filling the macOS rounded square (also fixes the macOS 26 grey plate); use the emblem as splash art (loading window, About, possibly the login-screen logo via the logo-swap setting).
 
 **Later / tech debt:** era extras (class mount quests, vanilla quest levels and gold, creature damage/armor, separate mount switch); WoWSilicon client perf patches (needs a §2 ADR, FPS A/B first); the F-items above.
 
