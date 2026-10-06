@@ -241,7 +241,7 @@ def _guard_profile(path: Path, allowed: Path, tag: str) -> None:
 def run_script(prof: Path, *args) -> dict:
     r = subprocess.run([SANDBOX_EXEC, "-f", str(prof), "/bin/bash", str(SCRIPT), *map(str, args)],
                        capture_output=True, text=True, timeout=120)
-    return {"args": list(map(str, args)), "rc": r.returncode, "stdout": r.stdout[-3000:], "stderr": r.stderr[-1500:]}
+    return {"args": list(map(str, args)), "rc": r.returncode, "stdout": r.stdout[-20000:], "stderr": r.stderr[-1500:]}
 
 
 def worktrees(repo: Path) -> list[dict]:
@@ -267,12 +267,45 @@ def real_outside_listing() -> dict:
             "moonglade_folder_exists": (P.ROOT.parent / "project-moonglade").exists()}
 
 
+def verify_applied(w: dict, data_before: dict, ev: dict, decoy: Path) -> None:
+    """The state after a completed --apply: repo and data folders moved (decoys untouched), worktrees linked."""
+    old, new, projects = w["old"], w["new"], w["projects"]
+    wt_in_new = new / w["wt_in"].relative_to(old)
+    names_after = sorted(d.name for d in projects.iterdir())
+    expect_names = sorted([encode(str(new)), encode(str(wt_in_new)), encode(str(old)) + "-agent"])
+    ev["projects_after"] = names_after
+    ev["projects_expected"] = expect_names
+    require(not old.exists() and (new / ".git").exists(), "the repo folder wasn't moved", **ev)
+    require(names_after == expect_names, "the Claude Code data folders aren't exactly the moved + untouched ones",
+            **ev)
+    moved_ok = (tree_listing(projects / encode(str(new))) == data_before[encode(str(old))]
+                and tree_listing(projects / encode(str(wt_in_new))) == data_before[encode(str(w["wt_in"]))]
+                and tree_listing(projects / (encode(str(old)) + "-agent")) == data_before[encode(str(old)) + "-agent"])
+    require(moved_ok, "a data folder's contents changed in the move (or the decoy changed)", **ev)
+    require(decoy.read_text() == "unrelated\n", "a decoy folder changed", **ev)
+    wts = worktrees(new)
+    ev["worktree_list"] = wts
+    paths = [x["path"] for x in wts]
+    require(paths[:1] == [str(new)] and sorted(paths[1:]) == sorted([str(wt_in_new), str(w["wt_out"])])
+            and all(Path(p).is_dir() for p in paths), "git worktree list doesn't show the new paths", **ev)
+    require(not any("prunable" in x for x in wts), "git reports a prunable (broken) worktree", **ev)
+    links = {}
+    for p in paths[1:]:
+        r = _git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=Path(p))
+        s = _git("status", "--porcelain", cwd=Path(p))
+        links[p] = {"common_dir": r.stdout.strip(), "rc": r.returncode, "status_rc": s.returncode}
+    ev["worktree_links"] = links
+    require(all(v["rc"] == 0 and v["status_rc"] == 0 and v["common_dir"] == str(new / ".git")
+                for v in links.values()), "a worktree doesn't link back to the moved repo", **ev)
+
+
 @check("repo.rename_script", order=5, capability=CAP, stack="any", tier="quick")
 def rename_script(ctx):
     """In a temp dir only (sandboxed: writes outside it are denied and logged): the dry run exits 0, prints the plan
     and changes nothing; --apply moves the repo and its Claude Code data folders (repo + inside worktree) to the new
     encoded names, leaves decoys alone, and `git worktree list` shows every worktree at a valid path with working
-    links both ways; a second --apply onto an existing destination is refused and changes nothing."""
+    links both ways; a second --apply onto an existing destination is refused and changes nothing; and an --apply
+    stopped after its first move (kill-safe) is finished by running --apply again."""
     ev: dict = {"script": str(SCRIPT)}
     require(SCRIPT.is_file() and os.access(SCRIPT, os.X_OK), "tools/rename-folder.sh is missing or not executable", **ev)
     tmp = Path(tempfile.mkdtemp(prefix="hs-rename-")).resolve()
@@ -316,33 +349,18 @@ def rename_script(ctx):
         data_before = {d.name: tree_listing(d) for d in projects.iterdir()}
         ev["apply"] = run_script(prof, "--apply", *args)
         require(ev["apply"]["rc"] == 0, "--apply failed", **ev)
-        wt_in_new = new / w["wt_in"].relative_to(old)
-        names_after = sorted(d.name for d in projects.iterdir())
-        expect_names = sorted([encode(str(new)), encode(str(wt_in_new)), encode(str(old)) + "-agent"])
-        ev["projects_after"] = names_after
-        ev["projects_expected"] = expect_names
-        require(not old.exists() and (new / ".git").exists(), "the repo folder wasn't moved", **ev)
-        require(names_after == expect_names, "the Claude Code data folders aren't exactly the moved + untouched ones",
-                **ev)
-        moved_ok = (tree_listing(projects / encode(str(new))) == data_before[encode(str(old))]
-                    and tree_listing(projects / encode(str(wt_in_new))) == data_before[encode(str(w["wt_in"]))]
-                    and tree_listing(projects / (encode(str(old)) + "-agent")) == data_before[encode(str(old)) + "-agent"])
-        require(moved_ok, "a data folder's contents changed in the move (or the decoy changed)", **ev)
-        require((tmp / "w" / "repos" / "other" / "keep.txt").read_text() == "unrelated\n", "a decoy folder changed", **ev)
-        wts = worktrees(new)
-        ev["worktree_list"] = wts
-        paths = [x["path"] for x in wts]
-        require(paths[:1] == [str(new)] and sorted(paths[1:]) == sorted([str(wt_in_new), str(w["wt_out"])])
-                and all(Path(p).is_dir() for p in paths), "git worktree list doesn't show the new paths", **ev)
-        require(not any("prunable" in x for x in wts), "git reports a prunable (broken) worktree", **ev)
-        links = {}
-        for p in paths[1:]:
-            r = _git("rev-parse", "--path-format=absolute", "--git-common-dir", cwd=Path(p))
-            s = _git("status", "--porcelain", cwd=Path(p))
-            links[p] = {"common_dir": r.stdout.strip(), "rc": r.returncode, "status_rc": s.returncode}
-        ev["worktree_links"] = links
-        require(all(v["rc"] == 0 and v["status_rc"] == 0 and v["common_dir"] == str(new / ".git")
-                    for v in links.values()), "a worktree doesn't link back to the moved repo", **ev)
+        verify_applied(w, data_before, ev, tmp / "w" / "repos" / "other" / "keep.txt")
+
+        # kill-safe: an --apply stopped right after step 1 (repo moved, nothing else) is finished by the next --apply
+        w2 = scratch_world(tmp / "w2")
+        ev2: dict = {"scratch": {k: str(v) for k, v in w2.items()}}
+        ev["interrupted"] = ev2
+        data_before2 = {d.name: tree_listing(d) for d in w2["projects"].iterdir()}
+        os.rename(w2["old"], w2["new"])            # what a SIGKILL after the script's first mv leaves behind
+        ev2["resume"] = run_script(prof, "--apply", "--claude-projects", w2["projects"], w2["old"], w2["new"])
+        require(ev2["resume"]["rc"] == 0 and "resuming an interrupted --apply" in ev2["resume"]["stdout"],
+                "--apply after an interrupted run didn't resume", **ev)
+        verify_applied(w2, data_before2, ev2, tmp / "w2" / "repos" / "other" / "keep.txt")
 
         # refusal: destination exists -> nonzero, nothing changes
         (tmp / "w" / "repos" / "project-old").mkdir()

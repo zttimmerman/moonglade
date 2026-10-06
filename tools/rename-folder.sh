@@ -19,6 +19,8 @@
 #      at the new paths again.
 # It refuses (and changes nothing) when NEW_REPO or a destination folder in DIR already exists, when OLD_REPO isn't
 # a git checkout, or when any running process has its working directory inside OLD_REPO (Claude Code still open).
+# If an earlier --apply was stopped after step 1 (OLD_REPO gone, NEW_REPO a git checkout), running it again finishes
+# steps 2 and 3.
 set -euo pipefail
 
 DEFAULT_OLD="$HOME/Documents/repos/[redacted]"
@@ -52,9 +54,17 @@ encode() { printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'; }
 fail() { echo "REFUSED: $*" >&2; echo "Nothing was changed." >&2; exit 1; }
 
 # ---- preflight (both modes)
-[ -d "$OLD" ] || fail "$OLD doesn't exist"
-[ -e "$OLD/.git" ] || fail "$OLD isn't a git checkout"
-[ ! -e "$NEW" ] || fail "$NEW already exists"
+# RESUME: an earlier --apply was stopped after moving the repo (OLD gone, NEW a git checkout); finish the remaining
+# steps (data folders, worktree repair) instead of refusing.
+RESUME=0
+if [ ! -e "$OLD" ] && [ -e "$NEW/.git" ]; then
+  RESUME=1
+else
+  [ -d "$OLD" ] || fail "$OLD doesn't exist"
+  [ -e "$OLD/.git" ] || fail "$OLD isn't a git checkout"
+  [ ! -e "$NEW" ] || fail "$NEW already exists"
+fi
+REPO_NOW="$OLD"; [ $RESUME = 1 ] && REPO_NOW="$NEW"
 [ "$(dirname "$NEW")" != "" ] && [ -d "$(dirname "$NEW")" ] || fail "the parent of $NEW doesn't exist"
 case "$NEW/" in "$OLD"/*) fail "$NEW is inside $OLD" ;; esac
 
@@ -62,7 +72,7 @@ case "$NEW/" in "$OLD"/*) fail "$NEW is inside $OLD" ;; esac
 WTS=()
 while IFS= read -r line; do
   case "$line" in worktree\ *) WTS+=("${line#worktree }") ;; esac
-done < <(git -C "$OLD" worktree list --porcelain)
+done < <(git -C "$REPO_NOW" worktree list --porcelain)
 LINKED=()
 for w in "${WTS[@]:1}"; do LINKED+=("$w"); done
 
@@ -91,8 +101,12 @@ BUSY=$(lsof -a -d cwd -Fpcn 2>/dev/null | awk -v o="$OLD" '
   /^n/ {n=substr($0,2); if (n==o || index(n, o "/")==1) print pid " " c " (" n ")"}' || true)
 
 echo "Rename plan ($([ $APPLY = 1 ] && echo APPLY || echo 'dry run: nothing will change; add --apply to do it')):"
-echo "  1. move the repo:      $OLD"
-echo "                      -> $NEW"
+if [ $RESUME = 1 ]; then
+  echo "  1. move the repo:      already done ($NEW); resuming an interrupted --apply"
+else
+  echo "  1. move the repo:      $OLD"
+  echo "                      -> $NEW"
+fi
 if [ ${#MOVES_FROM[@]} -eq 0 ]; then
   echo "  2. Claude Code data:   none found in $PROJECTS for this folder (looked for $(encode "$OLD"))"
 else
@@ -119,8 +133,10 @@ fi
 [ -z "$BUSY" ] || fail "processes are still working inside $OLD (close Claude Code first)"
 
 # ---- apply
-mv "$OLD" "$NEW"
-echo "moved $OLD -> $NEW"
+if [ $RESUME = 0 ]; then
+  mv "$OLD" "$NEW"
+  echo "moved $OLD -> $NEW"
+fi
 i=0
 while [ $i -lt ${#MOVES_FROM[@]} ]; do
   mv "${MOVES_FROM[$i]}" "${MOVES_TO[$i]}"

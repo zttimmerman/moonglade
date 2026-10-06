@@ -280,6 +280,39 @@ def verify_names(app: Path, pl: dict, ev: dict) -> None:
     require(not any(n["old_name_hits"].values()), "the launcher, plist or shim still carries the old name", **ev)
 
 
+def heal_test_launchers() -> list[dict]:
+    """Kill-safe: a harness killed mid-run leaves its own app session running (launcher, play loop, stack, stand-in).
+    Only launchers that are provably a check's own are stopped: started with --client-cmd pointing at a stand-in .bat
+    in a harness temp dir (hs-play-*). A player's session never has --client-cmd, so it's never touched (the GIVEN
+    then fails instead). The launcher's SIGTERM stops its play loop, which shuts the stack down."""
+    tmp = str(Path(tempfile.gettempdir()).resolve())
+    own = []
+    for l in _launchers(A.APP):
+        m = re.search(r"--client-cmd (\S+)", l["cmd"])
+        bat = Path(m.group(1)) if m else None
+        if bat and str(bat.resolve()).startswith(tmp + "/hs-play-") and bat.name == "hs-standin.bat":
+            own.append(l | {"stand_in_dir": str(bat.parent)})
+    if not own:
+        return []
+    for l in own:
+        Path(l["stand_in_dir"], "stop").write_text("quit")      # the stand-in exits; the play loop then cleans up
+    t0 = time.time()
+    while any(x["pid"] == l["pid"] for l in own for x in _launchers(A.APP)) and time.time() - t0 < 150:
+        time.sleep(1)
+    left = [l for l in own if any(x["pid"] == l["pid"] for x in _launchers(A.APP))]
+    for l in left:
+        try:
+            os.kill(l["pid"], signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    t0 = time.time()
+    while any(x["pid"] == l["pid"] for l in left for x in _launchers(A.APP)) and time.time() - t0 < 150:
+        time.sleep(1)
+    for l in own:
+        shutil.rmtree(l["stand_in_dir"], ignore_errors=True)
+    return [{"pid": l["pid"], "stand_in_dir": l["stand_in_dir"], "needed_sigterm": l in left} for l in own]
+
+
 def running_names(ev: dict) -> dict:
     """Open the built app through LaunchServices with the notepad stand-in (m0, stock client setting, test hook):
     the launcher's and the game process's LaunchServices display names, and every status/dialog/stage text the
@@ -357,6 +390,7 @@ def bundle_valid(ctx):
     the launcher's and the game process's LaunchServices display names are Moonglade and no launcher text it
     shows says the old name."""
     ev: dict = {"cmd": f"{SANDBOX_EXEC} -f <guard.sb> {HS} app"}
+    ev["healed_stale_test_launchers"] = heal_test_launchers()     # kill-safe: a killed earlier run's own session
     status = subprocess.run(["git", "-C", str(P.ROOT), "status", "--porcelain", "--", "branding/"],
                             capture_output=True, text=True).stdout
     tracked = subprocess.run(["git", "-C", str(P.ROOT), "ls-files", "--", "branding/AppIcon.icns", "branding/AppIcon.png"],
