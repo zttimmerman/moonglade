@@ -82,3 +82,14 @@ Measured 2026-10-06 on the dev Mac with the ~500-bot world's data (acore_charact
 - app.shutdown_window: the existing shared-session assertions are unchanged (the session takes no backup, so its
   stage list now carries `shutdown_backup skipped`); the new scenario uses a second app run where the game exits by
   itself with a scratch backup folder.
+- **Backups tier (task 1.5, harness-reporting "Backups tier"):** `@check(..., backups=True)` on the 7 `backups.*`
+  checks and `app.backups_window`. `runner.BACKUP_PATHS` is a fixed list (the spec's 7 paths plus
+  `harness/hslib/db.py`; deliberately no import closure). On a full-tier run, `runner.backups_rule()` (git changed paths
+  vs the merge base, like the GUI rule; unknown counts as changed) decides: no backup path changed -> each backups check
+  is recorded as skip "backups tier, not run in a full run (no backup path changed)" and listed in
+  `meta.backups_tier_skipped`; `report.full_run` accepts those skips only if the rule, re-evaluated at the end, still
+  finds no change. Slow runs always run them; `--tier backups` runs exactly them (no nested quick tier).
+  `meta.timing.backups_tier_s` is the executed backups checks' time; `report.timing` checks it, excuses by-design
+  backups skips in its id coverage, and compares wall time minus `backups_tier_s` with 110 % of the baseline.
+  `report.backups_tier_rule` (quick) proves it on synthetic registries through the runner's own code paths, a scratch
+  git repo, synthetic timing documents and the live registry.
