@@ -930,8 +930,14 @@ def reopen_during_loading(ctx):
 def shutdown_window(ctx):
     """Game running from the app, quit requested as from the Dock: the shutdown window is on screen within 1 s and at
     every shutdown stage (recorded in order) until the stack is down (sampled independently); then the app exits 0
-    and nothing remains."""
-    return verify_shutdown_window(_session())
+    and nothing remains. save-backups ("The backup stage is shown in order"): a second app run with a scratch backup
+    folder where the game exits by itself records shutdown_backup (start, done) after shutdown_login and before
+    shutdown_database with the window on screen, and leaves one new backup in that folder."""
+    out = verify_shutdown_window(_session())
+    from .backup_checks import backup_stage_app_run, verify_backup_stage
+    run = backup_stage_app_run({})
+    out["backup_stage"] = verify_backup_stage(run)
+    return out
 
 
 @check("app.loading_stages", order=397, capability=CAP_APP, stack="down", tier="full")

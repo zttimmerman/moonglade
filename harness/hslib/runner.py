@@ -38,6 +38,22 @@ GUI_FILES = (
 )
 GUI_PATHS = GUI_FILES + GUI_ROOTS             # the fixed part (the closure is added by gui_patterns)
 
+# harness-reporting "Backups tier" (save-backups, Zach 2026-10-06: "run them only when needed"): what a full run records
+# for a backups-marked check when no backup path changed. The backup path list is FIXED (no import closure: the
+# backups checks drive ./play, so a closure would contain most of the harness and the tier would always run). It is
+# the spec's list plus the backup checks' own file and the bits only they and the Backups window use.
+BACKUPS_SKIP_MSG = "backups tier, not run in a full run (no backup path changed)"
+BACKUP_PATHS = (
+    "harness/hslib/backups.py",               # backups: take / list / verify / rotate / restore / CLI
+    "harness/hslib/play.py",                  # the backup on quit, the gate, --backups dispatch, the notice
+    "harness/hslib/stack.py",                 # stack.down's before_database hook
+    "harness/hslib/stages.py",                # the shutdown_backup stage
+    "harness/app/launcher.m",                 # the Backups window, the notice line
+    "play",                                   # the ./play entry point (./play --backups)
+    "harness/hslib/checks/backup_checks.py",  # the backups-tier checks themselves
+    "harness/hslib/db.py",                    # the mysql client wrapper the dumps and loads go through
+)
+
 
 def _module_file(root, pkg_parts: list[str], name: str | None):
     """The repo file for module `pkg_parts[.name]` (a module or a package's __init__), or None."""
@@ -98,6 +114,26 @@ def import_closure(roots=GUI_ROOTS, root=None) -> list[str]:
 def gui_patterns(root=None) -> tuple:
     """Every GUI input pattern: the fixed files plus the import closure of GUI_ROOTS (evaluated now)."""
     return tuple(dict.fromkeys(GUI_PATHS + tuple(import_closure(root=root))))
+
+
+def backups_paths_matching(paths: list[str] | None) -> list[str] | None:
+    """The changed paths on the backup path list (exact paths, no closure); None (unknown) stays None."""
+    if paths is None:
+        return None
+    return sorted(p for p in paths if p in BACKUP_PATHS)
+
+
+def backups_rule(root=None) -> dict:
+    """The backup path rule for this checkout: {"changed_backup_paths": [...] or None (git failed: counts as
+    changed), "base_ref", "base", "error", "paths"}."""
+    c = changed_paths(root)
+    return {"base_ref": c["base_ref"], "base": c["base"], "error": c["error"],
+            "changed_backup_paths": backups_paths_matching(c["paths"]), "paths": list(BACKUP_PATHS)}
+
+
+def backups_changed(rule: dict | None) -> bool:
+    """A backup path changed, or it can't be told (fail closed)."""
+    return rule is None or rule.get("changed_backup_paths") is None or bool(rule["changed_backup_paths"])
 
 
 def _now():
@@ -198,7 +234,19 @@ def tolerated_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
     if (rec["status"] == "skip" and meta.get("tier") == "full" and c is not None and c.tier == "slow"
             and rec["id"] in meta.get("slow_tier_skipped", []) and rec.get("message") == SLOW_SKIP_MSG):
         return True
-    return is_gui_skip(rec, meta, reg)
+    return is_gui_skip(rec, meta, reg) or is_backups_skip(rec, meta, reg)
+
+
+def is_backups_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
+    """A by-design backups-tier skip (harness-reporting "Backups tier"): a backups-marked check that a full-tier run
+    recorded as skip with BACKUPS_SKIP_MSG, listed by the runner in meta.backups_tier_skipped, on a run whose backup
+    path rule found no changed backup path. A check raising CheckSkip with the same message isn't listed there."""
+    reg = REGISTRY if reg is None else reg
+    c = reg.get(rec["id"])
+    rule = meta.get("backups_rule") or {}
+    return (rec["status"] == "skip" and meta.get("tier") == "full" and c is not None and c.backups
+            and rec["id"] in meta.get("backups_tier_skipped", []) and rec.get("message") == BACKUPS_SKIP_MSG
+            and rule.get("changed_backup_paths") == [])
 
 
 def is_gui_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
@@ -246,8 +294,19 @@ def gui_tier_skips(reg: dict, tier: str, only: list[str] | None, changed: bool) 
                   key=lambda c: (c.order, c.id))
 
 
+def backups_tier_skips(reg: dict, tier: str, only: list[str] | None, changed: bool) -> list:
+    """Backups-marked checks a full-tier run records as skip: in the run's tiers, matching the filter, and only when
+    no backup path changed. Slow runs (the periodic sweep), `--tier backups` and quick runs record none."""
+    if tier != "full" or changed:
+        return []
+    tiers = tiers_for(tier)
+    return sorted((c for c in reg.values()
+                   if c.backups and c.tier in tiers and (not only or any(fnmatch.fnmatch(c.id, g) for g in only))),
+                  key=lambda c: (c.order, c.id))
+
+
 def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: bool = False,
-            gui_skips: list = ()) -> list[dict]:
+            gui_skips: list = (), backups_skips: list = ()) -> list[dict]:
     """Run `checks` in (order, id) sequence, recording `slow_skips` as skip ("slow tier") and `gui_skips` as skip
     ("gui tier") in their place. `ensure(stack_want, ctx, profile)` brings the stack to each check's required state
     (default _ensure_stack). `quiet` suppresses the per-check log lines (synthetic runs of the report.* rules)."""
@@ -255,8 +314,9 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
     say = (lambda _m: None) if quiet else log
     skip_ids = {c.id for c in slow_skips}
     gui_ids = {c.id for c in gui_skips}
+    bk_ids = {c.id for c in backups_skips}
     results = []
-    for c in sorted([*checks, *slow_skips, *gui_skips], key=lambda c: (c.order, c.id)):
+    for c in sorted([*checks, *slow_skips, *gui_skips, *backups_skips], key=lambda c: (c.order, c.id)):
         rec = {"id": c.id, "capability": c.capability, "description": c.doc}
         if c.id in skip_ids:
             rec |= {"status": "skip", "message": SLOW_SKIP_MSG, "duration_s": 0.0,
@@ -268,6 +328,12 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
             rec |= {"status": "skip", "message": GUI_SKIP_MSG, "duration_s": 0.0,
                     "evidence": {"skip_reason": GUI_SKIP_MSG, "tier": c.tier, "gui_tier": True}}
             say(f"SKIP  {c.id}  {GUI_SKIP_MSG}")
+            results.append(rec)
+            continue
+        if c.id in bk_ids:
+            rec |= {"status": "skip", "message": BACKUPS_SKIP_MSG, "duration_s": 0.0,
+                    "evidence": {"skip_reason": BACKUPS_SKIP_MSG, "tier": c.tier, "backups_tier": True}}
+            say(f"SKIP  {c.id}  {BACKUPS_SKIP_MSG}")
             results.append(rec)
             continue
         t0 = time.time()
@@ -289,22 +355,33 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
     return results
 
 
-def timing_summary(records: list[dict], wall_s: float | None) -> dict:
-    """harness-reporting "Full-run timing": per-check wall time, their sum, the run's wall time, and the 10 slowest."""
+def backups_tier_s(records: list[dict], reg: dict | None = None) -> float:
+    """Seconds spent in executed backups-marked checks (harness-reporting "Backups tier": reported separately and
+    left out of the timing guard's wall-time comparison)."""
+    reg = REGISTRY if reg is None else reg
+    return round(sum(float(r.get("duration_s") or 0.0) for r in records
+                     if r.get("status") != "skip" and r["id"] in reg and reg[r["id"]].backups), 1)
+
+
+def timing_summary(records: list[dict], wall_s: float | None, reg: dict | None = None) -> dict:
+    """harness-reporting "Full-run timing": per-check wall time, their sum, the run's wall time, the 10 slowest, and
+    the backups tier's total."""
     per = {r["id"]: float(r.get("duration_s") or 0.0) for r in records}
     top = sorted(per.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
     return {"per_check_s": per, "checks_sum_s": round(sum(per.values()), 1),
+            "backups_tier_s": backups_tier_s(records, reg),
             "total_wall_s": None if wall_s is None else round(wall_s, 1),
             "top10": [{"id": i, "s": v} for i, v in top]}
 
 
 def select(reg: dict, tier: str, only: list[str] | None, gui_skip_ids: set | frozenset = frozenset()) -> list:
-    """Checks a run executes: those of the tier's check tiers (gui: only gui-marked ones) matching the filter, minus
-    the ones recorded as GUI skips."""
+    """Checks a run executes: those of the tier's check tiers (gui: only gui-marked ones; backups: only backups-marked
+    ones) matching the filter, minus the ones recorded as GUI / backups-tier skips (`gui_skip_ids` holds both)."""
     tiers = tiers_for(tier)
     return sorted(
         (c for c in reg.values()
-         if c.tier in tiers and (tier != "gui" or c.gui) and c.id not in gui_skip_ids
+         if c.tier in tiers and (tier != "gui" or c.gui) and (tier != "backups" or c.backups)
+         and c.id not in gui_skip_ids
          and (not only or any(fnmatch.fnmatch(c.id, g) for g in only))),
         key=lambda c: (c.order, c.id),
     )
@@ -322,7 +399,9 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
     reg = load_all()
     rule = gui_rule() if tier in ("full", "slow") else None
     gui_skips = gui_tier_skips(reg, tier, only, gui_changed(rule)) if rule is not None else []
-    selected = select(reg, tier, only, {c.id for c in gui_skips})
+    bk_rule = backups_rule() if tier == "full" else None
+    bk_skips = backups_tier_skips(reg, tier, only, backups_changed(bk_rule)) if bk_rule is not None else []
+    selected = select(reg, tier, only, {c.id for c in gui_skips} | {c.id for c in bk_skips})
     slow_skips = slow_tier_skips(reg, tier, only, referenced_ids())
     full = is_full_run(tier, only)
     P.OUT.mkdir(parents=True, exist_ok=True)
@@ -331,6 +410,7 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
         "started": _now(), "repo_sha": _git_sha(), "fork_lock": P.fork_lock(), "full_run": full,
         "tier": tier, "force_clean": force_clean, "slow_tier_skipped": [c.id for c in slow_skips],
         "gui_tier_skipped": [c.id for c in gui_skips], "gui_rule": rule,
+        "backups_tier_skipped": [c.id for c in bk_skips], "backups_rule": bk_rule,
         "keep_awake": awake,
         "filter": only or [], "host": {"platform": platform.platform(), "machine": platform.machine(),
                                       "python": platform.python_version(), "disk_free_gb": round(du.free / 2**30, 1)},
@@ -340,12 +420,18 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
     import os
     os.environ["HS_HARNESS_RUN"] = "1"
     from .checks.resolution_checks import player_config_sha, player_marker_sha
+    from . import backups
     ctx = {"force_clean": force_clean, "tier": tier, "player_config_sha256_start": player_config_sha(),
-           "player_marker_sha256_start": player_marker_sha()}
+           "player_marker_sha256_start": player_marker_sha(),
+           # save-backups: the player's env/backups/ must be byte-identical at the end (backups.player_untouched)
+           "player_backups_fingerprint_start": backups.fingerprint(backups.PLAYER_ROOT)}
     if rule is not None:
         log(f"GUI rule: {'GUI checks run' if gui_changed(rule) else 'GUI checks skipped by design'} "
             f"(changed GUI paths: {rule['changed_gui_paths']}{'; ' + rule['error'] if rule['error'] else ''})")
-    results = execute(selected, ctx, slow_skips, gui_skips=gui_skips)
+    if bk_rule is not None:
+        log(f"Backups rule: {'backups checks run' if backups_changed(bk_rule) else 'backups checks skipped by design'} "
+            f"(changed backup paths: {bk_rule['changed_backup_paths']}{'; ' + bk_rule['error'] if bk_rule['error'] else ''})")
+    results = execute(selected, ctx, slow_skips, gui_skips=gui_skips, backups_skips=bk_skips)
 
     if not leave_up and any(stack.stack_processes().values()):
         ctx.setdefault("stack_transitions", []).append({"down(final)": stack.down()})
