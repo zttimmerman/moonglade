@@ -101,12 +101,17 @@ function HSFrontMenu_CurrentProfile()
 		or HS_PROFILES[1];
 end
 
+-- DefaultServerLogin wipes the password string it's given, in place (seamless-experience, measured: a second login
+-- with the same profile in one glue session, e.g. Try again or Main Menu then Continue, failed with "Please enter your
+-- password."). Lua strings are shared, so the profile's own copy went with it. The password is therefore kept as
+-- bytes and a fresh string is built for each login.
 function HSFrontMenu_Login(profile, how)
 	if ( not profile ) then return; end
 	HSFrontMenu_Mark("login:" .. profile.account .. ":" .. (how or "?"));
 	PlaySound("gsLogin");
 	SetSavedAccountName(profile.account);
-	DefaultServerLogin(profile.account, profile.password);
+	if ( not profile.pwbytes ) then profile.pwbytes = { string.byte(profile.password, 1, -1) }; end
+	DefaultServerLogin(profile.account, string.char(unpack(profile.pwbytes)));
 end
 
 function HSFrontMenu_Continue(how)
@@ -370,6 +375,16 @@ function AccountLogin_OnKeyDown(key)
 		Screenshot();
 		return;
 	end
+	-- seamless-experience: while the loading overlay is up, keys don't reach the menu (Enter would log in again);
+	-- Escape is the overlay's "Back to menu" once it's offered. The friendly error: Enter = Try again, Escape = Back.
+	if ( HSLoadingOverlay and HSLoadingOverlay:IsShown() ) then
+		if ( key == "ESCAPE" and HSLoadingOverlayBack:IsShown() ) then HSSeamless_OverlayBack(); end
+		return;
+	end
+	if ( HSSeamless_ErrorShown and HSSeamless_ErrorShown() ) then
+		if ( key == "ENTER" ) then HSSeamless_Retry(); elseif ( key == "ESCAPE" ) then HSSeamless_BackToMenu(); end
+		return;
+	end
 	if ( not state.items or GlueDialog:IsShown() or TOSFrame:IsShown() or ConnectionHelpFrame:IsShown() ) then
 		if ( key ~= "ENTER" ) then HS_Stock_OnKeyDown(key); end
 		return;
@@ -403,17 +418,25 @@ function HSFrontMenu_OnEvent(self, event)
 			names = names .. (i > 1 and "," or "") .. (name or "?");
 		end
 		HSFrontMenu_Mark("charlist:" .. n .. ":" .. names);
+		-- only after a login in this glue session: back from the world, the glue screens start at character select
+		-- again and must not repeat the scripted actions (seamless-experience)
+		local loggedIn = HSSeamlessState and HSSeamlessState.logins > 0 and not HSSeamlessState.enteredWorld;
 		if ( HS_TEST.quit_after_charlist and not state.quitAt ) then
 			state.quitAt = state.testClock + HS_TEST.quit_after_charlist;
 		end
-		if ( HS_TEST.enter_world_after_charlist and n > 0 and not state.enterAt ) then
+		if ( HS_TEST.enter_world_after_charlist and n > 0 and not state.enterAt and loggedIn ) then
 			state.enterAt = state.testClock + HS_TEST.enter_world_after_charlist;
+		end
+		-- HS_TEST.charselect = { {t = seconds after the character list, act = ...}, ... } (seamless-experience)
+		if ( HS_TEST.charselect and n > 0 and not state.csAt and loggedIn ) then
+			state.csAt = state.testClock;
 		end
 	end
 end
 
 -- HS_TEST.script = { {t = seconds after the glue screens load (the login screen shows within a frame or two), act = "continue" | "shot" | "quit" |
--- "backdrop:TBC" | "menu:settings" | "key:DOWN" | ...}, ... }; HS_TEST.quit_after_charlist = seconds. "continue"
+-- "backdrop:TBC" | "menu:settings" | "key:DOWN" | "details" | "retry" | ...}, ... }; HS_TEST.quit_after_charlist = seconds;
+-- HS_TEST.charselect = steps timed from the character list (HSFrontMenu_TestAct). "continue"
 -- clicks the Continue button once (the same handler a mouse click runs); "key:X" calls the login screen's own
 -- key handler; nothing here injects keystrokes into the client.
 -- Marker colours (HS_TEST.marker): backdrop and music squares red / green / blue for the 1st / 2nd / 3rd entry of
@@ -444,6 +467,14 @@ function HSFrontMenu_UpdateMarker()
 	else
 		HSTestMarkerErrors:SetTexture(1, 0, 0, 1);
 	end
+	-- seamless-experience, second row: green = loading overlay visible, blue = friendly error visible, white = neither
+	if ( HSLoadingOverlay and HSLoadingOverlay:IsVisible() ) then
+		HSTestMarkerOverlay:SetTexture(0, 1, 0, 1);
+	elseif ( HSErrorDialog and HSErrorDialog:IsVisible() ) then
+		HSTestMarkerOverlay:SetTexture(0, 0, 1, 1);
+	else
+		HSTestMarkerOverlay:SetTexture(1, 1, 1, 1);
+	end
 	HSTestMarker:Show();
 end
 
@@ -471,9 +502,14 @@ function HSFrontMenu_TestUpdate(self, elapsed)
 				state.testDone[i] = true;
 				local act = step.act;
 				if ( act == "continue" ) then
-					HSFrontMenu_Mark("press:continue");
-					HSFrontMenu_Open("main", 1);
-					HSMenuSlot1:Click();
+					-- only on the login screen (back from the world, the glue screens restart at character select)
+					if ( CURRENT_GLUE_SCREEN == "login" ) then
+						HSFrontMenu_Mark("press:continue");
+						HSFrontMenu_Open("main", 1);
+						HSMenuSlot1:Click();
+					else
+						HSFrontMenu_Mark("skip:continue:" .. tostring(CURRENT_GLUE_SCREEN));
+					end
 				elseif ( strsub(act, 1, 5) == "menu:" ) then
 					HSFrontMenu_Open(strsub(act, 6));
 				elseif ( strsub(act, 1, 4) == "key:" ) then
@@ -490,10 +526,23 @@ function HSFrontMenu_TestUpdate(self, elapsed)
 				elseif ( strsub(act, 1, 9) == "backdrop:" ) then
 					local b = backdropByKey(strsub(act, 10));
 					if ( b ) then HSFrontMenu_ApplyBackdrop(b, true); end
+				else
+					HSFrontMenu_TestAct(act);
 				end
 			end
 		end
 	end
+	if ( HS_TEST.charselect and state.csAt ) then
+		state.csDone = state.csDone or {};
+		for i, step in ipairs(HS_TEST.charselect) do
+			if ( not state.csDone[i] and state.testClock >= state.csAt + step.t ) then
+				state.csDone[i] = true;
+				HSFrontMenu_TestAct(step.act);
+			end
+		end
+	end
+	-- repaint after this frame's actions too, so a screenshot taken by one of them shows the state they produced
+	if ( HS_TEST.marker ) then HSFrontMenu_UpdateMarker(); end
 	if ( state.enterAt and state.testClock >= state.enterAt ) then
 		state.enterAt = nil;
 		HSFrontMenu_Mark("press:enterworld");
@@ -503,6 +552,39 @@ function HSFrontMenu_TestUpdate(self, elapsed)
 		state.quitAt = nil;
 		HSFrontMenu_Mark("quit");
 		QuitGame();
+	end
+end
+
+-- seamless-experience test actions: "details" / "retry" / "back" (the friendly error's controls, clicked),
+-- "csinspect" (record character select's wording), "play" (click Play on character select), "shot", "quit",
+-- "showlog" (debugging aid: the end of the in-memory test log as text on screen, for a following "shot").
+function HSFrontMenu_TestAct(act)
+	if ( act == "details" ) then
+		HSFrontMenu_Mark("press:details");
+		HSErrorDialogToggle:Click();
+	elseif ( act == "retry" ) then
+		HSFrontMenu_Mark("press:retry:" .. (HSErrorDialog:IsShown() and 1 or 0));
+		HSErrorDialogRetry:Click();
+	elseif ( act == "back" ) then
+		HSFrontMenu_Mark("press:back");
+		HSErrorDialogBack:Click();
+	elseif ( act == "showlog" ) then
+		-- debugging aid: the end of the in-memory test log on screen (for a following "shot")
+		HSTestLogText:SetText(strsub(state.testLog, -900));
+		HSTestLogText:Show();
+	elseif ( act == "csinspect" ) then
+		HSSeamless_InspectCharSelect();
+	elseif ( act == "play" ) then
+		HSFrontMenu_Mark("press:play:" .. tostring(CharSelectEnterWorldButton:GetText()));
+		CharSelectEnterWorldButton:Click();
+	elseif ( act == "shot" ) then
+		Screenshot();
+		HSFrontMenu_Mark("shot");
+	elseif ( act == "quit" ) then
+		HSFrontMenu_Mark("quit");
+		QuitGame();
+	else
+		HSFrontMenu_Mark("unknown-act:" .. tostring(act));
 	end
 end
 

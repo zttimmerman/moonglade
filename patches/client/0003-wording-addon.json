@@ -1,0 +1,10 @@
+{
+  "id": "0003",
+  "kind": "files",
+  "title": "Moonglade wording add-on (Interface/AddOns/Moonglade): Exit to Menu instead of Logout, no server talk",
+  "adr": "docs/adr/0009-client-patch-overlay.md (data only: a normal add-on folder; no FrameXML or binary change)",
+  "files": {
+    "Interface/AddOns/Moonglade/Moonglade.toc": "client-mods/addons/Moonglade/Moonglade.toc",
+    "Interface/AddOns/Moonglade/Moonglade.lua": "client-mods/addons/Moonglade/Moonglade.lua"
+  }
+}

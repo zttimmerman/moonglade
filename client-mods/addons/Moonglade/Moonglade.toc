@@ -1,0 +1,7 @@
+## Interface: 30300
+## Title: Moonglade
+## Notes: Moonglade game wording (Exit to Menu and friends).
+## Author: Moonglade
+## Version: 1
+## SavedVariables: MoongladeTest
+Moonglade.lua

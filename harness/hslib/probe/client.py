@@ -176,6 +176,7 @@ class WorldSession:
         self.ignored = {}              # opcode name -> count of packets the pump didn't parse
         self.pump_error = None
         self.group = None              # last parsed SMSG_GROUP_LIST (dict) or None
+        self.texts = []                # every server text packet received, from the first byte on (TEXT_OPCODES)
 
     # -- context
     def __enter__(self):
@@ -219,6 +220,8 @@ class WorldSession:
             opcode = struct.unpack("<H", rest[1:3])[0]
         payload = _recv_exact(self.sock, size - 2)
         self.log.append(("S>C", W.OPCODE_NAMES.get(opcode, hex(opcode))))
+        if opcode in TEXT_OPCODES:      # recorded here, so wait_for() and the pump both keep them
+            self.texts.append(parse_text_packet(opcode, payload) | {"t": round(time.time(), 3)})
         return opcode, payload
 
     def wait_for(self, *opcodes: int, timeout: float | None = None) -> tuple[int, bytes]:
@@ -633,6 +636,40 @@ def parse_chat(data: bytes, gm: bool = False) -> dict:
     r.u32()                       # message length + 1
     ev["msg"] = r.cstr()
     return ev
+
+
+# Packets that carry text the player reads (seamless-experience, client.login_text_clean). Sources in the pinned core:
+# SMSG_MOTD MotdMgr::CreateWorldPacket (Motd/MotdMgr.cpp: u32 line count, then that many C strings);
+# SMSG_MESSAGECHAT / SMSG_GM_MESSAGECHAT ChatHandler::BuildChatPacket; SMSG_NOTIFICATION ChatHandler::SendNotification
+# (C string); SMSG_CHAT_SERVER_MESSAGE WorldSession / World::SendServerMessage (u32 type, C string);
+# SMSG_AREA_TRIGGER_MESSAGE WorldSession::SendAreaTriggerMessage (u32 length, C string); SMSG_RAID_INSTANCE_MESSAGE
+# and SMSG_DEFENSE_MESSAGE are kept raw (names only), SMSG_CHANNEL_NOTIFY likewise (channel join notices).
+TEXT_OPCODES = {W.SMSG_MOTD, W.SMSG_MESSAGECHAT, W.SMSG_GM_MESSAGECHAT, W.SMSG_NOTIFICATION, W.SMSG_CHAT_SERVER_MESSAGE,
+                W.SMSG_AREA_TRIGGER_MESSAGE, W.SMSG_RAID_INSTANCE_MESSAGE, W.SMSG_DEFENSE_MESSAGE, W.SMSG_CHANNEL_NOTIFY}
+
+
+def parse_text_packet(op: int, data: bytes) -> dict:
+    """{"op": name, "lines": [text...], ...} for a TEXT_OPCODES packet; never raises (a parse error is recorded and the
+    raw bytes are kept as text, so a check can't miss a message it failed to parse)."""
+    name = W.OPCODE_NAMES.get(op, hex(op))
+    try:
+        r = W.Reader(data)
+        if op == W.SMSG_MOTD:
+            n = r.u32()
+            return {"op": name, "lines": [r.cstr() for _ in range(n)]}
+        if op in (W.SMSG_MESSAGECHAT, W.SMSG_GM_MESSAGECHAT):
+            c = parse_chat(data, gm=(op == W.SMSG_GM_MESSAGECHAT))
+            return {"op": name, "lines": [c["msg"]], "chat": c}
+        if op == W.SMSG_NOTIFICATION:
+            return {"op": name, "lines": [r.cstr()]}
+        if op == W.SMSG_CHAT_SERVER_MESSAGE:
+            return {"op": name, "type": r.u32(), "lines": [r.cstr()]}
+        if op == W.SMSG_AREA_TRIGGER_MESSAGE:
+            r.u32()
+            return {"op": name, "lines": [r.cstr()]}
+    except Exception as e:  # noqa: BLE001
+        return {"op": name, "parse_error": f"{type(e).__name__}: {e}", "lines": [data.decode("latin-1")]}
+    return {"op": name, "lines": [data.decode("latin-1")]}
 
 
 def parse_log_xpgain(data: bytes) -> dict:

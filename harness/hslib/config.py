@@ -170,6 +170,16 @@ def write_all(world_datadir: Path | None = None, extra_world: dict | None = None
         # Warden = anti-cheat that sends native code modules to the client. Pointless offline, and the prime
         # suspect for the client's ILLEGAL_INSTRUCTION crash at a non-module EIP under Wine+Rosetta (2026-10-01).
         "Warden.Enabled": "0",
+        # seamless-experience (client-connectivity "No server-identity text on login"): no core version line at login
+        # (CharacterHandler.cpp:846; the .dist default is 0 too, pinned here so a .dist change can't bring it back).
+        # The motd and mod-playerbots' login lines are held back by mod-moonglade (Moonglade.QuietServerText).
+        "Server.LoginInfo": "0",
+        # character logins ("Login Character:[name]", CharacterHandler.cpp:1067, logger entities.player) in their own
+        # timestamped server log, Players.log (flags 1 = time prefix, Appender.cpp:62), so checks can see when a client
+        # entered the world; the auction house's info lines (playerbots trade there) stay out
+        "Appender.Players": "2,4,1,Players.log,w",
+        "Logger.entities.player": "4,Players",
+        "Logger.entities.player.auctionhouse": "2,Players",
     } | prof["world"] | (extra_world or {})
     render(etc / "authserver.conf.dist", etc / "authserver.conf", auth)
     render(etc / "worldserver.conf.dist", etc / "worldserver.conf", world)

@@ -55,17 +55,8 @@ ALLOW_LINES = (
     ("tools/rename-folder.sh",
      r'#   cd ~ && ~/Documents/repos/[redacted]/tools/rename-folder.sh --apply +do it',
      "the folder-rename script's usage line runs it from the old folder"),
-    # Build inputs the rename brief kept out of scope ("no server, module, patch ... changes"): comment/title text
-    # only, nothing a player sees. Renaming them changes build or client-patch inputs; left for a change that may.
-    ("modules/mod-era-profile/conf/mod_era_profile.conf.dist",
-     r'# mod-era-profile: Hearthstone "vanilla mode" \(openspec/changes/m3-vanilla-mode, Gate 1 decisions in',
-     "module source comment (build input, out of the rename's scope)"),
-    ("modules/mod-era-profile/src/EraProfile.cpp",
-     r' \* mod-era-profile: Hearthstone "vanilla mode" \(openspec/changes/m3-vanilla-mode\)\.',
-     "module source comment (build input, out of the rename's scope)"),
-    ("patches/client/0002-glue-front-menu.json",
-     r'  "title": "Hearthstone front menu \(GlueXML\): profile list, auto-login with cancel, backdrop picker",',
-     "client patch record title (patch input, out of the rename's scope)"),
+    # F29 (seamless-experience): the three build-input lines the rename left (two mod-era-profile comments, patch
+    # 0002's title) are renamed; their entries are gone.
     # The guard's own requirement and the rename scenario must name the old word to state the rule.
     ("openspec/specs/harness-reporting/spec.md",
      r'Tracked current files SHALL NOT use the old project name "Hearthstone", except in recorded history and in Blizzard\'s own game content\.',
