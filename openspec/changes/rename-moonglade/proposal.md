@@ -24,4 +24,4 @@
 - `mac-app` (name and bundle id), `harness-reporting` (a naming guard).
 
 ## Spec-change log
-(none yet)
+- 2026-10-05: the `repo.naming` allowlist also covers three exact lines in build/patch inputs (comment headers of `modules/mod-era-profile/conf/mod_era_profile.conf.dist` and `src/EraProfile.cpp`, and the `"title"` of `patches/client/0002-glue-front-menu.json`). Renaming them would change build inputs (full rebuild) and a patch record for comment-only text no player sees. Exact-line allowlisting, not a path exemption. Follow-up: rename them in the next change that touches those inputs anyway.
