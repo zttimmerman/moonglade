@@ -30,6 +30,7 @@ taken on every quit makes progress safe, the way a console game keeps save slots
 
 ### Modified Capabilities
 - `mac-app`: Option-click opens the Backups window; the shutdown window shows the backup stage.
+- `harness-reporting`: a path-triggered backups tier; the full-run timing guard excludes it.
 
 ## Data provenance (§7)
 No game data values are written. Backups are byte-for-byte dumps of the player's own databases.
@@ -41,3 +42,4 @@ No game data values are written. Backups are byte-for-byte dumps of the player's
 
 ## Spec-change log
 - 2026-10-06 (tightening, after an incident): B25's manual kill-during-restore test ran against the live databases and its cleanup deleted the backups being restored, half-emptying `acore_characters` (recovered from a full copy with Zach's OK; all 111 tables checksum-identical to the 08:47 copy, nothing of the player's lost). The spec allowed tests to restore into the live schemas. Now: test-shaped restores target scratch `hsbk_` schemas only and live targets are refused (new scenario), and a killed restore is healed by the next run (new scenario under `backups.kill_safe`).
+- 2026-10-06 (Zach's choice; **loosening, review at the M4 gate**): the verifier's full run took 2433 s against the 1868 s timing limit; the new backup checks cost ~690 s. Zach chose "run them only when needed": a backups tier that full runs execute only when backup-related paths change (like the GUI tier), plus the slow-tier sweep, and `report.timing` excludes backups-tier time from the baseline comparison. Rejected: accepting ~40 min full runs, or slimming the checks first (likely still over the limit, +3 h).
