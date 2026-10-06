@@ -13,3 +13,4 @@
   - update `git worktree` paths (`git worktree repair`);
   - remind Zach to update anything that hard-codes the old path (Dock pin, etc.).
   It prints what it would do (dry run) unless given `--apply`.
+- As built: the script is also resumable: if `--apply` is killed after moving the repo, the next `--apply` finishes the remaining steps (data-folder move, worktree repair). It refuses when the destination exists from an unrelated folder, when the source is not a git checkout, or when a process still has its working directory inside the old folder.
