@@ -708,7 +708,12 @@ def startup_failure(ctx):
     off, since = _log_size(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     wine_off = P.WINE_LOG.stat().st_size if P.WINE_LOG.exists() else 0
     try:
-        ev["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat), "--world-datadir", bad)
+        # scratch settings, stock client: without them the play loop's "prepare" stage would (re)build the player's
+        # own env/client-play/ whenever the client patch inputs changed (F28); the failure under test is the world's
+        settings = s.dir / "settings.json"
+        settings.write_text(json.dumps({"client": "stock"}))
+        ev["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat), "--world-datadir", bad,
+                              env={"HS_SETTINGS": str(settings)})
         require(ev["open"]["rc"] == 0, "`open` failed to launch the app", **ev)
         t0 = time.time()
         while hook.exit_code() is None and time.time() - t0 < 900:
