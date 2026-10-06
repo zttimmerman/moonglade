@@ -66,6 +66,16 @@ ALLOW_LINES = (
     ("patches/client/0002-glue-front-menu.json",
      r'  "title": "Hearthstone front menu \(GlueXML\): profile list, auto-login with cancel, backdrop picker",',
      "client patch record title (patch input, out of the rename's scope)"),
+    # The guard's own requirement and the rename scenario must name the old word to state the rule.
+    ("openspec/specs/harness-reporting/spec.md",
+     r'Tracked current files SHALL NOT use the old project name "Hearthstone", except in recorded history and in Blizzard\'s own game content\.',
+     "the naming guard's own requirement text"),
+    ("openspec/specs/harness-reporting/spec.md",
+     r'- \*\*WHEN\*\* the naming guard scans tracked files case-insensitively for "hearthstone"',
+     "the naming guard's own scenario text"),
+    ("openspec/specs/mac-app/spec.md",
+     r'- \*\*THEN\*\* the launcher\'s and the game process\'s LaunchServices display names are "Moonglade", and no user-visible launcher text says "Hearthstone"',
+     "the rename scenario states the forbidden name"),
 )
 
 
