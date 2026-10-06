@@ -396,15 +396,29 @@ def stop_worldserver(pid: int) -> dict:
     return {"pid": pid, "graceful": graceful}
 
 
-def down() -> dict:
+def down(on_stage=None) -> dict:
+    """Stop worldserver (graceful: saves the world), authserver, mysqld. `on_stage(sid, state)` (launcher-fixes: the
+    shutdown window) hears "world" / "login" / "database" with "start" + "done", or "skipped" when not running."""
+    def note(sid, state):
+        if on_stage:
+            on_stage(sid, state)
     info = {}
     procs = stack_processes()
+    note("world", "start" if procs["worldserver"] else "skipped")
     for pid in procs["worldserver"]:
         info["worldserver"] = stop_worldserver(pid)
+    if procs["worldserver"]:
+        note("world", "done")
+    note("login", "start" if procs["authserver"] else "skipped")
     for pid in procs["authserver"]:
         _kill(pid, grace=15)
         info["authserver"] = {"pid": pid}
+    if procs["authserver"]:
+        note("login", "done")
+    note("database", "start" if procs["mysqld"] else "skipped")
     info |= mysql_down()
+    if procs["mysqld"]:
+        note("database", "done")
     for f in PIDFILE.values():
         if f.exists():
             f.unlink()

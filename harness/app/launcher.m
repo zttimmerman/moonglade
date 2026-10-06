@@ -29,6 +29,19 @@
 // - Test-only, honoured only with the test hook: HS_APP_TEST_DISABLE=handoff,forward,reopen_note,early_hide (counterexamples
 //   that switch one of those off) and HS_APP_SNAPSHOT_DIR=<dir> (renders the loading window, which test mode never
 //   puts on screen, to <dir>/NNN-<stage>.png at each stage event; previews without Screen Recording permission).
+//
+// launcher-fixes (openspec/changes/launcher-fixes):
+// - Reopen during loading (a Dock/Finder click before the game's window is up) brings the loading window forward
+//   instead of "already running". "Already running" is only the second-launch path (the play loop's exit code 2).
+// - Shutdown window: from a quit request (Dock Quit, Cmd-Q, SIGTERM) or the play loop's first `[shutdown] {json}`
+//   line (the game exited), the loading window turns into "Saving and shutting down the world…" and stays on screen
+//   (ordered front without taking focus) until the play loop has exited, i.e. everything has stopped; then the app
+//   exits. Each shutdown line is recorded as a hook event {"kind":"shutdown_stage", ...} with the window's state
+//   ("visible": AppKit's view, "onscreen": the window server's); "shutdown_window" events mark shown/closed.
+//   A problem during shutdown still ends in the error dialog.
+// - More test-only switches (HS_APP_TEST_DISABLE): loading_reopen (the old "already running" on a reopen during
+//   loading), loading_reopen_hide (a reopen during loading hides the loading window), shutdown_window (no shutdown
+//   window), shutdown_early_close (the shutdown window closes at the first shutdown stage).
 #import <Cocoa/Cocoa.h>
 #include <signal.h>
 #include <fcntl.h>
@@ -82,6 +95,9 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
 @property BOOL handedOff;
 @property double lastForward;
 @property double handoffAt;
+// shutdown (launcher-fixes)
+@property BOOL shutdownMode;
+@property(strong) NSTextField *titleLabel;
 @end
 
 @implementation HSLauncher
@@ -159,6 +175,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     detail.frame = NSMakeRect(124, 58, 372, 56);
     [root addSubview:detail];
     self.stageLabel = title;
+    self.titleLabel = title;
     self.bar = bar;
     self.statusDetail = detail;
     self.statusWindow = w;
@@ -206,6 +223,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     if (rec[@"t"]) { rec[@"play_t"] = rec[@"t"]; [rec removeObjectForKey:@"t"]; }
     rec[@"kind"] = @"stage";
     [self record:rec];
+    if (self.shutdownMode) return;                   // the window shows the shutdown now
     NSString *sid = [ev[@"id"] isKindOfClass:[NSString class]] ? ev[@"id"] : @"";
     if (![sid isEqual:self.stage[@"id"]] || [ev[@"state"] isEqual:@"start"])
         self.stageSince = [NSDate timeIntervalSinceReferenceDate];
@@ -217,7 +235,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     if ([sid isEqual:@"world"] && [frac isKindOfClass:[NSNumber class]] && [ev[@"state"] isEqual:@"progress"])
         label = [NSString stringWithFormat:@"%@  %d%%", label, (int)lround([frac doubleValue] * 100)];
     if ([ev[@"state"] isEqual:@"failed"]) label = [NSString stringWithFormat:@"Stopped: %@", label];
-    if (!self.stopRequested) self.stageLabel.stringValue = label;
+    if (!self.stopRequested && !self.shutdownMode) self.stageLabel.stringValue = label;
     if ([sid isEqual:@"ready"]) {
         NSDictionary *win = [ev[@"window"] isKindOfClass:[NSDictionary class]] ? ev[@"window"] : nil;
         if (win[@"pid"]) [self gameWindowUp:[win[@"pid"] intValue] via:@"ready_stage"];
@@ -380,6 +398,12 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
             if ([ev isKindOfClass:[NSDictionary class]]) [self onStage:ev];
             continue;
         }
+        if ([l hasPrefix:@"[shutdown] "]) {
+            NSData *jd = [[l substringFromIndex:11] dataUsingEncoding:NSUTF8StringEncoding];
+            id ev = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+            if ([ev isKindOfClass:[NSDictionary class]]) [self onShutdown:ev];
+            continue;
+        }
         if (![l hasPrefix:@"[play] "]) {
             NSString *t = [l stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
             if (t.length) [self.outLines addObject:t.length > 300 ? [t substringToIndex:300] : t];
@@ -389,7 +413,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
         NSString *msg = [l substringFromIndex:7];
         [self.playLines addObject:msg];
         if (self.playLines.count > 50) [self.playLines removeObjectAtIndex:0];
-        if (!self.handedOff && !self.stopRequested) {
+        if (!self.handedOff && !self.stopRequested && !self.shutdownMode) {
             self.statusDetail.stringValue = [self appWording:msg];
             [self record:@{@"kind": @"detail", @"text": self.statusDetail.stringValue}];
         }
@@ -456,6 +480,9 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     int code = task.terminationStatus;
     if (task.terminationReason == NSTaskTerminationReasonUncaughtSignal) code = 128 + code;
     [self appLog:[NSString stringWithFormat:@"play loop exited with %d", code]];
+    if (self.shutdownMode)                             // everything has stopped (the play loop is gone): close it
+        [self record:@{@"kind": @"shutdown_window", @"state": @"closed", @"code": @(code),
+                       @"visible_before": @(self.statusWindow.visible), @"onscreen_before": @([self windowOnScreen])}];
     [self hideStatus];
     if (code == 0) [self finish:0];
     if (code == 2) {                                    // play.py EXIT_BUSY: the single-instance lock is held
@@ -508,7 +535,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
 }
 
 - (void)pollHide {
-    if (!self.statusWindow.visible || ![self gameAlive]) return;
+    if (!self.statusWindow.visible || ![self gameAlive] || self.shutdownMode) return;
     BOOL win = [self gameWindowOnScreen];
     BOOL front = [[NSWorkspace sharedWorkspace] frontmostApplication].processIdentifier == self.game.processIdentifier;
     double waited = [NSDate timeIntervalSinceReferenceDate] - self.handoffAt;
@@ -521,6 +548,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
 }
 
 - (void)hideLoading:(NSString *)why {
+    if (self.shutdownMode) return;                   // the window is the shutdown window now: it stays
     [self hideStatus];
     [self record:@{@"kind": @"status", @"id": @"hidden", @"text": @"loading window hidden: the game window is up",
                    @"why": why}];
@@ -607,7 +635,26 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
         [self bringGameForward:@"reopen"];
         return NO;
     }
-    if (self.task.running) {
+    if (self.task.running && ![self.disabled containsObject:@"loading_reopen"]) {
+        // loading (no game window yet) or shutting down: bring forward what Hearthstone is showing, no dialog. (The
+        // only other case, the game's window gone but its shutdown not started yet, lasts a moment: just activate.)
+        BOOL showing = self.shutdownMode || !self.handedOff;
+        BOOL hide = showing && !self.shutdownMode && [self.disabled containsObject:@"loading_reopen_hide"];
+        [self record:@{@"kind": @"reopen", @"forwarded": @NO,
+                       @"showing": self.shutdownMode ? @"shutdown" : (!self.handedOff ? @"loading" : @"nothing"),
+                       @"test_hide": @(hide)}];
+        if (hide) {                                     // test-only counterexample
+            [self.statusWindow orderOut:nil];
+            return NO;
+        }
+        [NSApp activateIgnoringOtherApps:YES];
+        if (showing) {
+            [self ensureWindow];
+            [self.statusWindow makeKeyAndOrderFront:nil];
+        }
+        return NO;
+    }
+    if (self.task.running) {                            // test switch loading_reopen: the old behaviour
         [self dialog:@"already_running" title:@"Hearthstone is already running"
                 text:(self.clientStarted ? @"The game is already open. Quit the game to stop everything."
                                          : @"Hearthstone is still starting. The game will open by itself.")
@@ -617,13 +664,88 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     return NO;
 }
 
+// ------------------------------------------------------------------ the shutdown window (launcher-fixes)
+
+// Our status window as the window server sees it: on screen right now (owner and bounds only; no permission).
+- (BOOL)windowOnScreen {
+    if (!self.statusWindow || self.statusWindow.windowNumber <= 0) return NO;
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow,
+                                                 (CGWindowID)self.statusWindow.windowNumber);
+    if (!list) return NO;
+    BOOL on = NO;
+    for (NSDictionary *w in (__bridge NSArray *)list)
+        if ([w[(id)kCGWindowNumber] intValue] == self.statusWindow.windowNumber) on = [w[(id)kCGWindowIsOnscreen] boolValue];
+    CFRelease(list);
+    return on;
+}
+
+- (void)enterShutdown:(NSString *)why {
+    if (self.shutdownMode) return;
+    if ([self.disabled containsObject:@"shutdown_window"]) {    // test-only counterexample: no shutdown window
+        [self record:@{@"kind": @"shutdown_window", @"state": @"skipped", @"why": why,
+                       @"skipped": @"disabled by test switch"}];
+        return;
+    }
+    self.shutdownMode = YES;
+    [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(pollHide) object:nil];
+    [self ensureWindow];
+    self.titleLabel.stringValue = @"Saving and shutting down the world…";
+    self.statusDetail.stringValue = @"Please don't force-quit Hearthstone: it closes by itself when everything has "
+                                    @"stopped. This takes up to a minute.";
+    self.stage = nil;                                  // the bar now shows the shutdown's own steps
+    self.targetOverall = self.shownOverall = 0;
+    self.bar.doubleValue = 0;
+    // on top of other windows without taking focus from whatever the player is doing now
+    [self.statusWindow orderFrontRegardless];
+    [self recordShown:why attempt:0];
+}
+
+// "shown" is recorded once the window server has it on screen (it lags orderFront by a display cycle), or after 1 s
+- (void)recordShown:(NSString *)why attempt:(int)attempt {
+    BOOL on = [self windowOnScreen];
+    if (!on && attempt < 20 && self.statusWindow.visible) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self recordShown:why attempt:attempt + 1];
+        });
+        return;
+    }
+    [self record:@{@"kind": @"shutdown_window", @"state": @"shown", @"why": why, @"waited_s": @(attempt * 0.05),
+                   @"visible": @(self.statusWindow.visible), @"onscreen": @(on)}];
+}
+
+- (void)onShutdown:(NSDictionary *)ev {
+    [self enterShutdown:@"play loop shutdown"];
+    NSString *sid = [ev[@"id"] isKindOfClass:[NSString class]] ? ev[@"id"] : @"";
+    NSString *label = [ev[@"label"] isKindOfClass:[NSString class]] ? ev[@"label"] : sid;
+    if (self.shutdownMode && [self.disabled containsObject:@"shutdown_early_close"]) {   // test-only counterexample
+        [self.statusWindow orderOut:nil];
+    }
+    if (self.shutdownMode) {
+        double of = MAX([ev[@"of"] doubleValue], 1);
+        double step = [ev[@"step"] doubleValue] + ([ev[@"state"] isEqual:@"start"] ? 0.5 : 1.0);
+        self.targetOverall = MAX(self.targetOverall, MIN(step / of, 1.0));
+        BOOL problem = [ev[@"ok"] isKindOfClass:[NSNumber class]] && ![ev[@"ok"] boolValue];
+        self.statusDetail.stringValue = problem
+            ? @"Something didn't stop cleanly. Hearthstone will show what happened."
+            : [NSString stringWithFormat:@"%@… Please don't force-quit Hearthstone: it closes by itself when "
+                                         @"everything has stopped.", label];
+    }
+    NSMutableDictionary *rec = [ev mutableCopy];
+    if (rec[@"t"]) { rec[@"play_t"] = rec[@"t"]; [rec removeObjectForKey:@"t"]; }
+    rec[@"kind"] = @"shutdown_stage";
+    rec[@"visible"] = @(self.statusWindow.visible);
+    rec[@"onscreen"] = @([self windowOnScreen]);
+    rec[@"shutdown_mode"] = @(self.shutdownMode);
+    [self record:rec];
+}
+
 - (void)requestStop:(NSString *)why {
     if (!self.task.running) return;
     if (!self.stopRequested) {
         self.stopRequested = YES;
         [self appLog:[NSString stringWithFormat:@"stop requested (%@): sending SIGTERM to the play loop", why]];
         [self record:@{@"kind": @"status", @"id": @"stopping", @"text": @"Hearthstone is shutting down…"}];
-        if (!self.clientStarted && ![self testMode]) self.statusDetail.stringValue = @"Shutting down…";
+        [self enterShutdown:why];
         [self.task terminate];
     }
 }

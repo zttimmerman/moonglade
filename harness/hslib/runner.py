@@ -16,21 +16,88 @@ from .util import keep_awake, log
 SLOW_SKIP_MSG = "slow tier, not run in a full run"
 # harness-reporting "GUI tier": what a full run records for a gui-marked check when no GUI path changed
 GUI_SKIP_MSG = "gui tier, not run in a full run (no GUI path changed)"
-# The GUI path rule: a change touching any of these (fnmatch against repo-relative paths) runs the gui checks in
-# full runs. The launcher app and its sources, the Wine host Dock shim, the play loop and launch code that drive
-# the hand-off (client window detection, dock_env, stage events), the ./play entry point, and the GUI checks with
-# the app-check helpers their shared session uses.
-GUI_PATHS = (
-    "harness/app/*",                          # launcher.m, dockshim.m
-    "harness/hslib/app.py",                   # builds dist/Hearthstone.app
-    "harness/hslib/dockshim.py",              # builds/loads the Dock shim
-    "harness/hslib/launch.py",                # dock_env, client_window, start_client, prefix discovery
-    "harness/hslib/play.py",                  # the play loop the app runs (stages, ready -> hand-off)
-    "harness/hslib/stages.py",                # loading-window stage protocol
-    "play",                                   # the ./play entry point
+# The GUI path rule: a change touching any GUI input runs the gui checks in full runs. launcher-fixes (F26, verifier
+# 2026-10-05): dependency-based. The GUI inputs are the non-Python files below plus the transitive in-repo import
+# closure of GUI_ROOTS (the gui checks and their shared app session, and the code that session runs: the launcher
+# build, the ./play loop, the shim build), computed from the sources at evaluation time, so a new helper they
+# import is covered without editing this list.
+GUI_ROOTS = (
     "harness/hslib/checks/polish_checks.py",  # the gui checks and their shared app session
     "harness/hslib/checks/app_checks.py",     # open_app / Hook / build_app used by that session
+    "harness/hslib/play.py",                  # the play loop the app runs (stages, ready -> hand-off, shutdown)
+    "harness/hslib/app.py",                   # builds dist/Hearthstone.app
+    "harness/hslib/dockshim.py",              # builds/loads the Dock shim
+    "harness/hslib/__main__.py",              # `harness/hs app` (build_app) and the CLI
+    "harness/hslib/runner.py",                # this rule and the GUI tier itself
 )
+GUI_FILES = (
+    "harness/app/*",                          # launcher.m, dockshim.m
+    "play",                                   # the ./play entry point
+    "harness/hs",                             # the harness entry point (`hs app`, `hs run`)
+    "harness/hslib/checks/lssampler.m",       # the session's LaunchServices sampler (app.single_dock_icon)
+)
+GUI_PATHS = GUI_FILES + GUI_ROOTS             # the fixed part (the closure is added by gui_patterns)
+
+
+def _module_file(root, pkg_parts: list[str], name: str | None):
+    """The repo file for module `pkg_parts[.name]` (a module or a package's __init__), or None."""
+    from pathlib import Path
+    base = Path(root, "harness", *pkg_parts)
+    cands = ([base / name, ] if name else [base])
+    for c in cands:
+        if c.with_suffix(".py").is_file():
+            return c.with_suffix(".py")
+        if (c / "__init__.py").is_file():
+            return c / "__init__.py"
+    return None
+
+
+def import_closure(roots=GUI_ROOTS, root=None) -> list[str]:
+    """Repo-relative paths of every hslib module reachable from `roots` by static imports (absolute `hslib.x` and
+    relative `from . / .. import x`, including imports inside functions). Raises on a source that doesn't parse
+    (callers fail closed)."""
+    import ast
+    from pathlib import Path
+    root = Path(root or P.ROOT)
+    seen: set = set()
+    todo = [root / r for r in roots if (root / r).suffix == ".py"]
+    while todo:
+        f = todo.pop()
+        if f in seen or not f.is_file():
+            continue
+        seen.add(f)
+        rel = f.relative_to(root / "harness").with_suffix("").parts      # e.g. ("hslib", "checks", "polish_checks")
+        pkg = list(rel[:-1])                                              # the module's package
+        for node in ast.walk(ast.parse(f.read_text(), str(f))):
+            targets = []
+            if isinstance(node, ast.Import):
+                for a in node.names:
+                    parts = a.name.split(".")
+                    if parts[0] == "hslib":
+                        targets.append((parts[:-1], parts[-1]) if len(parts) > 1 else ([], "hslib"))
+            elif isinstance(node, ast.ImportFrom):
+                if node.level:
+                    base = pkg[: len(pkg) - (node.level - 1)] if node.level > 1 else list(pkg)
+                elif (node.module or "").split(".")[0] == "hslib":
+                    base = []
+                else:
+                    continue
+                mod = (node.module or "").split(".") if node.module else []
+                full = base + mod
+                if full:
+                    targets.append((full[:-1], full[-1]))           # the module itself (or package __init__)
+                for a in node.names:                               # `from pkg import module`
+                    targets.append((full, a.name))
+            for parts, name in targets:
+                m = _module_file(root, parts, name)
+                if m is not None:
+                    todo.append(m)
+    return sorted(str(x.relative_to(root)) for x in seen)
+
+
+def gui_patterns(root=None) -> tuple:
+    """Every GUI input pattern: the fixed files plus the import closure of GUI_ROOTS (evaluated now)."""
+    return tuple(dict.fromkeys(GUI_PATHS + tuple(import_closure(root=root))))
 
 
 def _now():
@@ -85,20 +152,28 @@ def changed_paths(root=None) -> dict:
     return out
 
 
-def gui_paths_matching(paths: list[str] | None, patterns=GUI_PATHS) -> list[str] | None:
-    """The changed paths that fall under the GUI path rule; None (unknown) stays None."""
+def gui_paths_matching(paths: list[str] | None, patterns=None) -> list[str] | None:
+    """The changed paths that fall under the GUI path rule (default patterns: gui_patterns(), i.e. with the import
+    closure); None (unknown) stays None."""
     if paths is None:
         return None
+    patterns = gui_patterns() if patterns is None else patterns
     return sorted(p for p in paths if any(fnmatch.fnmatch(p, g) for g in patterns))
 
 
 def gui_rule(root=None) -> dict:
-    """The GUI path rule for this checkout: {"changed_gui_paths": [...] or None (git failed: counts as changed),
-    "base_ref", "base", "error", "changed_paths_count"}."""
+    """The GUI path rule for this checkout: {"changed_gui_paths": [...] or None (git failed, or the import closure
+    couldn't be computed: counts as changed), "base_ref", "base", "error", "changed_paths_count", "patterns"}."""
     c = changed_paths(root)
+    try:
+        pats = gui_patterns()
+    except (OSError, SyntaxError, ValueError) as e:      # fail closed
+        return {"base_ref": c["base_ref"], "base": c["base"], "error": f"GUI import closure: {type(e).__name__}: {e}",
+                "changed_paths_count": None if c["paths"] is None else len(c["paths"]), "changed_gui_paths": None,
+                "patterns": list(GUI_PATHS)}
     return {"base_ref": c["base_ref"], "base": c["base"], "error": c["error"],
             "changed_paths_count": None if c["paths"] is None else len(c["paths"]),
-            "changed_gui_paths": gui_paths_matching(c["paths"]), "patterns": list(GUI_PATHS)}
+            "changed_gui_paths": gui_paths_matching(c["paths"], pats), "patterns": list(pats)}
 
 
 def gui_changed(rule: dict) -> bool:
@@ -260,7 +335,12 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
         "filter": only or [], "host": {"platform": platform.platform(), "machine": platform.machine(),
                                       "python": platform.python_version(), "disk_free_gb": round(du.free / 2**30, 1)},
     }
-    ctx = {"force_clean": force_clean, "tier": tier}
+    # launcher-fixes: every check's subprocesses know they're a harness run (./play then never writes the player's own
+    # play client's resolution), and client.player_config_untouched compares the player's config with this
+    import os
+    os.environ["HS_HARNESS_RUN"] = "1"
+    from .checks.resolution_checks import player_config_sha
+    ctx = {"force_clean": force_clean, "tier": tier, "player_config_sha256_start": player_config_sha()}
     if rule is not None:
         log(f"GUI rule: {'GUI checks run' if gui_changed(rule) else 'GUI checks skipped by design'} "
             f"(changed GUI paths: {rule['changed_gui_paths']}{'; ' + rule['error'] if rule['error'] else ''})")

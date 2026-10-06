@@ -108,44 +108,64 @@ def is_ours(a: dict) -> bool:
     return str(a.get("exe", "")).startswith(str(RUNTIME) + "/") or a.get("bundle") == A.BUNDLE_ID
 
 
+LSSAMPLER_SRC = Path(__file__).with_name("lssampler.m")
+LSSAMPLER_BIN = P.ENV / "tools" / "lssampler"
+
+
+def lssampler_bin() -> str:
+    """The compiled test-only sampler (env/tools/lssampler), rebuilt when its source changed."""
+    import hashlib
+    stamp = LSSAMPLER_BIN.with_suffix(".sha256")
+    want = hashlib.sha256(LSSAMPLER_SRC.read_bytes()).hexdigest()
+    if not (LSSAMPLER_BIN.is_file() and stamp.is_file() and stamp.read_text().strip() == want):
+        LSSAMPLER_BIN.parent.mkdir(parents=True, exist_ok=True)
+        sdk = subprocess.run(["/usr/bin/xcrun", "--show-sdk-path"], capture_output=True, text=True).stdout.strip()
+        r = subprocess.run(["/usr/bin/clang", "-isysroot", sdk, "-fobjc-arc", "-O2", "-framework", "Cocoa",
+                            str(LSSAMPLER_SRC), "-o", str(LSSAMPLER_BIN)], capture_output=True, text=True)
+        if r.returncode != 0:
+            raise CheckFail(f"couldn't build the LaunchServices sampler: {r.stderr[-500:]}")
+        stamp.write_text(want + "\n")
+    return str(LSSAMPLER_BIN)
+
+
 class LsSampler:
-    """lsappinfo list as fast as it goes (>= 10 Hz needed), keeping this runtime's Wine processes and our launcher.
-    Two staggered worker threads, so one slow lsappinfo call (Wine start-up load) doesn't leave a gap."""
+    """LaunchServices' view of this runtime's Wine processes and our launcher, >= 20 Hz, from one long-lived helper
+    process (lssampler.m: NSWorkspace runningApplications + activationPolicy, run loop spun between samples) that
+    streams JSON lines. launcher-fixes: replaces a `lsappinfo list` subprocess per sample, which left gaps > 0.25 s
+    under CPU load. Samples keep the old shape: {"t", "apps": [{"pid", "type", "exe", "bundle", "name"}]}."""
 
-    WORKERS = 2
-    PERIOD = 0.06
+    PERIOD_MS = 25
 
-    def __init__(self):
+    def __init__(self, max_s: int = 900):
         self.samples: list[dict] = []
-        self.stop_ev = threading.Event()
-        self.lock = threading.Lock()
-        self.threads = [threading.Thread(target=self._run, args=(i * self.PERIOD / self.WORKERS,), daemon=True,
-                                         name=f"ls-sampler-{i}") for i in range(self.WORKERS)]
+        self.max_s = max_s
+        self.proc = None
+        self.thread = threading.Thread(target=self._read, daemon=True, name="ls-sampler")
 
-    def _run(self, offset: float):
-        if self.stop_ev.wait(offset):
-            return
-        while not self.stop_ev.is_set():
-            t = time.time()
+    def _read(self):
+        for line in self.proc.stdout:
             try:
-                apps = [a for a in lsappinfo_list() if is_ours(a)]
-            except Exception as e:  # noqa: BLE001
-                apps = [{"error": str(e)}]
-            with self.lock:
-                self.samples.append({"t": round(t, 3), "apps": apps})
-            time.sleep(max(0.0, self.PERIOD - (time.time() - t)))
+                t, rows = json.loads(line)
+            except ValueError:
+                continue
+            self.samples.append({"t": round(t, 3), "apps": [{"pid": p, "type": ty, "exe": exe, "bundle": b or None,
+                                                             "name": n} for p, ty, exe, b, n in rows]})
 
     def start(self):
-        for th in self.threads:
-            th.start()
+        self.proc = subprocess.Popen([lssampler_bin(), str(self.PERIOD_MS), str(self.max_s), str(RUNTIME) + "/",
+                                      A.BUNDLE_ID], stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, text=True)
+        self.thread.start()
 
     def stop(self):
-        self.stop_ev.set()
-        for th in self.threads:
-            if th.is_alive():
-                th.join(timeout=5)
-        with self.lock:
-            self.samples.sort(key=lambda s: s["t"])
+        if self.proc and self.proc.poll() is None:
+            self.proc.terminate()
+            try:
+                self.proc.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                self.proc.kill()
+        if self.thread.is_alive():
+            self.thread.join(timeout=5)
+        self.samples.sort(key=lambda s: s["t"])
 
 
 class Sampler(threading.Thread):
@@ -354,6 +374,8 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
         ev["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat),
                               env={"HS_PROFILE": profile, "HS_SETTINGS": str(sfile), **(env or {})})
         require(ev["open"]["rc"] == 0, "`open` failed to launch the app", **ev)
+        if focus:                                    # launcher-fixes: a Dock/Finder click while it's still loading
+            ev["loading_reopen"] = _loading_reopen(hook, s, sfile, profile, env, wins)
         win, t_win = wait_window(600, stop_if=lambda: hook.exit_code() is not None)
         ev["window"], ev["t_window"] = win, t_win
         if not win:
@@ -385,9 +407,17 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
         else:
             ev["reopen"] = ev["unminimize"] = {"skipped": "gui checks not run (no focus steps)"}
 
-        # quit: the stand-in exits, everything stops
-        s.stop_file.write_text("quit")
+        # quit the app as the Dock's Quit does (launcher-fixes: the shutdown window shows until everything stopped)
+        ev["shutdown"] = sd = {"launcher_pid": ev["launcher_pid"]}
+        stk = Sampler(lambda: {k: v for k, v in stack.stack_processes().items() if v}, SHUTDOWN_SAMPLE_S)
+        stk.start()
+        time.sleep(0.5)
+        sd["t_quit"] = round(time.time(), 3)
+        sd["quit"] = quit_app(ev["launcher_pid"])
         rc, dt = wait_app_exit(hook, A.APP)
+        sd["t_app_gone"] = round(time.time(), 3)
+        stk.stop()
+        sd["stack_samples"] = stk.samples
         dbs.stop()
         rec = last_record(ev["play_pid"]) if ev["play_pid"] else {}
         ev |= {"app_exit_code": rc, "events": hook.events(), "db_online_samples": dbs.samples,
@@ -407,6 +437,58 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
             wins.stop()
         stop_launchers(A.APP)
         s.cleanup()
+
+
+SHUTDOWN_SAMPLE_S = 0.2
+SHOWN_WITHIN_S = 1.0          # the shutdown window is up within 1 s of the quit request ("from the start of shutdown")
+
+
+def quit_app(pid: int | None) -> dict:
+    """Ask the launcher to quit the way the Dock's Quit does (a quit Apple event via NSRunningApplication -terminate;
+    no Automation permission involved)."""
+    if not pid:
+        return {"ok": False, "why": "no launcher pid"}
+    js = (f"ObjC.import('AppKit'); var a = $.NSRunningApplication.runningApplicationWithProcessIdentifier({int(pid)}); "
+          "a.isNil() ? 'no app' : String(a.terminate)")
+    r = subprocess.run(["osascript", "-l", "JavaScript", "-e", js], capture_output=True, text=True, timeout=30)
+    out = (r.stdout + r.stderr).strip()
+    return {"ok": r.returncode == 0 and out == "true", "rc": r.returncode, "out": out, "t": round(time.time(), 3)}
+
+
+def _loading_reopen(hook, s, sfile, profile: str, env: dict | None, wins) -> dict:
+    """launcher-fixes: while the app is still loading (world stage, no game window yet), make Finder frontmost, then
+    reopen the app through LaunchServices; sample the frontmost app for 3 s. The window server's z-order comes from
+    the session's window sampler."""
+    r: dict = {}
+    t0 = time.time()
+    while time.time() - t0 < 300 and hook.exit_code() is None and not hook.find("stage", "world"):
+        time.sleep(0.2)
+    r["world_stage_after_s"] = round(time.time() - t0, 2) if hook.find("stage", "world") else None
+    launchers = _launchers(A.APP)
+    r["launcher_pid"] = launchers[0]["pid"] if launchers else None
+    subprocess.run([OPEN, "-a", "Finder"], capture_output=True, text=True, timeout=30)
+    r["finder_pids"] = [a["pid"] for a in lsappinfo_list() if a.get("bundle") == "com.apple.finder"]
+    t1 = time.time()
+    while time.time() - t1 < 5 and frontmost_pid() not in r["finder_pids"]:
+        time.sleep(0.1)
+    r["front_before"] = frontmost_pid()
+    r["client_window_before"] = launch.client_window()
+    n_dialogs = len(hook.find("dialog"))
+    r["t_reopen"] = round(time.time(), 3)
+    r["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat),
+                         env={"HS_PROFILE": profile, "HS_SETTINGS": str(sfile), **(env or {})})
+    fronts = []
+    while time.time() - r["t_reopen"] < FOCUS_LIMIT_S + 1.0:
+        fronts.append([round(time.time(), 3), frontmost_pid()])
+        time.sleep(0.05)
+    r["front_samples"] = fronts
+    r["client_window_after"] = launch.client_window()
+    time.sleep(0.3)
+    r["dialogs_after"] = hook.find("dialog")[n_dialogs:]
+    r["reopen_events"] = [e for e in hook.events() if e.get("kind") == "reopen"]
+    r["window_samples"] = [x for x in list(wins.samples) if r["t_reopen"] - 1 <= x[0] <= r["t_reopen"] + FOCUS_LIMIT_S + 1]
+    r["launchers_after"] = [l["pid"] for l in _launchers(A.APP)]
+    return r
 
 
 def _focus_steps(ev: dict, win: dict, hook, s, sfile, profile: str, env: dict | None, t_start: float) -> None:
@@ -697,6 +779,102 @@ def verify_shim_scope(ev: dict, shim: str | None = None) -> dict:
     return out
 
 
+def _ts(e: dict) -> float:
+    return datetime.fromisoformat(e["t"].replace("Z", "+00:00")).timestamp()
+
+
+def verify_reopen_during_loading(ev: dict) -> dict:
+    """Reopen during loading: within 2 s the loading window is frontmost (the launcher is the frontmost app and its
+    window is the topmost normal window on screen) and stays so to the 2 s mark, no "already running" dialog, and the
+    same launcher goes on to the game (its window appears later and is handed focus)."""
+    r = ev["loading_reopen"]
+    lp, tr = r["launcher_pid"], r["t_reopen"]
+    out = {k: r.get(k) for k in ("launcher_pid", "world_stage_after_s", "front_before", "finder_pids", "t_reopen",
+                                 "client_window_before", "client_window_after", "dialogs_after", "reopen_events",
+                                 "launchers_after", "open")}
+    out["front_samples"] = r["front_samples"][:80]
+    _focus_given(ev, out)
+    require(r["world_stage_after_s"] is not None and lp, "GIVEN not met: the app wasn't loading (no world stage)", **out)
+    require(r["front_before"] in r["finder_pids"], "GIVEN not met: Finder wasn't frontmost before the reopen", **out)
+    require(r["client_window_before"] is None and ev.get("t_window") and ev["t_window"] > tr + FOCUS_LIMIT_S,
+            "GIVEN not met: the game window was already up (the reopen wasn't during loading)",
+            t_window=ev.get("t_window"), **out)
+    _no_thief(ev, [p for _t, p in r["front_samples"]], {lp, *r["finder_pids"]}, out, "during the reopen")
+    # the window server's z-order: the topmost normal window's owner at each sample
+    tops = [[t, (rows[0][0] if rows else None)] for t, rows in r["window_samples"]]
+    out["topmost_window_owner"] = [x for x in tops if tr - 0.2 <= x[0] <= tr + FOCUS_LIMIT_S + 0.5][:80]
+
+    def top_at(t):
+        near = [x for x in tops if abs(x[0] - t) <= 0.15]
+        return min(near, key=lambda x: abs(x[0] - t))[1] if near else "no sample"
+    hit = next((t for t, p in r["front_samples"] if t <= tr + FOCUS_LIMIT_S and p == lp and top_at(t) == lp), None)
+    out["loading_window_frontmost_after_s"] = round(hit - tr, 2) if hit else None
+    require(hit, "the loading window wasn't frontmost within 2 s of the reopen (launcher frontmost with its window on "
+                 "top)", **out)
+    later = [(t, p, top_at(t)) for t, p in r["front_samples"] if hit <= t <= tr + FOCUS_LIMIT_S]
+    lost = [x for x in later if x[1] != lp or x[2] not in (lp, "no sample")]
+    out["lost_after_hit"] = lost[:10]
+    require(not lost, "the loading window didn't stay frontmost up to the 2 s mark", **out)
+    require(not [d for d in r["dialogs_after"] if d.get("id") == "already_running"],
+            "an \"already running\" dialog was shown", **out)
+    require(any(e.get("showing") == "loading" for e in r["reopen_events"]),
+            "the launcher didn't handle the reopen as \"loading\"", **out)
+    ho = [e for e in ev["events"] if e.get("kind") == "handoff" and e.get("ok", True) and _ts(e) > tr]
+    out["handoff_after_reopen"] = ho[:1]
+    require(r["launchers_after"] == [lp] and ev.get("window") and ho,
+            "loading didn't continue to the game (same launcher, game window, hand-off)", **out)
+    return out
+
+
+def verify_shutdown_window(ev: dict) -> dict:
+    """Shutdown window: shown within 1 s of the quit request; every shutdown stage arrives in order with the window
+    visible and on screen; it closes only after the last moment the stack was seen running (sampled every 0.2 s),
+    the app then exits 0 and nothing remains."""
+    sd = ev["shutdown"]
+    evs = ev["events"]
+    shown = [e for e in evs if e.get("kind") == "shutdown_window" and e.get("state") in ("shown", "skipped")]
+    closed = [e for e in evs if e.get("kind") == "shutdown_window" and e.get("state") == "closed"]
+    stages = [e for e in evs if e.get("kind") == "shutdown_stage"]
+    exits = [e for e in evs if e.get("kind") == "exit"]
+    running = [t for t, v in sd["stack_samples"] if v]
+    empty_after = [t for t, v in sd["stack_samples"] if v == {} and running and t > max(running)]
+    out = {"quit": sd["quit"], "t_quit": sd["t_quit"], "shown": shown, "closed": closed,
+           "stages": [{k: e.get(k) for k in ("id", "state", "visible", "onscreen", "shutdown_mode", "ok", "t")}
+                      for e in stages],
+           "stack_samples_n": len(sd["stack_samples"]),
+           "stack_running_first_last": [min(running), max(running)] if running else None,
+           "stack_first_seen_down": min(empty_after) if empty_after else None,
+           "app_exit_code": ev["app_exit_code"], "remaining_after": ev["remaining_after"]}
+    require(sd["quit"]["ok"], "the quit request wasn't delivered", **out)
+    require(running and min(running) <= sd["t_quit"] + SHUTDOWN_SAMPLE_S * 2,
+            "GIVEN not met: the stack wasn't running when the quit was requested", **out)
+    require(shown and shown[0]["state"] == "shown", "no shutdown window was shown", **out)
+    out["shown_after_quit_s"] = round(_ts(shown[0]) - sd["t_quit"], 2)
+    require(out["shown_after_quit_s"] <= SHOWN_WITHIN_S and shown[0].get("visible") and shown[0].get("onscreen"),
+            f"the shutdown window wasn't on screen within {SHOWN_WITHIN_S} s of the quit request", **out)
+    text = [e for e in evs if e.get("kind") == "status" and e.get("id") == "stopping"]
+    require(text, "the launcher recorded no stopping status", **out)
+    seq = [e.get("id") for e in stages]
+    first = list(dict.fromkeys(seq))
+    order = [S.SHUTDOWN_IDS.index(i) if i in S.SHUTDOWN_IDS else -1 for i in seq]
+    out |= {"stage_order": first, "stage_backwards": [i for i in range(len(order) - 1) if order[i + 1] < order[i]]}
+    require(first == S.SHUTDOWN_IDS and not out["stage_backwards"], "the shutdown stages aren't recorded in order",
+            **out)
+    bad = [e.get("id") for e in stages if not (e.get("visible") and e.get("onscreen") and e.get("shutdown_mode"))]
+    out["stages_without_window"] = bad
+    require(not bad, f"the shutdown window wasn't on screen at stage(s) {bad}", **out)
+    require(stages[-1].get("ok") is True, "the last shutdown stage reports something still running", **out)
+    require(closed and closed[0].get("visible_before") and closed[0].get("onscreen_before"),
+            "the shutdown window wasn't still on screen when it closed", **out)
+    out["closed_t"] = round(_ts(closed[0]), 3)
+    require(running and out["closed_t"] > max(running) and empty_after and min(empty_after) <= out["closed_t"] + 0.5,
+            "the shutdown window closed before the stack was down", **out)
+    require(exits and exits[-1]["code"] == 0 and _ts(exits[-1]) >= _ts(closed[0]) and ev["app_exit_code"] == 0,
+            "the app didn't exit 0 after the stack was down", **out)
+    require(is_clear(ev["remaining_after"]), "something is still running after the app exited", **out)
+    return out
+
+
 def client_inspect() -> dict:
     from ..registry import REGISTRY
     return REGISTRY["client.inspect"].fn(None)
@@ -732,6 +910,22 @@ def reopen_unminimizes(ctx):
     """Stand-in window minimised by the shim's test notification: reopening the app puts it back on screen and
     frontmost."""
     return verify_unminimize(_session(focus=True))
+
+
+@check("app.reopen_during_loading", order=395, capability=CAP_APP, stack="down", tier="full", gui=True)
+def reopen_during_loading(ctx):
+    """App loading (world stage, no game window yet), Finder frontmost: reopening the app through LaunchServices makes
+    the loading window frontmost within 2 s (launcher frontmost, its window topmost on screen) with no "already
+    running" dialog, and loading continues to the game."""
+    return verify_reopen_during_loading(_session(focus=True))
+
+
+@check("app.shutdown_window", order=397, capability=CAP_APP, stack="down", tier="full")
+def shutdown_window(ctx):
+    """Game running from the app, quit requested as from the Dock: the shutdown window is on screen within 1 s and at
+    every shutdown stage (recorded in order) until the stack is down (sampled independently); then the app exits 0
+    and nothing remains."""
+    return verify_shutdown_window(_session())
 
 
 @check("app.loading_stages", order=397, capability=CAP_APP, stack="down", tier="full")

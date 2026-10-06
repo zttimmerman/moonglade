@@ -37,8 +37,8 @@ Opening the app SHALL run the same play loop as `./play`: bring up the stack, la
 
 #### Scenario: Second open while running
 - **GIVEN** the app (or `./play`) is already running
-- **WHEN** the app is opened again
-- **THEN** it shows an "already running" message, starts no second stack or client, and the first session continues unaffected
+- **WHEN** a second instance of the app is launched (`open -n`), or the app is opened while `./play` runs from a terminal
+- **THEN** it shows an "already running" message, starts no second stack or client, and the first session continues unaffected; opening or clicking the *running* app instead brings forward whatever it shows (see "Reopen always brings Hearthstone forward")
 - Check: `app.single_instance`
 
 #### Scenario: Works after being moved
@@ -50,7 +50,7 @@ Opening the app SHALL run the same play loop as `./play`: bring up the stack, la
 #### Scenario: Zach opens it from Finder or the Dock
 - **GIVEN** a built app
 - **WHEN** Zach double-clicks it in Finder or clicks it in the Dock
-- **THEN** he sees the logo, the game starts without a terminal, and quitting the game leaves nothing running
+- **THEN** they see the logo, the game starts without a terminal, and quitting the game leaves nothing running
 - [human-verify] Finder/Dock interaction, first-run macOS prompts, and how the icon looks can only be judged by a person.
 
 ### Requirement: One Hearthstone in the Dock
@@ -150,3 +150,26 @@ The launcher's loading window SHALL show the current stage and a progress bar, w
 - **WHEN** Zach opens the app
 - **THEN** the loading window reads clearly and the bar moves smoothly through the stages
 - [human-verify] Look and smoothness are judged by a person.
+
+### Requirement: Reopen always brings Hearthstone forward
+Opening or clicking Hearthstone SHALL bring forward whatever Hearthstone is showing: the loading window while loading, the game after.
+
+#### Scenario: Click during loading
+- **GIVEN** the app opened and its loading window up, with another app frontmost
+- **WHEN** the app is reopened through LaunchServices before the game window appears
+- **THEN** within 2 s the loading window is frontmost, no "already running" dialog is shown, and loading continues to the game
+- Check: `app.reopen_during_loading`
+
+### Requirement: Shutdown is visible
+After the game exits or the player quits from the Dock, the launcher SHALL show a shutdown window until everything has stopped, then exit.
+
+#### Scenario: Quit shows the shutdown window until the stack is down
+- **GIVEN** the game running from the app
+- **WHEN** the launcher is asked to quit (or the game exits)
+- **THEN** a shutdown window ("Saving and shutting down the world…", advising not to force-quit) is shown from the start of shutdown until the stack is down, its stages are recorded in order, the app exits 0 after the stack is down, and nothing remains running
+- Check: `app.shutdown_window`
+
+#### Scenario: Zach sees the shutdown window
+- **WHEN** Zach quits from the Dock
+- **THEN** the shutdown window explains what's happening until the app closes
+- [human-verify] Look and clarity are judged by a person.

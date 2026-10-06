@@ -496,7 +496,7 @@ def bots_label(b: dict) -> str:
 
 
 def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: str | None = None,
-            population_n: int | None = None, stages=None) -> tuple[dict, dict]:
+            population_n: int | None = None, stages=None, set_resolution: bool = True) -> tuple[dict, dict]:
     """Everything before starting the client, shared by `hs launch` and `./play`: stack up (if needed) →
     client-config (+ Wine defaults) → accounts → Wine prefix → binaries match the manifest. `accounts` makes
     sure the login exists (default: the harness fixtures, test account + character; `./play` passes its
@@ -540,6 +540,14 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: 
     cfg = configure(client_dir(), defaults=WINE_DEFAULTS)
     ev["client_config"] = {"changed_files": cfg["changed_files"],
                            "config_wtf": next(c for c in cfg["changes"] if c["kind"] == "Config.wtf")}
+    if is_play_client() and not set_resolution:
+        ev["resolution"] = {"skipped": "not a genuine player launch, and this is the player's own play client"}
+    elif is_play_client():          # launcher-fixes: a resolution matching the display, unless the player chose one
+        from . import resolution
+        try:
+            ev["resolution"] = resolution.apply(client_dir())
+        except resolution.ResolutionError as e:     # never block a launch over the default resolution
+            ev["resolution"] = {"error": str(e)}       # (no new [play] line: the play loop's wording stays as it was)
     ev["prefix"] = ensure_prefix()
 
     hashes_before = _binary_hashes(man)

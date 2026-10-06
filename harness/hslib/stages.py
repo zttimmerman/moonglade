@@ -15,6 +15,16 @@ ids, in order (the contract; labels are what Zach reads):
     launching   Launching the game           client started, until its first window is on screen
     ready       Ready                        the game window is up (the launcher hands focus to it)
 
+Shutdown (launcher-fixes): when the play loop stops (the game exited, Quit, Ctrl-C, or a failed start) it prints
+`[shutdown] {json}` lines with the same fields, so the launcher can show its shutdown window until everything has
+stopped. They use their own prefix so the loading protocol above stays exactly as it was. ids, in order:
+    shutdown_game      Closing the game              the Wine prefix (client) is stopped
+    shutdown_world     Saving the world              worldserver (graceful `server shutdown`, which saves)
+    shutdown_login     Stopping the login server     authserver
+    shutdown_database  Stopping the database         mysqld
+    shutdown_done      Everything has stopped        last line; "ok" false + "remaining" when something survived
+Each line carries "step"/"of" (the launcher's bar) and `t`. A stage that wasn't running is `skipped`.
+
 state: start | progress | done | skipped | failed. database/login/world are `skipped` when the server is already
 running. `overall` is the whole bar (0..1, never decreasing): the sum of finished stages' weights plus the current
 stage's weight x its fraction. Weights are the last run's measured stage durations (env/run/boot-calibration.json),
@@ -260,3 +270,57 @@ class Stages:
         except OSError:
             return None
         return cal
+
+
+# ---------------------------------------------------------------------- shutdown (launcher-fixes)
+
+SHUTDOWN = [
+    ("shutdown_game", "Closing the game"),
+    ("shutdown_world", "Saving the world"),
+    ("shutdown_login", "Stopping the login server"),
+    ("shutdown_database", "Stopping the database"),
+    ("shutdown_done", "Everything has stopped"),
+]
+SHUTDOWN_IDS = [s for s, _ in SHUTDOWN]
+SHUTDOWN_LABELS = dict(SHUTDOWN)
+SHUTDOWN_PREFIX = "[shutdown] "
+_STACK_TO_SHUTDOWN = {"world": "shutdown_world", "login": "shutdown_login", "database": "shutdown_database"}
+
+
+def parse_shutdown(line: str) -> dict | None:
+    """The event of a `[shutdown] {...}` line, else None."""
+    if not line.startswith(SHUTDOWN_PREFIX):
+        return None
+    try:
+        ev = json.loads(line[len(SHUTDOWN_PREFIX):])
+    except ValueError:
+        return None
+    return ev if isinstance(ev, dict) else None
+
+
+class Shutdown:
+    """Emits the play loop's shutdown stages (one `[shutdown]` line each). Only ever moves forward."""
+
+    def __init__(self, emit=write_line):
+        self.emit = emit
+        self.events: list[dict] = []
+        self.reached = -1
+
+    def send(self, sid: str, state: str, **kw) -> dict | None:
+        i = SHUTDOWN_IDS.index(sid)
+        if i < self.reached:
+            return None
+        self.reached = i
+        ev = {"id": sid, "label": SHUTDOWN_LABELS[sid], "state": state, "step": i, "of": len(SHUTDOWN) - 1,
+              "t": round(time.time(), 3), **kw}
+        self.events.append(ev)
+        self.emit(SHUTDOWN_PREFIX + json.dumps(ev, separators=(",", ":")))
+        return ev
+
+    def on_stack(self, sid: str, state: str) -> None:
+        """stack.down's on_stage callback."""
+        if sid in _STACK_TO_SHUTDOWN:
+            self.send(_STACK_TO_SHUTDOWN[sid], state)
+
+    def finish(self, remaining: list) -> dict | None:
+        return self.send("shutdown_done", "done", ok=not remaining, remaining=len(remaining))

@@ -243,6 +243,34 @@ def choose_world(say=say) -> dict:
     return world
 
 
+# Signs of a harness (or developer test) run rather than the player starting the game: test arguments, and the
+# environment switches the harness sets (HS_HARNESS_RUN is set by `hs run` for every check's subprocesses).
+HARNESS_ENV = ("HS_HARNESS_RUN", "HS_PLAYER_FILE", "HS_PLAYER_DEFAULT_NAME", "HS_SETTINGS", "HS_PROFILE",
+               "HS_CLIENT_DIR", "HS_GLUE_TEST", "HS_PLAY_SKIP_PATCHES")
+
+
+def harness_signs(args, environ=None) -> list[str]:
+    """Why this ./play isn't a genuine player launch ([] = it is)."""
+    environ = os.environ if environ is None else environ
+    signs = [f"--{k.replace('_', '-')}" for k in ("client_cmd", "world_datadir") if getattr(args, k, None)]
+    if getattr(args, "allow_test_client_dir", False):
+        signs.append("--allow-test-client-dir")
+    if getattr(args, "account", "player") != "player":
+        signs.append(f"--account {args.account}")
+    signs += [f"${k}" for k in HARNESS_ENV if environ.get(k)]
+    signs += [f"${k}" for k in sorted(environ) if k == "HSDOCK_TEST" or k.startswith("HSDOCK_TEST_")]
+    return signs
+
+
+def resolution_gate(args, client: Path, environ=None) -> dict:
+    """launcher-fixes: may this launch write the resolution default into `client`? Scratch play clients: yes. The
+    player's own env/client-play/: only from a genuine player launch."""
+    from .clientbuild import PLAY as PLAYER_CLIENT
+    own = Path(client).resolve() == PLAYER_CLIENT.resolve()
+    signs = harness_signs(args, environ)
+    return {"players_own_client": own, "harness_signs": signs, "apply": not (own and signs)}
+
+
 class Loop:
     def __init__(self, args):
         self.args = args
@@ -251,8 +279,9 @@ class Loop:
         self.rec: dict = {"pid": os.getpid(), "started": _now(), "argv": sys.argv[1:],
                           "client_cmd": str(args.client_cmd) if args.client_cmd else None,
                           "client_started": False, "steps": []}
-        from .stages import Stages
+        from .stages import Shutdown, Stages
         self.stages = Stages()
+        self.shutdown = Shutdown()
 
     # -- signals
     def on_signal(self, signum, _frame):
@@ -320,10 +349,16 @@ class Loop:
         self.rec["world"] = world
         st.profile = world["profile"]
         st.world_lines_of = st._world_lines_of()
+        # the player's own play client gets the resolution default only from a genuine player launch (the app, or
+        # ./play with no test arguments); harness runs never write it there. Scratch play clients
+        # ($HS_PLAY_CLIENT_DIR) get it as a player's would (client.resolution_default).
+        gate = resolution_gate(self.args, launch.client_dir())
+        self.rec["resolution_gate"] = gate
         man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts,
-                                 profile=world["profile"], population_n=world["population_n"], stages=st)
+                                 profile=world["profile"], population_n=world["population_n"], stages=st,
+                                 set_resolution=gate["apply"])
         self.rec["prepare"] = {k: ev[k] for k in ("restarted_world", "stack", "fixtures", "accounts", "prefix",
-                                                  "binaries_match_manifest_before") if k in ev}
+                                                  "binaries_match_manifest_before", "resolution") if k in ev}
         self.man = man
 
         from .clientinst import sha256_file
@@ -406,13 +441,18 @@ class Loop:
         """Close the client (Wine prefix) and stop the stack gracefully. Returns whatever is still running."""
         say("Shutting down... (closing the game and stopping the server; this takes up to a minute)")
         self.step("cleanup_start")
+        sd = self.shutdown                  # [shutdown] lines: the launcher's shutdown window (launcher-fixes)
         clean: dict = {}
         if launch.prefix_processes():
+            sd.send("shutdown_game", "start")
             clean["stop_prefix"] = launch.stop_prefix()
+            sd.send("shutdown_game", "done")
+        else:
+            sd.send("shutdown_game", "skipped")
         if getattr(self, "profiles_dir", None):        # the generated login file lives only while the game runs
             from . import frontmenu
             clean["profiles_removed"] = frontmenu.remove(self.profiles_dir)
-        clean["down"] = stack.down()
+        clean["down"] = stack.down(on_stage=sd.on_stack)
         remaining = self.leftovers()
         if remaining:                       # one more pass, e.g. a component that came up during an aborted start
             clean["down_retry"] = stack.down()
@@ -455,7 +495,8 @@ def main(argv=None) -> int:
         say(f"{PLAY_CLIENT_ENV} is set ({os.environ[PLAY_CLIENT_ENV]}): that's a test copy of the play client. "
             f"Unset it (`unset {PLAY_CLIENT_ENV}`) and run ./play again.")
         return EXIT_FAIL
-    for var in (GLUE_TEST_ENV, SKIP_ENV):            # test-only switches; refused before anything happens
+    from .resolution import TEST_ENV as DISPLAY_TEST_ENV
+    for var in (GLUE_TEST_ENV, SKIP_ENV, DISPLAY_TEST_ENV):   # test-only switches; refused before anything happens
         if os.environ.get(var) and not args.allow_test_client_dir:
             say(f"{var} is set: that's a test switch for the harness, not for playing. "
                 f"Unset it (`unset {var}`) and run ./play again.")
@@ -527,6 +568,7 @@ def main(argv=None) -> int:
         except Exception as e:  # noqa: BLE001
             remaining = [{"cleanup_error": f"{type(e).__name__}: {e}", "traceback": traceback.format_exc()}]
             loop.rec["cleanup_error"] = remaining[0]
+        loop.shutdown.finish(remaining)
         if remaining:
             say("WARNING: these are still running after shutdown:")
             for r in remaining:
