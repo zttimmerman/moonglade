@@ -1,7 +1,8 @@
-| (none) | | | Next: seamless experience (front menu step 3) |
+| Seamless experience (B26) | `change/seamless-experience`, main checkout (builder owns the stack) | Building since 18:10 (est. done ~21:00); then verifier (~2 h, GUI checks need an unlocked screen) | Resume from tasks.md; spec final (bcd512b); includes restore-done message + F29 |
+| Front-menu saves spike (B27) | `spike/front-menu-saves`, own worktree; read-only RE, no stack | Researching how the login screen can ask the launcher to restore (est. ~1–2 h) | Read docs/research/front-menu-saves-spike.md on that branch; then spec change `front-menu-saves` |
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-06 16:50 (save backups merged, PR #19)._
+_Updated 2026-10-06 18:10 (seamless experience building; saves-in-menu spike)._
 
 **Cold start:** read this file, then `openspec list` (Node 20: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`), then `git -C <repo> worktree list`, `git branch -a`, `gh pr list`, then `harness/hs status`. The skills `.claude/skills/hs-*` hold the procedures (change loop, checks, client debugging, RE). User preferences and decisions are in the orchestrator memory notes (plain language for decisions, Gate 1, front-menu vision, logo).
 
