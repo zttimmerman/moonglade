@@ -396,12 +396,15 @@ def stop_worldserver(pid: int) -> dict:
     return {"pid": pid, "graceful": graceful}
 
 
-def down(on_stage=None) -> dict:
-    """Stop worldserver (graceful: saves the world), authserver, mysqld. `on_stage(sid, state)` (launcher-fixes: the
-    shutdown window) hears "world" / "login" / "database" with "start" + "done", or "skipped" when not running."""
-    def note(sid, state):
+def down(on_stage=None, before_database=None) -> dict:
+    """Stop worldserver (graceful: saves the world), authserver, mysqld. `on_stage(sid, state, **kw)` (launcher-fixes:
+    the shutdown window) hears "world" / "login" / "backup" / "database" with "start" + "done", or "skipped" when not
+    running. save-backups: `before_database()`, if given, runs after the world and login servers have stopped and
+    before mysqld stops (the play loop's backup on quit); it returns a dict with "ok" (False -> state "failed" with
+    its "error") and is skipped when the world server is still running or mysqld isn't."""
+    def note(sid, state, **kw):
         if on_stage:
-            on_stage(sid, state)
+            on_stage(sid, state, **kw)
     info = {}
     procs = stack_processes()
     note("world", "start" if procs["worldserver"] else "skipped")
@@ -415,6 +418,25 @@ def down(on_stage=None) -> dict:
         info["authserver"] = {"pid": pid}
     if procs["authserver"]:
         note("login", "done")
+    if before_database is None:
+        note("backup", "skipped")
+    else:
+        now = stack_processes()
+        if now["worldserver"] or now["authserver"] or not now["mysqld"]:
+            why = ("the world or login server is still running" if now["worldserver"] or now["authserver"]
+                   else "the database isn't running")
+            info["backup"] = {"ok": False, "skipped": why}
+            note("backup", "skipped", why=why)
+        else:
+            note("backup", "start")
+            try:
+                info["backup"] = before_database()
+            except Exception as e:  # noqa: BLE001  (a hook never stops the shutdown)
+                info["backup"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            if info["backup"].get("ok"):
+                note("backup", "done")
+            else:
+                note("backup", "failed", error=str(info["backup"].get("error"))[:300])
     note("database", "start" if procs["mysqld"] else "skipped")
     info |= mysql_down()
     if procs["mysqld"]:

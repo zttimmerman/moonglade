@@ -30,6 +30,14 @@ profile file with the login is generated into the play client at each start and 
 `stock`: the untouched client/, exactly as before (type the login). Test-only: $HS_PLAY_CLIENT_DIR builds/uses a
 scratch play client instead of env/client-play/ (needs --allow-test-client-dir), $HS_PLAY_SKIP_PATCHES leaves
 patches out of that scratch build (counterexamples), $HS_GLUE_TEST passes the GlueXML test hook (frontmenu.py).
+
+Save backups (save-backups, backups.py): when a session that started the game ends, cleanup takes a backup after the
+world and login servers have stopped and before the database stops (stack.down's before_database hook; shutdown
+stage `shutdown_backup`). Only a genuine player launch backs up, into env/backups/; a test run backs up only when it
+names a scratch folder ($HS_BACKUP_DIR, refused without --allow-test-client-dir). The outcome goes into
+play-last.json ("backup"); a failure is also remembered in the backup folder, and the next launch prints a
+`[notice] Last backup failed: ...` line. `./play --backups [list | restore <id>] [--json]` lists or restores backups
+(backups.cli).
 """
 from __future__ import annotations
 
@@ -246,7 +254,8 @@ def choose_world(say=say) -> dict:
 # Signs of a harness (or developer test) run rather than the player starting the game: test arguments, and the
 # environment switches the harness sets (HS_HARNESS_RUN is set by `hs run` for every check's subprocesses).
 HARNESS_ENV = ("HS_HARNESS_RUN", "HS_PLAYER_FILE", "HS_PLAYER_DEFAULT_NAME", "HS_SETTINGS", "HS_PROFILE",
-               "HS_CLIENT_DIR", "HS_GLUE_TEST", "HS_PLAY_SKIP_PATCHES", "HS_TEST_OWN_CLIENT")
+               "HS_CLIENT_DIR", "HS_GLUE_TEST", "HS_PLAY_SKIP_PATCHES", "HS_TEST_OWN_CLIENT",
+               "HS_BACKUP_DIR", "HS_BACKUP_TEST_FAIL", "HS_BACKUP_TEST_FREE_BYTES", "HS_BACKUP_TEST_PAUSE_S")
 # test-only (client.config_gate): treat this scratch play client as the player's own, so the gate's "own client"
 # branch can be exercised end to end without ever touching env/client-play/. It can only make the gate stricter
 # (another directory counts as the player's), and main() refuses it without --allow-test-client-dir.
@@ -279,8 +288,9 @@ def resolution_gate(args, client: Path, environ=None) -> dict:
 
 
 class Loop:
-    def __init__(self, args):
+    def __init__(self, args, backup_plan: dict | None = None):
         self.args = args
+        self.backup_plan = backup_plan or {"root": None, "why": "no plan"}
         self.signum: int | None = None
         self.cleaning = False
         self.rec: dict = {"pid": os.getpid(), "started": _now(), "argv": sys.argv[1:],
@@ -330,8 +340,56 @@ class Loop:
     def step(self, name: str, **kw):
         self.rec["steps"].append({"step": name, "at": _now(), **kw})
 
+    # -- save backups (save-backups)
+    def backup_notice(self) -> None:
+        """Every launch: drop a killed backup's leftovers, and tell the player if the last backup failed."""
+        from . import backups
+        from .stages import write_line
+        root = self.backup_plan.get("root")
+        self.rec["backup_plan"] = {"root": str(root) if root else None, "test": self.backup_plan.get("test"),
+                                   "why": self.backup_plan.get("why")}
+        if root is None:
+            return
+        try:
+            self.rec["backup_plan"]["stale_removed"] = backups.clean_stale(root)
+        except OSError as e:
+            self.rec["backup_plan"]["stale_error"] = str(e)
+        # a restore killed mid-load (backups.finish_interrupted) is finished before anything else starts
+        done = backups.finish_interrupted(root, backups.client_dir_for(os.environ, bool(self.backup_plan.get("test"))),
+                                          say=say)
+        if done:
+            self.rec["backup_plan"]["finished_interrupted_restore"] = done
+        notice = backups.failure_notice(root)
+        if notice:
+            self.rec["backup_notice"] = notice
+            write_line(f"[notice] {notice}")
+
+    def backup_hook(self):
+        """stack.down's before_database hook for this run, or None (and the reason in play-last.json)."""
+        from . import backups
+        root = self.backup_plan.get("root")
+        if root is None:
+            self.rec["backup"] = {"skipped": self.backup_plan.get("why") or "no backup for this run"}
+            return None
+        if not self.rec.get("client_started"):
+            self.rec["backup"] = {"skipped": "the game never started, so nothing changed"}
+            return None
+        account = getattr(self, "account_name", None)
+        cdir = launch.client_dir()
+        knobs = self.backup_plan.get("knobs") or {}
+
+        def hook():
+            say("Backing up your save...")
+            r = backups.on_quit(root, account, cdir, knobs)
+            if not r["ok"]:
+                say(f"The backup failed: {r['error']}. Your earlier backups are kept.")
+            self.rec["backup"] = r
+            return r
+        return hook
+
     # -- the loop
     def run(self) -> int:
+        self.backup_notice()
         args_, cwd, name = client_command(self.args.client_cmd)
         if self.args.account == "test":
             login, accounts = {"account": P.TEST_USER, "password": P.TEST_PASS, "character": P.TEST_CHAR}, None
@@ -347,6 +405,7 @@ class Loop:
             def accounts():
                 say(f"Making sure your account ({login['account']}) exists...")
                 return ensure_player_account(login)
+        self.account_name = login["account"].upper()
         say("Starting Moonglade.")
         self.step("prepare")
         st = self.stages
@@ -468,7 +527,7 @@ class Loop:
         if getattr(self, "profiles_dir", None):        # the generated login file lives only while the game runs
             from . import frontmenu
             clean["profiles_removed"] = frontmenu.remove(self.profiles_dir)
-        clean["down"] = stack.down(on_stage=sd.on_stack)
+        clean["down"] = stack.down(on_stage=sd.on_stack, before_database=self.backup_hook())
         remaining = self.leftovers()
         if remaining:                       # one more pass, e.g. a component that came up during an aborted start
             clean["down_retry"] = stack.down()
@@ -498,11 +557,17 @@ def _parse(argv):
     ap.add_argument("--world-datadir", type=Path, help=argparse.SUPPRESS)   # test-only: provoke a startup failure
     # test-only: accept HS_CLIENT_DIR (a scratch client copy); without it ./play refuses to run when the variable is set
     ap.add_argument("--allow-test-client-dir", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--backups", action="store_true",          # handled in main() before this parser runs
+                    help="list or restore your save backups: ./play --backups [list | restore <id>] (nothing starts)")
     return ap.parse_args(argv)
 
 
 def main(argv=None) -> int:
-    args = _parse(sys.argv[1:] if argv is None else argv)
+    argv = sys.argv[1:] if argv is None else argv
+    if "--backups" in argv:                 # save-backups: list / restore (backups.cli), never a play session
+        from . import backups
+        return backups.cli([a for a in argv if a != "--backups"])
+    args = _parse(argv)
     if os.environ.get("HS_CLIENT_DIR") and not args.allow_test_client_dir:
         say(f"HS_CLIENT_DIR is set ({os.environ['HS_CLIENT_DIR']}): that points the game at a test copy of the client, "
             "not your real one. Unset it (`unset HS_CLIENT_DIR`) and run ./play again.")
@@ -523,6 +588,12 @@ def main(argv=None) -> int:
             say(f"{var} is set: that's a test switch for the harness, not for playing. "
                 f"Unset it (`unset {var}`) and run ./play again.")
             return EXIT_FAIL
+    from . import backups
+    try:                                     # save-backups: $HS_BACKUP_DIR & co. only with the test flag
+        backup_plan = backups.plan(args)
+    except backups.Refused as e:
+        say(str(e))
+        return EXIT_FAIL
     launch.allow_dock_test(args.client_cmd is not None)
     try:
         fd, lock = acquire_lock()
@@ -530,7 +601,7 @@ def main(argv=None) -> int:
         say(f"Moonglade is already running (./play pid {b.pid}). Use that window, or quit the game there first.")
         return EXIT_BUSY
 
-    loop = Loop(args)
+    loop = Loop(args, backup_plan)
     loop.rec["lock"] = lock
     if "reclaimed_stale_pid" in lock:
         say(f"(Cleaned up a leftover lock from an earlier run, pid {lock['reclaimed_stale_pid']}.)")
@@ -554,6 +625,9 @@ def main(argv=None) -> int:
         except launch.LaunchError as e:
             loop.rec |= {"outcome": "startup_failed", "error": str(e), "evidence": e.evidence}
             say(f"Couldn't start the game: {e}")
+        except backups.BackupError as e:        # an interrupted restore that couldn't be finished
+            loop.rec |= {"outcome": "startup_failed", "error": str(e)}
+            say(f"Couldn't start: {e}")
         except PlayerAccountError as e:
             loop.rec |= {"outcome": "startup_failed", "error": str(e)}
             say(f"Couldn't set up your login: {e}")

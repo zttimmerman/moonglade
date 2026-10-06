@@ -21,6 +21,8 @@ stopped. They use their own prefix so the loading protocol above stays exactly a
     shutdown_game      Closing the game              the Wine prefix (client) is stopped
     shutdown_world     Saving the world              worldserver (graceful `server shutdown`, which saves)
     shutdown_login     Stopping the login server     authserver
+    shutdown_backup    Backing up your save          save-backups: the backup on quit (backups.py); `skipped` when
+                                                     this run takes none, `failed` (+ "error") when it failed
     shutdown_database  Stopping the database         mysqld
     shutdown_done      Everything has stopped        last line; "ok" false + "remaining" when something survived
 Each line carries "step"/"of" (the launcher's bar) and `t`. A stage that wasn't running is `skipped`.
@@ -278,13 +280,15 @@ SHUTDOWN = [
     ("shutdown_game", "Closing the game"),
     ("shutdown_world", "Saving the world"),
     ("shutdown_login", "Stopping the login server"),
+    ("shutdown_backup", "Backing up your save"),
     ("shutdown_database", "Stopping the database"),
     ("shutdown_done", "Everything has stopped"),
 ]
 SHUTDOWN_IDS = [s for s, _ in SHUTDOWN]
 SHUTDOWN_LABELS = dict(SHUTDOWN)
 SHUTDOWN_PREFIX = "[shutdown] "
-_STACK_TO_SHUTDOWN = {"world": "shutdown_world", "login": "shutdown_login", "database": "shutdown_database"}
+_STACK_TO_SHUTDOWN = {"world": "shutdown_world", "login": "shutdown_login", "backup": "shutdown_backup",
+                      "database": "shutdown_database"}
 
 
 def parse_shutdown(line: str) -> dict | None:
@@ -317,10 +321,10 @@ class Shutdown:
         self.emit(SHUTDOWN_PREFIX + json.dumps(ev, separators=(",", ":")))
         return ev
 
-    def on_stack(self, sid: str, state: str) -> None:
+    def on_stack(self, sid: str, state: str, **kw) -> None:
         """stack.down's on_stage callback."""
         if sid in _STACK_TO_SHUTDOWN:
-            self.send(_STACK_TO_SHUTDOWN[sid], state)
+            self.send(_STACK_TO_SHUTDOWN[sid], state, **kw)
 
     def finish(self, remaining: list) -> dict | None:
         return self.send("shutdown_done", "done", ok=not remaining, remaining=len(remaining))

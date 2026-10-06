@@ -340,8 +340,11 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
     import os
     os.environ["HS_HARNESS_RUN"] = "1"
     from .checks.resolution_checks import player_config_sha, player_marker_sha
+    from . import backups
     ctx = {"force_clean": force_clean, "tier": tier, "player_config_sha256_start": player_config_sha(),
-           "player_marker_sha256_start": player_marker_sha()}
+           "player_marker_sha256_start": player_marker_sha(),
+           # save-backups: the player's env/backups/ must be byte-identical at the end (backups.player_untouched)
+           "player_backups_fingerprint_start": backups.fingerprint(backups.PLAYER_ROOT)}
     if rule is not None:
         log(f"GUI rule: {'GUI checks run' if gui_changed(rule) else 'GUI checks skipped by design'} "
             f"(changed GUI paths: {rule['changed_gui_paths']}{'; ' + rule['error'] if rule['error'] else ''})")

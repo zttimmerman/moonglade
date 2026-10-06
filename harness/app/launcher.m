@@ -42,6 +42,20 @@
 // - More test-only switches (HS_APP_TEST_DISABLE): loading_reopen (the old "already running" on a reopen during
 //   loading), loading_reopen_hide (a reopen during loading hides the loading window), shutdown_window (no shutdown
 //   window), shutdown_early_close (the shutdown window closes at the first shutdown stage).
+//
+// save-backups (openspec/changes/save-backups):
+// - Opening Moonglade with the Option key held shows the Backups window instead of starting the game: the backups
+//   from `./play --backups list --json` (newest first: date, kind, characters), Restore (an NSAlert confirmation that
+//   says what is rewound and that a safety backup is taken first; then `./play --backups restore <id> --json`), Play
+//   (closes the window and starts the game as usual) and Quit. Closing the window exits 0 with nothing started.
+// - `[notice] ...` lines of the play loop (e.g. "Last backup failed: ...") show in the loading window's notice line;
+//   the Backups window shows the same notice from the list's "last_failure". Each is recorded as a hook event.
+// - The shutdown window needs nothing new: the play loop's `shutdown_backup` stage ("Backing up your save") arrives
+//   as a [shutdown] line like the others.
+// - Test-only, honoured only with the test hook: HS_APP_TEST_OPTION=1 (the Option key reported held at launch) and
+//   HS_APP_TEST_BACKUPS=<steps> (scripted clicks in the Backups window, ';'-separated: select:<id>, restore,
+//   confirm | cancel (the answer to the confirmation), wait:<file> (until the file exists), play, close).
+//   The ./play --backups calls get --allow-test-client-dir only when the app itself was given it.
 #import <Cocoa/Cocoa.h>
 #include <signal.h>
 #include <fcntl.h>
@@ -52,6 +66,8 @@ static NSString *const kDisableEnv = @"HS_APP_TEST_DISABLE";
 static NSString *const kSnapshotEnv = @"HS_APP_SNAPSHOT_DIR";
 static NSString *const kReopenNote = @"local.moonglade.reopen";
 static NSString *const kWindowNote = @"local.moonglade.window";
+static NSString *const kTestOptionEnv = @"HS_APP_TEST_OPTION";
+static NSString *const kTestBackupsEnv = @"HS_APP_TEST_BACKUPS";
 
 // The loading window's background, drawn in drawRect: so an off-screen render (snapshot) has it too.
 @interface HSBackgroundView : NSView
@@ -63,7 +79,7 @@ static NSString *const kWindowNote = @"local.moonglade.window";
 }
 @end
 
-@interface HSLauncher : NSObject <NSApplicationDelegate>
+@interface HSLauncher : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
 @property(strong) NSString *repo;
 @property(strong) NSString *logPath;
 @property(strong) NSString *hookPath;
@@ -98,6 +114,21 @@ static NSString *const kWindowNote = @"local.moonglade.window";
 // shutdown (launcher-fixes)
 @property BOOL shutdownMode;
 @property(strong) NSTextField *titleLabel;
+// save-backups
+@property(strong) NSTextField *noticeLabel;          // the loading window's "[notice]" line
+@property(strong) NSArray<NSString *> *playArgs;
+@property(strong) NSDictionary *playEnv;
+@property(strong) NSWindow *backupsWindow;
+@property(strong) NSTableView *backupsTable;
+@property(strong) NSTextField *backupsNotice;
+@property(strong) NSTextField *backupsStatus;
+@property(strong) NSButton *restoreButton;
+@property(strong) NSButton *playButton;
+@property(strong) NSButton *quitButton;
+@property(strong) NSArray<NSDictionary *> *backups;
+@property(strong) NSMutableArray<NSString *> *script;   // test-only scripted steps
+@property(strong) NSTask *restoreTask;
+@property BOOL leavingBackups;                         // Play chosen: closing the window doesn't quit
 @end
 
 @implementation HSLauncher
@@ -174,6 +205,13 @@ static NSString *const kWindowNote = @"local.moonglade.window";
     detail.textColor = [NSColor secondaryLabelColor];
     detail.frame = NSMakeRect(124, 58, 372, 56);
     [root addSubview:detail];
+    NSTextField *notice = [NSTextField wrappingLabelWithString:@""];
+    notice.font = [NSFont systemFontOfSize:11];
+    notice.textColor = [NSColor systemOrangeColor];
+    notice.frame = NSMakeRect(124, 12, 372, 42);
+    notice.hidden = YES;
+    [root addSubview:notice];
+    self.noticeLabel = notice;
     self.stageLabel = title;
     self.titleLabel = title;
     self.bar = bar;
@@ -344,10 +382,35 @@ static NSString *const kWindowNote = @"local.moonglade.window";
     [env removeObjectForKey:kHookEnv];                 // the hook is the app's, not the play loop's
     [env removeObjectForKey:kDisableEnv];
     [env removeObjectForKey:kSnapshotEnv];
+    [env removeObjectForKey:kTestOptionEnv];
+    [env removeObjectForKey:kTestBackupsEnv];
     env[@"HS_APP_BUNDLE"] = [[NSBundle mainBundle] bundlePath];   // the shim shows this bundle's icon
     env[@"PYTHONUNBUFFERED"] = @"1";
     env[@"HS_FROM_APP"] = @"1";                        // ./play then keeps passwords out of app.log (play.shown_password)
+    self.playArgs = args;
+    self.playEnv = env;
 
+    // save-backups: Option held at launch opens the Backups window instead of the game
+    BOOL option = ([NSEvent modifierFlags] & NSEventModifierFlagOption) != 0;
+    if ([self testMode]) {
+        if ([penv[kTestOptionEnv] isEqual:@"1"]) option = YES;
+        if ([penv[kTestBackupsEnv] length])
+            self.script = [[penv[kTestBackupsEnv] componentsSeparatedByString:@";"] mutableCopy];
+    } else if ([penv[kTestOptionEnv] length] || [penv[kTestBackupsEnv] length]) {
+        [self appLog:@"ignoring HS_APP_TEST_OPTION / HS_APP_TEST_BACKUPS: test-only, need the test hook"];
+    }
+    if (option) {
+        [self record:@{@"kind": @"option_launch", @"injected": @([self testMode] && [penv[kTestOptionEnv] isEqual:@"1"])}];
+        [self showBackups];
+        return;
+    }
+    [self startPlay];
+}
+
+- (void)startPlay {
+    NSArray *args = self.playArgs;
+    NSDictionary *env = self.playEnv;
+    NSString *repo = self.repo;
     unsigned long long size = [[[NSFileManager defaultManager] attributesOfItemAtPath:self.logPath error:nil] fileSize];
     self.tailOffset = size;
     NSTask *t = [NSTask new];
@@ -396,6 +459,14 @@ static NSString *const kWindowNote = @"local.moonglade.window";
             NSData *jd = [[l substringFromIndex:8] dataUsingEncoding:NSUTF8StringEncoding];
             id ev = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
             if ([ev isKindOfClass:[NSDictionary class]]) [self onStage:ev];
+            continue;
+        }
+        if ([l hasPrefix:@"[notice] "]) {                 // save-backups: e.g. "Last backup failed: ..."
+            NSString *msg = [l substringFromIndex:9];
+            [self record:@{@"kind": @"notice", @"text": msg, @"where": @"loading"}];
+            [self ensureWindow];
+            self.noticeLabel.stringValue = msg;
+            self.noticeLabel.hidden = NO;
             continue;
         }
         if ([l hasPrefix:@"[shutdown] "]) {
@@ -629,6 +700,11 @@ static NSString *const kWindowNote = @"local.moonglade.window";
 }
 
 - (BOOL)applicationShouldHandleReopen:(NSApplication *)app hasVisibleWindows:(BOOL)flag {
+    if (self.backupsWindow && !self.task) {             // the Backups window is what Moonglade shows: bring it forward
+        [NSApp activateIgnoringOtherApps:YES];
+        [self.backupsWindow makeKeyAndOrderFront:nil];
+        return NO;
+    }
     if (self.task.running && self.handedOff && [self gameAlive] && !self.stopRequested) {
         [self record:@{@"kind": @"reopen", @"forwarded": @YES, @"game_pid": @(self.game.processIdentifier)}];
         self.lastForward = 0;                           // a click always forwards
@@ -755,7 +831,355 @@ static NSString *const kWindowNote = @"local.moonglade.window";
         [self requestStop:@"quit"];
         return NSTerminateCancel;
     }
+    if (self.restoreTask.running) {                     // never cut a restore short; it ends by itself
+        self.backupsStatus.stringValue = @"Restoring… Moonglade can quit when the restore has finished.";
+        return NSTerminateCancel;
+    }
+    if (self.backupsWindow && !self.task) [self finish:0];
     return NSTerminateNow;
+}
+
+// ------------------------------------------------------------------ the Backups window (save-backups)
+
+- (NSArray *)backupsArgs:(NSArray *)extra {
+    NSMutableArray *a = [NSMutableArray arrayWithObjects:[self.repo stringByAppendingPathComponent:@"play"],
+                         @"--backups", nil];
+    [a addObjectsFromArray:extra];
+    [a addObject:@"--json"];
+    if ([self.playArgs containsObject:@"--allow-test-client-dir"]) [a addObject:@"--allow-test-client-dir"];
+    return a;
+}
+
+- (NSTask *)backupsTask:(NSArray *)extra pipe:(NSPipe *)pipe {
+    NSTask *t = [NSTask new];
+    t.executableURL = [NSURL fileURLWithPath:@"/bin/bash"];
+    t.arguments = [self backupsArgs:extra];
+    t.currentDirectoryURL = [NSURL fileURLWithPath:self.repo];
+    t.environment = self.playEnv;
+    t.standardInput = [NSFileHandle fileHandleWithNullDevice];
+    t.standardOutput = pipe;
+    t.standardError = self.logHandle ?: [NSFileHandle fileHandleWithNullDevice];
+    return t;
+}
+
+- (NSDictionary *)parseJSON:(NSData *)d {
+    id obj = d.length ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    return [obj isKindOfClass:[NSDictionary class]] ? obj : nil;
+}
+
+- (void)loadBackups {
+    NSPipe *pipe = [NSPipe pipe];
+    NSTask *t = [self backupsTask:@[@"list"] pipe:pipe];
+    NSError *err = nil;
+    NSDictionary *res = nil;
+    if ([t launchAndReturnError:&err]) {
+        NSData *d = [pipe.fileHandleForReading readDataToEndOfFile];
+        [t waitUntilExit];
+        res = [self parseJSON:d];
+    }
+    NSArray *items = [res[@"backups"] isKindOfClass:[NSArray class]] ? res[@"backups"] : @[];
+    self.backups = items;
+    [self.backupsTable reloadData];
+    NSString *notice = [res[@"last_failure"] isKindOfClass:[NSString class]] ? res[@"last_failure"] : nil;
+    self.backupsNotice.stringValue = notice ?: @"";
+    self.backupsNotice.hidden = notice == nil;
+    if (!res) self.backupsStatus.stringValue = @"Couldn't read the backups list; see the log.";
+    else if (!items.count) self.backupsStatus.stringValue = @"No backups yet: one is taken every time you quit the game.";
+    NSMutableArray *rows = [NSMutableArray array];
+    for (NSDictionary *b in items)
+        [rows addObject:@{@"id": b[@"id"] ?: @"", @"date": b[@"date_label"] ?: @"", @"kind": b[@"kind"] ?: @"",
+                          @"kind_label": b[@"kind_label"] ?: @"", @"characters": b[@"characters_label"] ?: @""}];
+    [self record:@{@"kind": @"backups_list", @"ok": @(res != nil && [res[@"ok"] boolValue]), @"rows": rows,
+                   @"notice": notice ?: [NSNull null], @"list_exit": @(t.isRunning ? -1 : t.terminationStatus)}];
+    if (notice) [self record:@{@"kind": @"notice", @"text": notice, @"where": @"backups"}];
+    [self updateBackupButtons];
+}
+
+- (NSButton *)button:(NSString *)title action:(SEL)sel frame:(NSRect)r {
+    NSButton *b = [NSButton buttonWithTitle:title target:self action:sel];
+    b.frame = r;
+    return b;
+}
+
+- (void)showBackups {
+    NSRect r = NSMakeRect(0, 0, 680, 440);
+    NSWindow *w = [[NSWindow alloc] initWithContentRect:r
+                                              styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                                                        NSWindowStyleMaskMiniaturizable
+                                                backing:NSBackingStoreBuffered defer:NO];
+    w.title = @"Moonglade – Backups";
+    w.releasedWhenClosed = NO;
+    w.delegate = self;
+    HSBackgroundView *root = [[HSBackgroundView alloc] initWithFrame:r];
+    w.contentView = root;
+    NSTextField *title = [NSTextField labelWithString:@"Your save backups"];
+    title.font = [NSFont boldSystemFontOfSize:16];
+    title.frame = NSMakeRect(20, 402, 640, 24);
+    [root addSubview:title];
+    NSTextField *about = [NSTextField wrappingLabelWithString:
+        @"Moonglade saves a backup every time you quit the game (the last 10 are kept). Restoring one rewinds your "
+        @"characters, your companions and the AI players to that moment, and puts back your key bindings, macros "
+        @"and chat settings from then. Before it does, it saves a safety backup of how things are now, so a restore "
+        @"can always be undone."];
+    about.font = [NSFont systemFontOfSize:12];
+    about.frame = NSMakeRect(20, 340, 640, 56);
+    [root addSubview:about];
+    NSTextField *notice = [NSTextField wrappingLabelWithString:@""];
+    notice.font = [NSFont systemFontOfSize:12];
+    notice.textColor = [NSColor systemOrangeColor];
+    notice.frame = NSMakeRect(20, 312, 640, 28);
+    notice.hidden = YES;
+    [root addSubview:notice];
+    self.backupsNotice = notice;
+
+    NSScrollView *sv = [[NSScrollView alloc] initWithFrame:NSMakeRect(20, 92, 640, 216)];
+    sv.hasVerticalScroller = YES;
+    sv.borderType = NSBezelBorder;
+    NSTableView *tv = [[NSTableView alloc] initWithFrame:sv.bounds];
+    NSArray *cols = @[@[@"date", @"When", @200], @[@"kind", @"Kind", @160], @[@"chars", @"Characters", @260]];
+    for (NSArray *c in cols) {
+        NSTableColumn *col = [[NSTableColumn alloc] initWithIdentifier:c[0]];
+        col.title = c[1];
+        col.width = [c[2] doubleValue];
+        [tv addTableColumn:col];
+    }
+    tv.dataSource = self;
+    tv.delegate = self;
+    tv.allowsMultipleSelection = NO;
+    tv.usesAlternatingRowBackgroundColors = YES;
+    sv.documentView = tv;
+    [root addSubview:sv];
+    self.backupsTable = tv;
+
+    NSTextField *status = [NSTextField wrappingLabelWithString:@""];
+    status.font = [NSFont systemFontOfSize:11];
+    status.textColor = [NSColor secondaryLabelColor];
+    status.frame = NSMakeRect(20, 56, 640, 30);
+    [root addSubview:status];
+    self.backupsStatus = status;
+    self.restoreButton = [self button:@"Restore…" action:@selector(restorePressed:) frame:NSMakeRect(20, 16, 120, 32)];
+    self.quitButton = [self button:@"Quit" action:@selector(quitPressed:) frame:NSMakeRect(420, 16, 110, 32)];
+    self.playButton = [self button:@"Play" action:@selector(playPressed:) frame:NSMakeRect(540, 16, 120, 32)];
+    self.playButton.keyEquivalent = @"\r";
+    for (NSButton *b in @[self.restoreButton, self.quitButton, self.playButton]) [root addSubview:b];
+    self.backupsWindow = w;
+    [w center];
+    [self loadBackups];
+    [NSApp activateIgnoringOtherApps:YES];
+    [w makeKeyAndOrderFront:nil];
+    [self recordBackupsShown:0];
+}
+
+- (BOOL)backupsWindowOnScreen {
+    NSWindow *w = self.backupsWindow;
+    if (!w || w.windowNumber <= 0) return NO;
+    CFArrayRef list = CGWindowListCopyWindowInfo(kCGWindowListOptionIncludingWindow, (CGWindowID)w.windowNumber);
+    if (!list) return NO;
+    BOOL on = NO;
+    for (NSDictionary *x in (__bridge NSArray *)list)
+        if ([x[(id)kCGWindowNumber] intValue] == w.windowNumber) on = [x[(id)kCGWindowIsOnscreen] boolValue];
+    CFRelease(list);
+    return on;
+}
+
+// "shown" once the window server has the window on screen (or after 1 s), then the scripted steps (test) start
+- (void)recordBackupsShown:(int)attempt {
+    BOOL on = [self backupsWindowOnScreen];
+    if (!on && attempt < 20) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.05 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            [self recordBackupsShown:attempt + 1];
+        });
+        return;
+    }
+    [self record:@{@"kind": @"backups_window", @"state": @"shown", @"visible": @(self.backupsWindow.visible),
+                   @"onscreen": @(on), @"title": self.backupsWindow.title}];
+    [self nextScriptStep];
+}
+
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tv { return (NSInteger)self.backups.count; }
+
+- (NSView *)tableView:(NSTableView *)tv viewForTableColumn:(NSTableColumn *)col row:(NSInteger)row {
+    NSTextField *cell = [tv makeViewWithIdentifier:col.identifier owner:self];
+    if (!cell) {
+        cell = [NSTextField labelWithString:@""];
+        cell.identifier = col.identifier;
+        cell.lineBreakMode = NSLineBreakByTruncatingTail;
+    }
+    NSDictionary *b = self.backups[(NSUInteger)row];
+    NSString *key = [col.identifier isEqual:@"date"] ? @"date_label"
+                  : [col.identifier isEqual:@"kind"] ? @"kind_label" : @"characters_label";
+    cell.stringValue = [b[key] isKindOfClass:[NSString class]] ? b[key] : @"";
+    cell.toolTip = cell.stringValue;
+    return cell;
+}
+
+- (void)tableViewSelectionDidChange:(NSNotification *)n { [self updateBackupButtons]; }
+
+- (void)updateBackupButtons {
+    BOOL busy = self.restoreTask.running;
+    self.restoreButton.enabled = !busy && self.backupsTable.selectedRow >= 0;
+    self.playButton.enabled = !busy;
+    self.quitButton.enabled = !busy;
+}
+
+- (NSDictionary *)selectedBackup {
+    NSInteger row = self.backupsTable.selectedRow;
+    return (row >= 0 && (NSUInteger)row < self.backups.count) ? self.backups[(NSUInteger)row] : nil;
+}
+
+- (void)restorePressed:(id)sender {
+    NSDictionary *b = [self selectedBackup];
+    if (!b || self.restoreTask.running) return;
+    NSString *when = b[@"date_label"] ?: b[@"id"];
+    NSString *title = [NSString stringWithFormat:@"Restore the backup from %@?", when];
+    NSString *text = [NSString stringWithFormat:
+        @"This rewinds your characters, your companions and the AI players to how they were on %@, and puts back "
+        @"your key bindings, macros and chat settings from then. Anything played after that is undone.\n\n"
+        @"A safety backup of how things are now is taken first, so you can undo this restore from this window.",
+        when];
+    BOOL yes;
+    NSString *answerSource;
+    if ([self testMode]) {
+        NSString *ans = self.script.count ? self.script.firstObject : @"cancel";
+        if (self.script.count) [self.script removeObjectAtIndex:0];
+        yes = [ans isEqual:@"confirm"];
+        answerSource = @"test script";
+    } else {
+        NSAlert *a = [NSAlert new];
+        a.alertStyle = NSAlertStyleWarning;
+        a.messageText = title;
+        a.informativeText = text;
+        [a addButtonWithTitle:@"Restore"];
+        [a addButtonWithTitle:@"Cancel"];
+        yes = [a runModal] == NSAlertFirstButtonReturn;
+        answerSource = @"user";
+    }
+    [self record:@{@"kind": @"confirm", @"id": b[@"id"] ?: @"", @"title": title, @"text": text,
+                   @"answer": yes ? @"restore" : @"cancel", @"source": answerSource}];
+    if (!yes) {
+        self.backupsStatus.stringValue = @"Restore cancelled; nothing was changed.";
+        [self nextScriptStep];
+        return;
+    }
+    [self startRestore:b];
+}
+
+- (void)startRestore:(NSDictionary *)b {
+    NSPipe *pipe = [NSPipe pipe];
+    NSTask *t = [self backupsTask:@[@"restore", b[@"id"]] pipe:pipe];
+    NSMutableData *out = [NSMutableData data];
+    pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *h) {
+        NSData *d = h.availableData;
+        @synchronized (out) { [out appendData:d]; }
+    };
+    __weak HSLauncher *weakSelf = self;
+    t.terminationHandler = ^(NSTask *task) {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            pipe.fileHandleForReading.readabilityHandler = nil;
+            NSData *rest = [pipe.fileHandleForReading readDataToEndOfFile];
+            NSData *all;
+            @synchronized (out) { [out appendData:rest]; all = [out copy]; }
+            [weakSelf restoreFinished:task output:all backup:b];
+        });
+    };
+    self.backupsStatus.stringValue = [NSString stringWithFormat:@"Restoring the backup from %@… (saving a safety "
+                                      @"backup first; this takes about a minute)", b[@"date_label"] ?: b[@"id"]];
+    NSError *err = nil;
+    if (![t launchAndReturnError:&err]) {
+        self.backupsStatus.stringValue = [NSString stringWithFormat:@"Couldn't start the restore: %@", err.localizedDescription];
+        [self record:@{@"kind": @"restore", @"state": @"error", @"error": err.localizedDescription ?: @""}];
+        return;
+    }
+    self.restoreTask = t;
+    [self record:@{@"kind": @"restore", @"state": @"start", @"id": b[@"id"] ?: @"", @"task_pid": @(t.processIdentifier)}];
+    [self updateBackupButtons];
+}
+
+- (void)restoreFinished:(NSTask *)task output:(NSData *)data backup:(NSDictionary *)b {
+    NSDictionary *res = [self parseJSON:data];
+    int code = task.terminationStatus;
+    BOOL ok = code == 0 && [res[@"ok"] boolValue];
+    NSString *safety = [res[@"safety"] isKindOfClass:[NSDictionary class]] ? res[@"safety"][@"id"] : nil;
+    NSString *err = [res[@"error"] isKindOfClass:[NSString class]] ? res[@"error"] : @"see the log";
+    [self record:@{@"kind": @"restore", @"state": @"done", @"id": b[@"id"] ?: @"", @"code": @(code), @"ok": @(ok),
+                   @"safety": safety ?: [NSNull null], @"error": ok ? [NSNull null] : err}];
+    self.restoreTask = nil;
+    [self loadBackups];
+    self.backupsStatus.stringValue = ok
+        ? [NSString stringWithFormat:@"Restored the backup from %@. The safety backup of how things were is in the "
+                                     @"list (Before restore), if you want to undo it. Press Play to play.",
+                                     b[@"date_label"] ?: b[@"id"]]
+        : [NSString stringWithFormat:@"The restore didn't happen: %@", err];
+    if (!ok && ![self testMode]) {
+        NSAlert *a = [NSAlert new];
+        a.alertStyle = NSAlertStyleWarning;
+        a.messageText = @"The restore didn't happen";
+        a.informativeText = err;
+        [a runModal];
+    }
+    [self updateBackupButtons];
+    [self nextScriptStep];
+}
+
+- (void)playPressed:(id)sender {
+    if (self.restoreTask.running) return;
+    [self record:@{@"kind": @"backups_window", @"state": @"closed", @"why": @"play"}];
+    self.leavingBackups = YES;
+    [self.backupsWindow close];
+    self.backupsWindow = nil;
+    [self startPlay];
+}
+
+- (void)quitPressed:(id)sender {
+    if (self.restoreTask.running) return;
+    [self.backupsWindow close];                        // windowWillClose: records and exits 0
+}
+
+- (void)windowWillClose:(NSNotification *)n {
+    if (n.object != self.backupsWindow || self.leavingBackups) return;
+    [self record:@{@"kind": @"backups_window", @"state": @"closed", @"why": @"closed"}];
+    [self finish:0];
+}
+
+- (BOOL)windowShouldClose:(NSWindow *)w {
+    return !(w == self.backupsWindow && self.restoreTask.running);
+}
+
+// test-only: the next scripted click in the Backups window
+- (void)nextScriptStep {
+    if (![self testMode] || !self.script.count || !self.backupsWindow) return;
+    NSString *step = self.script.firstObject;
+    [self.script removeObjectAtIndex:0];
+    [self record:@{@"kind": @"script_step", @"step": step}];
+    if ([step hasPrefix:@"select:"]) {
+        NSString *bid = [step substringFromIndex:7];
+        NSUInteger i = [self.backups indexOfObjectPassingTest:^BOOL(NSDictionary *b, NSUInteger idx, BOOL *stop) {
+            return [b[@"id"] isEqual:bid];
+        }];
+        if (i != NSNotFound) [self.backupsTable selectRowIndexes:[NSIndexSet indexSetWithIndex:i] byExtendingSelection:NO];
+        [self record:@{@"kind": @"backups_select", @"id": bid, @"found": @(i != NSNotFound)}];
+        [self nextScriptStep];
+    } else if ([step isEqual:@"restore"]) {
+        [self restorePressed:nil];                     // consumes the confirm/cancel step itself
+    } else if ([step hasPrefix:@"wait:"]) {
+        [self waitForFile:[step substringFromIndex:5] since:[NSDate timeIntervalSinceReferenceDate]];
+    } else if ([step isEqual:@"play"]) {
+        [self playPressed:nil];
+    } else if ([step isEqual:@"close"]) {
+        [self.backupsWindow performClose:nil];
+    } else {
+        [self nextScriptStep];
+    }
+}
+
+- (void)waitForFile:(NSString *)f since:(double)t0 {
+    if ([[NSFileManager defaultManager] fileExistsAtPath:f] || [NSDate timeIntervalSinceReferenceDate] - t0 > 900) {
+        [self nextScriptStep];
+        return;
+    }
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        [self waitForFile:f since:t0];
+    });
 }
 
 - (void)installSignalHandlers {

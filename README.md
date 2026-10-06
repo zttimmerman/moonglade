@@ -117,6 +117,12 @@ These are saved in `env/settings.json` and read on every start.
 
 Things to know when switching: going from vanilla to WotLK lowers the XP thresholds, so a character may level up on its next XP gain. Item tooltips can look stale until the client cache refreshes.
 
+### Save backups
+
+Every time you quit the game, Moonglade backs up your save while it shuts down (the shutdown window shows "Backing up your save"; about 10 s with the default world). A backup holds your characters, your companions and the AI players (the `acore_characters`, `acore_auth` and `acore_playerbots` databases) plus your client's per-account settings (`WTF/Account/<ACCOUNT>/`: key bindings, macros, chat and addon settings). Game content and vanilla mode aren't part of it. Backups live in `env/backups/` (about 38 MB each). The last 10 are kept.
+
+**To restore one,** hold **Option** while you open Moonglade (Dock or Finder). Instead of starting the game it shows the Backups window: pick a backup, press **Restore…**, confirm, then **Play** or **Quit**. From a terminal: `./play --backups` lists them and `./play --backups restore <id>` restores one. A restore rewinds everything in the backup together and first saves a "before restore" safety backup of how things are now (the last 3 are kept), so you can undo it the same way. Restoring is refused while Moonglade is running, and a damaged backup is refused without changing anything. If a backup ever fails (for example, less than 2 GB free disk space), shutdown still completes, and the next start tells you why.
+
 ### Companions
 
 Add and dismiss companions with chat commands: `.playerbots bot addclass <class>` (e.g. `priest`) and `.playerbots bot remove <name>`. These are the commands the harness checks use (`harness/hslib/companion.py`). They should work on the non-GM `PLAYER` account per the code (`.playerbots bot` is a player-level command and `AiPlayerbot.AddClassCommand` defaults to 1), but the harness doesn't exercise that (its checks use a GM-level test account), so confirm in play. Companions keep their last orders across sessions.
