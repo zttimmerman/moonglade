@@ -10,12 +10,15 @@
 -- The glue screens' disconnect messages (GlueStrings DISCONNECTED, RESPONSE_DISCONNECTED) live in GlueXML, which an
 -- add-on can't reach; the front menu shows them as a friendly error instead (client-mods/glue/HSSeamless.lua).
 --
--- Test hook (harness checks only): when the SavedVariables table MoongladeTest holds hook = 1 (planted by a check into
--- a scratch play client's WTF/Account/<test account>/SavedVariables/Moonglade.lua), the add-on counts Lua errors from
+-- Test hook (harness checks only): when the SavedVariables table MoongladeTest holds hook = 1, the add-on counts Lua
+-- errors from
 -- its load on, shows the logout countdown popup once and records what it read (StaticPopup_Show("CAMP"), as
 -- UIParent.lua does on PLAYER_CAMPING), logs out logout_after seconds after entering the world, and
 -- writes a report into MoongladeTest at logout (the client saves SavedVariables then). Without the hook MoongladeTest
--- is cleared at load, so nothing is saved.
+-- is cleared at load, so nothing is saved. The client reads SavedVariables from the logged-in account's own folder, and
+-- only the harness writes hook = 1, only into WTF/Account/HSTEST/ of a scratch play client
+-- (seamless_checks.plant_addon_hook refuses any other client), so the hook never reaches the player's account.
+-- (The account name itself isn't readable here: GetCVar("accountName") didn't match in the world, measured.)
 
 local WORDING = {
 	LOGOUT = "Exit to Menu",
@@ -77,7 +80,7 @@ frame:SetScript("OnEvent", function(self, event, arg1)
 				if ( previous ) then return previous(msg, ...); end
 			end);
 		else
-			MoongladeTest = nil;
+			MoongladeTest = nil;                -- nothing is saved outside the test hook
 		end
 	elseif ( event == "PLAYER_ENTERING_WORLD" and test.on and not test.logoutAt ) then
 		test.logoutAt = test.clock + (tonumber(MoongladeTest.logout_after) or 8);

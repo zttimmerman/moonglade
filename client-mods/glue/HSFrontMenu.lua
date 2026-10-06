@@ -570,7 +570,12 @@ function HSFrontMenu_TestAct(act)
 		HSErrorDialogBack:Click();
 	elseif ( act == "showlog" ) then
 		-- debugging aid: the end of the in-memory test log on screen (for a following "shot")
-		HSTestLogText:SetText(strsub(state.testLog, -900));
+		local lines = {};
+		for e in string.gmatch(state.testLog, "[^;]+") do
+			if ( strsub(e, 1, 5) ~= "open:" and strsub(e, 1, 9) ~= "backdrop:" ) then table.insert(lines, e); end
+		end
+		HSTestLogText:SetHeight(500);
+		HSTestLogText:SetText(strsub(table.concat(lines, "\n"), -1500));
 		HSTestLogText:Show();
 	elseif ( act == "csinspect" ) then
 		HSSeamless_InspectCharSelect();

@@ -633,6 +633,12 @@ def friendly_errors(ctx):
             "reached the world)", **ev)
     require(s["auth_stopped"]["stopped"] and s["auth_down_at_details_shot"],
             "GIVEN not met: the login server wasn't down from the Continue to the details", **ev)
+    # the client's own log: the Continue's attempt found the login server down, the later one got through
+    conn = s["connection_log"] or ""
+    down, up = conn.find("result: LOGIN_SERVER_DOWN"), conn.find("RESPONSE_CONNECTED")
+    ev["connection_log_down_then_up"] = [down, up]
+    require(0 <= down < up, "GIVEN not met: the client's connection.log doesn't show the login server down at the "
+            "Continue and reached after Try again", **ev)
     i_c, i_x = tok(rec, "C"), tok(rec, "X")
     require(i_c is not None and i_x is not None and i_c < i_x, "no friendly error followed the Continue", **ev)
     ph = _overlay_phase(rec, i_c + 1)
