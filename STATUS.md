@@ -1,4 +1,4 @@
-| Save backups (B25) | `change/save-backups`, main checkout (builder owns the stack) | Building, resumed 09:26 after an incident (see below; est. done ~11:30); then verifier + full run | Read the branch log; resume from tasks.md; spec is final (Zach 2026-10-06: whole save = chars+auth+playerbots DBs + WTF/Account, keep 10 + 3 safety, auto on quit, Option-click Backups window) |# STATUS
+| Save backups (B25) | `change/save-backups`, main checkout (builder owns the stack) | Built (e9abb15, pushed). Verifier started 10:35 (est. done ~12:35): full run + 5× repeats; it also guards hsbk_t, acore_characters_broken and PLAYER rows | Read the branch log; resume from tasks.md; spec is final (Zach 2026-10-06: whole save = chars+auth+playerbots DBs + WTF/Account, keep 10 + 3 safety, auto on quit, Option-click Backups window) |# STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
 _Updated 2026-10-06 08:50 (folder rename done and healed; save backups building)._
