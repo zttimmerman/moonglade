@@ -14,3 +14,4 @@
   - remind Zach to update anything that hard-codes the old path (Dock pin, etc.).
   It prints what it would do (dry run) unless given `--apply`.
 - As built: the script is also resumable: if `--apply` is killed after moving the repo, the next `--apply` finishes the remaining steps (data-folder move, worktree repair). It refuses when the destination exists from an unrelated folder, when the source is not a git checkout, or when a process still has its working directory inside the old folder.
+- Cycle 2: harness runs never write the player's own play client: `launch.client_config_step` (realmlist + Wine defaults), resolution and `frontmenu.write` all follow `play.resolution_gate` (harness signs + own client). Real-client harness checks use scratch play clients; `./play` refuses a harness-shaped real-client run on the player's client. Test switch `HS_TEST_OWN_CLIENT` (refused by plain ./play) makes a scratch client count as the player's own, for checks.
