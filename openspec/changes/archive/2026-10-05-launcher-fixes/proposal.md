@@ -23,4 +23,4 @@ Verifier follow-ups: F25 (menu-waits is proven only on a used play client) and F
 - `mac-app` (reopen during loading, shutdown window), `client-connectivity` (resolution default), `login-screen` (fresh-client menu waits), `harness-reporting` (GUI path rule).
 
 ## Spec-change log
-(none yet)
+- 2026-10-05: MODIFIED `mac-app` "Second open while running" (requirement "Double-click plays the game"). Before: opening the app again while it runs shows "already running". Now: a *second instance* (`open -n`) or an app open while `./play` runs shows "already running"; opening/clicking the running app brings forward what it shows (Zach's play test: clicking Hearthstone during loading should not say "already running"). `app.single_instance` part (a) uses `open -n` accordingly. Not a loosening: duplicate-session prevention is still required and checked; the reopen behaviour is covered by the new `app.reopen_during_loading`. Raised by verifier 2.

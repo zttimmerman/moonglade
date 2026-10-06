@@ -45,3 +45,12 @@ The login screen SHALL offer WotLK, TBC and Vanilla (Dark Portal) backdrops with
 - **WHEN** Zach opens it, presses Continue, then restarts and switches the backdrop
 - **THEN** he reaches character select with one press and no typing, and the screen looks and sounds like a native login screen
 - [human-verify] Look, feel and sound of the login screen can only be judged by a person.
+
+### Requirement: A fresh play client waits for the player
+A never-used play client SHALL NOT log in before the player triggers Continue.
+
+#### Scenario: No login before Continue on first launch
+- **GIVEN** a freshly built, never-used scratch play client
+- **WHEN** the client starts and the menu appears
+- **THEN** no authserver login happens between client start and the Continue action
+- Check: `login.fresh_menu_waits`
