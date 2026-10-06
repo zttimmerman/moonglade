@@ -40,4 +40,4 @@ No game data values are written. Backups are byte-for-byte dumps of the player's
   if a backup takes over 60 s, raise it at the next human gate.
 
 ## Spec-change log
-(none yet)
+- 2026-10-06 (tightening, after an incident): B25's manual kill-during-restore test ran against the live databases and its cleanup deleted the backups being restored, half-emptying `acore_characters` (recovered from a full copy with Zach's OK; all 111 tables checksum-identical to the 08:47 copy, nothing of the player's lost). The spec allowed tests to restore into the live schemas. Now: test-shaped restores target scratch `hsbk_` schemas only and live targets are refused (new scenario), and a killed restore is healed by the next run (new scenario under `backups.kill_safe`).

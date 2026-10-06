@@ -48,12 +48,12 @@ If a backup can't be taken (an error, or less than 2 GB of free disk), shutdown 
 - Check: `backups.kill_safe`
 
 ### Requirement: Restore with a safety backup
-Restoring a backup SHALL first take a "before restore" safety backup, then replace the three databases and the player's WTF account folder with the backup's contents, with the world server stopped. A backup whose files don't match its manifest checksums SHALL be refused without changing anything. Restore SHALL be refused while Moonglade (the app or `./play`) is running.
+Restoring a backup SHALL first take a "before restore" safety backup, then replace the three databases and the player's WTF account folder with the backup's contents, with the world server stopped. A backup whose files don't match its manifest checksums SHALL be refused without changing anything. Restore SHALL be refused while Moonglade (the app or `./play`) is running. A restore that is interrupted SHALL be finished by the next `./play` or restore before anything else runs. **Tests never restore into the live databases:** a test-shaped restore (scratch backup folder via the test flag) SHALL target scratch schemas only (names starting `hsbk_`), and a restore into the live `acore_*` schemas from a test-shaped run SHALL be refused before anything is changed.
 
 #### Scenario: Restore rewinds, and can be undone
 - **GIVEN** a backup B, after which the test character's level is changed and a new test character is created
-- **WHEN** B is restored (`./play --backups restore <id>` with the scratch test switches)
-- **THEN** a safety backup S is taken first; afterwards the three databases match B's checksums (the level is back and the new character is gone) and the WTF account folder matches B; the stack is down afterwards; and restoring S brings back the changed level and the new character
+- **WHEN** B is restored (`./play --backups restore <id>` with the scratch test switches, into scratch `hsbk_` schemas)
+- **THEN** a safety backup S is taken first; afterwards the three target schemas match B's checksums (the level is back and the new character is gone) and the WTF account folder matches B; the stack is down afterwards; and restoring S brings back the changed level and the new character
 - Check: `backups.restore_roundtrip`
 
 #### Scenario: Damaged backup is refused
@@ -61,6 +61,18 @@ Restoring a backup SHALL first take a "before restore" safety backup, then repla
 - **WHEN** it is restored
 - **THEN** the restore is refused with a message naming the damaged file, exits nonzero, and every table checksum is unchanged; no safety backup is taken
 - Check: `backups.restore_refusals`
+
+#### Scenario: A test run can't restore into the live databases
+- **GIVEN** the live `acore_characters`, `acore_auth` and `acore_playerbots` with every table's checksum recorded
+- **WHEN** a test-shaped restore names the live schemas as its target (and, separately, names no target)
+- **THEN** both are refused with a nonzero exit before any database is touched, no safety backup is taken, and every live table checksum is unchanged
+- Check: `backups.restore_refusals`
+
+#### Scenario: Killed in the middle of a restore
+- **GIVEN** a test-shaped restore into scratch `hsbk_` schemas, in progress (loading)
+- **WHEN** it is killed with SIGKILL, and then `./play` (test-shaped, scratch folder) runs
+- **THEN** before starting anything else the next run finishes the restore (the scratch schemas then match the backup's checksums), no loader process is left, the backup and its safety backup are intact, and every live table checksum is unchanged throughout
+- Check: `backups.kill_safe`
 
 #### Scenario: Restore while running is refused
 - **GIVEN** a running play session (the play lock held)
