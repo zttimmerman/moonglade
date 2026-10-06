@@ -37,8 +37,9 @@ Builders run this before handing over and put a short pass/fail line per item in
 8. **Data provenance (§7).** No hand-typed game values: names, classes, numbers come from VMaNGOS, AC base SQL or DBCs, with citations.
 9. **Scope guards.** `client.inspect` passes; `env/player.json`, `env/settings.json` and PLAYER (last_login) are untouched; nothing is written outside the repo; TCC, bundle id and designated requirement are untouched; build inputs have changed only as intended (`--force-clean` if so).
 10. **Repeat, and report oddities.** Each new or changed check passes ≥3 times. Any unexplained failure is reported as such, never dismissed as "probably a human" without confirming.
-11. **Clean up.** No ad-hoc GUI programs that appear in Zach's Dock; use the harness's test switches (a verifier's throwaway `flick` program left ~20 ghost Dock icons, 2026-10-05). Scratch dirs and test accounts removed, stack down, no stray Wine/Wow/server processes, disk checked.
-12. **Docs match code.** design.md describes what was built (M-launcher: osascript vs AppKit drift).
+11. **Shared databases are the player's save.** The isolated MySQL holds Zach's real characters. No ad-hoc script or command writes to, drops, renames or loads into the live `acore_*` schemas; only the harness's normal stack operations do. Any test that restores or bulk-loads uses scratch schemas, and starts with a full `mysqldump` safety copy in `env/tmp/` that is never deleted. Cleanup never deletes a backup a restore is using until the outcome is verified. Anything unexpected touching live data: stop and report, don't self-repair. (save-backups B25, 2026-10-06: a kill-during-restore test half-emptied `acore_characters`.)
+12. **Clean up.** No ad-hoc GUI programs that appear in Zach's Dock; use the harness's test switches (a verifier's throwaway `flick` program left ~20 ghost Dock icons, 2026-10-05). Scratch dirs and test accounts removed, stack down, no stray Wine/Wow/server processes, disk checked.
+13. **Docs match code.** design.md describes what was built (M-launcher: osascript vs AppKit drift).
 
 ## Verify
 - Use the `verifier` agent type and give it only: spec deltas, `git diff <last-verified>..HEAD -- harness/ …`, and the harness command.
