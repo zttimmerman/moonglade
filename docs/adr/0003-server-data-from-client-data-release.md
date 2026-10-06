@@ -1,5 +1,7 @@
 # ADR-0003: Server map/DBC data from wowgaming/client-data for M0
 
+> Project renamed to Moonglade on 2026-10-05 (openspec/changes/rename-moonglade); this record keeps the name it was written under.
+
 - Status: accepted
 - Date: 2026-10-01
 

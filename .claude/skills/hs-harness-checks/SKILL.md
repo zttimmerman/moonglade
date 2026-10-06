@@ -1,6 +1,6 @@
 ---
 name: hs-harness-checks
-description: How to write Hearthstone harness checks (harness/hslib/checks) that can actually fail. Use when adding or reviewing a @check, or mapping a spec scenario to a check.
+description: How to write Moonglade harness checks (harness/hslib/checks) that can actually fail. Use when adding or reviewing a @check, or mapping a spec scenario to a check.
 ---
 
 # Writing harness checks

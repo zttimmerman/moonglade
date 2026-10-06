@@ -209,7 +209,7 @@ GLUE_TEST_ENV = "HS_GLUE_TEST"        # test-only GlueXML hook (frontmenu.py); n
 SKIP_ENV = "HS_PLAY_SKIP_PATCHES"      # test-only (counterexamples): build the scratch play client without these patches
 
 
-FROM_APP_ENV = launch.FROM_APP_ENV     # set by Hearthstone.app (launcher.m); its output goes to env/logs/app.log
+FROM_APP_ENV = launch.FROM_APP_ENV     # set by Moonglade.app (launcher.m); its output goes to env/logs/app.log
 WINDOW_POLL_S = 0.5                    # launching -> ready: how often to look for the client's first window
 BOTS_POLL_S = 2.0                      # how often the launching stage refreshes the (informational) bot count
 READY_FALLBACK_S = 120                 # a client with no window (the .bat stand-in) is "ready" after this long
@@ -246,7 +246,11 @@ def choose_world(say=say) -> dict:
 # Signs of a harness (or developer test) run rather than the player starting the game: test arguments, and the
 # environment switches the harness sets (HS_HARNESS_RUN is set by `hs run` for every check's subprocesses).
 HARNESS_ENV = ("HS_HARNESS_RUN", "HS_PLAYER_FILE", "HS_PLAYER_DEFAULT_NAME", "HS_SETTINGS", "HS_PROFILE",
-               "HS_CLIENT_DIR", "HS_GLUE_TEST", "HS_PLAY_SKIP_PATCHES")
+               "HS_CLIENT_DIR", "HS_GLUE_TEST", "HS_PLAY_SKIP_PATCHES", "HS_TEST_OWN_CLIENT")
+# test-only (client.config_gate): treat this scratch play client as the player's own, so the gate's "own client"
+# branch can be exercised end to end without ever touching env/client-play/. It can only make the gate stricter
+# (another directory counts as the player's), and main() refuses it without --allow-test-client-dir.
+OWN_CLIENT_TEST_ENV = "HS_TEST_OWN_CLIENT"
 
 
 def harness_signs(args, environ=None) -> list[str]:
@@ -263,10 +267,13 @@ def harness_signs(args, environ=None) -> list[str]:
 
 
 def resolution_gate(args, client: Path, environ=None) -> dict:
-    """launcher-fixes: may this launch write the resolution default into `client`? Scratch play clients: yes. The
-    player's own env/client-play/: only from a genuine player launch."""
+    """May this launch write into `client`'s config (launcher-fixes: the resolution default; rename-moonglade cycle 2:
+    every config write: realmlist, Config.wtf defaults, resolution, the generated login file)? Scratch play clients
+    and client/: yes. The player's own env/client-play/: only from a genuine player launch."""
     from .clientbuild import PLAY as PLAYER_CLIENT
-    own = Path(client).resolve() == PLAYER_CLIENT.resolve()
+    env = os.environ if environ is None else environ
+    stand = env.get(OWN_CLIENT_TEST_ENV)
+    own = Path(client).resolve() == PLAYER_CLIENT.resolve() or bool(stand and Path(client).resolve() == Path(stand).resolve())
     signs = harness_signs(args, environ)
     return {"players_own_client": own, "harness_signs": signs, "apply": not (own and signs)}
 
@@ -308,7 +315,7 @@ class Loop:
                 info = {"mode": mode, "dir": str(dest), "built": b["built"], "reason": b.get("reason"),
                         "outputs": b["stamp"]["outputs"], "state": b["stamp"].get("state")}
                 if b["built"]:
-                    say("Prepared the game client (play client with the Hearthstone login screen).")
+                    say("Prepared the game client (play client with the Moonglade login screen).")
             else:
                 launch.select_client(None)
                 info = {"mode": mode, "dir": str(P.CLIENT)}
@@ -340,7 +347,7 @@ class Loop:
             def accounts():
                 say(f"Making sure your account ({login['account']}) exists...")
                 return ensure_player_account(login)
-        say("Starting Hearthstone.")
+        say("Starting Moonglade.")
         self.step("prepare")
         st = self.stages
         st.start("prepare")
@@ -349,23 +356,32 @@ class Loop:
         self.rec["world"] = world
         st.profile = world["profile"]
         st.world_lines_of = st._world_lines_of()
-        # the player's own play client gets the resolution default only from a genuine player launch (the app, or
-        # ./play with no test arguments); harness runs never write it there. Scratch play clients
-        # ($HS_PLAY_CLIENT_DIR) get it as a player's would (client.resolution_default).
+        # the player's own play client gets config writes (realmlist, Config.wtf defaults, the resolution default, the
+        # generated login file) only from a genuine player launch (the app, or ./play with no test arguments); harness
+        # runs never write there. Scratch play clients ($HS_PLAY_CLIENT_DIR) get them as a player's would.
         gate = resolution_gate(self.args, launch.client_dir())
         self.rec["resolution_gate"] = gate
+        if gate["players_own_client"] and not gate["apply"] and args_ is None:
+            # the real Wow.exe from a harness-shaped run would play the player's own client with its config writes
+            # skipped: refuse; such runs use a scratch play client ($HS_PLAY_CLIENT_DIR + --allow-test-client-dir)
+            raise launch.LaunchError("a test run (" + ", ".join(gate["harness_signs"]) + ") can't start the real game in "
+                                     "your own play client; tests use a scratch play client ($HS_PLAY_CLIENT_DIR)",
+                                     {"resolution_gate": gate})
         man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts,
                                  profile=world["profile"], population_n=world["population_n"], stages=st,
-                                 set_resolution=gate["apply"])
+                                 write_client_config=gate["apply"])
         self.rec["prepare"] = {k: ev[k] for k in ("restarted_world", "stack", "fixtures", "accounts", "prefix",
-                                                  "binaries_match_manifest_before", "resolution") if k in ev}
+                                                  "binaries_match_manifest_before", "resolution", "client_config") if k in ev}
         self.man = man
 
         from .clientinst import sha256_file
         self.rec["client"]["exe"] = str(launch.client_dir() / "Wow.exe")
         self.rec["client"]["exe_sha256"] = sha256_file(launch.client_dir() / "Wow.exe")
         auto = client["mode"] == "patched"
-        if auto:
+        if auto and not gate["apply"]:
+            self.rec["client"]["profiles"] = {"skipped": "not a genuine player launch, and this is the player's own "
+                                                         "play client"}
+        elif auto:
             from . import frontmenu
             self.profiles_dir = launch.client_dir()
             # the GlueXML test hook only ever reaches a test-account run (main() also refuses it without the flag)
@@ -475,7 +491,7 @@ class Loop:
 
 
 def _parse(argv):
-    ap = argparse.ArgumentParser(prog="./play", description="Start Hearthstone: the local server and the game "
+    ap = argparse.ArgumentParser(prog="./play", description="Start Moonglade: the local server and the game "
                                  "client. Quit the game (or press Ctrl-C) and everything shuts down.")
     ap.add_argument("--client-cmd", type=Path, help=argparse.SUPPRESS)      # test-only stand-in client
     ap.add_argument("--account", choices=["player", "test"], default="player", help=argparse.SUPPRESS)  # test-only
@@ -496,7 +512,7 @@ def main(argv=None) -> int:
             f"Unset it (`unset {PLAY_CLIENT_ENV}`) and run ./play again.")
         return EXIT_FAIL
     from .resolution import TEST_ENV as DISPLAY_TEST_ENV
-    for var in (GLUE_TEST_ENV, SKIP_ENV, DISPLAY_TEST_ENV):   # test-only switches; refused before anything happens
+    for var in (GLUE_TEST_ENV, SKIP_ENV, DISPLAY_TEST_ENV, OWN_CLIENT_TEST_ENV):   # test-only; refused before anything
         if os.environ.get(var) and not args.allow_test_client_dir:
             say(f"{var} is set: that's a test switch for the harness, not for playing. "
                 f"Unset it (`unset {var}`) and run ./play again.")
@@ -511,7 +527,7 @@ def main(argv=None) -> int:
     try:
         fd, lock = acquire_lock()
     except Busy as b:
-        say(f"Hearthstone is already running (./play pid {b.pid}). Use that window, or quit the game there first.")
+        say(f"Moonglade is already running (./play pid {b.pid}). Use that window, or quit the game there first.")
         return EXIT_BUSY
 
     loop = Loop(args)

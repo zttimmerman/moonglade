@@ -68,7 +68,7 @@ class LaunchError(RuntimeError):
         self.evidence = evidence or {}
 
 
-FROM_APP_ENV = "HS_FROM_APP"          # set by Hearthstone.app (launcher.m) for its play loop
+FROM_APP_ENV = "HS_FROM_APP"          # set by Moonglade.app (launcher.m) for its play loop
 APP_BUNDLE_ENV = "HS_APP_BUNDLE"      # the launcher's bundle path (for its icon)
 DOCK_TOKEN = str(P.ROOT)              # object of the launcher <-> shim distributed notifications
 _dock_test = False                    # ./play --client-cmd (a test stand-in): the shim's test-only hooks may run
@@ -94,7 +94,7 @@ def dock_env() -> dict:
         else P.ROOT / "branding" / "AppIcon.icns"
     env = {"DYLD_INSERT_LIBRARIES": dockshim.ensure_built(),
            "HSDOCK_POLICY": pol["policy"] if app else "regular",
-           "HSDOCK_NAME": "Hearthstone", "HSDOCK_ICON": str(icon), "HSDOCK_LOG": str(dockshim.LOG),
+           "HSDOCK_NAME": "Moonglade", "HSDOCK_ICON": str(icon), "HSDOCK_LOG": str(dockshim.LOG),
            "HSDOCK_TOKEN": DOCK_TOKEN}
     if _dock_test:
         env["HSDOCK_TEST"] = "1"
@@ -495,15 +495,30 @@ def bots_label(b: dict) -> str:
     return f"AI players: {b['online'] if b.get('online') is not None else '?'} / {b.get('target') or '?'} online"
 
 
+def client_config_step(write_client_config: bool, say=log) -> dict:
+    """prepare()'s config step for the client being launched: realmlist + Config.wtf defaults (WINE_DEFAULTS).
+    rename-moonglade cycle 2: with write_client_config False (./play's play.resolution_gate: a harness run against the
+    player's own play client) nothing is written: not realmlist, not the Config.wtf defaults, not the resolution.
+    Harness runs that start the real Wow.exe use scratch play clients (play.py refuses otherwise); stand-ins don't
+    read the config."""
+    from .clientcfg import WINE_DEFAULTS, configure
+    if not write_client_config:
+        skipped = {"skipped": "not a genuine player launch, and this is the player's own play client"}
+        return {"client_config": skipped, "resolution": skipped}
+    say("Pointing the game client at this computer (127.0.0.1)...")
+    cfg = configure(client_dir(), defaults=WINE_DEFAULTS)
+    return {"client_config": {"changed_files": cfg["changed_files"],
+                              "config_wtf": next(c for c in cfg["changes"] if c["kind"] == "Config.wtf")}}
+
+
 def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: str | None = None,
-            population_n: int | None = None, stages=None, set_resolution: bool = True) -> tuple[dict, dict]:
+            population_n: int | None = None, stages=None, write_client_config: bool = True) -> tuple[dict, dict]:
     """Everything before starting the client, shared by `hs launch` and `./play`: stack up (if needed) →
     client-config (+ Wine defaults) → accounts → Wine prefix → binaries match the manifest. `accounts` makes
     sure the login exists (default: the harness fixtures, test account + character; `./play` passes its
     player-account step). `say` reports each step. Raises stack.StackError / LaunchError / FixtureError.
     Returns (manifest, ev)."""
     from . import fixtures
-    from .clientcfg import WINE_DEFAULTS, configure
 
     _require_wine()
     if os.environ.get("HS_CLIENT_DIR"):
@@ -536,13 +551,8 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: 
         ev["accounts"] = accounts()
     if stages:
         stages.start("game_setup")
-    say("Pointing the game client at this computer (127.0.0.1)...")
-    cfg = configure(client_dir(), defaults=WINE_DEFAULTS)
-    ev["client_config"] = {"changed_files": cfg["changed_files"],
-                           "config_wtf": next(c for c in cfg["changes"] if c["kind"] == "Config.wtf")}
-    if is_play_client() and not set_resolution:
-        ev["resolution"] = {"skipped": "not a genuine player launch, and this is the player's own play client"}
-    elif is_play_client():          # launcher-fixes: a resolution matching the display, unless the player chose one
+    ev |= client_config_step(write_client_config, say)
+    if write_client_config and is_play_client():   # launcher-fixes: a resolution matching the display, unless chosen
         from . import resolution
         try:
             ev["resolution"] = resolution.apply(client_dir())

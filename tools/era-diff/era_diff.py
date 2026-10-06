@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """era-diff: compare VMaNGOS (1.12) world data against AzerothCore (3.3.5a) for the
-Hearthstone era profile (CLAUDE.md §7, KICKOFF.md §3 Gate 1).
+Moonglade era profile (CLAUDE.md §7, KICKOFF.md §3 Gate 1).
 
 Scope rules (KICKOFF.md correction note):
   * only entities present in BOTH databases, matched by entry ID;

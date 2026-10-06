@@ -25,10 +25,11 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from .. import app as A, config, dockshim, launch, paths as P, play, procs, stack, stages as S
+from .. import app as A, clientbuild, config, dockshim, launch, paths as P, play, procs, stack, stages as S
 from ..registry import CheckFail, check, require
 from .app_checks import (Hook, OPEN, _launchers, _log_since, _log_size, _play_pid, app_remaining, build_app, open_app,
                          require_clear, stop_launchers, tcc_prompts, wait_app_exit)
+from .naming_checks import NEW_NAME, OLD_NAME
 from .play_checks import PINNED, StandIn, is_clear, last_record, remaining
 
 CAP_APP = "mac-app"
@@ -41,8 +42,13 @@ FOCUS_LIMIT_S = 2.0
 NOTHING_ON_SCREEN_S = 0.3     # hand-off: longest moment with neither the loading window nor the game window on screen
 # [play] lines as they were before launcher-polish (main at 1ba1d3b): every line a run prints must match one of
 # these say() templates, so the terminal output is unchanged
+PERF_SCRATCH = P.ENV / "check-play-shimperf"     # app.shim_perf's scratch play client (never env/client-play/)
 PLAY_LINES_BASE = "1ba1d3b"
 PLAY_LINES_FILES = ("harness/hslib/play.py", "harness/hslib/launch.py")
+# rename-moonglade (2026-10-05): the project name in those templates is mapped to the new one, and nothing else is.
+# A rename, not a loosening: every other character of every template is still the 1ba1d3b text, a line with the old
+# name now fails (the old name isn't allowed any more), and no template gains a wildcard.
+PLAY_LINES_RENAMES = ((OLD_NAME, NEW_NAME),)
 
 
 # ---------------------------------------------------------------- environment probes
@@ -212,7 +218,7 @@ while (Date.now() < end) {
 
 class WindowSampler(threading.Thread):
     """Every on-screen normal window (owner pid, size) ~20 times a second from one long-lived osascript, so a moment
-    with no Hearthstone window on screen can be measured."""
+    with no Moonglade window on screen can be measured."""
 
     def __init__(self, max_s: int = 900):
         super().__init__(daemon=True, name="window-sampler")
@@ -512,7 +518,7 @@ def _focus_steps(ev: dict, win: dict, hook, s, sfile, profile: str, env: dict | 
 
     # minimise (test-only shim notification), then reopen
     ev["unminimize"] = u = {}
-    u["minimize_note"] = post_note("local.hearthstone.test.minimize")
+    u["minimize_note"] = post_note("local.moonglade.test.minimize")
     t0 = time.time()
     while time.time() - t0 < 5 and big_windows(win["pid"]):
         time.sleep(0.2)
@@ -601,10 +607,10 @@ def verify_single_dock(ev: dict) -> dict:
     hs = [a for a in apps if a.get("bundle") == A.BUNDLE_ID]
     others_fg = [a for a in apps if a["pid"] != lp and a.get("type") == "Foreground"]
     out |= {"stand_in": stand, "launchers": hs, "other_foreground": others_fg}
-    require(stand and stand[0]["type"] == "UIElement" and stand[0]["name"] == "Hearthstone",
-            "the stand-in isn't a UIElement named Hearthstone", **out)
+    require(stand and stand[0]["type"] == "UIElement" and stand[0]["name"] == "Moonglade",
+            "the stand-in isn't a UIElement named Moonglade", **out)
     require(len(hs) == 1 and hs[0]["pid"] == lp and hs[0]["type"] == "Foreground",
-            "the launcher isn't the only Foreground process with bundle id local.hearthstone.app", **out)
+            "the launcher isn't the only Foreground process with bundle id local.moonglade.app", **out)
     require(not others_fg, "another process of this prefix is Foreground", **out)
     # sampling from the Wine host's start to 5 s after the window
     samples = ev["ls_samples"]
@@ -661,7 +667,7 @@ def verify_handoff(ev: dict) -> dict:
     require(out["window_sample_max_gap_s"] is not None and out["window_sample_max_gap_s"] <= 0.25,
             "window sampling had a gap > 0.25 s", **out)
     require(out["nothing_on_screen_s"] <= NOTHING_ON_SCREEN_S,
-            f"nothing of Hearthstone's was on screen for {out['nothing_on_screen_s']} s between the loading window "
+            f"nothing of Moonglade's was on screen for {out['nothing_on_screen_s']} s between the loading window "
             f"and the game window (limit {NOTHING_ON_SCREEN_S} s)", **out)
     require(ev["front_after_window_s"] is not None and ev["front_after_window_s"] <= FOCUS_LIMIT_S,
             "the stand-in didn't become frontmost within 2 s of its window", **out)
@@ -682,7 +688,7 @@ def verify_reopen(ev: dict) -> dict:
     hs = [a for a in r["apps_after"] if a.get("bundle") == A.BUNDLE_ID]
     fg = [a for a in r["apps_after"] if a.get("type") == "Foreground"]
     require(len(hs) == 1 and hs[0]["pid"] == ev["launcher_pid"] and [a["pid"] for a in fg] == [ev["launcher_pid"]],
-            "the launcher isn't still the single Hearthstone Dock icon", **out)
+            "the launcher isn't still the single Moonglade Dock icon", **out)
     return out
 
 
@@ -884,8 +890,8 @@ def client_inspect() -> dict:
 
 @check("app.single_dock_icon", order=392, capability=CAP_APP, stack="down", tier="full", gui=True)
 def single_dock_icon(ctx):
-    """App + notepad stand-in: lsappinfo has the stand-in as a UIElement named Hearthstone, the launcher as the only
-    Foreground process with bundle id local.hearthstone.app, no other prefix process Foreground; sampled at >= 10 Hz
+    """App + notepad stand-in: lsappinfo has the stand-in as a UIElement named Moonglade, the launcher as the only
+    Foreground process with bundle id local.moonglade.app, no other prefix process Foreground; sampled at >= 10 Hz
     from the Wine host's start to 5 s after the window, no prefix process is ever Foreground."""
     ev = _session(focus=True)
     return verify_single_dock(ev)
@@ -901,7 +907,7 @@ def handoff_focus(ctx):
 @check("app.reopen_focuses_game", order=394, capability=CAP_APP, stack="down", tier="full", gui=True)
 def reopen_focuses_game(ctx):
     """Stand-in up, Finder frontmost: reopening the app through LaunchServices makes the stand-in frontmost within
-    2 s, shows no "already running" dialog, and the launcher stays the single Hearthstone Dock icon."""
+    2 s, shows no "already running" dialog, and the launcher stays the single Moonglade Dock icon."""
     return verify_reopen(_session(focus=True))
 
 
@@ -1071,7 +1077,10 @@ def base_play_templates(rev: str = PLAY_LINES_BASE) -> list[str]:
         src = subprocess.run(["git", "-C", str(P.ROOT), "show", f"{rev}:{f}"], capture_output=True, text=True)
         if src.returncode != 0:
             raise CheckFail(f"can't read {f} at {rev}: {src.stderr.strip()}")
-        for node in ast.walk(ast.parse(src.stdout)):
+        text = src.stdout
+        for old, new in PLAY_LINES_RENAMES:
+            text = text.replace(old, new)
+        for node in ast.walk(ast.parse(text)):
             if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "say" and node.args:
                 pats.append(_regex_of(node.args[0]))
     return pats
@@ -1147,8 +1156,8 @@ def verify_dock_identity(ev: dict) -> dict:
     np = ev["window"]["pid"]
     stand = [a for a in ev["apps_at_window"] if a["pid"] == np]
     out = {"stand_in": stand, "shim_log": ev["shim_log"]}
-    require(stand and stand[0].get("type") == "Foreground" and stand[0].get("name") == "Hearthstone",
-            "the stand-in isn't a normal Foreground app named Hearthstone", **out)
+    require(stand and stand[0].get("type") == "Foreground" and stand[0].get("name") == "Moonglade",
+            "the stand-in isn't a normal Foreground app named Moonglade", **out)
     require(any("setApplicationIconImage:" in l and "replaced=1" in l for l in ev["shim_log"]),
             "the shim log has no icon replacement for the stand-in (this run)", **out)
     require(not any("-> using 1" in l for l in ev["shim_log"]), "the terminal run made the stand-in an accessory app", **out)
@@ -1157,7 +1166,7 @@ def verify_dock_identity(ev: dict) -> dict:
 
 @check("play.dock_identity", order=391, capability=CAP_PLAY, stack="down", tier="full")
 def dock_identity(ctx):
-    """Terminal ./play with the notepad stand-in (no app): the stand-in is a normal Foreground app named Hearthstone,
+    """Terminal ./play with the notepad stand-in (no app): the stand-in is a normal Foreground app named Moonglade,
     and the shim log records the icon replacement for its pid in this run."""
     return verify_dock_identity(_term())
 
@@ -1197,7 +1206,10 @@ def perf_run(policy: str, ev_runs: list) -> dict:
     try:
         run["display_states"] = states = [display_state()]
         run["up"] = {k: v for k, v in stack.up(profile="m0").items() if k in ("profile", "worldserver")}
-        run["open"] = open_app(A.APP, hook, "--account", "test", env={"HS_PROFILE": "m0", "HS_SETTINGS": str(sfile)})
+        # rename-moonglade cycle 2: the real client plays a scratch play client (built once by app.shim_perf), never
+        # the player's own env/client-play/ (play.py refuses a real-client test run there)
+        run["open"] = open_app(A.APP, hook, "--account", "test", "--allow-test-client-dir",
+                               env={"HS_PROFILE": "m0", "HS_SETTINGS": str(sfile), "HS_PLAY_CLIENT_DIR": str(PERF_SCRATCH)})
         t0 = time.time()
         launching, wow, t_win = None, None, None
         while time.time() - t0 < 300 and hook.exit_code() is None:
@@ -1292,6 +1304,9 @@ def shim_perf(ctx):
     build_app(ev)
     require_clear(ev)
     runs: list = []
+    from .playclient_util import drop_scratch, fresh_scratch
+    fresh_scratch(PERF_SCRATCH.name.removeprefix("check-play-"))
+    clientbuild.build(dest=PERF_SCRATCH)              # once, before the runs: no build time inside a measurement
     try:
         for i in range(PERF_RUNS):
             for policy in (("accessory", "off") if i % 2 == 0 else ("off", "accessory")):
@@ -1300,4 +1315,6 @@ def shim_perf(ctx):
                     return verify_perf(runs)
     except CheckFail as e:
         raise CheckFail(str(e), {"runs": runs, **e.evidence})
+    finally:
+        drop_scratch(PERF_SCRATCH)
     return verify_perf(runs)

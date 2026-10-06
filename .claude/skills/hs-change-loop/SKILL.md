@@ -1,9 +1,9 @@
 ---
 name: hs-change-loop
-description: Hearthstone's unit-of-work loop. OpenSpec change → branch → builder → verifier → full run → PR/merge → archive. Use when starting, delegating, verifying, or closing any change in this repo.
+description: Moonglade's unit-of-work loop. OpenSpec change → branch → builder → verifier → full run → PR/merge → archive. Use when starting, delegating, verifying, or closing any change in this repo.
 ---
 
-# Hearthstone change loop
+# Moonglade change loop
 
 CLAUDE.md §4/§6/§9 are the rules; this is the practiced procedure.
 

@@ -1,5 +1,7 @@
 # ADR-0004: Wine layer: WoWSilicon's Wine runtime + mtld3d (D3D9→Metal), repo-local prefixes
 
+> Project renamed to Moonglade on 2026-10-05 (openspec/changes/rename-moonglade); this record keeps the name it was written under.
+
 - Status: accepted (revised 2026-10-01 after F3; the original Whisky decision is kept below as history)
 - Date: 2026-10-01
 

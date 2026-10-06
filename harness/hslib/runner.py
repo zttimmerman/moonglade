@@ -25,7 +25,7 @@ GUI_ROOTS = (
     "harness/hslib/checks/polish_checks.py",  # the gui checks and their shared app session
     "harness/hslib/checks/app_checks.py",     # open_app / Hook / build_app used by that session
     "harness/hslib/play.py",                  # the play loop the app runs (stages, ready -> hand-off, shutdown)
-    "harness/hslib/app.py",                   # builds dist/Hearthstone.app
+    "harness/hslib/app.py",                   # builds dist/Moonglade.app
     "harness/hslib/dockshim.py",              # builds/loads the Dock shim
     "harness/hslib/__main__.py",              # `harness/hs app` (build_app) and the CLI
     "harness/hslib/runner.py",                # this rule and the GUI tier itself
@@ -339,8 +339,9 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
     # play client's resolution), and client.player_config_untouched compares the player's config with this
     import os
     os.environ["HS_HARNESS_RUN"] = "1"
-    from .checks.resolution_checks import player_config_sha
-    ctx = {"force_clean": force_clean, "tier": tier, "player_config_sha256_start": player_config_sha()}
+    from .checks.resolution_checks import player_config_sha, player_marker_sha
+    ctx = {"force_clean": force_clean, "tier": tier, "player_config_sha256_start": player_config_sha(),
+           "player_marker_sha256_start": player_marker_sha()}
     if rule is not None:
         log(f"GUI rule: {'GUI checks run' if gui_changed(rule) else 'GUI checks skipped by design'} "
             f"(changed GUI paths: {rule['changed_gui_paths']}{'; ' + rule['error'] if rule['error'] else ''})")

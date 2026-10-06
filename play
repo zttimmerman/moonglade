@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Hearthstone: one command to play. Starts the local server and the game client; quitting the game (or Ctrl-C)
+# Moonglade: one command to play. Starts the local server and the game client; quitting the game (or Ctrl-C)
 # shuts everything down. See docs/client-setup.md ("Play") and openspec/changes/m1-offline-play-loop/.
 set -euo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

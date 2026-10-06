@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -16,7 +17,7 @@ from .. import clientbuild, launch, paths as P
 from ..clientinst import load_manifest, mismatches, sha256_file
 from ..registry import check, require
 from .play_checks import is_clear, remaining, require_given_clear
-from .playclient_util import PlayRun, fresh_scratch
+from .playclient_util import PlayRun, drop_scratch, fresh_scratch
 
 CAP = "play-client"
 RECORD = clientbuild.QUEUE / "0001-gluexml-signature.json"
@@ -218,20 +219,32 @@ def _launched(run: PlayRun, ev_key: str, ev: dict) -> dict:
 @check("client.stock_mode", order=386, capability=CAP, stack="down", tier="full")
 def stock_mode(ctx):
     """With `client = stock` (scratch settings) the play loop launches the real client/Wow.exe (pristine hash); with
-    `client = patched` it launches env/client-play/Wow.exe (patched hash)."""
+    `client = patched` it launches the play client's Wow.exe (patched hash): a scratch play client built by the same
+    queue for the real game (a check never runs it in the player's own env/client-play/), and, with no scratch
+    override, the play loop selects env/client-play/ itself, whose Wow.exe is patch 0001's output (stand-in run,
+    config writes gated off; the player's Config.wtf is unchanged)."""
     rec0001 = json.loads(RECORD.read_text())
     ev: dict = {}
     require_given_clear(ev)
     man = load_manifest()
-    for mode in ("stock", "patched"):
-        run = PlayRun(f"mode-{mode}", mode=mode)
-        try:
-            info = _launched(run, mode, ev)
-        finally:
-            run.cleanup()
-        require(info["client_up"].get("up"), f"{mode}: the real Wow.exe never came up", **ev)
+    # rename-moonglade cycle 2: the patched run plays a scratch play client built by the same queue (the real Wow.exe
+    # never runs in the player's own env/client-play/ from a check; play.py refuses that), so "the play client's
+    # Wow.exe" is the scratch's, with the same patch 0001 output hash env/client-play/Wow.exe has
+    scratch = fresh_scratch("mode-patched")
+    try:
+        for mode in ("stock", "patched"):
+            run = PlayRun(f"mode-{mode}", mode=mode, scratch=scratch if mode == "patched" else None)
+            try:
+                info = _launched(run, mode, ev)
+            finally:
+                run.cleanup()
+            require(info["client_up"].get("up"), f"{mode}: the real Wow.exe never came up", **ev)
+    finally:
+        drop_scratch(scratch)
     win = lambda p: "Z:" + str(p).replace("/", "\\")
-    stock_exe, play_exe = win(P.CLIENT / "Wow.exe").lower(), win(clientbuild.PLAY / "Wow.exe").lower()
+    stock_exe, play_exe = win(P.CLIENT / "Wow.exe").lower(), win(scratch / "Wow.exe").lower()
+    ev["player_play_client_exe_sha256"] = sha256_file(clientbuild.PLAY / "Wow.exe") \
+        if (clientbuild.PLAY / "Wow.exe").exists() else None
     s, pt = ev["stock"], ev["patched"]
     ev["expected"] = {"stock_exe": stock_exe, "stock_sha256": man["binaries_sha256"]["Wow.exe"],
                       "patched_exe": play_exe, "patched_sha256": rec0001["output_sha256"]}
@@ -240,9 +253,51 @@ def stock_mode(ctx):
     require((s["record_client"] or {}).get("exe_sha256") == man["binaries_sha256"]["Wow.exe"]
             and (s["record_client"] or {}).get("mode") == "stock", "stock mode's exe hash isn't the pristine one", **ev)
     require(any(c.lower().startswith(play_exe) for c in pt.get("wow_cmd", [])),
-            "patched mode didn't launch env/client-play/Wow.exe", **ev)
+            "patched mode didn't launch the play client's Wow.exe (scratch play client)", **ev)
     require((pt["record_client"] or {}).get("exe_sha256") == rec0001["output_sha256"],
             "patched mode's exe hash isn't patch 0001's output", **ev)
+    # cycle 3: the player's half of the THEN ("env/client-play/ for the player"), on the play loop's own selection
+    ev["player_path"] = pp = player_path_run()
+    rc_ = pp.get("record_client") or {}
+    require(pp["exit_code"] == 0 and pp["client_up"].get("up"), "the patched stand-in run didn't run and end cleanly",
+            **ev)
+    require(rc_.get("mode") == "patched" and rc_.get("dir") == str(clientbuild.PLAY.resolve()),
+            "with no scratch override, patched mode didn't select the player's env/client-play/", **ev)
+    require(rc_.get("exe") == str(clientbuild.PLAY.resolve() / "Wow.exe")
+            and rc_.get("exe_sha256") == rec0001["output_sha256"],
+            "the player's play client Wow.exe isn't patch 0001's output", **ev)
+    require(pp["player_config_sha_after"] == pp["player_config_sha_before"],
+            "the patched stand-in run changed the player's Config.wtf", **ev)
     ev["remaining_after"] = remaining()
     require(is_clear(ev["remaining_after"]), "something is still running", **ev)
     return ev
+
+
+def player_path_run() -> dict:
+    """Patched mode with no scratch override (no $HS_PLAY_CLIENT_DIR): ./play with the stand-in (--client-cmd), so the
+    real game never runs in the player's client and the config writes there are gated off. Returns the play loop's
+    own record of the client it selected (dir, exe, exe sha256) and the player's Config.wtf hash before/after."""
+    from .play_checks import StandIn
+    from .. import play
+    zach = clientbuild.PLAY / "WTF" / "Config.wtf"
+    ev: dict = {"player_config_sha_before": sha256_file(zach) if zach.exists() else None,
+                "env_overrides_present": [k for k in ("HS_PLAY_CLIENT_DIR", "HS_TEST_OWN_CLIENT", "HS_CLIENT_DIR")
+                                          if os.environ.get(k)]}
+    require(not ev["env_overrides_present"], "GIVEN not met: a client override is set in the harness environment", **ev)
+    s = StandIn("mode-player")
+    sfile = s.dir / "settings.json"
+    sfile.write_text(json.dumps({"client": "patched"}))
+    try:
+        s.start_play(env={"HS_SETTINGS": str(sfile)})
+        ev["client_up"] = s.wait_client_up()
+        s.stop_file.write_text("quit")
+        rc, _ = s.wait_exit(timeout=300)
+        rec = json.loads(play.LAST.read_text()) if play.LAST.exists() else {}
+        rec = rec if rec.get("pid") == (s.proc.pid if s.proc else None) else {"stale_record_pid": rec.get("pid")}
+        ev |= {"exit_code": rc, "record_client": {k: (rec.get("client") or {}).get(k) for k in ("mode", "dir", "exe",
+                                                                                              "exe_sha256")},
+               "gate": rec.get("resolution_gate"), "client_config": (rec.get("prepare") or {}).get("client_config"),
+               "player_config_sha_after": sha256_file(zach) if zach.exists() else None}
+        return ev
+    finally:
+        s.cleanup()

@@ -15,7 +15,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .. import clientbuild, launch, paths as P, play, resolution as R
+from .. import clientbuild, launch, paths as P, play, resolution as R, stack
 from ..registry import check, require
 from .play_checks import PLAY, is_clear, remaining, require_given_clear
 from .playclient_util import PlayRun, drop_scratch, fresh_scratch
@@ -232,6 +232,11 @@ def player_config_sha() -> str | None:
     return _sha(clientbuild.PLAY / "WTF" / "Config.wtf")
 
 
+def player_marker_sha() -> str | None:
+    """sha256 of the launcher's resolution marker in the player's own WTF/ (None if absent)."""
+    return _sha(clientbuild.PLAY / "WTF" / R.MARKER)
+
+
 def player_marker_exists() -> bool:
     return (clientbuild.PLAY / "WTF" / R.MARKER).exists()
 
@@ -239,7 +244,7 @@ def player_marker_exists() -> bool:
 GATE_CASES = [
     # (label, argv, environ, client: "own" | "scratch", may write?)
     ("plain ./play (the player)", [], {}, "own", True),
-    ("the app (the player)", [], {"HS_FROM_APP": "1", "HS_APP_BUNDLE": "/x/Hearthstone.app"}, "own", True),
+    ("the app (the player)", [], {"HS_FROM_APP": "1", "HS_APP_BUNDLE": "/x/Moonglade.app"}, "own", True),
     ("play.player_account: --account player --client-cmd + $HS_PLAYER_FILE",
      ["--account", "player", "--client-cmd", "/tmp/x.bat"], {"HS_PLAYER_FILE": "/tmp/p.json"}, "own", False),
     ("--client-cmd alone", ["--client-cmd", "/tmp/x.bat"], {}, "own", False),
@@ -251,6 +256,9 @@ GATE_CASES = [
     ("--world-datadir", ["--world-datadir", "/nonexistent"], {}, "own", False),
     ("scratch play client (client.resolution_default)", ["--account", "test", "--allow-test-client-dir"],
      {"HS_PLAY_CLIENT_DIR": "/tmp/check-play-res", "HS_HARNESS_RUN": "1"}, "scratch", True),
+    ("scratch client standing in for the player's ($HS_TEST_OWN_CLIENT, client.config_gate)",
+     ["--account", "test", "--client-cmd", "/tmp/x.bat", "--allow-test-client-dir"],
+     {"HS_TEST_OWN_CLIENT": str(P.ENV / "check-play-res")}, "scratch", False),
 ]
 
 
@@ -269,23 +277,243 @@ def verify_gate(gate_fn=None) -> dict:
     return {"cases": rows}
 
 
+# ---------------------------------------------------------------- every config write is gated (rename-moonglade
+# cycle 2, verifier FAIL 2026-10-05: play.loop_clean_exit appended `SET gxApi "d3d9"` to the player's Config.wtf
+# through launch.prepare's ungated configure(client_dir(), defaults=WINE_DEFAULTS))
+
+def player_config_copy(dest: Path) -> dict:
+    """GIVEN of the verifier's case on a scratch copy: dest/WTF/Config.wtf = the player's Config.wtf (read only) with
+    no gxApi line, plus his realmlist.wtf files. Returns what was copied."""
+    src = clientbuild.PLAY / "WTF" / "Config.wtf"
+    text = src.read_bytes() if src.exists() else b'SET gxWindow "1"\r\n'
+    text = b"".join(l for l in text.splitlines(keepends=True) if not l.lower().startswith(b"set gxapi "))
+    (dest / "WTF").mkdir(parents=True, exist_ok=True)
+    (dest / "WTF" / "Config.wtf").write_bytes(text)
+    copied = ["WTF/Config.wtf"]
+    for rl in (clientbuild.PLAY / "Data").glob("*/realmlist.wtf"):
+        (dest / "Data" / rl.parent.name).mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(rl, dest / "Data" / rl.parent.name / "realmlist.wtf")
+        copied.append(f"Data/{rl.parent.name}/realmlist.wtf")
+    return {"from_player_config": src.exists(), "copied": copied, "has_gxapi": b"gxapi" in text.lower()}
+
+
+def config_hashes(d: Path) -> dict:
+    """sha256 of every config file the launch could write: WTF/*.wtf, Data/*/realmlist.wtf, the login archive."""
+    from .. import frontmenu
+    files = list((d / "WTF").glob("*.wtf")) + list((d / "Data").glob("*/realmlist.wtf"))
+    out = {str(f.relative_to(d)): _sha(f) for f in sorted(files)}
+    try:
+        arch = frontmenu.archive_path(d)
+        out[str(arch.relative_to(d))] = _sha(arch)
+    except Exception:  # noqa: BLE001  (no locale dir: nothing to hash)
+        pass
+    return out
+
+
+def verify_config_step() -> dict:
+    """launch.client_config_step on a scratch copy of the player's config (gxApi missing): with the gate closed
+    nothing changes; the old ungated call (write_client_config=True) adds gxApi there (so the GIVEN can show a
+    write: the self-counterexample)."""
+    scratch = fresh_scratch("cfgstep")
+    ev: dict = {"scratch": str(scratch)}
+    try:
+        clientbuild.build(dest=scratch)               # a real (scratch) play client: configure() checks for Wow.exe
+        ev["given"] = player_config_copy(scratch)
+        require(not ev["given"]["has_gxapi"], "GIVEN not met: the scratch config has a gxApi line", **ev)
+        launch.select_client(scratch)
+        before = config_hashes(scratch)
+        ev["gated"] = launch.client_config_step(False, say=lambda *_: None)
+        ev["gated_changed"] = sorted(k for k, v in config_hashes(scratch).items() if before.get(k) != v)
+        ev["ungated"] = launch.client_config_step(True, say=lambda *_: None)
+        cfg = (scratch / "WTF" / "Config.wtf").read_bytes().lower()
+        ev["ungated_added_gxapi"] = b'set gxapi "d3d9"' in cfg
+        require(not ev["gated_changed"], "the gated config step wrote into the (stand-in) player's client", **ev)
+        require(ev["ungated_added_gxapi"], "self-test: the ungated call didn't write gxApi, so the case proves nothing",
+                **ev)
+        return ev
+    finally:
+        launch.select_client(None)
+        drop_scratch(scratch)
+
+
 @check("client.resolution_gate", order=385, capability=CAP, stack="any", tier="quick")
 def resolution_gate(ctx):
-    """The play loop writes the resolution default into the player's own env/client-play/ only from a genuine
+    """The play loop writes config (the resolution default, and since rename-moonglade cycle 2 every config write:
+    realmlist, Config.wtf defaults, the login file) into the player's own env/client-play/ only from a genuine
     player launch (the app or plain ./play); every harness-shaped launch (test arguments, $HS_HARNESS_RUN, scratch
     settings, pinned profile, shim test knobs, the player-account check's --client-cmd + $HS_PLAYER_FILE) is a
-    no-op there; a scratch play client still gets it."""
-    return verify_gate()
+    no-op there; a scratch play client still gets it. The config step itself writes nothing when the gate is closed
+    (scratch copy of the player's config, gxApi missing), and the old ungated call does write there."""
+    ev = verify_gate()
+    ev["config_step"] = verify_config_step()
+    return ev
+
+
+def config_gate_run(scratch: Path, own: bool) -> dict:
+    """One harness-shaped ./play (stand-in, test account, patched, scratch play client) with the scratch standing
+    in for the player's own client when `own`. Returns evidence incl. config hashes before/after and whether the
+    login archive ever appeared."""
+    from .. import frontmenu
+    from .play_checks import StandIn
+    s = StandIn("cfggate-own" if own else "cfggate-control")
+    sfile = s.dir / "settings.json"
+    sfile.write_text(json.dumps({"client": "patched"}))
+    env = {"HS_SETTINGS": str(sfile), "HS_PLAY_CLIENT_DIR": str(scratch), **({"HS_TEST_OWN_CLIENT": str(scratch)} if own else {})}
+    ev: dict = {"own": own, "env": sorted(env)}
+    arch = frontmenu.archive_path(scratch)
+    try:
+        before = config_hashes(scratch)
+        s.start_play("--allow-test-client-dir", env=env)
+        seen_archive, t0 = False, time.time()
+        up = None
+        while time.time() - t0 < 900:
+            seen_archive = seen_archive or arch.exists()
+            if s.proc.poll() is not None:
+                up = {"up": False, "why": f"./play exited early with {s.proc.returncode}"}
+                break
+            if s.started.exists() and play.client_processes(s.bat.name.lower()):
+                up = {"up": True, "after_s": round(time.time() - t0, 1)}
+                break
+            time.sleep(0.5)
+        seen_archive = seen_archive or arch.exists()
+        ev["client_up"] = up or {"up": False, "why": "timeout"}
+        s.stop_file.write_text("quit")
+        rc, _ = s.wait_exit(timeout=300)
+        rec = json.loads(play.LAST.read_text()) if play.LAST.exists() else {}
+        after = config_hashes(scratch)
+        ev |= {"exit_code": rc, "gate": rec.get("resolution_gate"),
+               "prepare_client_config": (rec.get("prepare") or {}).get("client_config"),
+               "profiles": (rec.get("client") or {}).get("profiles", {}).get("skipped") if isinstance(
+                   (rec.get("client") or {}).get("profiles"), dict) else None,
+               "changed": sorted(k for k in set(before) | set(after) if before.get(k) != after.get(k)),
+               "login_archive_seen": seen_archive,
+               "gxapi_after": b'set gxapi "d3d9"' in (scratch / "WTF" / "Config.wtf").read_bytes().lower(),
+               "remaining_after": remaining(s)}
+        return ev
+    finally:
+        s.cleanup()
+
+
+@check("client.config_gate", order=386, capability=CAP, stack="down", tier="full")
+def config_gate(ctx):
+    """The verifier's case on a scratch copy of the player's client only (his file is never written): a scratch play
+    client with the player's Config.wtf minus gxApi, standing in for his own client ($HS_TEST_OWN_CLIENT): a
+    harness ./play stand-in run leaves every config file byte-identical and never writes the login file; the same run
+    on a copy without the stand-in flag (ungated) does write gxApi, so the run would write if it weren't gated; and
+    the player's own Config.wtf is unchanged."""
+    zach = clientbuild.PLAY / "WTF" / "Config.wtf"
+    ev: dict = {"player_config_sha_before": _sha(zach)}
+    require_given_clear(ev)
+    scratch = fresh_scratch("cfggate")
+    try:
+        clientbuild.build(dest=scratch)
+        ev["given"] = player_config_copy(scratch)
+        require(not ev["given"]["has_gxapi"], "GIVEN not met: the scratch config has a gxApi line", **ev)
+        ev["own_run"] = o = config_gate_run(scratch, own=True)
+        require(o["exit_code"] == 0 and o["client_up"].get("up") and is_clear(o["remaining_after"]),
+                "the stand-in ./play run didn't run and end cleanly", **ev)
+        require((o["gate"] or {}).get("players_own_client") is True and (o["gate"] or {}).get("apply") is False,
+                "GIVEN not met: the gate didn't treat the scratch as the player's own client", **ev)
+        require(not o["changed"] and not o["gxapi_after"], "the harness run wrote config into the player's client",
+                **ev)
+        require(not o["login_archive_seen"], "the harness run wrote the login file into the player's client", **ev)
+        # the ungated control on a copy (APFS clone of the scratch as the gated run left it): the same harness run,
+        # just without the switch, so its config step is ungated; it must add the missing default
+        copy = fresh_scratch("cfggate-copy")
+        cp = subprocess.run(["/bin/cp", "-cR", str(scratch), str(copy)], capture_output=True, text=True)
+        require(cp.returncode == 0, f"couldn't clone the scratch client: {cp.stderr.strip()}", **ev)
+        ev["control_copy"] = str(copy)
+        ev["control_run"] = c = config_gate_run(copy, own=False)
+        require(c["exit_code"] == 0 and c["gxapi_after"] and (c["gate"] or {}).get("apply") is True,
+                "control: the ungated run on a copy didn't write gxApi (so the case proves nothing)", **ev)
+    finally:
+        drop_scratch(scratch)
+        drop_scratch(P.ENV / "check-play-cfggate-copy")
+    ev["player_config_sha_after"] = _sha(zach)
+    require(ev["player_config_sha_after"] == ev["player_config_sha_before"], "the player's play client config changed",
+            **ev)
+    return ev
+
+
+REFUSE_WITHIN_S = 90      # the refusal comes before the server starts (~2 s); 90 s = it's starting things instead
+
+
+@check("client.real_client_refused", order=386, capability=CAP, stack="down", tier="quick")
+def real_client_refused(ctx):
+    """A harness-shaped ./play that would start the real Wow.exe in the player's own play client (stand-in flag,
+    no --client-cmd) is refused before the server starts (no server or Wine process sampled at 10 Hz while it runs,
+    the play loop never reached prepare), nothing is launched and no config is changed."""
+    from .play_checks import StandIn
+    scratch = fresh_scratch("cfgrefuse")
+    s = StandIn("cfgrefuse")
+    ev: dict = {}
+    try:
+        clientbuild.build(dest=scratch)
+        player_config_copy(scratch)
+        before = config_hashes(scratch)
+        sfile = s.dir / "settings.json"
+        sfile.write_text(json.dumps({"client": "patched"}))
+        env = {**os.environ, "HS_PROFILE": "m0", "HS_SETTINGS": str(sfile), "HS_PLAY_CLIENT_DIR": str(scratch),
+               "HS_TEST_OWN_CLIENT": str(scratch)}
+        out = s.dir / "play.out"
+        with open(out, "w") as fh:
+            proc = subprocess.Popen([PLAY, "--account", "test", "--allow-test-client-dir"], cwd=P.ROOT, env=env,
+                                    stdout=fh, stderr=subprocess.STDOUT, start_new_session=True)
+        seen = {"stack": [], "wine": []}             # sampled while ./play runs: "before the server starts"
+        t0 = time.time()
+        while proc.poll() is None and time.time() - t0 < REFUSE_WITHIN_S:
+            st = {k: v for k, v in stack.stack_processes().items() if v}
+            wn = launch.prefix_processes()
+            if st:
+                seen["stack"].append({"t": round(time.time() - t0, 2), **st})
+            if wn:
+                seen["wine"].append({"t": round(time.time() - t0, 2), "n": len(wn)})
+            if st or wn:                             # already past the point of refusing: stop it now
+                break
+            time.sleep(0.1)
+        rc = proc.poll()
+        if rc is None:                               # not refused: it's starting the server/real game; stop it all
+            os.killpg(proc.pid, 9)
+            proc.wait()
+            if launch.prefix_processes():
+                launch.stop_prefix()
+            if any(stack.stack_processes().values()):
+                stack.down()
+        ev["seen_while_running"] = {k: v[:5] for k, v in seen.items()}
+        rec = json.loads(play.LAST.read_text()) if play.LAST.exists() else {}
+        rec = rec if rec.get("pid") == proc.pid else {}
+        ev |= {"rc": rc, "output_tail": out.read_text(errors="replace")[-1500:], "outcome": rec.get("outcome"),
+               "error": rec.get("error"), "client_started": rec.get("client_started"),
+               "changed": sorted(k for k, v in config_hashes(scratch).items() if before.get(k) != v),
+               "remaining_after": remaining()}
+        require(rc not in (None, 0) and "can't start the real game in your own play client" in (rec.get("error") or ""),
+                "the real-client harness run on the player's client wasn't refused", **ev)
+        ev["record_has_prepare"] = "prepare" in rec
+        ev["record_steps"] = [x.get("step") for x in rec.get("steps", [])]
+        require(not seen["stack"] and not seen["wine"] and not ev["record_has_prepare"],
+                "the refused run got as far as the server or Wine before refusing", **ev)
+        require(rec.get("client_started") is False and not ev["changed"] and is_clear(ev["remaining_after"]),
+                "the refused run started something or wrote config", **ev)
+        return ev
+    finally:
+        s.cleanup()
+        drop_scratch(scratch)
 
 
 @check("client.player_config_untouched", order=999, capability=CAP, stack="any", tier="quick")
 def player_config_untouched(ctx):
     """Last check of every run: the player's own env/client-play/WTF/Config.wtf is byte-identical to the start of
-    the run (sha256 recorded by the runner), so no check wrote it."""
+    the run (sha256 recorded by the runner), so no check wrote it; and the launcher's marker file there
+    (WTF/hs-resolution.json) wasn't created, removed or changed (its sha256, or absence, is the same as at the start)."""
     start = (ctx or {}).get("player_config_sha256_start", "missing")
-    now = player_config_sha()
+    m_start = (ctx or {}).get("player_marker_sha256_start", "missing")
+    now, m_now = player_config_sha(), player_marker_sha()
     ev = {"file": str(clientbuild.PLAY / "WTF" / "Config.wtf"), "sha256_at_run_start": start, "sha256_now": now,
-          "launcher_marker_present": player_marker_exists()}
-    require(start != "missing", "the runner didn't record the player's config at the start of the run", **ev)
+          "marker": str(clientbuild.PLAY / "WTF" / R.MARKER), "marker_sha256_at_run_start": m_start,
+          "marker_sha256_now": m_now, "launcher_marker_present": m_now is not None}
+    require(start != "missing" and m_start != "missing",
+            "the runner didn't record the player's config and marker at the start of the run", **ev)
     require(now == start, "a check changed the player's own play client config during this run", **ev)
+    require(m_now == m_start, "a check created, removed or changed the launcher marker in the player's play client",
+            **ev)
     return ev

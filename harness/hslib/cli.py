@@ -15,7 +15,7 @@ def main(argv=None) -> int:
     if argv[:1] == ["probe"]:                 # pass everything (incl. --help) through to the probe CLI
         from .probe.__main__ import main as probe_main
         return probe_main(argv[1:])
-    ap = argparse.ArgumentParser(prog="hs", description="Hearthstone harness")
+    ap = argparse.ArgumentParser(prog="hs", description="Moonglade harness")
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     b = sub.add_parser("build", help="sync pinned vendor trees and build/install the server")
@@ -115,11 +115,11 @@ def main(argv=None) -> int:
     cm.add_argument("value", nargs="?", choices=["patched", "stock"])
 
     dp = sub.add_parser("dock-policy", help="show or set how the game shows in the Dock when run from the app: "
-                                            "accessory (one Hearthstone icon, default), regular (the game keeps "
-                                            "its own Hearthstone-labelled icon) or off (no shim; ADR-0010)")
+                                            "accessory (one Moonglade icon, default), regular (the game keeps "
+                                            "its own Moonglade-labelled icon) or off (no shim; ADR-0010)")
     dp.add_argument("value", nargs="?", choices=["accessory", "regular", "off"])
 
-    sub.add_parser("app", help="build dist/Hearthstone.app (double-clickable launcher for ./play; launcher-app) "
+    sub.add_parser("app", help="build dist/Moonglade.app (double-clickable launcher for ./play; launcher-app) "
                                "and the Wine host shim env/dockshim/hsdock.dylib (ADR-0010)")
     ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns from env/branding/logo-source.jpeg")
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")

@@ -1,5 +1,7 @@
 # ADR-0006: Core patch: guard ServerMailReward's async login callback
 
+> Project renamed to Moonglade on 2026-10-05 (openspec/changes/rename-moonglade); this record keeps the name it was written under.
+
 - Status: accepted (2026-10-02). Patch: `patches/core/0001-server-mail-guard-async-player.patch` (first core patch); checks `core.patch_applied`, `core.login_logout_race`, `core.login_logout_race_baseline`
 - Date: 2026-10-02
 

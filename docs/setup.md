@@ -1,4 +1,4 @@
-# Setting up Hearthstone on a fresh Mac
+# Setting up Moonglade on a fresh Mac
 
 These are the steps to go from a fresh clone to playing, in order. They're **manual today**. Automating them (a Brewfile, an `hs bootstrap` command) is follow-up **F6** in [STATUS.md](../STATUS.md). Until that lands, this page is the reference. Anything not yet verified is marked **unverified**. Check it by hand and fix this page once you have.
 
@@ -34,7 +34,7 @@ Disk use per part (measured with `du -sh`, 2026-10-05):
 ## 1. Tools
 
 ```sh
-xcode-select --install              # Command Line Tools: clang, xcrun, codesign (server build and Hearthstone.app)
+xcode-select --install              # Command Line Tools: clang, xcrun, codesign (server build and Moonglade.app)
 softwareupdate --install-rosetta    # the Wine runtime is x86_64 and runs under Rosetta 2
 ```
 
@@ -64,11 +64,11 @@ Whisky.app is **not** needed. The default Wine layer is the pinned WoWSilicon ru
 ## 2. Clone
 
 ```sh
-git clone https://github.com/zttimmerman/[redacted].git   # private repo
-cd [redacted]
+git clone https://github.com/zttimmerman/project-moonglade.git   # private repo
+cd project-moonglade
 ```
 
-The repo lives in `~/Documents` on the dev Mac. That's why `Hearthstone.app` asks for Documents-folder access on its first launch (see the README's Troubleshooting section). Another location should work too; whether the macOS prompt changes outside `~/Documents` is **unverified**.
+The repo lives in `~/Documents` on the dev Mac. That's why `Moonglade.app` asks for Documents-folder access on its first launch (see the README's Troubleshooting section). Another location should work too; whether the macOS prompt changes outside `~/Documents` is **unverified**.
 
 ## 3. Build the server
 
@@ -148,7 +148,7 @@ harness/hs run --only client.inspect
 harness/hs client-build
 ```
 
-This builds `env/client-play/`: an APFS clone of `client/`, plus the hash-checked patch queue in `patches/client/`. That queue holds `0001` (an 8-byte change so the client accepts a modified login screen, ADR-0009 Appendix A) and `0002` (the Hearthstone front menu, built from `client-mods/glue/`). It refuses a client that doesn't match the expected hashes. `./play` also runs this automatically when needed, so this step mostly confirms that it works. The build keeps your settings in the play client's `WTF/`, `Screenshots/` and so on across rebuilds.
+This builds `env/client-play/`: an APFS clone of `client/`, plus the hash-checked patch queue in `patches/client/`. That queue holds `0001` (an 8-byte change so the client accepts a modified login screen, ADR-0009 Appendix A) and `0002` (the Moonglade front menu, built from `client-mods/glue/`). It refuses a client that doesn't match the expected hashes. `./play` also runs this automatically when needed, so this step mostly confirms that it works. The build keeps your settings in the play client's `WTF/`, `Screenshots/` and so on across rebuilds.
 
 ## 9. Build the app
 
@@ -156,14 +156,14 @@ This builds `env/client-play/`: an APFS clone of `client/`, plus the hash-checke
 harness/hs app
 ```
 
-This builds `dist/Hearthstone.app`: a small launcher compiled from `harness/app/launcher.m`, ad-hoc signed, with the icon from `branding/AppIcon.icns`. It records this repo's path, so you can drag the app to `/Applications` or the Dock and it still finds the repo. It writes nothing outside the repo. (`harness/hs icon` regenerates the icon from `env/branding/logo-source.jpeg`, a file that isn't committed. You only need it if you change the logo.)
+This builds `dist/Moonglade.app`: a small launcher compiled from `harness/app/launcher.m`, ad-hoc signed, with the icon from `branding/AppIcon.icns`. It records this repo's path, so you can drag the app to `/Applications` or the Dock and it still finds the repo. It writes nothing outside the repo. (`harness/hs icon` regenerates the icon from `env/branding/logo-source.jpeg`, a file that isn't committed. You only need it if you change the logo.)
 
 ## 10. First run
 
-Double-click `dist/Hearthstone.app`, or run `./play` in a terminal.
+Double-click `dist/Moonglade.app`, or run `./play` in a terminal.
 
 - The first run creates your personal account, **`PLAYER`**, with a random password. It's not a GM account. The name and password are saved in **`env/player.json`** (gitignored, readable only by you). `./play` prints them once. To choose your own name and password instead, create that file *before* the first run: `{"account": "NAME", "password": "secret"}` (letters and digits, up to 16 characters each).
-- With the default (`patched`) client, the login screen shows the Hearthstone menu. Press **Continue** (or Enter) and you're in, with nothing to type. Create a character at character select as usual.
+- With the default (`patched`) client, the login screen shows the Moonglade menu. Press **Continue** (or Enter) and you're in, with nothing to type. Create a character at character select as usual.
 - Quitting the game shuts everything down. `./play` prints `All stopped.`
 
 ## 11. Optional: run the harness
