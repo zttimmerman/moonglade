@@ -26,7 +26,7 @@ from pathlib import Path
 
 from .. import paths as P
 from ..registry import check, require
-from .play_checks import SANDBOX_EXEC, _denials
+from .play_checks import SANDBOX_EXEC, _denials, _wait_denials
 
 CAP = "harness-reporting"
 OLD_NAME = "Hearthstone"
@@ -313,7 +313,8 @@ def rename_script(ctx):
     links both ways; a second --apply onto an existing destination is refused and changes nothing; an --apply
     stopped after its first move (kill-safe) is finished by running --apply again; the script's own processes never
     count as "still open" (and it prints the cd ~ instruction and the ~/.claude.json note), while another process
-    working inside the folder makes --apply refuse."""
+    working inside the folder makes --apply refuse; the same holds when the paths are given through a symlink
+    (/var -> /private/var): the busy check sees the process and --apply moves and repairs as for the physical paths."""
     ev: dict = {"script": str(SCRIPT)}
     require(SCRIPT.is_file() and os.access(SCRIPT, os.X_OK), "tools/rename-folder.sh is missing or not executable", **ev)
     tmp = Path(tempfile.mkdtemp(prefix="hs-rename-")).resolve()
@@ -391,6 +392,29 @@ def rename_script(ctx):
             sleeper.kill()
             sleeper.wait()
 
+        # symlinked spelling (verifier 2, cycle 3): the same paths given through macOS's /var -> /private/var
+        # symlink. The busy check still sees a shell working inside the folder, and --apply moves, renames the data
+        # folders and repairs the worktrees as for the physical paths.
+        w4 = scratch_world(tmp / "w4")
+        unres = lambda p: Path(str(p).replace("/private/var/", "/var/", 1))
+        ev["symlinked"] = sym = {"given_old": str(unres(w4["old"])), "given_new": str(unres(w4["new"])),
+                                 "given_projects": str(unres(w4["projects"]))}
+        require(sym["given_old"] != str(w4["old"]) and Path(sym["given_old"]).resolve() == w4["old"],
+                "GIVEN not met: the temp dir isn't reachable through a symlinked spelling (/var)", **ev)
+        args4 = ("--claude-projects", unres(w4["projects"]), unres(w4["old"]), unres(w4["new"]))
+        sleeper = subprocess.Popen(["/bin/sleep", "120"], cwd=w4["old"])
+        try:
+            sym["busy_dry_run"] = r = run_script(prof, *args4)
+            require(r["rc"] == 0 and f"{sleeper.pid} sleep" in r["stdout"],
+                    "symlinked path: the busy check missed a process working inside the folder", **ev)
+        finally:
+            sleeper.kill()
+            sleeper.wait()
+        data_before4 = {d.name: tree_listing(d) for d in w4["projects"].iterdir()}
+        sym["apply"] = r = run_script(prof, "--apply", *args4)
+        require(r["rc"] == 0, "symlinked path: --apply failed", **ev)
+        verify_applied(w4, data_before4, sym, tmp / "w4" / "repos" / "other" / "keep.txt")
+
         # refusal: destination exists -> nonzero, nothing changes
         (tmp / "w" / "repos" / "project-old").mkdir()
         (tmp / "w" / "repos" / "project-old" / ".git").mkdir()
@@ -401,13 +425,18 @@ def rename_script(ctx):
         require(ev["refusal"]["rc"] != 0 and "REFUSED" in ev["refusal"]["stderr"] and not ev["refusal_changed"],
                 "--apply onto an existing destination wasn't refused cleanly", **ev)
 
-        time.sleep(3)                                  # let the kernel's sandbox reports reach the log
-        rows = _denials(tag, since)
+        # sentinel (cycle 3): a blocked write after the script runs; once its denial is logged, the script's are too
+        time.sleep(1.1)
+        sentinel = Path(tempfile.gettempdir()).resolve() / f"hs-rename-sentinel-{os.getpid()}"
+        subprocess.run([SANDBOX_EXEC, "-f", str(prof), "/usr/bin/touch", str(sentinel)], capture_output=True)
+        rows = _wait_denials(tag, since, lambda rs: any("hs-rename-sentinel" in r["target"] for r in rs), timeout=60)
         ev["denials"] = rows[:20]
         require(any("hs-rename-probe" in r["target"] for r in rows),
                 "self-test: the blocked probe write isn't in the denial log, so the log can't vouch for the script",
                 **ev)
-        stray = [r for r in rows if "hs-rename-probe" not in r["target"]]
+        require(any("hs-rename-sentinel" in r["target"] for r in rows) and not sentinel.exists(),
+                "the sentinel denial never reached the log, so the log can't vouch for the script", **ev)
+        stray = [r for r in rows if "hs-rename-probe" not in r["target"] and "hs-rename-sentinel" not in r["target"]]
         require(not stray, "the script tried to write outside the temp dir", **ev)
         ev["outside_before"] = outside_before
         ev["outside_after"] = real_outside_listing()

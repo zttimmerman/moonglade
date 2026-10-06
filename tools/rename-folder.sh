@@ -54,6 +54,23 @@ encode() { printf '%s' "$1" | LC_ALL=C sed 's/[^A-Za-z0-9]/-/g'; }
 
 fail() { echo "REFUSED: $*" >&2; echo "Nothing was changed." >&2; exit 1; }
 
+# Canonical (symlink-free) paths before any check or move: lsof reports working directories, git records worktree
+# paths and Claude Code names its folders by the physical path, so a symlinked spelling (e.g. /tmp -> /private/tmp)
+# would miss a busy shell and break `git worktree repair`. An existing directory resolves fully (OLD given as a
+# symlink to the repo moves the repo itself); a path that doesn't exist yet resolves through its parent.
+canon() {
+  if [ -d "$1" ]; then (cd "$1" && pwd -P); return; fi
+  local parent; parent=$(cd "$(dirname "$1")" 2>/dev/null && pwd -P) || { printf '%s' "$1"; return 0; }
+  printf '%s/%s' "${parent%/}" "$(basename "$1")"
+}
+canon_parent() {   # for NEW: never follow NEW itself (an existing NEW must stay visible to the refusal below)
+  local parent; parent=$(cd "$(dirname "$1")" 2>/dev/null && pwd -P) || { printf '%s' "$1"; return 0; }
+  printf '%s/%s' "${parent%/}" "$(basename "$1")"
+}
+GIVEN_OLD="$OLD"; GIVEN_NEW="$NEW"
+OLD=$(canon "$OLD"); NEW=$(canon_parent "$NEW")
+[ ! -d "$PROJECTS" ] || PROJECTS=$(cd "$PROJECTS" && pwd -P)
+
 # ---- preflight (both modes)
 # RESUME: an earlier --apply was stopped after moving the repo (OLD gone, NEW a git checkout); finish the remaining
 # steps (data folders, worktree repair) instead of refusing.
@@ -107,6 +124,7 @@ BUSY=$(lsof -a -d cwd -FpRcn 2>/dev/null | awk -v o="$OLD" -v self="$$" '
 SELF_PATH="$(cd "$(dirname "$0")" && pwd)/$(basename "$0")"
 
 echo "Rename plan ($([ $APPLY = 1 ] && echo APPLY || echo 'dry run: nothing will change; add --apply to do it')):"
+[ "$GIVEN_OLD" = "$OLD" ] && [ "$GIVEN_NEW" = "$NEW" ] || echo "  (paths resolved without symlinks: $GIVEN_OLD -> $OLD, $GIVEN_NEW -> $NEW)"
 if [ $RESUME = 1 ]; then
   echo "  1. move the repo:      already done ($NEW); resuming an interrupted --apply"
 else

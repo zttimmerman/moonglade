@@ -30,7 +30,7 @@ from pathlib import Path
 from .. import app as A, icon as I, launch, paths as P, play, procs, stack
 from ..registry import check, require
 from .naming_checks import NEW_NAME, OLD_NAME
-from .play_checks import (PINNED, START_TIMEOUT, StandIn, _denials, graceful_halt, is_clear, last_record,
+from .play_checks import (PINNED, START_TIMEOUT, StandIn, _denials, _wait_denials, graceful_halt, is_clear, last_record,
                           play_processes, remaining, SANDBOX_EXEC)
 
 CAP = "mac-app"
@@ -43,6 +43,7 @@ NAMES_TIMEOUT = 60            # the shim names the game process at its start; 60
 HS = str(P.HARNESS / "hs")
 OPEN = "/usr/bin/open"
 APP_OUTPUT_TIMEOUT = 90       # the play loop prints its first line within ~1-2 s; 90 s = blocked (e.g. TCC prompt)
+DENIAL_LOG_WAIT_S = 60       # how long to wait for a sandbox denial to reach the unified log (normally 1-3 s)
 EXIT_TIMEOUT = 300            # play's own limit after the client exits is 120 s (play.loop_clean_exit)
 TCC_HINT = ("the play loop never started: macOS is probably asking for Moonglade's Documents-folder permission "
             "(the repo is in ~/Documents). Open the app once and click Allow; see tcc_prompts")
@@ -422,12 +423,22 @@ def bundle_valid(ctx):
         b = subprocess.run([SANDBOX_EXEC, "-f", str(prof), HS, "app"], cwd=P.ROOT, capture_output=True, text=True,
                            timeout=600)
         ev["build"] = {"rc": b.returncode, "stdout_tail": b.stdout[-1500:], "stderr_tail": b.stderr[-1500:]}
-        time.sleep(3)                                     # let the kernel's sandbox reports reach the log
-        rows = _denials(tag, since)
+        # sentinel (cycle 3): a second blocked write after the build. Once its denial is in the log, every earlier
+        # report of this tag (the build's) is too; a fixed 3 s wait sometimes read the log before delivery (the Mac
+        # idle/locked: 1 of 5 quick runs saw no rows at all)
+        time.sleep(1.1)
+        after = work / "after-build-probe"
+        subprocess.run([SANDBOX_EXEC, "-f", str(prof), "/usr/bin/touch", str(after)], capture_output=True)
+        rows = _wait_denials(tag, since, lambda rs: any("after-build-probe" in r["target"] for r in rs),
+                             timeout=DENIAL_LOG_WAIT_S)
         ev["denials"] = {"selftest": [r for r in rows if r["time"] and r["time"][:19].replace("T", " ") < build_since],
-                         "build": [r for r in rows if r["time"] and r["time"][:19].replace("T", " ") >= build_since]}
+                         "build": [r for r in rows if r["time"] and r["time"][:19].replace("T", " ") >= build_since
+                                   and "after-build-probe" not in r["target"]],
+                         "sentinel": [r for r in rows if "after-build-probe" in r["target"]]}
         require(any("outside-write-probe" in r["target"] for r in ev["denials"]["selftest"]),
                 "self-test: the blocked write isn't in the denial log, so the log can't vouch for the build", **ev)
+        require(ev["denials"]["sentinel"] and not after.exists(),
+                "the post-build sentinel denial never reached the log, so the log can't vouch for the build", **ev)
         require(not ev["denials"]["build"], "the build tried to write outside the repo", **ev)
         require(b.returncode == 0, "`harness/hs app` failed", **ev)
         require(A.APP.is_dir(), "dist/Moonglade.app doesn't exist after the build", **ev)
