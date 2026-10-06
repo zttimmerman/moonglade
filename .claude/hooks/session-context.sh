@@ -6,7 +6,7 @@ handoff=$(printf '%s\n' "$status" | awk '/^## ▶ Handoff/{on=1} on&&/^## /&&!/H
 [ -n "$handoff" ] || handoff="(no '▶ Handoff' section found in STATUS.md)"
 branches=$(git -C "$repo" for-each-ref --sort=-committerdate --format='%(refname:short) %(committerdate:relative) %(subject)' 'refs/heads/change/*' 2>/dev/null | head -5)
 mem="$HOME/.claude/projects/$(printf '%s' "${repo%/.claude/worktrees/*}" | tr '/' '-')/memory/MEMORY.md"
-ctx="Hearthstone resume context (injected by .claude/hooks/session-context.sh).
+ctx="Moonglade resume context (injected by .claude/hooks/session-context.sh).
 
 STATUS.md handoff (origin/main):
 $handoff

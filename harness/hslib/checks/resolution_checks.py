@@ -239,7 +239,7 @@ def player_marker_exists() -> bool:
 GATE_CASES = [
     # (label, argv, environ, client: "own" | "scratch", may write?)
     ("plain ./play (the player)", [], {}, "own", True),
-    ("the app (the player)", [], {"HS_FROM_APP": "1", "HS_APP_BUNDLE": "/x/Hearthstone.app"}, "own", True),
+    ("the app (the player)", [], {"HS_FROM_APP": "1", "HS_APP_BUNDLE": "/x/Moonglade.app"}, "own", True),
     ("play.player_account: --account player --client-cmd + $HS_PLAYER_FILE",
      ["--account", "player", "--client-cmd", "/tmp/x.bat"], {"HS_PLAYER_FILE": "/tmp/p.json"}, "own", False),
     ("--client-cmd alone", ["--client-cmd", "/tmp/x.bat"], {}, "own", False),

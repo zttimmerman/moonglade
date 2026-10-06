@@ -1,5 +1,7 @@
 # ADR-0007: Core patch: give the playerbots packet hook an intact copy of the packet
 
+> Project renamed to Moonglade on 2026-10-05 (openspec/changes/rename-moonglade); this record keeps the name it was written under.
+
 - Status: accepted (2026-10-03, M2 verifier PASS). Patch: `patches/core/0002-playerbots-hook-packet-copy.patch`; checks `core.playerbots_patches_applied` (patch content, stamp, hash) and `comp.quest_shared` (behaviour)
 - Date: 2026-10-03
 

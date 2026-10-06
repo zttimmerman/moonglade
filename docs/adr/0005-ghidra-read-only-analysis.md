@@ -1,5 +1,7 @@
 # ADR-0005: Ghidra read-only analysis of the client is allowed; patching stays gated
 
+> Project renamed to Moonglade on 2026-10-05 (openspec/changes/rename-moonglade); this record keeps the name it was written under.
+
 - Status: accepted (opened by Zach, 2026-10-02)
 - Date: 2026-10-02
 

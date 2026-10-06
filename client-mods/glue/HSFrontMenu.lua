@@ -1,4 +1,4 @@
--- Hearthstone front menu (openspec/changes/in-client-login, patch 0002).
+-- Moonglade front menu (openspec/changes/in-client-login, patch 0002).
 --
 -- The stock 3.3.5a login screen (animated backdrop, music, era logo) turned into a single-player title menu
 -- (design.md "Menu layout"): one centred column over a subtle dark panel.
@@ -6,7 +6,7 @@
 --             launcher; clicking it presses Continue), Profiles, Settings, Extras, Quit
 --   Profiles: every profile, the current one marked; choosing one makes it Continue's target; Back
 --   Settings: Game options (the stock option panels), Login screen < name > (backdrop, logo and music switch live), Back
---   Extras:   Cinematics, Credits, About (read-only: game and Hearthstone versions, current world), Back
+--   Extras:   Cinematics, Credits, About (read-only: game and Moonglade versions, current world), Back
 -- Keyboard: Up/Down move, Enter selects, Left/Right change the selector, Escape goes back a level (on the main menu
 -- it moves to Quit). The mouse works too (hovering highlights a button the stock way but doesn't move the
 -- keyboard selection, so a resting cursor can't steal Continue's preselection). Every stock login control (edit boxes, corner buttons) is hidden.
@@ -128,7 +128,7 @@ local MENUS = {};
 MENUS.main = { back = nil, items = function()
 	local cur = HSFrontMenu_CurrentProfile();
 	return {
-		{ text = "Continue", context = cur and (cur.context or pname(cur)) or "No profile: start from the Hearthstone app",
+		{ text = "Continue", context = cur and (cur.context or pname(cur)) or "No profile: start from the Moonglade app",
 		  disabled = not cur, action = function() HSFrontMenu_Continue("continue"); end },
 		{ text = "Profiles", action = function() HSFrontMenu_Open("profiles"); end },
 		{ text = "Settings", action = function() HSFrontMenu_Open("settings"); end },
@@ -173,7 +173,7 @@ MENUS.extras = { title = "Extras", back = "main", items = function()
 	};
 end };
 
--- About: read-only. Game version from the client itself (GetBuildInfo); Hearthstone version, commit, pins and the
+-- About: read-only. Game version from the client itself (GetBuildInfo); Moonglade version, commit, pins and the
 -- world the launcher started come from HS_ABOUT in the generated HSProfiles.lua (no credentials in it).
 function HSFrontMenu_AboutText()
 	local _, buildType, version, build, date = GetBuildInfo();
@@ -184,7 +184,7 @@ function HSFrontMenu_AboutText()
 		line("Game:", "World of Warcraft " .. (version or "?") .. " (" .. (build or "?") .. ")"),
 		"|cff9d9d9d" .. (date or "") .. "|r",
 		"",
-		line("Hearthstone:", (a.version or "?") .. " (" .. (a.commit or "?") .. ")"),
+		line("Moonglade:", (a.version or "?") .. " (" .. (a.commit or "?") .. ")"),
 		line("Server core:", a.core),
 		line("Playerbots:", a.playerbots),
 		"",

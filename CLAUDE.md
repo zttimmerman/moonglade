@@ -1,4 +1,4 @@
-# Hearthstone — standing rules
+# Moonglade — standing rules
 
 Offline single-player WoW (AzerothCore 3.3.5a) on macOS ARM64. These rules apply to every session. On resume, read `STATUS.md` and `openspec/` first. Remaining kickoff material (Gate 1, milestones, first-session plan) lives in `KICKOFF.md`; the M0 harness requirements (original section 5) live in `docs/harness-requirements.md`.
 

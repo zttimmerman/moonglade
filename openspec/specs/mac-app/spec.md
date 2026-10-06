@@ -1,17 +1,17 @@
 # mac-app Specification
 
 ## Purpose
-A double-clickable Hearthstone.app that takes the player from nothing running to in-game and back, using the project's own icon, with no terminal.
+A double-clickable Moonglade.app that takes the player from nothing running to in-game and back, using the project's own icon, with no terminal.
 
 ## Requirements
 
 ### Requirement: App bundle with the project icon
-`harness/hs app` SHALL build `dist/Hearthstone.app`, a valid, ad-hoc-signed macOS app bundle whose icon is Zach's logo on a transparent background.
+`harness/hs app` SHALL build `dist/Moonglade.app`, a valid, ad-hoc-signed macOS app bundle whose icon is Zach's logo on a transparent background.
 
 #### Scenario: Bundle is valid and signed
 - **GIVEN** a clean checkout with the committed branding assets
 - **WHEN** `harness/hs app` runs
-- **THEN** `dist/Hearthstone.app` exists; `plutil -lint` passes on its Info.plist; the plist names the executable, the bundle identifier and the icon; the executable is present and executable; `codesign --verify --deep --strict` passes; and nothing outside the repo was written
+- **THEN** `dist/Moonglade.app` exists; `plutil -lint` passes on its Info.plist; the plist names the executable, the bundle identifier and the icon; the executable is present and executable; `codesign --verify --deep --strict` passes; and nothing outside the repo was written
 - Check: `app.bundle_valid`
 
 #### Scenario: Icon is the logo on a transparent background
@@ -25,7 +25,7 @@ Opening the app SHALL run the same play loop as `./play`: bring up the stack, la
 
 #### Scenario: Open, play, quit
 - **GIVEN** nothing from this repo is running
-- **WHEN** the app is opened (`open dist/Hearthstone.app`, with the harness's stand-in client)
+- **WHEN** the app is opened (`open dist/Moonglade.app`, with the harness's stand-in client)
 - **THEN** a "starting" status is shown, the stack reaches readiness, the client is launched, and when the client exits the stack shuts down gracefully; the app process exits 0, and no stack, Wine or Wow.exe process from this repo remains, with ports 3307/3724/8085/7878 free
 - Check: `app.launch_lifecycle`
 
@@ -38,7 +38,7 @@ Opening the app SHALL run the same play loop as `./play`: bring up the stack, la
 #### Scenario: Second open while running
 - **GIVEN** the app (or `./play`) is already running
 - **WHEN** a second instance of the app is launched (`open -n`), or the app is opened while `./play` runs from a terminal
-- **THEN** it shows an "already running" message, starts no second stack or client, and the first session continues unaffected; opening or clicking the *running* app instead brings forward whatever it shows (see "Reopen always brings Hearthstone forward")
+- **THEN** it shows an "already running" message, starts no second stack or client, and the first session continues unaffected; opening or clicking the *running* app instead brings forward whatever it shows (see "Reopen always brings Moonglade forward")
 - Check: `app.single_instance`
 
 #### Scenario: Works after being moved
@@ -53,13 +53,13 @@ Opening the app SHALL run the same play loop as `./play`: bring up the stack, la
 - **THEN** they see the logo, the game starts without a terminal, and quitting the game leaves nothing running
 - [human-verify] Finder/Dock interaction, first-run macOS prompts, and how the icon looks can only be judged by a person.
 
-### Requirement: One Hearthstone in the Dock
-When the game runs from Hearthstone.app, the Dock SHALL show exactly one icon for it, Hearthstone's, from launch to quit, and activating Hearthstone by any route SHALL bring the game forward (ADR-0010).
+### Requirement: One Moonglade in the Dock
+When the game runs from Moonglade.app, the Dock SHALL show exactly one icon for it, Moonglade's, from launch to quit, and activating Moonglade by any route SHALL bring the game forward (ADR-0010).
 
 #### Scenario: The game has no Dock icon of its own
 - **GIVEN** the app opened with the GUI stand-in client (Wine's notepad under the same runtime and shim)
 - **WHEN** the stand-in's window is up
-- **THEN** `lsappinfo` reports the stand-in pid as a UIElement (no Dock icon) named Hearthstone, the launcher pid as the only Foreground process of this session with bundle id `local.hearthstone.app`, and no other process of this prefix as Foreground
+- **THEN** `lsappinfo` reports the stand-in pid as a UIElement (no Dock icon) named Moonglade, the launcher pid as the only Foreground process of this session with bundle id `local.moonglade.app`, and no other process of this prefix as Foreground
 - **AND** sampling every process of this prefix at least 10 times per second from the Wine host's start until 5 s after the window is up, none is ever reported as Foreground (no Wine Dock icon flashes, even briefly), with the sample count recorded
 - Check: `app.single_dock_icon`
 
@@ -69,7 +69,7 @@ When the game runs from Hearthstone.app, the Dock SHALL show exactly one icon fo
 - **THEN** the loading window is hidden and the stand-in becomes frontmost within 2 s, without user input
 - Check: `app.handoff_focus`
 
-#### Scenario: Clicking Hearthstone brings the game forward
+#### Scenario: Clicking Moonglade brings the game forward
 - **GIVEN** the stand-in window is up and another app is frontmost
 - **WHEN** the app is reopened through LaunchServices (as a Finder or Dock click does)
 - **THEN** within 2 s the stand-in is frontmost, no "already running" dialog is shown, and the launcher keeps its single Dock icon
@@ -81,10 +81,10 @@ When the game runs from Hearthstone.app, the Dock SHALL show exactly one icon fo
 - **THEN** the window is on screen and frontmost again
 - Check: `app.reopen_unminimizes`
 
-#### Scenario: Terminal ./play keeps a normal Dock icon with Hearthstone's identity
+#### Scenario: Terminal ./play keeps a normal Dock icon with Moonglade's identity
 - **GIVEN** `./play` from a shell with the GUI stand-in (no app)
 - **WHEN** the window is up
-- **THEN** the stand-in is a normal Foreground app named Hearthstone, and the shim log records the icon replacement
+- **THEN** the stand-in is a normal Foreground app named Moonglade, and the shim log records the icon replacement
 - Check: `play.dock_identity`
 
 #### Scenario: The shim stays in the runtime layer
@@ -107,7 +107,7 @@ When the game runs from Hearthstone.app, the Dock SHALL show exactly one icon fo
 #### Scenario: Zach plays from the app
 - **GIVEN** a built app
 - **WHEN** Zach plays a session
-- **THEN** he sees one Hearthstone icon in the Dock; clicking it from another app or Cmd-Tabbing brings the game back; full screen still works; Dock Quit shuts everything down
+- **THEN** he sees one Moonglade icon in the Dock; clicking it from another app or Cmd-Tabbing brings the game back; full screen still works; Dock Quit shuts everything down
 - [human-verify] Dock appearance, Cmd-Tab, full screen and the Dock menu can't be observed without Screen Recording or Accessibility permission.
 
 ### Requirement: Loading window with stages
@@ -151,8 +151,8 @@ The launcher's loading window SHALL show the current stage and a progress bar, w
 - **THEN** the loading window reads clearly and the bar moves smoothly through the stages
 - [human-verify] Look and smoothness are judged by a person.
 
-### Requirement: Reopen always brings Hearthstone forward
-Opening or clicking Hearthstone SHALL bring forward whatever Hearthstone is showing: the loading window while loading, the game after.
+### Requirement: Reopen always brings Moonglade forward
+Opening or clicking Moonglade SHALL bring forward whatever Moonglade is showing: the loading window while loading, the game after.
 
 #### Scenario: Click during loading
 - **GIVEN** the app opened and its loading window up, with another app frontmost

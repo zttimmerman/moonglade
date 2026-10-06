@@ -1,6 +1,6 @@
-# Hearthstone
+# Moonglade
 
-Hearthstone is single-player, fully offline World of Warcraft: **Wrath of the Lich King 3.3.5a (build 12340)** on an Apple Silicon Mac. It runs a local **AzerothCore** server with **mod-playerbots**, so about 500 AI players fill the world, and you can add bot companions to your party. An optional **vanilla mode** gives levels 1–60 the pre-2.3 pace and difficulty, and all WotLK content stays in place: Outland, Northrend and Death Knights. The game's own login screen becomes a **front menu**, so you press Continue and you're in. One double-click (or `./play`) starts the server and the game. Quitting stops everything.
+Moonglade is single-player, fully offline World of Warcraft: **Wrath of the Lich King 3.3.5a (build 12340)** on an Apple Silicon Mac. It runs a local **AzerothCore** server with **mod-playerbots**, so about 500 AI players fill the world, and you can add bot companions to your party. An optional **vanilla mode** gives levels 1–60 the pre-2.3 pace and difficulty, and all WotLK content stays in place: Outland, Northrend and Death Knights. The game's own login screen becomes a **front menu**, so you press Continue and you're in. One double-click (or `./play`) starts the server and the game. Quitting stops everything.
 
 It's a personal project, and nothing it produces is redistributed. **The WoW client isn't included.** You need your own Windows 3.3.5a enUS client.
 
@@ -11,10 +11,10 @@ It's a personal project, and nothing it produces is redistributed. **The WoW cli
 - **M1 offline loop:** `./play` takes you from nothing running to in-game and back to nothing running, with no network needed.
 - **M2 living world:** about 500 AI players across starting zones and capitals, plus companions you add to your party who follow you, fight with you and take shared quests. It stays within a measured memory budget on a 16 GB Mac.
 - **M3 vanilla mode:** levels 1–60 use pre-2.3 XP, quest XP, outdoor elites and mounts. It's on by default, and all values come from VMaNGOS data.
-- **Hearthstone.app:** a double-clickable launcher for `./play`.
+- **Moonglade.app:** a double-clickable launcher for `./play`.
 - **In-client login screen:** the Continue / Profiles / Settings / Extras menu inside the game's own login screen, running on a patched, revertable copy of the client.
 
-**Next:** fixing a flaky companion check (F23), then launcher polish (one Dock icon, a loading screen with stages), save backups, and **M4 solo dungeons**. Zach still has to play the "human-verify" scenarios: M2 (living world, companions), M3 (vanilla mode), the in-client login screen (Continue, backdrop picker, About) and the first double-click of Hearthstone.app. The live roadmap, task board and known issues are in **[STATUS.md](STATUS.md)**.
+**Next:** fixing a flaky companion check (F23), then launcher polish (one Dock icon, a loading screen with stages), save backups, and **M4 solo dungeons**. Zach still has to play the "human-verify" scenarios: M2 (living world, companions), M3 (vanilla mode), the in-client login screen (Continue, backdrop picker, About) and the first double-click of Moonglade.app. The live roadmap, task board and known issues are in **[STATUS.md](STATUS.md)**.
 
 ## Requirements
 
@@ -40,8 +40,8 @@ brew install cmake mysql boost openssl@3 readline ccache python
 python3 --version         # must say 3.10 or newer
 
 # 2. clone (private repo)
-git clone https://github.com/zttimmerman/[redacted].git
-cd [redacted]
+git clone https://github.com/zttimmerman/project-moonglade.git
+cd project-moonglade
 
 # 3. build the pinned server (clones pinned sources into vendor/, applies patches/, installs into server/)
 harness/hs build
@@ -67,32 +67,32 @@ harness/hs run --only client.inspect
 harness/hs client-build
 
 # 9. the app
-harness/hs app            # -> dist/Hearthstone.app
+harness/hs app            # -> dist/Moonglade.app
 
 # 10. play
-./play                    # or double-click dist/Hearthstone.app
+./play                    # or double-click dist/Moonglade.app
 ```
 
-**First run:** Hearthstone creates your personal account `PLAYER` with a random password (not a GM) and saves it in `env/player.json`. That file is gitignored and readable only by you. Look there if you ever need the login. To pick your own name and password, create that file before the first run (see docs/setup.md, step 10).
+**First run:** Moonglade creates your personal account `PLAYER` with a random password (not a GM) and saves it in `env/player.json`. That file is gitignored and readable only by you. Look there if you ever need the login. To pick your own name and password, create that file before the first run (see docs/setup.md, step 10).
 
 ## Playing
 
-### Hearthstone.app or `./play`
+### Moonglade.app or `./play`
 
-- **`dist/Hearthstone.app`** (build it with `harness/hs app`). Double-click it, or drag it to `/Applications` or the Dock, and it still finds the repo. It shows a small "starting" window, then the game. Quitting the game (or quitting the app from the Dock) shuts everything down. If something fails, a dialog tells you what went wrong and points you to the log.
-  - **First launch:** macOS asks whether Hearthstone may access your **Documents folder**, because the repo lives in `~/Documents`. Allow it. The permission is tied to the app's bundle id `local.hearthstone.app`, so it survives rebuilds. Don't change the bundle id, or macOS will ask again.
-  - The Dock shows two icons today: Hearthstone, and Wine's process for the game. Clicking Hearthstone says "already running", and the Wine icon brings the game forward. A fix for this is accepted (ADR-0010) and is part of the upcoming launcher polish.
+- **`dist/Moonglade.app`** (build it with `harness/hs app`). Double-click it, or drag it to `/Applications` or the Dock, and it still finds the repo. It shows a small "starting" window, then the game. Quitting the game (or quitting the app from the Dock) shuts everything down. If something fails, a dialog tells you what went wrong and points you to the log.
+  - **First launch:** macOS asks whether Moonglade may access your **Documents folder**, because the repo lives in `~/Documents`. Allow it. The permission is tied to the app's bundle id `local.moonglade.app`, so it survives rebuilds. Don't change the bundle id, or macOS will ask again.
+  - The Dock shows two icons today: Moonglade, and Wine's process for the game. Clicking Moonglade says "already running", and the Wine icon brings the game forward. A fix for this is accepted (ADR-0010) and is part of the upcoming launcher polish.
 - **`./play`** in a terminal does the same thing and prints its progress. The terminal stays busy while you play. Ctrl-C stops everything cleanly. Exit codes: `0` normal quit, `1` startup problem, `2` already running, `3` the client crashed, `129`/`130`/`143` SIGHUP/Ctrl-C/SIGTERM.
 
 Both start the database, the login server and the world server, then wait until they're ready, make sure your account exists and open the game. With the ~500-bot world, startup takes a while.
 
 ### The front menu (the game's login screen)
 
-With the default `patched` client, the login screen is Hearthstone's menu. There are no username or password boxes:
+With the default `patched` client, the login screen is Moonglade's menu. There are no username or password boxes:
 - **Continue** (preselected) logs you straight in to character select. The line under it shows your last-played character, for example "Arthas · Level 23 Paladin".
 - **Profiles:** pick which profile Continue uses. Today there's one profile, from `env/player.json`. Creating profiles from the menu is on the list.
 - **Settings:** the game's own option panels, plus the login screen look: **Lich King**, **Burning Crusade** or **Classic** (the Dark Portal scene). Each switches the backdrop, logo and music together.
-- **Extras:** Cinematics, Credits, and **About** (game and Hearthstone versions, the commit and pins, and the current world: size and vanilla mode on/off).
+- **Extras:** Cinematics, Credits, and **About** (game and Moonglade versions, the commit and pins, and the current world: size and vanilla mode on/off).
 - **Quit.**
 
 **Your menu choices (last profile, backdrop) are saved only after you enter the world.** The client writes its settings file only then. If you quit from the login or character screen, nothing is saved (ADR-0009, Appendix A).
@@ -108,7 +108,7 @@ harness/hs world-size 300              # any number from 10 to 2000
 
 harness/hs client-mode                 # show which client is used
 harness/hs client-mode stock           # the untouched client/: classic login, type the account and password
-harness/hs client-mode patched         # the play client with the Hearthstone menu (default)
+harness/hs client-mode patched         # the play client with the Moonglade menu (default)
 ```
 
 These are saved in `env/settings.json` and read on every start.
@@ -125,11 +125,11 @@ Add and dismiss companions with chat commands: `.playerbots bot addclass <class>
 
 - **Everything hangs, even `kill -9` doesn't work on Wine.** Rosetta's translation service (`oahd`) can wedge, which freezes every x86_64 program, Wine included (2026-10-03). Fix: `sudo killall oahd`. If that doesn't help, reboot.
 - **macOS privacy prompts.**
-  - *Documents folder* (Hearthstone.app): allow it. If you denied it, the app says "macOS blocked access to the Hearthstone folder". Fix it in System Settings > Privacy & Security > Files and Folders > Hearthstone (Documents Folder), then open the app again.
-  - *Screen recording*: Hearthstone doesn't ask for this when you play. Only some harness checks look at window lists. A prompt seen on 2026-10-04 most likely came from another app, and denying it is safe.
+  - *Documents folder* (Moonglade.app): allow it. If you denied it, the app says "macOS blocked access to the Moonglade folder". Fix it in System Settings > Privacy & Security > Files and Folders > Moonglade (Documents Folder), then open the app again.
+  - *Screen recording*: Moonglade doesn't ask for this when you play. Only some harness checks look at window lists. A prompt seen on 2026-10-04 most likely came from another app, and denying it is safe.
   - The real Wow.exe under Wine may trigger other macOS prompts.
 - **A closed lid or sleep stalls long runs.** The harness holds `caffeinate -s` during runs. The dev Mac also has `sudo pmset -a disablesleep 1` set, so a closed lid doesn't stall anything. Undo it with `sudo pmset -a disablesleep 0`.
-- **"Hearthstone is already running"** (app) or exit code 2 (`./play`). Another `./play` or app session holds `env/run/play.lock`, and `./play` prints its pid. Use the window that's already open, or quit that game first. A lock left by a killed `./play` is cleaned up automatically. If the server is still up with no game running, check `harness/hs status` and stop it with `harness/hs down`. If a Wine process is stuck, stop this prefix's Wine:
+- **"Moonglade is already running"** (app) or exit code 2 (`./play`). Another `./play` or app session holds `env/run/play.lock`, and `./play` prints its pid. Use the window that's already open, or quit that game first. A lock left by a killed `./play` is cleaned up automatically. If the server is still up with no game running, check `harness/hs status` and stop it with `harness/hs down`. If a Wine process is stuck, stop this prefix's Wine:
   ```sh
   WINEPREFIX="$PWD/env/wineprefix-mtld3d" env/wowsilicon-r17/.wine-runtime/bin/wineserver -k
   ```
@@ -168,7 +168,7 @@ Add and dismiss companions with chat commands: `.playerbots bot addclass <class>
 | `hs client-install`, `hs client-config`, `hs client-build`, `hs client-mode` | client install, localhost config, the play client, stock vs patched |
 | `hs wine-install`, `hs launch [--smoke]` | the Wine runtime; start the client the harness way (test account) |
 | `hs world-size`, `hs pop-session` | world size setting; one measured population session |
-| `hs app`, `hs icon` | build `dist/Hearthstone.app`; regenerate the icon |
+| `hs app`, `hs icon` | build `dist/Moonglade.app`; regenerate the icon |
 | `hs ghidra-install`, `hs re …`, `hs mpq …` | read-only client analysis, MPQ list/extract/write (never under `client/`) |
 
 **Tiers.** Each check is tagged quick, full or slow:
@@ -203,7 +203,7 @@ The practical procedure, run budget and pre-verification checklist are in `.clau
 |---|---|
 | `play` | the one-command play loop (`harness/hslib/play.py`) |
 | `harness/hs`, `harness/hslib/` | the harness CLI and library: build, stack, client, Wine, play loop, app, checks (`hslib/checks/`), protocol probe (`hslib/probe/`) |
-| `harness/app/launcher.m` | the Hearthstone.app launcher source |
+| `harness/app/launcher.m` | the Moonglade.app launcher source |
 | `harness/ghidra_scripts/` | headless Ghidra scripts for `hs re` |
 | `harness/active-changes` | changes currently being built or verified |
 | `modules/mod-era-profile/` | our server module: vanilla mode (C++, config, generated SQL) |
@@ -235,7 +235,7 @@ Generated and gitignored, never committed: `vendor/` (pinned sources), `build/`,
 | [0007](docs/adr/0007-core-patch-playerbots-hook-packet-copy.md) | Core patch: give the playerbots packet hook an intact copy of the packet |
 | [0008](docs/adr/0008-playerbots-patch-queue-and-group-cleanup.md) | mod-playerbots patch queue; dismissing a companion takes it out of the party |
 | [0009](docs/adr/0009-client-patch-overlay.md) | Revertable client patches on a derived "play client" |
-| [0010](docs/adr/0010-wine-host-shim.md) | Wine host shim for one Hearthstone Dock icon (accepted, not built yet) |
+| [0010](docs/adr/0010-wine-host-shim.md) | Wine host shim for one Moonglade Dock icon (accepted, not built yet) |
 
 **Specs** (`openspec/specs/<capability>/spec.md`): what each capability must do, with scenarios.
 - `server-build`, `server-lifecycle`: build and run the server.
@@ -258,4 +258,4 @@ Generated and gitignored, never committed: `vendor/` (pinned sources), `build/`,
 
 ## Legal and scope
 
-This is a personal project for one person's own offline play. World of Warcraft and its client files belong to Blizzard Entertainment. The client you install is your own copy, and this repo never contains or distributes it. Nothing Hearthstone produces is redistributed: client files, the patched play client, builds or packages. AzerothCore, mod-playerbots, the Wine runtime, Ghidra and the VMaNGOS data are fetched from their own upstreams at pinned versions (`fork.lock`) under their own licences.
+This is a personal project for one person's own offline play. World of Warcraft and its client files belong to Blizzard Entertainment. The client you install is your own copy, and this repo never contains or distributes it. Nothing Moonglade produces is redistributed: client files, the patched play client, builds or packages. AzerothCore, mod-playerbots, the Wine runtime, Ghidra and the VMaNGOS data are fetched from their own upstreams at pinned versions (`fork.lock`) under their own licences.

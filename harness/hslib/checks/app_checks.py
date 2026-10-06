@@ -1,4 +1,4 @@
-"""mac-app: Hearthstone.app (openspec/changes/launcher-app).
+"""mac-app: Moonglade.app (openspec/changes/launcher-app).
 
 app.icon and app.bundle_valid inspect the committed icon and a fresh `harness/hs app` build. The runtime checks open
 the built app the way Finder does, through LaunchServices (`/usr/bin/open`, never by exec'ing the binary), with the
@@ -8,7 +8,7 @@ and its exit code in that file. LaunchServices starts the app with launchd's env
 (HS_PROFILE=m0) goes through `open --env` too.
 
 macOS privacy (TCC): the repo lives in ~/Documents, so the play loop the app starts needs the "Documents folder"
-permission for Hearthstone.app. macOS asks once ("Hearthstone would like to access files in your Documents folder");
+permission for Moonglade.app. macOS asks once ("Moonglade would like to access files in your Documents folder");
 until someone clicks Allow, the loop is blocked and the runtime checks fail fast (within APP_OUTPUT_TIMEOUT) with that
 diagnosis and the tccd log lines as evidence, instead of waiting out the startup timeout.
 """
@@ -29,15 +29,22 @@ from pathlib import Path
 
 from .. import app as A, icon as I, launch, paths as P, play, procs, stack
 from ..registry import check, require
+from .naming_checks import NEW_NAME, OLD_NAME
 from .play_checks import (PINNED, START_TIMEOUT, StandIn, _denials, graceful_halt, is_clear, last_record,
                           play_processes, remaining, SANDBOX_EXEC)
 
 CAP = "mac-app"
+# rename-moonglade: the spec's literal expectations, not app.py's constants, so a wrong constant there fails
+EXPECT_APP_DIR = "Moonglade.app"
+EXPECT_NAME = NEW_NAME
+EXPECT_ID = "local.moonglade.app"
+EXPECT_DR = 'designated => identifier "local.moonglade.app"'
+NAMES_TIMEOUT = 60            # the shim names the game process at its start; 60 s after the client is up = it didn't
 HS = str(P.HARNESS / "hs")
 OPEN = "/usr/bin/open"
 APP_OUTPUT_TIMEOUT = 90       # the play loop prints its first line within ~1-2 s; 90 s = blocked (e.g. TCC prompt)
 EXIT_TIMEOUT = 300            # play's own limit after the client exits is 120 s (play.loop_clean_exit)
-TCC_HINT = ("the play loop never started: macOS is probably asking for Hearthstone's Documents-folder permission "
+TCC_HINT = ("the play loop never started: macOS is probably asking for Moonglade's Documents-folder permission "
             "(the repo is in ~/Documents). Open the app once and click Allow; see tcc_prompts")
 
 
@@ -228,14 +235,127 @@ def verify_bundle(app: Path, ev: dict) -> None:
                               ("Identifier", "Format", "CodeDirectory v", "Signature", "Sealed Resources version")]
     require(v.returncode == 0, "codesign --verify --deep --strict fails", **ev)
     require("Signature=adhoc" in d.stderr, "the bundle isn't ad-hoc signed", **ev)
+    verify_names(app, pl, ev)
 
 
-@check("app.bundle_valid", order=381, capability=CAP, stack="any", tier="quick")
+def repo_roots() -> list[str]:
+    """This repo's folder path (as given and resolved), longest first. It still carries the old name until Zach runs
+    tools/rename-folder.sh; that's the folder, not wording the app shows, so name scans mask it first (e.g. the
+    shim's install name embeds its build path)."""
+    return sorted({str(P.ROOT), str(P.ROOT.resolve())}, key=len, reverse=True)
+
+
+def old_name_hits(path: Path) -> list[str]:
+    """Case-insensitive hits of the old project name in a file's bytes (the strings a binary can show), with the
+    repo folder's own path masked."""
+    try:
+        data = path.read_bytes()
+    except OSError as e:
+        return [f"unreadable: {e}"]          # fail-closed
+    for r in repo_roots():
+        data = data.replace(r.encode(), b"<repo>")
+    return [data[max(0, m.start() - 40):m.end() + 20].decode(errors="replace")
+            for m in re.finditer(re.escape(OLD_NAME).encode(), data, re.I)]
+
+
+def verify_names(app: Path, pl: dict, ev: dict) -> None:
+    """rename-moonglade: bundle file name, plist names and id, designated requirement; and no launcher, plist or
+    shim text still carries the old name (every user-visible launcher string is compiled into the executable)."""
+    from .. import dockshim
+    r = subprocess.run(["/usr/bin/codesign", "-d", "-r-", str(app)], capture_output=True, text=True)
+    dr = [l.strip() for l in (r.stdout + r.stderr).splitlines() if l.strip().startswith("designated =>")]
+    exe = app / "Contents" / "MacOS" / str(pl.get("CFBundleExecutable", ""))
+    texts = {"executable": exe, "Info.plist": app / "Contents" / "Info.plist", "shim": dockshim.DYLIB}
+    n = {"bundle_dir_name": app.name if app.resolve().parent == A.DIST.resolve() else None,
+         "CFBundleName": pl.get("CFBundleName"), "CFBundleDisplayName": pl.get("CFBundleDisplayName"),
+         "CFBundleIdentifier": pl.get("CFBundleIdentifier"), "designated_requirement": dr,
+         "old_name_hits": {k: old_name_hits(p) for k, p in texts.items()}}
+    ev["names"] = n
+    if n["bundle_dir_name"] is not None:      # app.relocatable checks a copy under its own folder name
+        require(n["bundle_dir_name"] == EXPECT_APP_DIR, f"the built bundle isn't dist/{EXPECT_APP_DIR}", **ev)
+    require(n["CFBundleName"] == EXPECT_NAME and n["CFBundleDisplayName"] == EXPECT_NAME,
+            f"CFBundleName / CFBundleDisplayName aren't {EXPECT_NAME}", **ev)
+    require(n["CFBundleIdentifier"] == EXPECT_ID, f"the bundle identifier isn't {EXPECT_ID}", **ev)
+    require(dr == [EXPECT_DR], f"the designated requirement isn't {EXPECT_DR}", **ev)
+    require(not any(n["old_name_hits"].values()), "the launcher, plist or shim still carries the old name", **ev)
+
+
+def running_names(ev: dict) -> dict:
+    """Open the built app through LaunchServices with the notepad stand-in (m0, stock client setting, test hook):
+    the launcher's and the game process's LaunchServices display names, and every status/dialog/stage text the
+    launcher recorded. Then quit the stand-in: the app exits 0 and nothing is left running."""
+    from .polish_checks import GuiStandIn, lsappinfo_list      # polish_checks imports this module
+    run: dict = {}
+    ev["names_run"] = run
+    require_clear(run)
+    s = GuiStandIn("names")
+    hook = Hook(s.dir, "hook")
+    sfile = s.dir / "settings.json"
+    sfile.write_text(json.dumps({"client": "stock"}))
+    off, since = _log_size(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        t_open = time.time()
+        run["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat),
+                               env={"HS_SETTINGS": str(sfile)})
+        require(run["open"]["rc"] == 0, "`open` failed to launch the app", **run)
+        up = wait_app_client_up(s, hook, off, since)
+        run["client_up"] = up
+        require(up["up"], f"stand-in client never came up under the app: {up.get('why')}", **run)
+        launchers = _launchers(A.APP)
+        lp = launchers[0]["pid"] if len(launchers) == 1 else None
+        t0, apps, nps = time.time(), [], []
+        while time.time() - t0 < NAMES_TIMEOUT:
+            nps = GuiStandIn.notepad_pids()
+            apps = [a for a in lsappinfo_list() if a["pid"] in nps or a["pid"] == lp or a.get("bundle") == EXPECT_ID]
+            game = [a for a in apps if a["pid"] in nps]
+            if lp and game and all(a.get("name") == EXPECT_NAME for a in game) \
+                    and any(a["pid"] == lp and a.get("name") == EXPECT_NAME for a in apps):
+                break
+            time.sleep(0.5)
+        run |= {"t_open": round(t_open, 3), "launchers": launchers, "launcher_pid": lp, "notepad_pids": nps,
+                "apps": apps, "names_after_s": round(time.time() - t0, 1)}
+        ls_launcher = [a for a in apps if a["pid"] == lp]
+        ls_game = [a for a in apps if a["pid"] in nps]
+        require(lp and ls_launcher and ls_launcher[0].get("name") == EXPECT_NAME
+                and ls_launcher[0].get("bundle") == EXPECT_ID,
+                f"the launcher's LaunchServices display name isn't {EXPECT_NAME} (bundle {EXPECT_ID})", **run)
+        require(ls_game and all(a.get("name") == EXPECT_NAME for a in ls_game),
+                f"the game process's LaunchServices display name isn't {EXPECT_NAME}", **run)
+        s.stop_file.write_text("quit")
+        rc, dt = wait_app_exit(hook, A.APP)
+        shown = [{"kind": e.get("kind"), "id": e.get("id"), **{k: e[k] for k in ("title", "text", "label") if k in e}}
+                 for e in hook.events() if e.get("kind") in ("status", "dialog", "detail", "stage")]
+        # a text may include the repo's folder path (e.g. a log path): masked, see repo_roots()
+        roots = repo_roots()
+
+        def unrooted(v) -> str:
+            v = str(v)
+            for r in roots:
+                v = v.replace(r, "<repo>")
+            return v.lower()
+        old = [x for x in shown if any(OLD_NAME.lower() in unrooted(x.get(k, "")) for k in ("title", "text", "label"))]
+        run |= {"app_exit_code": rc, "exit_after_s": dt, "shown_texts": shown[:60], "shown_with_old_name": old,
+                "remaining_after": app_remaining(s)}
+        require(shown, "the launcher recorded no status/stage text (nothing to judge)", **run)
+        require(not old, "a launcher status/dialog/stage text still says the old name", **run)
+        require(rc == 0, f"the app's exit code is {rc}, expected 0", **run)
+        require(is_clear(run["remaining_after"]), "something from this repo is still running", **run)
+        return run
+    finally:
+        stop_launchers(A.APP)
+        s.cleanup()
+
+
+@check("app.bundle_valid", order=381, capability=CAP, stack="down", tier="quick")
 def bundle_valid(ctx):
     """From a clean checkout with the committed branding assets, `harness/hs app` (run under a sandbox profile that
-    denies and logs every file write outside the repo) builds dist/Hearthstone.app: plutil -lint passes; the plist
+    denies and logs every file write outside the repo) builds dist/Moonglade.app: plutil -lint passes; the plist
     names the executable (present, executable), the bundle identifier and the icon; codesign --verify --deep --strict
-    passes on an ad-hoc signature; and no write outside the repo was attempted."""
+    passes on an ad-hoc signature; and no write outside the repo was attempted. rename-moonglade: CFBundleName and
+    CFBundleDisplayName are Moonglade, the id is local.moonglade.app, the designated requirement is
+    `identifier "local.moonglade.app"`, the launcher/plist/shim carry no old-name text; opened with the stand-in,
+    the launcher's and the game process's LaunchServices display names are Moonglade and no launcher text it
+    shows says the old name."""
     ev: dict = {"cmd": f"{SANDBOX_EXEC} -f <guard.sb> {HS} app"}
     status = subprocess.run(["git", "-C", str(P.ROOT), "status", "--porcelain", "--", "branding/"],
                             capture_output=True, text=True).stdout
@@ -277,9 +397,10 @@ def bundle_valid(ctx):
                 "self-test: the blocked write isn't in the denial log, so the log can't vouch for the build", **ev)
         require(not ev["denials"]["build"], "the build tried to write outside the repo", **ev)
         require(b.returncode == 0, "`harness/hs app` failed", **ev)
-        require(A.APP.is_dir(), "dist/Hearthstone.app doesn't exist after the build", **ev)
+        require(A.APP.is_dir(), "dist/Moonglade.app doesn't exist after the build", **ev)
         verify_bundle(A.APP, ev)
         ev["build_window_started"] = t0.isoformat()
+        running_names(ev)
         return ev
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -288,7 +409,7 @@ def bundle_valid(ctx):
 # ---------------------------------------------------------------- runtime helpers
 
 def _launchers(bundle: Path | None = None) -> list[dict]:
-    """Running Hearthstone.app launchers (any copy, or the one at `bundle`)."""
+    """Running Moonglade.app launchers (any copy, or the one at `bundle`)."""
     suffix = ".app/Contents/MacOS/" + A.EXE_NAME
     out = []
     for pid, cmd in procs.table():
@@ -350,7 +471,7 @@ def _play_pid(off: int, launcher_pid: int | None = None) -> int | None:
     pat = re.compile(r"\[app [^\]]+\] play loop pid (\d+):")
     text = _log_since(off)
     if launcher_pid is not None:          # the launcher's header line names its own pid; take the play pid after it
-        idx = text.find(f"==== Hearthstone.app pid {launcher_pid} ")
+        idx = text.find(f"==== Moonglade.app pid {launcher_pid} ")
         text = text[idx:] if idx >= 0 else ""
     m = pat.search(text)
     return int(m.group(1)) if m else None
@@ -500,7 +621,7 @@ def lifecycle(bundle: Path, ev: dict, tag: str) -> dict:
 
 @check("app.launch_lifecycle", order=382, capability=CAP, stack="down", tier="full")
 def launch_lifecycle(ctx):
-    """`open dist/Hearthstone.app` (stand-in client): a "starting" status is recorded, the stack reaches readiness, the
+    """`open dist/Moonglade.app` (stand-in client): a "starting" status is recorded, the stack reaches readiness, the
     client is launched by the app's play loop (the app's child, the app launched by LaunchServices, no Terminal),
     and when the client exits the stack shuts down gracefully, the app exits 0 with no dialog, and nothing from this
     repo (stack, Wine, Wow.exe, launcher) remains, ports 3307/3724/8085/7878 free."""
@@ -678,7 +799,7 @@ def relocatable(ctx):
     ev: dict = {}
     build_app(ev)
     work = Path(tempfile.mkdtemp(prefix="hs-app-moved-")).resolve()
-    copy = work / "Elsewhere" / "Hearthstone.app"
+    copy = work / "Elsewhere" / "Moonglade.app"
     try:
         copy.parent.mkdir()
         d = subprocess.run(["/usr/bin/ditto", str(A.APP), str(copy)], capture_output=True, text=True)

@@ -1,11 +1,11 @@
-// Hearthstone Wine host shim (ADR-0010, openspec/changes/launcher-polish task 2.1). Built by `harness/hs app`
+// Moonglade Wine host shim (ADR-0010, openspec/changes/launcher-polish task 2.1). Built by `harness/hs app`
 // (harness/hslib/dockshim.py) into env/dockshim/hsdock.dylib, universal x86_64 (the Wine host runs under Rosetta)
 // + arm64. Loaded only into the game client's Wine processes, through DYLD_INSERT_LIBRARIES set by
 // launch.wine_env(client=True) (never globally; bash would strip it anyway). It changes nothing in Wow.exe, the
 // Windows side, rendering or client/: it only adjusts how the macOS host process presents itself.
 //
 // Environment (set by launch.dock_env):
-//   HSDOCK_POLICY  accessory = no Dock icon of its own (app runs: the launcher is the one Hearthstone icon);
+//   HSDOCK_POLICY  accessory = no Dock icon of its own (app runs: the launcher is the one Moonglade icon);
 //                  regular   = keep Wine's normal Dock icon (terminal ./play, or the option-B fallback)
 //   HSDOCK_NAME    the display name (Dock, Cmd-Tab, Force Quit) instead of "wine"
 //   HSDOCK_ICON    an .icns that replaces the exe icon Wine passes to -[NSApplication setApplicationIconImage:]
@@ -21,9 +21,9 @@
 //   - -[NSApplication setApplicationIconImage:]: our icon instead of the exe's.
 //   - -[WineApplicationController transformProcessToForeground:]: runs once. Wine calls it every time a window is
 //     ordered in while the policy isn't Regular, which under Accessory would rebuild menus and re-request
-//     activation each time (spike Q-A risks). After the first run it posts local.hearthstone.window (pid) so the
+//     activation each time (spike Q-A risks). After the first run it posts local.moonglade.window (pid) so the
 //     launcher can hand focus to the game at once.
-//   - local.hearthstone.reopen (posted by the launcher on a Dock/Finder click or Cmd-Tab): calls Wine's own reopen
+//   - local.moonglade.reopen (posted by the launcher on a Dock/Finder click or Cmd-Tab): calls Wine's own reopen
 //     handler, -[WineApplicationController applicationShouldHandleReopen:hasVisibleWindows:], which unminimises
 //     the game window (cocoa_app.m unminimizeWindowIfNoneVisible).
 #import <Foundation/Foundation.h>
@@ -35,9 +35,9 @@
 #include <stdatomic.h>
 #include <unistd.h>
 
-static NSString *const kReopen = @"local.hearthstone.reopen";
-static NSString *const kWindow = @"local.hearthstone.window";
-static NSString *const kTestMinimize = @"local.hearthstone.test.minimize";
+static NSString *const kReopen = @"local.moonglade.reopen";
+static NSString *const kWindow = @"local.moonglade.window";
+static NSString *const kTestMinimize = @"local.moonglade.test.minimize";
 
 static IMP orig_setPolicy, orig_setIcon, orig_transform;
 static atomic_int swizzledApp, swizzledWine, transformRuns, policyCalls;

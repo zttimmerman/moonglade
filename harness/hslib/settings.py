@@ -14,9 +14,9 @@ on every start. Intended as a front-menu option later.
     Change it with `harness/hs client-mode stock|patched`.
 
     {"dock_policy": "accessory" | "regular" | "off"}   (launcher-polish, ADR-0010) how the game shows in the Dock
-        when it runs from Hearthstone.app:
-        accessory = no Dock icon of its own; the Hearthstone icon brings it forward (the default),
-        regular   = the game keeps its own Dock icon, named Hearthstone with our logo (option B: Wine's menus and
+        when it runs from Moonglade.app:
+        accessory = no Dock icon of its own; the Moonglade icon brings it forward (the default),
+        regular   = the game keeps its own Dock icon, named Moonglade with our logo (option B: Wine's menus and
                     native full screen as before),
         off       = no shim at all (Wine's "wine" icon, as before launcher-polish).
     The environment variable HSDOCK_POLICY overrides it. Change it with `harness/hs dock-policy <value>`."""

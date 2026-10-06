@@ -25,7 +25,7 @@ GUI_ROOTS = (
     "harness/hslib/checks/polish_checks.py",  # the gui checks and their shared app session
     "harness/hslib/checks/app_checks.py",     # open_app / Hook / build_app used by that session
     "harness/hslib/play.py",                  # the play loop the app runs (stages, ready -> hand-off, shutdown)
-    "harness/hslib/app.py",                   # builds dist/Hearthstone.app
+    "harness/hslib/app.py",                   # builds dist/Moonglade.app
     "harness/hslib/dockshim.py",              # builds/loads the Dock shim
     "harness/hslib/__main__.py",              # `harness/hs app` (build_app) and the CLI
     "harness/hslib/runner.py",                # this rule and the GUI tier itself

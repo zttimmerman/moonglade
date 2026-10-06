@@ -1,4 +1,4 @@
-// Hearthstone.app launcher (openspec/changes/launcher-app, task 2.2). Built into Contents/MacOS/Hearthstone by
+// Moonglade.app launcher (openspec/changes/launcher-app, task 2.2). Built into Contents/MacOS/Moonglade by
 // `harness/hs app` (harness/hslib/app.py); see that module and design.md.
 //
 // What it does: reads the repo's absolute path from Contents/Resources/repo-path (written at build time, so a copy of
@@ -21,10 +21,10 @@
 //   that has no measurable progress), and the latest [play] line (the bots stage's heading is "AI players: N / M online"). Each stage line is
 //   recorded as a hook event {"kind":"stage", ...} (play's own timestamp as "play_t").
 // - One Dock icon: the game's Wine process runs as an accessory app (the shim, harness/app/dockshim.m), so this
-//   launcher stays the only Hearthstone icon. When the game's first window appears (the shim posts
-//   local.hearthstone.window; the play loop's `ready` stage is the fallback) the loading window goes away and
+//   launcher stays the only Moonglade icon. When the game's first window appears (the shim posts
+//   local.moonglade.window; the play loop's `ready` stage is the fallback) the loading window goes away and
 //   activation is handed to the game (yieldActivationToApplication: + activateFromApplication:). From then on a
-//   Dock/Finder click (reopen) or activating the launcher (Cmd-Tab) posts local.hearthstone.reopen (the shim
+//   Dock/Finder click (reopen) or activating the launcher (Cmd-Tab) posts local.moonglade.reopen (the shim
 //   unminimises the game window) and hands activation to the game again, instead of "already running".
 // - Test-only, honoured only with the test hook: HS_APP_TEST_DISABLE=handoff,forward,reopen_note,early_hide (counterexamples
 //   that switch one of those off) and HS_APP_SNAPSHOT_DIR=<dir> (renders the loading window, which test mode never
@@ -50,8 +50,8 @@
 static NSString *const kHookEnv = @"HS_APP_TEST_HOOK";
 static NSString *const kDisableEnv = @"HS_APP_TEST_DISABLE";
 static NSString *const kSnapshotEnv = @"HS_APP_SNAPSHOT_DIR";
-static NSString *const kReopenNote = @"local.hearthstone.reopen";
-static NSString *const kWindowNote = @"local.hearthstone.window";
+static NSString *const kReopenNote = @"local.moonglade.reopen";
+static NSString *const kWindowNote = @"local.moonglade.window";
 
 // The loading window's background, drawn in drawRect: so an off-screen render (snapshot) has it too.
 @interface HSBackgroundView : NSView
@@ -150,14 +150,14 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     NSWindow *w = [[NSWindow alloc] initWithContentRect:r
                                               styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskMiniaturizable
                                                 backing:NSBackingStoreBuffered defer:NO];
-    w.title = @"Hearthstone";
+    w.title = @"Moonglade";
     w.releasedWhenClosed = NO;
     HSBackgroundView *root = [[HSBackgroundView alloc] initWithFrame:r];
     w.contentView = root;
     NSImageView *iv = [NSImageView imageViewWithImage:[NSApp applicationIconImage]];
     iv.frame = NSMakeRect(24, 92, 84, 84);
     [root addSubview:iv];
-    NSTextField *title = [NSTextField labelWithString:@"Hearthstone is starting…"];
+    NSTextField *title = [NSTextField labelWithString:@"Moonglade is starting…"];
     title.font = [NSFont boldSystemFontOfSize:16];
     title.frame = NSMakeRect(124, 146, 372, 24);
     title.lineBreakMode = NSLineBreakByTruncatingTail;
@@ -261,7 +261,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
 // The play loop's lines are written for a terminal; a few read wrong in the app's window.
 - (NSString *)appWording:(NSString *)msg {
     return [msg stringByReplacingOccurrencesOfString:@"Press Ctrl-C here to stop everything."
-                                          withString:@"To stop everything, quit Hearthstone from the Dock."];
+                                          withString:@"To stop everything, quit Moonglade from the Dock."];
 }
 
 - (void)hideStatus {
@@ -303,8 +303,8 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     NSString *repo = [self resource:@"repo-path"];
     NSString *play = [repo stringByAppendingPathComponent:@"play"];
     if (repo.length == 0 || ![[NSFileManager defaultManager] isExecutableFileAtPath:play]) {
-        [self dialog:@"repo_missing" title:@"Hearthstone can't find its folder"
-                text:[NSString stringWithFormat:@"This app runs the game from the Hearthstone folder at\n%@\nbut that "
+        [self dialog:@"repo_missing" title:@"Moonglade can't find its folder"
+                text:[NSString stringWithFormat:@"This app runs the game from the Moonglade folder at\n%@\nbut that "
                       @"folder (or its `play` script) isn't there any more. If you moved the folder, rebuild the app "
                       @"from it with `harness/hs app`.\n\nNo log was written.", repo.length ? repo : @"(not recorded)"]
                style:NSAlertStyleCritical showLog:NO];
@@ -316,7 +316,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     self.logPath = [logs stringByAppendingPathComponent:@"app.log"];
     int fd = open(self.logPath.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd >= 0) self.logHandle = [[NSFileHandle alloc] initWithFileDescriptor:fd closeOnDealloc:YES];
-    [self appLog:[NSString stringWithFormat:@"==== Hearthstone.app pid %d from %@ (repo %@)", getpid(),
+    [self appLog:[NSString stringWithFormat:@"==== Moonglade.app pid %d from %@ (repo %@)", getpid(),
                   [[NSBundle mainBundle] bundlePath], repo]];
     if ([self testMode]) {                             // test-only switches: never honoured without the test hook
         if ([penv[kDisableEnv] length])
@@ -362,10 +362,10 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     t.terminationHandler = ^(NSTask *task) {
         dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf playExited:task]; });
     };
-    [self showStatus:@"starting" text:@"Hearthstone is starting…"];
+    [self showStatus:@"starting" text:@"Moonglade is starting…"];
     NSError *err = nil;
     if (![t launchAndReturnError:&err]) {
-        [self dialog:@"error" title:@"Hearthstone couldn't start"
+        [self dialog:@"error" title:@"Moonglade couldn't start"
                 text:[NSString stringWithFormat:@"The play loop couldn't be started: %@\n\nLog: %@",
                       err.localizedDescription, self.logPath] style:NSAlertStyleCritical showLog:YES];
         [self finish:1];
@@ -467,8 +467,8 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     }
     for (NSString *l in [self.outLines arrayByAddingObjectsFromArray:self.playLines])
         if ([l rangeOfString:@"Operation not permitted"].location != NSNotFound) {
-            [parts addObject:@"macOS blocked access to the Hearthstone folder. Allow it in System Settings > Privacy & "
-                             @"Security > Files and Folders > Hearthstone (Documents Folder), then open the app again."];
+            [parts addObject:@"macOS blocked access to the Moonglade folder. Allow it in System Settings > Privacy & "
+                             @"Security > Files and Folders > Moonglade (Documents Folder), then open the app again."];
             break;
         }
     return [parts componentsJoinedByString:@"\n\n"];
@@ -486,7 +486,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     [self hideStatus];
     if (code == 0) [self finish:0];
     if (code == 2) {                                    // play.py EXIT_BUSY: the single-instance lock is held
-        [self dialog:@"already_running" title:@"Hearthstone is already running"
+        [self dialog:@"already_running" title:@"Moonglade is already running"
                 text:@"The game is already open (or still starting). Use that window, or quit the game first."
                style:NSAlertStyleInformational showLog:NO];
         [self finish:0];
@@ -494,7 +494,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     NSDictionary *rec = [self playRecord:task.processIdentifier];
     if (self.stopRequested && code >= 128 && ![[rec[@"cleanup"] objectForKey:@"remaining"] count]) [self finish:0];
     BOOL started = [rec[@"client_started"] boolValue] || self.clientStarted;
-    NSString *title = started ? @"Hearthstone stopped because of a problem" : @"Hearthstone couldn't start";
+    NSString *title = started ? @"Moonglade stopped because of a problem" : @"Moonglade couldn't start";
     NSString *stageLabel = nil;                        // the loading stage it stopped at (play-last.json, else ours)
     if ([rec[@"stage"] isKindOfClass:[NSDictionary class]] && [rec[@"stage"][@"label"] isKindOfClass:[NSString class]])
         stageLabel = rec[@"stage"][@"label"];
@@ -529,7 +529,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
                    @"game_policy": @(g.activationPolicy)}];
     [self forwardFocus:@"handoff" attempt:0];        // first, while the loading window still holds activation
     // the loading window stays until the game's window is on screen and the game is frontmost (or 5 s), so there's
-    // never a moment with nothing of Hearthstone's on screen
+    // never a moment with nothing of Moonglade's on screen
     self.handoffAt = [NSDate timeIntervalSinceReferenceDate];
     [self pollHide];
 }
@@ -636,7 +636,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
         return NO;
     }
     if (self.task.running && ![self.disabled containsObject:@"loading_reopen"]) {
-        // loading (no game window yet) or shutting down: bring forward what Hearthstone is showing, no dialog. (The
+        // loading (no game window yet) or shutting down: bring forward what Moonglade is showing, no dialog. (The
         // only other case, the game's window gone but its shutdown not started yet, lasts a moment: just activate.)
         BOOL showing = self.shutdownMode || !self.handedOff;
         BOOL hide = showing && !self.shutdownMode && [self.disabled containsObject:@"loading_reopen_hide"];
@@ -655,9 +655,9 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
         return NO;
     }
     if (self.task.running) {                            // test switch loading_reopen: the old behaviour
-        [self dialog:@"already_running" title:@"Hearthstone is already running"
+        [self dialog:@"already_running" title:@"Moonglade is already running"
                 text:(self.clientStarted ? @"The game is already open. Quit the game to stop everything."
-                                         : @"Hearthstone is still starting. The game will open by itself.")
+                                         : @"Moonglade is still starting. The game will open by itself.")
                style:NSAlertStyleInformational showLog:NO];
         if (!self.clientStarted && ![self testMode]) [self.statusWindow makeKeyAndOrderFront:nil];
     }
@@ -690,7 +690,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     [NSObject cancelPreviousPerformRequestsWithTarget:self selector:@selector(pollHide) object:nil];
     [self ensureWindow];
     self.titleLabel.stringValue = @"Saving and shutting down the world…";
-    self.statusDetail.stringValue = @"Please don't force-quit Hearthstone: it closes by itself when everything has "
+    self.statusDetail.stringValue = @"Please don't force-quit Moonglade: it closes by itself when everything has "
                                     @"stopped. This takes up to a minute.";
     self.stage = nil;                                  // the bar now shows the shutdown's own steps
     self.targetOverall = self.shownOverall = 0;
@@ -726,8 +726,8 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
         self.targetOverall = MAX(self.targetOverall, MIN(step / of, 1.0));
         BOOL problem = [ev[@"ok"] isKindOfClass:[NSNumber class]] && ![ev[@"ok"] boolValue];
         self.statusDetail.stringValue = problem
-            ? @"Something didn't stop cleanly. Hearthstone will show what happened."
-            : [NSString stringWithFormat:@"%@… Please don't force-quit Hearthstone: it closes by itself when "
+            ? @"Something didn't stop cleanly. Moonglade will show what happened."
+            : [NSString stringWithFormat:@"%@… Please don't force-quit Moonglade: it closes by itself when "
                                          @"everything has stopped.", label];
     }
     NSMutableDictionary *rec = [ev mutableCopy];
@@ -744,7 +744,7 @@ static NSString *const kWindowNote = @"local.hearthstone.window";
     if (!self.stopRequested) {
         self.stopRequested = YES;
         [self appLog:[NSString stringWithFormat:@"stop requested (%@): sending SIGTERM to the play loop", why]];
-        [self record:@{@"kind": @"status", @"id": @"stopping", @"text": @"Hearthstone is shutting down…"}];
+        [self record:@{@"kind": @"status", @"id": @"stopping", @"text": @"Moonglade is shutting down…"}];
         [self enterShutdown:why];
         [self.task terminate];
     }

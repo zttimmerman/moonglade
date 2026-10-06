@@ -1,5 +1,7 @@
 # ADR-0010: Wine host shim for one Hearthstone Dock icon
 
+> Project renamed to Moonglade on 2026-10-05 (openspec/changes/rename-moonglade); this record keeps the name it was written under.
+
 - Status: **accepted** (2026-10-04). Zach's yes ("let's do A") was conditional on no performance impact; that condition is enforced by a check (`app.shim_perf`). If it fails, the shim is off by default until fixed.
 - Research: `docs/research/launcher-polish-spike.md` (branch `spike/launcher-polish`, 8846af5).
 

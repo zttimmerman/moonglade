@@ -209,7 +209,7 @@ GLUE_TEST_ENV = "HS_GLUE_TEST"        # test-only GlueXML hook (frontmenu.py); n
 SKIP_ENV = "HS_PLAY_SKIP_PATCHES"      # test-only (counterexamples): build the scratch play client without these patches
 
 
-FROM_APP_ENV = launch.FROM_APP_ENV     # set by Hearthstone.app (launcher.m); its output goes to env/logs/app.log
+FROM_APP_ENV = launch.FROM_APP_ENV     # set by Moonglade.app (launcher.m); its output goes to env/logs/app.log
 WINDOW_POLL_S = 0.5                    # launching -> ready: how often to look for the client's first window
 BOTS_POLL_S = 2.0                      # how often the launching stage refreshes the (informational) bot count
 READY_FALLBACK_S = 120                 # a client with no window (the .bat stand-in) is "ready" after this long
@@ -308,7 +308,7 @@ class Loop:
                 info = {"mode": mode, "dir": str(dest), "built": b["built"], "reason": b.get("reason"),
                         "outputs": b["stamp"]["outputs"], "state": b["stamp"].get("state")}
                 if b["built"]:
-                    say("Prepared the game client (play client with the Hearthstone login screen).")
+                    say("Prepared the game client (play client with the Moonglade login screen).")
             else:
                 launch.select_client(None)
                 info = {"mode": mode, "dir": str(P.CLIENT)}
@@ -340,7 +340,7 @@ class Loop:
             def accounts():
                 say(f"Making sure your account ({login['account']}) exists...")
                 return ensure_player_account(login)
-        say("Starting Hearthstone.")
+        say("Starting Moonglade.")
         self.step("prepare")
         st = self.stages
         st.start("prepare")
@@ -475,7 +475,7 @@ class Loop:
 
 
 def _parse(argv):
-    ap = argparse.ArgumentParser(prog="./play", description="Start Hearthstone: the local server and the game "
+    ap = argparse.ArgumentParser(prog="./play", description="Start Moonglade: the local server and the game "
                                  "client. Quit the game (or press Ctrl-C) and everything shuts down.")
     ap.add_argument("--client-cmd", type=Path, help=argparse.SUPPRESS)      # test-only stand-in client
     ap.add_argument("--account", choices=["player", "test"], default="player", help=argparse.SUPPRESS)  # test-only
@@ -511,7 +511,7 @@ def main(argv=None) -> int:
     try:
         fd, lock = acquire_lock()
     except Busy as b:
-        say(f"Hearthstone is already running (./play pid {b.pid}). Use that window, or quit the game there first.")
+        say(f"Moonglade is already running (./play pid {b.pid}). Use that window, or quit the game there first.")
         return EXIT_BUSY
 
     loop = Loop(args)

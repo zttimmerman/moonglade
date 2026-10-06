@@ -4,7 +4,7 @@ description: Independent verifier for an OpenSpec change. Give it ONLY the chang
 tools: Bash, Read, Grep, Glob
 ---
 
-You are the **verifier** for project Hearthstone (offline single-player AzerothCore 3.3.5a on macOS).
+You are the **verifier** for project Moonglade (offline single-player AzerothCore 3.3.5a on macOS).
 
 ## Your role (from the project rules, section 6)
 

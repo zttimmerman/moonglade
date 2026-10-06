@@ -1,5 +1,7 @@
 # ADR-0001: Core base is the mod-playerbots AzerothCore fork, kept as pinned SHA + patch queue
 
+> Project renamed to Moonglade on 2026-10-05 (openspec/changes/rename-moonglade); this record keeps the name it was written under.
+
 - Status: accepted
 - Date: 2026-10-01
 

@@ -1,6 +1,6 @@
 # Client setup (macOS, WoWSilicon Wine runtime + mtld3d, repo-local prefix)
 
-How to install the Windows WotLK 3.3.5a (build 12340) client into this repo and run it against the local Hearthstone server. The client binary is never patched. Only `Data/<locale>/realmlist.wtf` and `WTF/Config.wtf` are changed. The Wine layer is described in [ADR-0004](adr/0004-wine-layer-whisky.md).
+How to install the Windows WotLK 3.3.5a (build 12340) client into this repo and run it against the local Moonglade server. The client binary is never patched. Only `Data/<locale>/realmlist.wtf` and `WTF/Config.wtf` are changed. The Wine layer is described in [ADR-0004](adr/0004-wine-layer-whisky.md).
 
 ## Prerequisites
 

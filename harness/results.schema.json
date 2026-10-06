@@ -1,6 +1,6 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "title": "Hearthstone harness results",
+  "title": "Moonglade harness results",
   "type": "object",
   "required": ["meta", "checks"],
   "properties": {
