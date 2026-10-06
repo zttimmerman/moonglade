@@ -210,13 +210,15 @@ def tiers_nested(leave_up: bool) -> dict:
 
 
 def full_run_record(doc: dict, referenced: set, extra: list, reg: dict | None = None,
-                    gui_rule_now: dict | None = None) -> dict:
+                    gui_rule_now: dict | None = None, backups_rule_now: dict | None = None) -> dict:
     """report.full_run over a results document (+ the post-run records in `extra`): a full run passes only if every
     scenario-referenced check has a record and every record passes, except tolerated skips (runner.tolerated_skip:
     a full-tier run's "slow tier" skips of scenario-referenced slow checks, and by-design GUI skips). GUI skips are
     accepted only if the GUI path rule, evaluated again now (`gui_rule_now`, default runner.gui_rule() on this
-    checkout), still finds no changed GUI path: a changed GUI path with skipped GUI checks fails the run."""
-    from ..runner import gui_changed, gui_rule, is_gui_skip, tolerated_skip
+    checkout), still finds no changed GUI path: a changed GUI path with skipped GUI checks fails the run. The same
+    for by-design backups-tier skips (save-backups) and the backup path rule (`backups_rule_now`)."""
+    from ..runner import (backups_changed, backups_rule, gui_changed, gui_rule, is_backups_skip, is_gui_skip,
+                          tolerated_skip)
     m = doc["meta"]
     referenced = set(referenced) - set(POST_IDS)
     executed = {r["id"] for r in doc["checks"]}
@@ -228,7 +230,13 @@ def full_run_record(doc: dict, referenced: set, extra: list, reg: dict | None = 
         gui_now = gui_rule_now if gui_rule_now is not None else gui_rule()
         if gui_changed(gui_now):          # GUI skips are not by design any more: they count as failing
             tolerated = [r for r in tolerated if r["id"] not in gui_skipped]
-    slow_skipped = sorted(r["id"] for r in tolerated if r["id"] not in gui_skipped)
+    bk_skipped = sorted(r["id"] for r in tolerated if is_backups_skip(r, m, reg))
+    bk_now = None
+    if bk_skipped:
+        bk_now = backups_rule_now if backups_rule_now is not None else backups_rule()
+        if backups_changed(bk_now):        # backup paths changed after all: those skips count as failing
+            tolerated = [r for r in tolerated if r["id"] not in bk_skipped]
+    slow_skipped = sorted(r["id"] for r in tolerated if r["id"] not in gui_skipped and r["id"] not in bk_skipped)
     ok_skips = {r["id"] for r in tolerated}
     failing = sorted(r["id"] for r in doc["checks"] + extra if r["status"] != "pass" and r["id"] not in ok_skips)
     full = m["full_run"]
@@ -243,6 +251,9 @@ def full_run_record(doc: dict, referenced: set, extra: list, reg: dict | None = 
                          "gui_tier_skipped": gui_skipped, "gui_rule_at_run_start": m.get("gui_rule"),
                          "gui_rule_rechecked": gui_now,
                          "gui_skips_accepted": bool(gui_skipped) and all(i in ok_skips for i in gui_skipped),
+                         "backups_tier_skipped": bk_skipped, "backups_rule_at_run_start": m.get("backups_rule"),
+                         "backups_rule_rechecked": bk_now,
+                         "backups_skips_accepted": bool(bk_skipped) and all(i in ok_skips for i in bk_skipped),
                          "non_passing": failing, "checks_executed": len(executed) - len(ok_skips),
                          "outputs": [str(P.RESULTS.relative_to(P.ROOT)), str(P.SUMMARY.relative_to(P.ROOT))]},
             "duration_s": 0.0,
@@ -263,7 +274,7 @@ def post_run(doc, selected_ids, t_start=None, leave_up=False):
     m = doc["meta"]
     self_mode = m.get("tier") == "quick" and not m.get("filter")
     # a --tier gui run executes only the GUI checks: no nested quick tier unless asked for by filter
-    nested = not self_mode and ((not m.get("filter") and m.get("tier") != "gui")
+    nested = not self_mode and ((not m.get("filter") and m.get("tier") not in ("gui", "backups"))
                                 or any(fnmatch.fnmatch("report.tiers", g) for g in m.get("filter") or []))
     if nested:
         out.append(tiers_nested(leave_up))
@@ -300,8 +311,10 @@ def timing_problems(doc: dict, extra: list, wall_s: float, baseline: dict | None
     """report.timing over a results document (+ the post-run records before it): the timing summary covers every
     record; on an unfiltered full-tier run, every check the baseline executed was executed again (minus by-design
     GUI skips) and the wall time is <= TIMING_TARGET x the baseline's (harness-reporting "Full-run timing is
-    recorded and guarded")."""
-    from ..runner import is_gui_skip
+    recorded and guarded"). save-backups: the summary carries the backups tier's total (it must equal the executed
+    backups-marked checks' time), by-design backups-tier skips are excused like GUI skips, and the wall time compared
+    with the baseline is the run's wall time minus the backups tier's time (the baseline has no backups checks)."""
+    from ..runner import backups_tier_s, is_backups_skip, is_gui_skip
     m = doc["meta"]
     recs = doc["checks"] + extra
     t = m.get("timing") or {}
@@ -317,7 +330,12 @@ def timing_problems(doc: dict, extra: list, wall_s: float, baseline: dict | None
         probs.append("top10 isn't the 10 slowest checks of per_check_s")
     if not isinstance(t.get("checks_sum_s"), (int, float)):
         probs.append("no checks_sum_s in the timing summary")
+    bk_s = backups_tier_s(doc["checks"], reg)
+    if t.get("backups_tier_s") != bk_s:
+        probs.append(f"the timing summary's backups_tier_s ({t.get('backups_tier_s')}) isn't the executed backups "
+                     f"checks' time ({bk_s})")
     ev = {"timing_summary_checks": len(per), "records": len(recs), "top10": top, "wall_s_now": round(wall_s, 1),
+          "backups_tier_s": bk_s, "wall_minus_backups_s": round(wall_s - bk_s, 1),
           "full_tier_unfiltered": m.get("full_run") is True and m.get("tier") == "full"}
     if not ev["full_tier_unfiltered"]:
         ev["speed_target"] = ("not evaluated: the baseline is an unfiltered full-tier run, this is "
@@ -327,25 +345,28 @@ def timing_problems(doc: dict, extra: list, wall_s: float, baseline: dict | None
         probs.append(f"no readable baseline at {TIMING_BASELINE.relative_to(P.ROOT)}")
         return probs, ev
     gui_skipped = sorted(r["id"] for r in doc["checks"] if is_gui_skip(r, m, reg))
+    bk_skipped = sorted(r["id"] for r in doc["checks"] if is_backups_skip(r, m, reg))
     executed = {r["id"] for r in recs if r["status"] != "skip"}
-    need = set(baseline["executed_ids"]) - set(gui_skipped)
+    need = set(baseline["executed_ids"]) - set(gui_skipped) - set(bk_skipped)
+    compared = wall_s - bk_s
     not_again = sorted(need - executed)
     limit = round(TIMING_TARGET * baseline["wall_s"], 1)
     ev |= {"baseline": {k: baseline.get(k) for k in ("repo_sha", "wall_s", "counts", "host", "source")},
            "baseline_executed": len(baseline["executed_ids"]), "gui_skipped_by_design": gui_skipped,
+           "backups_skipped_by_design": bk_skipped, "compared_wall_s": round(compared, 1),
            "executed_now": len(executed), "baseline_ids_not_executed_now": not_again,
            "new_ids_executed": sorted(executed - set(baseline["executed_ids"])),
            "same_machine": (m.get("host") or {}).get("machine") == (baseline.get("host") or {}).get("machine"),
-           "wall_limit_s": limit, "wall_ratio": round(wall_s / baseline["wall_s"], 3),
-           "speedup_pct": round(100 * (1 - wall_s / baseline["wall_s"]), 1)}
+           "wall_limit_s": limit, "wall_ratio": round(compared / baseline["wall_s"], 3),
+           "speedup_pct": round(100 * (1 - compared / baseline["wall_s"]), 1)}
     if not ev["same_machine"]:
         probs.append(f"not the baseline's machine type ({(m.get('host') or {}).get('machine')} vs "
                      f"{(baseline.get('host') or {}).get('machine')})")
     if not_again or len(executed) < len(need):
         probs.append(f"baseline checks not executed in this run: {not_again}")
-    if wall_s > limit:
-        probs.append(f"wall {wall_s:.0f} s > {limit:.0f} s ({int(TIMING_TARGET * 100)} % of the baseline "
-                     f"{baseline['wall_s']} s)")
+    if compared > limit:
+        probs.append(f"wall {wall_s:.0f} s minus backups tier {bk_s:.0f} s = {compared:.0f} s > {limit:.0f} s "
+                     f"({int(TIMING_TARGET * 100)} % of the baseline {baseline['wall_s']} s)")
     return probs, ev
 
 
@@ -372,7 +393,8 @@ def timing_record(doc: dict, extra: list, wall_s: float) -> dict:
 # ----------------------------------------------------------------------------- slow-tier scenario rule
 
 def _simulate(reg: dict, tier: str, referenced: set, gui_at_start: list | None = (),
-              gui_at_end: list | None | str = "same") -> dict:
+              gui_at_end: list | None | str = "same", bk_at_start: list | None = (),
+              bk_at_end: list | None | str = "same") -> dict:
     """One unfiltered run of a synthetic registry through the runner's own code paths (gui_tier_skips, select,
     slow_tier_skips, execute, full_run_record, run_ok) with the stack handling stubbed out. `gui_at_start` is the
     changed-GUI-path list the run starts with (() = none changed, None = unknown), `gui_at_end` what the GUI rule
@@ -382,20 +404,27 @@ def _simulate(reg: dict, tier: str, referenced: set, gui_at_start: list | None =
     if tier in ("full", "slow"):
         rule = {"changed_gui_paths": None if gui_at_start is None else list(gui_at_start), "error": None}
     gui_skips = runner.gui_tier_skips(reg, tier, None, runner.gui_changed(rule)) if rule is not None else []
-    selected = runner.select(reg, tier, None, {c.id for c in gui_skips})
+    bk_rule = ({"changed_backup_paths": None if bk_at_start is None else list(bk_at_start), "error": None}
+               if tier == "full" else None)
+    bk_skips = runner.backups_tier_skips(reg, tier, None, runner.backups_changed(bk_rule)) if bk_rule is not None else []
+    selected = runner.select(reg, tier, None, {c.id for c in gui_skips} | {c.id for c in bk_skips})
     skips = runner.slow_tier_skips(reg, tier, None, referenced)
-    results = runner.execute(selected, {}, skips, ensure=lambda *a: None, quiet=True, gui_skips=gui_skips)
+    results = runner.execute(selected, {}, skips, ensure=lambda *a: None, quiet=True, gui_skips=gui_skips,
+                             backups_skips=bk_skips)
     meta = {"full_run": runner.is_full_run(tier, None), "tier": tier, "filter": [],
             "slow_tier_skipped": [c.id for c in skips], "gui_tier_skipped": [c.id for c in gui_skips],
-            "gui_rule": rule}
+            "gui_rule": rule, "backups_tier_skipped": [c.id for c in bk_skips], "backups_rule": bk_rule}
     doc = {"meta": meta, "checks": results}
     end = rule if gui_at_end == "same" else {"changed_gui_paths": None if gui_at_end is None else list(gui_at_end)}
-    fr = full_run_record(doc, referenced, [], reg, gui_rule_now=end or {"changed_gui_paths": []})
+    bk_end = bk_rule if bk_at_end == "same" else {"changed_backup_paths": None if bk_at_end is None else list(bk_at_end)}
+    fr = full_run_record(doc, referenced, [], reg, gui_rule_now=end or {"changed_gui_paths": []},
+                         backups_rule_now=bk_end or {"changed_backup_paths": []})
     doc["checks"].append(fr)
     ok = runner.run_ok(doc, reg)
     return {"tier": tier, "records": {r["id"]: (r["status"], r.get("message", "")) for r in doc["checks"]},
             "report_full_run": fr["status"], "exit": 0 if ok else 1,
-            "selected": [c.id for c in selected], "gui_skipped": [c.id for c in gui_skips]}
+            "selected": [c.id for c in selected], "gui_skipped": [c.id for c in gui_skips],
+            "backups_skipped": [c.id for c in bk_skips]}
 
 
 @check("report.slow_tier_rule", order=2, capability="harness-reporting", stack="any", tier="quick")
@@ -675,4 +704,220 @@ def gui_tier_rule(ctx):
           "problems": probs,
           "code": "runner.gui_tier_skips/select/execute/run_ok/changed_paths + reporting.full_run_record"}
     require(not probs, f"{len(probs)} GUI tier rule violation(s)", **ev)
+    return ev
+
+
+# ----------------------------------------------------------------------------- backups tier rule (save-backups)
+
+# every backups.* check and app.backups_window (harness-reporting "Backups tier")
+BACKUPS_CHECKS = ("backups.on_quit", "backups.rotation", "backups.failure_nonblocking", "backups.kill_safe",
+                  "backups.player_untouched", "backups.restore_roundtrip", "backups.restore_refusals",
+                  "app.backups_window")
+SPEC_BACKUP_PATHS = ("harness/hslib/backups.py", "harness/hslib/play.py", "harness/hslib/stack.py",
+                     "harness/hslib/stages.py", "harness/app/launcher.m", "play",
+                     "harness/hslib/checks/backup_checks.py")
+
+
+def _scratch_repo_backup_paths() -> dict:
+    """runner.changed_paths on a throwaway git repo, through the backup path rule: nothing changed, a non-backup edit,
+    an uncommitted backup-path edit, the same committed on a branch, and an untracked backup-path file."""
+    import shutil
+    import tempfile
+    from pathlib import Path
+    from .. import runner
+    d = Path(tempfile.mkdtemp(prefix="hs-bkrule-"))
+    out: dict = {}
+    try:
+        def git(*a):
+            r = subprocess.run(["git", "-C", str(d), "-c", "user.name=hs", "-c", "user.email=hs@localhost", *a],
+                               capture_output=True, text=True, timeout=60)
+            if r.returncode != 0:
+                raise RuntimeError(f"git {' '.join(a)}: {r.stderr[-300:]}")
+        git("init", "-q", "-b", "main")
+        (d / "harness" / "hslib").mkdir(parents=True)
+        (d / "harness" / "hslib" / "backups.py").write_text("# v1\n")
+        (d / "harness" / "hslib" / "era.py").write_text("# v1\n")
+        git("add", "-A")
+        git("commit", "-q", "-m", "base")
+        git("checkout", "-q", "-b", "change/x")
+        m = lambda: runner.backups_paths_matching(runner.changed_paths(d)["paths"])
+        out["clean"] = m()
+        (d / "harness" / "hslib" / "era.py").write_text("# v2\n")
+        out["non_backup_edit"] = m()
+        (d / "harness" / "hslib" / "backups.py").write_text("# v2\n")
+        out["uncommitted_backup_edit"] = m()
+        git("commit", "-q", "-am", "edit")
+        out["committed_backup_edit"] = m()
+        git("checkout", "-q", "main")
+        (d / "play").write_text("#!/bin/sh\n")
+        out["untracked_backup_file"] = m()
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    return out
+
+
+def _timing_cases() -> dict:
+    """report.timing's verdict on synthetic full-run documents (the baseline: 1690 s, ids t.a and t.b): the
+    backups tier's time is subtracted from the wall time, by-design backups-tier skips are excused, and a run whose
+    non-backups time exceeds 110 % still fails."""
+    from .. import runner
+    from ..registry import Check
+    reg = {i: Check(i, lambda c: {}, n, "synthetic", "any", "", "full", True, None, False, bk)
+           for n, (i, bk) in enumerate([("t.a", False), ("t.b", False), ("t.bk", True)])}
+    base = {"wall_s": 1690.0, "executed_ids": ["t.a", "t.b"], "host": {"machine": "arm64"}}
+
+    def doc(recs, wall, bk_skipped=(), bk_changed=()):
+        meta = {"full_run": True, "tier": "full", "filter": [], "host": {"machine": "arm64"},
+                "backups_tier_skipped": list(bk_skipped), "backups_rule": {"changed_backup_paths": list(bk_changed)}}
+        d = {"meta": meta, "checks": recs}
+        meta["timing"] = runner.timing_summary(recs, wall, reg)
+        return timing_problems(d, [], wall, base, reg)
+
+    def r(i, s, st="pass", msg=None):
+        return {"id": i, "status": st, "duration_s": s, **({"message": msg} if msg else {})}
+    out = {}
+    # the verifier's run: 2433 s wall, ~690 s of it backups checks -> 1743 s <= 1859 s
+    out["backups_ran_within_limit"] = doc([r("t.a", 900), r("t.b", 800), r("t.bk", 690)], 2433.0, bk_changed=["play"])
+    # the same wall time with nothing from the backups tier: 2433 s > 1859 s
+    out["no_backups_time_over_limit"] = doc([r("t.a", 1300), r("t.b", 1100)], 2433.0)
+    # backups tier ran, but the rest alone is over the limit: 2600 - 690 = 1910 s > 1859 s
+    out["non_backups_over_limit"] = doc([r("t.a", 1000), r("t.b", 900), r("t.bk", 690)], 2600.0, bk_changed=["play"])
+    # backups tier skipped by design (no backup path changed): excused, under the limit
+    out["backups_skipped_by_design"] = doc([r("t.a", 900), r("t.b", 800),
+                                            r("t.bk", 0.0, "skip", runner.BACKUPS_SKIP_MSG)], 1750.0, ["t.bk"])
+    # a baseline check skipped with the backups message (not backups-marked): not excused
+    out["baseline_check_forges_skip"] = doc([r("t.a", 900), r("t.b", 0.0, "skip", runner.BACKUPS_SKIP_MSG)],
+                                            1750.0, ["t.b"])
+    return {k: {"problems": v[0], "compared_wall_s": v[1].get("compared_wall_s"),
+                "backups_tier_s": v[1].get("backups_tier_s")} for k, v in out.items()}
+
+
+@check("report.backups_tier_rule", order=4, capability="harness-reporting", stack="any", tier="quick")
+def backups_tier_rule(ctx):
+    """save-backups "Backups tier": a full run with no changed backup path records every backups check as skip
+    "backups tier" and report.full_run passes; with a changed backup path every backups check runs and a failing or
+    skipped one fails report.full_run (also a backup path that changed although the checks were skipped, and a forged
+    "backups tier" skip message); a slow run executes them all; `--tier backups` runs exactly the backups checks. The
+    path rule is the fixed list (spec paths at least; not an import closure) on a scratch git repo. The live registry
+    marks exactly the 8 backups checks. report.timing subtracts the backups tier's time and excuses its by-design
+    skips, and still fails a run whose non-backups time exceeds 110 % of the baseline."""
+    from .. import runner
+    from ..registry import Check, CheckFail, CheckSkip
+
+    calls = []
+
+    def ok_fn(cid):
+        def f(_ctx):
+            calls.append(cid)
+            return {"ran": cid}
+        return f
+
+    def fail_fn(cid):
+        def f(_ctx):
+            calls.append(cid)
+            raise CheckFail("synthetic backups failure", {"ran": cid})
+        return f
+
+    def skip_fn(msg):
+        def f(_ctx):
+            raise CheckSkip(msg)
+        return f
+
+    def reg(**fns):
+        base = {"t.quick": ("quick", False, ok_fn("t.quick")), "t.full": ("full", False, ok_fn("t.full")),
+                "t.bk1": ("full", True, ok_fn("t.bk1")), "t.bk2": ("quick", True, ok_fn("t.bk2"))}
+        base.update(fns)
+        return {i: Check(i, fn, n, "synthetic", "any", f"synthetic {t}", t, True, None, False, b)
+                for n, (i, (t, b, fn)) in enumerate(sorted(base.items()))}
+
+    referenced = {"t.quick", "t.full", "t.bk1", "t.bk2"}
+    bk_ids = ["t.bk1", "t.bk2"]
+    changed = ["harness/hslib/backups.py"]
+    cases: dict = {}
+
+    def sim(name, r, tier, start=(), end="same"):
+        calls.clear()
+        cases[name] = _simulate(r, tier, referenced, bk_at_start=start, bk_at_end=end) | {"executed": list(calls)}
+        return cases[name]
+
+    A = sim("A_full_no_backup_change", reg(), "full")
+    B = sim("B_full_backup_changed", reg(), "full", changed)
+    C = sim("C_full_changed_backups_check_fails", reg(**{"t.bk1": ("full", True, fail_fn("t.bk1"))}), "full", changed)
+    D = sim("D_full_changed_backups_check_skips", reg(**{"t.bk2": ("quick", True, skip_fn("busy"))}), "full", changed)
+    E = sim("E_changed_but_backups_skipped", reg(), "full", (), changed)
+    F = sim("F_backups_check_forges_skip_msg", reg(**{"t.bk1": ("full", True, skip_fn(runner.BACKUPS_SKIP_MSG))}),
+            "full", changed)
+    G = sim("G_other_check_forges_skip_msg", reg(**{"t.full": ("full", False, skip_fn(runner.BACKUPS_SKIP_MSG))}), "full")
+    H = sim("H_tier_backups", reg(), "backups")
+    I = sim("I_backup_rule_unknown", reg(), "full", None)
+    J = sim("J_slow_no_backup_change", reg(), "slow")
+
+    probs = []
+    rec = lambda case, i: case["records"].get(i, ("missing", ""))
+    for i in bk_ids:
+        if rec(A, i)[0] != "skip" or rec(A, i)[1] != runner.BACKUPS_SKIP_MSG:
+            probs.append(f"A: {i} recorded as {rec(A, i)}, want skip '{runner.BACKUPS_SKIP_MSG}'")
+    if set(bk_ids) & set(A["executed"]):
+        probs.append(f"A: backups checks executed in a full run with no backup change: {A['executed']}")
+    if A["report_full_run"] != "pass" or A["exit"] != 0:
+        probs.append(f"A: report.full_run={A['report_full_run']} exit={A['exit']}, want pass / 0")
+    if sorted(set(B["executed"]) & set(bk_ids)) != bk_ids or any(rec(B, i)[0] != "pass" for i in bk_ids):
+        probs.append(f"B: backups checks not all executed+passing with a backup change: {B['executed']}")
+    if B["report_full_run"] != "pass" or B["exit"] != 0:
+        probs.append(f"B: report.full_run={B['report_full_run']} exit={B['exit']}, want pass / 0")
+    for name, case in (("C", C), ("D", D), ("E", E), ("F", F), ("G", G)):
+        if case["report_full_run"] != "fail" or case["exit"] != 1:
+            probs.append(f"{name}: report.full_run={case['report_full_run']} exit={case['exit']}, want fail / 1")
+    if sorted(H["selected"]) != bk_ids or sorted(H["executed"]) != bk_ids:
+        probs.append(f"H: --tier backups selected {H['selected']} executed {H['executed']}, want exactly {bk_ids}")
+    if rec(H, "report.full_run")[0] != "skip" or H["exit"] != 0:
+        probs.append(f"H: --tier backups report.full_run={rec(H, 'report.full_run')} exit={H['exit']}, want skip / 0")
+    if sorted(set(I["executed"]) & set(bk_ids)) != bk_ids:
+        probs.append(f"I: backup rule unknown (git failed) but backups checks not run (must fail closed): {I['executed']}")
+    if sorted(set(J["executed"]) & set(bk_ids)) != bk_ids or J["backups_skipped"] or J["report_full_run"] != "pass":
+        probs.append(f"J: slow run didn't execute every backups check: executed={J['executed']} "
+                     f"skipped={J['backups_skipped']} report.full_run={J['report_full_run']}")
+
+    # the path rule: a fixed list containing the spec's paths, matching exact paths only
+    missing = sorted(set(SPEC_BACKUP_PATHS) - set(runner.BACKUP_PATHS))
+    if missing:
+        probs.append(f"path rule: spec paths missing from runner.BACKUP_PATHS: {missing}")
+    probe = {p: runner.backups_paths_matching([p]) for p in (*SPEC_BACKUP_PATHS, "harness/hslib/era.py",
+                                                              "harness/hslib/procs.py", "harness/hslib/settings.py",
+                                                              "harness/hslib/checks/polish_checks.py", "openspec/x.md",
+                                                              "harness/hslib/backups.py.bak")}
+    wrong = {p: v for p, v in probe.items() if bool(v) != (p in SPEC_BACKUP_PATHS)}
+    if wrong:
+        probs.append(f"path rule: wrong matches {wrong}")
+    try:
+        repo = _scratch_repo_backup_paths()
+    except (RuntimeError, OSError, subprocess.SubprocessError) as e:
+        repo = {"error": str(e)}
+        probs.append(f"scratch repo: {e}")
+    if "error" not in repo:
+        exp = {"clean": [], "non_backup_edit": [], "uncommitted_backup_edit": ["harness/hslib/backups.py"],
+               "committed_backup_edit": ["harness/hslib/backups.py"], "untracked_backup_file": ["play"]}
+        bad = {k: repo.get(k) for k, v in exp.items() if repo.get(k) != v}
+        if bad:
+            probs.append(f"scratch repo: changed backup paths {bad} != expected")
+
+    # report.timing with synthetic runs
+    tc = _timing_cases()
+    want_fail = {"backups_ran_within_limit": False, "no_backups_time_over_limit": True, "non_backups_over_limit": True,
+                 "backups_skipped_by_design": False, "baseline_check_forges_skip": True}
+    for k, should_fail in want_fail.items():
+        if bool(tc[k]["problems"]) != should_fail:
+            probs.append(f"timing {k}: problems={tc[k]['problems']}, want {'a failure' if should_fail else 'none'}")
+
+    live = sorted(i for i, c in REGISTRY.items() if c.backups)
+    if live != sorted(BACKUPS_CHECKS):
+        probs.append(f"live registry: backups checks {live} != {sorted(BACKUPS_CHECKS)}")
+    rule = runner.backups_rule()
+    ev = {"cases": cases, "path_matches": probe, "backup_paths": list(runner.BACKUP_PATHS), "scratch_repo": repo,
+          "timing_cases": tc, "live_backups_checks": live, "live_backups_rule": rule,
+          "live_full_run_would": "run backups checks" if runner.backups_changed(rule) else "skip them",
+          "problems": probs,
+          "code": "runner.backups_tier_skips/select/execute/run_ok/changed_paths + reporting.full_run_record/"
+                  "timing_problems"}
+    require(not probs, f"{len(probs)} backups tier rule violation(s)", **ev)
     return ev

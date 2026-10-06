@@ -43,10 +43,11 @@ def main(argv=None) -> int:
     r = sub.add_parser("run", help="run checks; write harness/results.json + summary.md")
     r.add_argument("--only", action="append", help="glob of check ids (repeatable)")
     r.add_argument("--leave-up", action="store_true", help="don't shut the stack down at the end")
-    r.add_argument("--tier", choices=["quick", "full", "slow", "gui"], default="full",
+    r.add_argument("--tier", choices=["quick", "full", "slow", "gui", "backups"], default="full",
                    help="quick: quick checks only; full (default, the merge gate): quick+full; slow: everything; "
                         "gui: only the checks that need exclusive screen focus (full runs include them only when "
-                        "a GUI path changed)")
+                        "a GUI path changed); backups: only the save-backups end-to-end checks (full runs include "
+                        "them only when a backup path changed)")
     r.add_argument("--force-clean", action="store_true", help="build.clean always does a from-empty build")
     r.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)   # nested runs (report.tiers) write here
     ps_ = sub.add_parser("pop-session", help="one M2 population session (cold start with the population profile, "
@@ -208,11 +209,11 @@ def main(argv=None) -> int:
         checks = sorted(load_all().values(), key=lambda c: (c.order, c.id))
         if a.json:
             _print([{"id": c.id, "order": c.order, "capability": c.capability, "stack": c.stack, "tier": c.tier,
-                     "tier_declared": c.tier_declared, "gui": c.gui} for c in checks])
+                     "tier_declared": c.tier_declared, "gui": c.gui, "backups": c.backups} for c in checks])
             return 0
         for c in checks:
             t = c.tier if c.tier_declared else f"{c.tier}(undeclared)"
-            print(f"{c.order:4} {c.id:32} [{c.capability}] stack={c.stack} tier={t}{' gui' if c.gui else ''}  "
+            print(f"{c.order:4} {c.id:32} [{c.capability}] stack={c.stack} tier={t}{' gui' if c.gui else ''}{' backups' if c.backups else ''}  "
                   f"{c.doc.splitlines()[0] if c.doc else ''}")
         return 0
 

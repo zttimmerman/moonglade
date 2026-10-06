@@ -242,7 +242,7 @@ def stack_clear() -> dict:
 
 # ---------------------------------------------------------------- backups.on_quit
 
-@check("backups.on_quit", order=365, capability=CAP, stack="down", tier="full")
+@check("backups.on_quit", order=365, capability=CAP, stack="down", tier="full", backups=True)
 def on_quit(ctx):
     """Empty scratch backup folder + scratch play client: a ./play session where the test character gains a level
     ends with exactly one new backup whose manifest lists the three databases and the WTF folder with sha256 values
@@ -438,7 +438,7 @@ def rotation_run(root: Path, ev: dict, take=None) -> dict:
     return ev
 
 
-@check("backups.rotation", order=366, capability=CAP, stack="down", tier="full")
+@check("backups.rotation", order=366, capability=CAP, stack="down", tier="full", backups=True)
 def rotation(ctx):
     """Scratch folder with 10 automatic and 3 safety backups (one real backup plus clones of it under older ids):
     after two more automatic backups and one more safety backup, exactly the newest 10 automatic and newest 3 safety
@@ -472,7 +472,7 @@ def verify_failed_session(res: dict, root: Path, expect: str) -> dict:
     return out
 
 
-@check("backups.failure_nonblocking", order=367, capability=CAP, stack="down", tier="full")
+@check("backups.failure_nonblocking", order=367, capability=CAP, stack="down", tier="full", backups=True)
 def failure_nonblocking(ctx):
     """An injected dump failure, then an injected low-disk reading (1 MB free): each session still ends with exit 0
     and the stack fully down, no backup listed, no temporary files, the failure (and why) in play-last.json and the
@@ -522,7 +522,7 @@ def failure_nonblocking(ctx):
 
 # ---------------------------------------------------------------- backups.kill_safe
 
-@check("backups.kill_safe", order=368, capability=CAP, stack="down", tier="full")
+@check("backups.kill_safe", order=368, capability=CAP, stack="down", tier="full", backups=True)
 def kill_safe(ctx):
     """An earlier backup in the scratch folder; a session whose backup is paused mid-dump (after the first database,
     test knob) is SIGKILLed: no partial backup is listed, the earlier backup's files still match their checksums
@@ -716,7 +716,7 @@ def gate_table() -> list[dict]:
     return rows
 
 
-@check("backups.player_untouched", order=998, capability=CAP, stack="any", tier="quick")
+@check("backups.player_untouched", order=998, capability=CAP, stack="any", tier="quick", backups=True)
 def player_untouched(ctx):
     """The player's env/backups/ is byte-identical (every file's size, mtime, sha256; or still absent) to the start
     of this harness run; the backup gate gives no backup folder to every test-shaped run that names no scratch folder
@@ -832,7 +832,7 @@ def change_target(t: dict, new_level: int) -> None:
              f"WHERE name='{P.TEST_CHAR}'", root=True)
 
 
-@check("backups.restore_roundtrip", order=369, capability=CAP, stack="down", tier="full")
+@check("backups.restore_roundtrip", order=369, capability=CAP, stack="down", tier="full", backups=True)
 def restore_roundtrip(ctx):
     """Backup B (of the live databases, read only) is loaded into scratch schemas hsbk_rt_*; there the test character's
     level changes and a new test character appears, and the scratch play client's WTF folder changes.
@@ -926,7 +926,7 @@ def watch_stack(samples: list, stop: threading.Event) -> threading.Thread:
     return th
 
 
-@check("backups.restore_refusals", order=370, capability=CAP, stack="down", tier="full")
+@check("backups.restore_refusals", order=370, capability=CAP, stack="down", tier="full", backups=True)
 def restore_refusals(ctx):
     """(a) A backup with one byte of one dump changed: the restore (into scratch schemas) exits nonzero naming the
     damaged file, takes no safety backup, starts nothing, and no scratch or live table changes. (a2) A test-shaped
@@ -1112,7 +1112,7 @@ def verify_window_shown(run: dict, root_rows: list[dict]) -> dict:
     return out
 
 
-@check("app.backups_window", order=386, capability=CAP_APP, stack="down", tier="full")
+@check("app.backups_window", order=386, capability=CAP_APP, stack="down", tier="full", backups=True)
 def backups_window(ctx):
     """Built app, scratch folder with 3 backups (one of the live databases, one of scratch schemas where the test
     character is a level higher, and a clone as a safety backup), Option reported held (test hook): (1) the Backups
