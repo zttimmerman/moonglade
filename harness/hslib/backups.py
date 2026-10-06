@@ -36,7 +36,6 @@ Test switches (refused by ./play unless --allow-test-client-dir is given, honour
 """
 from __future__ import annotations
 
-import gzip
 import hashlib
 import json
 import os
@@ -145,6 +144,27 @@ def free_bytes(root: Path, knobs: dict | None = None) -> int:
 
 def _schema(key: str) -> str:
     return P.DB_NAMES[key]
+
+
+LIVE = {k: P.DB_NAMES[k] for k in DATABASES}           # the player's databases
+SCRATCH_RE = re.compile(r"^hsbk_[a-z0-9]+(?:_[a-z0-9]+)*$")
+PROTECTED = {"hsbk_t", "acore_characters_broken"}       # Zach's recovery copies (2026-10-06): never a target
+
+
+def scratch_target(prefix: str) -> dict:
+    """A test restore's target: scratch schemas <prefix>_characters / _auth / _playerbots (prefix starts hsbk_).
+    Raises Refused for anything else (the live acore_* schemas above all)."""
+    if not prefix or not SCRATCH_RE.match(prefix) or prefix in PROTECTED:
+        raise Refused(f"a test restore needs a scratch target (--target hsbk_<name>), not {prefix!r}")
+    t = {k: f"{prefix}_{k}" for k in DATABASES}
+    bad = [x for x in t.values() if x in PROTECTED or x in LIVE.values() or not x.startswith("hsbk_")]
+    if bad:
+        raise Refused(f"{bad} can't be a test restore target")
+    return t
+
+
+def is_live(target: dict) -> bool:
+    return any(not str(x).startswith("hsbk_") for x in target.values())
 
 
 def _q(s: str) -> str:
@@ -305,10 +325,11 @@ def schema_charset(schema: str) -> tuple[str, str]:
     return rows[0][0], rows[0][1]
 
 
-def characters(account: str) -> list[dict]:
+def characters(account: str, schemas: dict | None = None) -> list[dict]:
     """The account's characters: name, level, class (id + name from ChrClasses.dbc), race."""
-    rows = db.query("SELECT c.guid, c.name, c.level, c.class, c.race FROM acore_characters.characters c "
-                    "JOIN acore_auth.account a ON a.id = c.account "
+    sc = schemas or LIVE
+    rows = db.query(f"SELECT c.guid, c.name, c.level, c.class, c.race FROM `{sc['characters']}`.characters c "
+                    f"JOIN `{sc['auth']}`.account a ON a.id = c.account "
                     f"WHERE a.username = '{_q(account.upper())}' ORDER BY c.guid", root=True)
     try:
         from .dbc import class_names
@@ -404,9 +425,8 @@ def _write_exact(schema: str, tables: list[str], out, add_child) -> dict:
     return rows_total
 
 
-def dump_database(key: str, dest: Path, add_child, fail: bool = False) -> dict:
+def dump_database(schema: str, dest: Path, add_child, fail: bool = False) -> dict:
     """Write one database's dump (4 sections, design.md "As built") as gzip to dest. Raises BackupError."""
-    schema = _schema(key)
     floats = _float_tables(schema)
     base = [str(MYSQLDUMP), _cnf(), "--single-transaction", "--set-gtid-purged=OFF", "--skip-dump-date",
             "--hex-blob", "--default-character-set=utf8mb4"]
@@ -470,11 +490,12 @@ def _copy_wtf(client_dir: Path | None, account: str, dest: Path) -> dict:
 
 
 def take(kind: str, account: str, client_dir: Path | None, root: Path, knobs: dict | None = None,
-         rotate_after: bool = True) -> dict:
+         rotate_after: bool = True, schemas: dict | None = None) -> dict:
     """Take a backup (world and login servers stopped, mysqld running). Returns the manifest plus "path",
     "rotated" and "completed_at". Raises BackupError; nothing partial is ever listed."""
     from . import stack
     knobs = knobs or {}
+    schemas = schemas or LIVE                 # a test restore's safety backup dumps its scratch target instead
     if kind not in KEEP:
         raise BackupError(f"unknown backup kind {kind}")
     t_start = time.time()
@@ -504,13 +525,13 @@ def take(kind: str, account: str, client_dir: Path | None, root: Path, knobs: di
                      "mysqld_pids": procs_now["mysqld"],
                      "core_sha": P.fork_lock().get("core_sha"), "playerbots_sha": P.fork_lock().get("playerbots_sha"),
                      "stale_removed": stale, "databases": {}, "files": {}}
-        man["characters"] = characters(account)
+        man["characters"] = characters(account, schemas)
         for i, key in enumerate(DATABASES):
-            schema = _schema(key)
+            schema = schemas[key]
             cs, coll = schema_charset(schema)
             fname = f"{key}.sql.gz"
             t0 = time.time()
-            info = dump_database(key, tmp / fname, add_child, fail=knobs.get(TEST_FAIL_ENV) == "dump" and i == 1)
+            info = dump_database(schema, tmp / fname, add_child, fail=knobs.get(TEST_FAIL_ENV) == "dump" and i == 1)
             man["databases"][key] = {"schema": schema, "file": fname, "charset": cs, "collation": coll,
                                      "dump_s": round(time.time() - t0, 2), **info, "tables": table_stats(schema)}
             if i == 0 and knobs.get(TEST_PAUSE_ENV):
@@ -628,15 +649,15 @@ def client_dir_for(env: dict, test: bool) -> Path | None:
     return clientbuild.PLAY if settings.client_mode()["mode"] == "patched" else P.CLIENT
 
 
-def load(m: dict, say=lambda s: None) -> dict:
-    """Replace the three databases with the backup's dumps (mysqld must be running; world/login stopped)."""
+def load(m: dict, target: dict) -> dict:
+    """Replace the target's three databases with the backup's dumps (mysqld running; world/login stopped)."""
     d = Path(m["path"])
     out = {}
     for key in DATABASES:
         rec = m["databases"][key]
-        schema = rec["schema"]
-        if schema != _schema(key):
-            raise BackupError(f"backup database {schema} isn't {_schema(key)}")
+        schema = target[key]
+        if schema in PROTECTED:
+            raise BackupError(f"{schema} is protected")
         t0 = time.time()
         db.query(f"DROP DATABASE IF EXISTS `{schema}`; CREATE DATABASE `{schema}` CHARACTER SET {rec['charset']} "
                  f"COLLATE {rec['collation']};", root=True, timeout=600)
@@ -680,12 +701,12 @@ def load_dump(f: Path, schema: str) -> None:
                           f"{(my_err or gz_err).decode(errors='replace').strip()[-300:]}")
 
 
-def compare_live(m: dict) -> dict:
-    """The live databases' tables vs the manifest's stats. {"ok", "diff": [...]} (SQL errors raise)."""
+def compare_live(m: dict, target: dict) -> dict:
+    """The target databases' tables vs the manifest's stats. {"ok", "diff": [...]} (SQL errors raise)."""
     diff = []
     for key in DATABASES:
         want = m["databases"][key]["tables"]
-        have = table_stats(m["databases"][key]["schema"])
+        have = table_stats(target[key])
         for t in sorted(set(want) | set(have)):
             if want.get(t) != have.get(t):
                 diff.append({"db": key, "table": t, "backup": want.get(t), "live": have.get(t)})
@@ -735,9 +756,14 @@ def finish_interrupted(root: Path, client_dir: Path | None, say=lambda s: None) 
         rec = json.loads(f.read_text())
     except (OSError, ValueError) as e:
         raise BackupError(f"{f} is unreadable ({e}); restore a backup by hand") from None
-    m = find(root, rec.get("target", ""))
+    m = find(root, rec.get("backup", ""))
+    target = rec.get("schemas")
+    if not isinstance(target, dict) or set(target) != set(DATABASES):
+        raise BackupError(f"{f} names no target databases; restore a backup by hand")
+    if (is_live(target) and not is_player_root(root)) or any(x in PROTECTED for x in target.values()):
+        raise BackupError(f"{f} (a test folder) names live or protected databases {target}; refusing to load them")
     if not m or not verify(Path(m["path"]), m)["ok"]:
-        raise BackupError(f"a restore of {rec.get('target')} was interrupted and that backup is missing or damaged; "
+        raise BackupError(f"a restore of {rec.get('backup')} was interrupted and that backup is missing or damaged; "
                           f"restore the safety backup {rec.get('safety')} with ./play --backups restore")
     st = stack.stack_processes()
     if st["worldserver"] or st["authserver"]:
@@ -748,8 +774,8 @@ def finish_interrupted(root: Path, client_dir: Path | None, say=lambda s: None) 
     try:
         if started:
             stack.mysql_up()
-        out = {"target": m["id"], "safety": rec.get("safety"), "killed_loaders": killed, "load": load(m),
-               "compare": compare_live(m)}
+        out = {"backup": m["id"], "schemas": target, "safety": rec.get("safety"), "killed_loaders": killed,
+               "load": load(m, target), "compare": compare_live(m, target)}
         if not out["compare"]["ok"]:
             raise BackupError(f"finishing the interrupted restore of {m['id']} left "
                               f"{out['compare']['differences']} table(s) different")
@@ -762,14 +788,20 @@ def finish_interrupted(root: Path, client_dir: Path | None, say=lambda s: None) 
             stack.PIDFILE["mysqld"].unlink(missing_ok=True)
 
 
-def restore(backup_id: str, root: Path, client_dir: Path | None, say=print) -> dict:
+def restore(backup_id: str, root: Path, client_dir: Path | None, say=print, target: dict | None = None,
+            allow_live: bool = False) -> dict:
     """Restore a backup: refuse while Moonglade runs or if the backup is damaged (nothing changed); otherwise start
     mysqld only, take a before-restore safety backup, load the dumps, check every table against the manifest
     (rolling back to the safety backup if that fails), replace the WTF account folder, stop mysqld. Returns a
     result dict with "ok"; "code" is the exit code."""
     from . import play, stack
-    res: dict = {"ok": False, "id": backup_id, "root": str(root), "timeline": {}}
+    target = target or LIVE
+    res: dict = {"ok": False, "id": backup_id, "root": str(root), "target": target, "timeline": {}}
     tl = res["timeline"]
+    if is_live(target) and not allow_live:            # only a genuine player restore may touch the live databases
+        return res | {"code": 1, "error": "a test restore can't target the live databases; nothing was touched"}
+    if any(x in PROTECTED for x in target.values()):
+        return res | {"code": 1, "error": f"{target} includes a protected schema; nothing was touched"}
 
     def mark(k):
         tl[k] = round(time.time(), 3)
@@ -805,19 +837,24 @@ def restore(backup_id: str, root: Path, client_dir: Path | None, say=print) -> d
             stack.mysql_up()
             started_mysql = True
         mark("mysqld_up")
+        missing = [x for x in target.values() if not db.scalar(
+            f"SELECT COUNT(*) FROM information_schema.schemata WHERE schema_name='{_q(x)}'", root=True) == "1"]
+        if missing:
+            return res | {"code": 1, "error": f"the target database(s) {missing} don't exist; nothing was changed"}
         say("Saving a safety backup of how things are now...")
-        safety = take("before-restore", m["account"], client_dir, root)
+        safety = take("before-restore", m["account"], client_dir, root, schemas=target)
         res["safety"] = {"id": safety["id"], "path": safety["path"], "completed_at": safety["completed_at"],
                          "rotated": safety["rotated"]}
         mark("safety_done")
         say(f"Restoring the backup from {label_time(m)}...")
         marker = Path(root) / INTERRUPTED
-        marker.write_text(json.dumps({"target": m["id"], "safety": safety["id"], "at": _now_iso()}))
+        marker.write_text(json.dumps({"backup": m["id"], "schemas": target, "safety": safety["id"],
+                                      "at": _now_iso()}))
         _fsync_path(marker)
         try:
             mark("load_start")
-            res["load"] = load(m)
-            res["compare"] = compare_live(m)
+            res["load"] = load(m, target)
+            res["compare"] = compare_live(m, target)
             if not res["compare"]["ok"]:
                 raise BackupError(f"after loading, {res['compare']['differences']} table(s) don't match the backup")
             mark("load_done")
@@ -825,8 +862,8 @@ def restore(backup_id: str, root: Path, client_dir: Path | None, say=print) -> d
             res["load_error"] = str(e)
             say(f"The restore failed ({e}); putting things back from the safety backup...")
             try:
-                load(find(root, safety["id"]))
-                res["rollback_compare"] = compare_live(find(root, safety["id"]))
+                load(find(root, safety["id"]), target)
+                res["rollback_compare"] = compare_live(find(root, safety["id"]), target)
                 res["rolled_back"] = res["rollback_compare"]["ok"]
                 if res["rolled_back"]:
                     marker.unlink(missing_ok=True)
@@ -896,6 +933,7 @@ def cli(argv: list[str]) -> int:
     ap.add_argument("id", nargs="?")
     ap.add_argument("--json", action="store_true", help="machine-readable output (the app's Backups window)")
     ap.add_argument("--allow-test-client-dir", action="store_true", help=argparse.SUPPRESS)
+    ap.add_argument("--target", help=argparse.SUPPRESS)   # test-only: scratch schema prefix (hsbk_...) to restore into
     args = ap.parse_args(argv)
     env = os.environ
     as_json = args.json
@@ -940,6 +978,19 @@ def cli(argv: list[str]) -> int:
     if not args.id:
         emit({"ok": False, "error": "restore needs a backup id"}, "Usage: ./play --backups restore <id>")
         return 1
+    # where the restore goes: a genuine player restore -> the live databases; a test restore -> scratch hsbk_ schemas
+    # named by --target, refused (before anything is touched) without one or with anything else
+    if pl["test"]:
+        try:
+            target = scratch_target(args.target or "")
+        except Refused as e:
+            emit({"ok": False, "error": f"{e}; nothing was touched"}, f"Restore refused: {e}; nothing was touched.")
+            return 1
+    else:
+        if args.target:
+            emit({"ok": False, "error": "--target is a test switch"}, "--target is a test switch for the harness.")
+            return 1
+        target = LIVE
     cdir = client_dir_for(env, pl["test"])
     if pl["test"] and cdir is not None:
         from . import clientbuild
@@ -948,7 +999,7 @@ def cli(argv: list[str]) -> int:
                  "A test restore can't write the player's own client.")
             return 1
     say = (lambda s: None) if as_json else (lambda s: print(f"[backups] {s}", flush=True))
-    res = restore(args.id, root, cdir, say=say)
+    res = restore(args.id, root, cdir, say=say, target=target, allow_live=not pl["test"])
     if as_json:
         emit(res)
     elif res["ok"]:

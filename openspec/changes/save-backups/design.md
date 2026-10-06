@@ -65,7 +65,17 @@ Measured 2026-10-06 on the dev Mac with the ~500-bot world's data (acore_charact
 - Kill-safety: `.tmp-<id>/` records its writer and child pids; every entry point removes stale temp folders (killing
   a dead writer's leftover dump processes). A restore writes `<root>/.restore-in-progress.json` before loading; the
   next ./play or restore finishes it (kills orphaned loaders, reloads the target, re-checks every table) before
-  anything else (added after the first verification round of the builder; see the builder report).
+  anything else (proven by backups.kill_safe's "Killed in the middle of a restore" part).
+- **Restore targets (spec-change log 2026-10-06):** `restore(..., target, allow_live)`. A genuine player restore
+  (no test signs) loads into the live `acore_*` schemas. A test-shaped restore (scratch folder via the test flag)
+  must name `--target hsbk_<name>` (schemas `hsbk_<name>_characters/_auth/_playerbots`, which must already exist);
+  `--target live`, any non-`hsbk_` name, no `--target`, or Zach's recovery copies (`hsbk_t`,
+  `acore_characters_broken`) are refused before anything is touched (CLI, and again inside `restore()`). The safety
+  backup of a test restore is a dump of its scratch target (`take(schemas=...)`), and the interrupted-restore marker
+  records the target; `finish_interrupted` refuses a test folder's marker that names live schemas. The app passes a
+  target only from `HS_APP_TEST_RESTORE_TARGET`, honoured with the test hook. Checks seed the scratch schemas from a
+  backup of the live databases (read only) and drop them at the end; the checks that restore compare every live
+  table before and after.
 - App: Option at launch (`[NSEvent modifierFlags]`, or `HS_APP_TEST_OPTION=1` with the test hook) shows the Backups
   window (NSTableView, Restore…/Quit/Play, NSAlert confirmation; scripted with `HS_APP_TEST_BACKUPS` under the hook);
   `[notice]` lines show in an orange line of the loading window. The shutdown window needed no change.

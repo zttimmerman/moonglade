@@ -55,6 +55,7 @@
 // - Test-only, honoured only with the test hook: HS_APP_TEST_OPTION=1 (the Option key reported held at launch) and
 //   HS_APP_TEST_BACKUPS=<steps> (scripted clicks in the Backups window, ';'-separated: select:<id>, restore,
 //   confirm | cancel (the answer to the confirmation), wait:<file> (until the file exists), play, close).
+//   HS_APP_TEST_RESTORE_TARGET=hsbk_<name> passes `--target` to the restore (tests restore into scratch schemas only).
 //   The ./play --backups calls get --allow-test-client-dir only when the app itself was given it.
 #import <Cocoa/Cocoa.h>
 #include <signal.h>
@@ -68,6 +69,7 @@ static NSString *const kReopenNote = @"local.moonglade.reopen";
 static NSString *const kWindowNote = @"local.moonglade.window";
 static NSString *const kTestOptionEnv = @"HS_APP_TEST_OPTION";
 static NSString *const kTestBackupsEnv = @"HS_APP_TEST_BACKUPS";
+static NSString *const kTestTargetEnv = @"HS_APP_TEST_RESTORE_TARGET";
 
 // The loading window's background, drawn in drawRect: so an off-screen render (snapshot) has it too.
 @interface HSBackgroundView : NSView
@@ -129,6 +131,7 @@ static NSString *const kTestBackupsEnv = @"HS_APP_TEST_BACKUPS";
 @property(strong) NSMutableArray<NSString *> *script;   // test-only scripted steps
 @property(strong) NSTask *restoreTask;
 @property BOOL leavingBackups;                         // Play chosen: closing the window doesn't quit
+@property(strong) NSString *testRestoreTarget;         // test-only: scratch schemas a restore goes to
 @end
 
 @implementation HSLauncher
@@ -384,6 +387,7 @@ static NSString *const kTestBackupsEnv = @"HS_APP_TEST_BACKUPS";
     [env removeObjectForKey:kSnapshotEnv];
     [env removeObjectForKey:kTestOptionEnv];
     [env removeObjectForKey:kTestBackupsEnv];
+    [env removeObjectForKey:kTestTargetEnv];
     env[@"HS_APP_BUNDLE"] = [[NSBundle mainBundle] bundlePath];   // the shim shows this bundle's icon
     env[@"PYTHONUNBUFFERED"] = @"1";
     env[@"HS_FROM_APP"] = @"1";                        // ./play then keeps passwords out of app.log (play.shown_password)
@@ -396,8 +400,10 @@ static NSString *const kTestBackupsEnv = @"HS_APP_TEST_BACKUPS";
         if ([penv[kTestOptionEnv] isEqual:@"1"]) option = YES;
         if ([penv[kTestBackupsEnv] length])
             self.script = [[penv[kTestBackupsEnv] componentsSeparatedByString:@";"] mutableCopy];
-    } else if ([penv[kTestOptionEnv] length] || [penv[kTestBackupsEnv] length]) {
-        [self appLog:@"ignoring HS_APP_TEST_OPTION / HS_APP_TEST_BACKUPS: test-only, need the test hook"];
+        if ([penv[kTestTargetEnv] length]) self.testRestoreTarget = penv[kTestTargetEnv];
+    } else if ([penv[kTestOptionEnv] length] || [penv[kTestBackupsEnv] length] || [penv[kTestTargetEnv] length]) {
+        [self appLog:@"ignoring HS_APP_TEST_OPTION / HS_APP_TEST_BACKUPS / HS_APP_TEST_RESTORE_TARGET: test-only, "
+                     @"need the test hook"];
     }
     if (option) {
         [self record:@{@"kind": @"option_launch", @"injected": @([self testMode] && [penv[kTestOptionEnv] isEqual:@"1"])}];
@@ -1066,7 +1072,9 @@ static NSString *const kTestBackupsEnv = @"HS_APP_TEST_BACKUPS";
 
 - (void)startRestore:(NSDictionary *)b {
     NSPipe *pipe = [NSPipe pipe];
-    NSTask *t = [self backupsTask:@[@"restore", b[@"id"]] pipe:pipe];
+    NSMutableArray *rargs = [NSMutableArray arrayWithObjects:@"restore", b[@"id"], nil];
+    if (self.testRestoreTarget) [rargs addObjectsFromArray:@[@"--target", self.testRestoreTarget]];
+    NSTask *t = [self backupsTask:rargs pipe:pipe];
     NSMutableData *out = [NSMutableData data];
     pipe.fileHandleForReading.readabilityHandler = ^(NSFileHandle *h) {
         NSData *d = h.availableData;

@@ -7,9 +7,11 @@ play.* checks' headless ./play with the .bat stand-in and the harness test accou
 player's WTF folder it uses a scratch play client (env/check-play-backups/, $HS_PLAY_CLIENT_DIR), never
 env/client-play/.
 
-Restores are real (the spec's "whole save"): they rewind acore_characters / acore_auth / acore_playerbots. Each check
-that restores takes its baseline backup right before changing anything and ends by restoring that baseline, so the
-databases end as they started; the real player's account rows are compared before and after.
+Restores never touch the live databases (spec-change log 2026-10-06): backups are taken of the live databases (read
+only), and every restore a check makes targets scratch schemas named hsbk_<check>_<db> (`--target hsbk_<check>`),
+which the check seeds from a backup, changes, and drops at the end. The checks that restore compare every live
+table's CHECKSUM TABLE before and after. A failed check keeps its scratch backup folder under env/tmp/ for
+inspection.
 """
 from __future__ import annotations
 
@@ -25,8 +27,7 @@ from pathlib import Path
 
 from .. import backups as B, clientbuild, launch, paths as P, play, stack, stages as S
 from ..registry import check, require
-from .play_checks import (PINNED, PLAY, StandIn, _real_player_name, _snapshot, human_lines, is_clear, last_record,
-                          remaining)
+from .play_checks import PINNED, PLAY, StandIn, human_lines, is_clear, last_record, remaining
 
 CAP = "save-backups"
 SCRATCH_CLIENT = P.ENV / "check-play-backups"      # scratch play client (WTF), never env/client-play/
@@ -86,23 +87,6 @@ def diff_stats(a: dict, b: dict) -> list:
 
 def manifest_stats(m: dict) -> dict:
     return {k: m["databases"][k]["tables"] for k in B.DATABASES}
-
-
-def test_char_level() -> int | None:
-    from .. import db
-    v = db.scalar(f"SELECT level FROM characters WHERE name='{P.TEST_CHAR}'", "characters")
-    return int(v) if v not in (None, "NULL") else None
-
-
-def char_exists(name: str) -> bool:
-    from .. import db
-    return db.scalar(f"SELECT COUNT(*) FROM characters WHERE name='{name}'", "characters") == "1"
-
-
-def player_rows() -> dict | None:
-    """The real player's account + characters (play_checks._snapshot), or None when there is no player file."""
-    name = _real_player_name()
-    return _snapshot(name) if name else None
 
 
 def ids(root: Path) -> list[str]:
@@ -343,7 +327,7 @@ def on_quit(ctx):
         live = live_stats()
         got = {}
         for k in B.DATABASES:
-            sch = f"hsbkchk_{k}"
+            sch = f"hsbk_chk_{k}"
             loaded.append(sch)
             rec = m["databases"][k]
             db.query(f"DROP DATABASE IF EXISTS `{sch}`; CREATE DATABASE `{sch}` CHARACTER SET {rec['charset']} "
@@ -543,11 +527,13 @@ def kill_safe(ctx):
     """An earlier backup in the scratch folder; a session whose backup is paused mid-dump (after the first database,
     test knob) is SIGKILLed: no partial backup is listed, the earlier backup's files still match their checksums
     (and are unchanged), and the next session removes the leftover temp folder, exits 0, adds a complete backup and
-    leaves nothing running."""
+    leaves nothing running. Then "Killed in the middle of a restore" (killed_restore): a test restore into scratch
+    schemas killed while loading is finished by the next test-shaped ./play; live tables never change."""
     ev: dict = {}
     given_clear(ev)
     root = scratch_root("kill")
     sessions = []
+    ok = False
     try:
         stack.mysql_up()
         early = B.take("auto", P.TEST_USER, None, root)
@@ -597,13 +583,99 @@ def kill_safe(ctx):
         require(len(listed) == 2 and early["id"] in ev["next"]["listed"] and all(ev["next"]["verify"].values())
                 and not ev["next"]["leftovers"], "the next run didn't add one complete backup next to the earlier one",
                 **ev)
+        ev["killed_restore"] = killed_restore(ev)
+        ok = True
         return ev
     finally:
         for s in sessions:
             s.cleanup()
         if any(stack.stack_processes().values()):
             stack.down()
-        drop(root)
+        if ok:
+            drop(root)
+
+
+def loader_pids() -> list[int]:
+    from .. import procs
+    return [pid for pid, cmd in procs.table() if B.LOADER_TAG in cmd and cmd.startswith(str(B.db.MYSQL))]
+
+
+def killed_restore(ev: dict) -> dict:
+    """"Killed in the middle of a restore": a test restore into scratch schemas hsbk_ks_* is SIGKILLed while loading;
+    then a test-shaped ./play (scratch folder; its stand-in is missing on purpose, so it stops right after its start
+    steps) finishes the restore before anything else: the scratch schemas match the backup, no loader is left, the
+    backup and the safety backup verify, and every live table is unchanged (checked before, after the kill, after the
+    heal)."""
+    out: dict = {}
+    root = scratch_root("killrestore")
+    prefix = "hsbk_ks"
+    ok = False
+    try:
+        stack.mysql_up()
+        live0 = live_stats()
+        k = B.take("auto", P.TEST_USER, None, root)
+        t = seed_target(k, prefix)
+        new_level = (level_in(t) or 1) % 79 + 1
+        change_target(t, new_level)               # the scratch "now" differs from the backup being restored
+        sfile = root.parent / f"{root.name}-settings.json"
+        sfile.write_text(json.dumps({"client": "stock"}))
+        env = {**os.environ, **PINNED, "HS_SETTINGS": str(sfile), "HS_BACKUP_DIR": str(root)}
+        env.pop("HS_PLAY_CLIENT_DIR", None)
+        p = subprocess.Popen([PLAY, "--backups", "restore", k["id"], "--target", prefix, "--json",
+                              "--allow-test-client-dir"], cwd=P.ROOT, env=env, stdout=subprocess.DEVNULL,
+                             stderr=subprocess.DEVNULL)
+        marker = root / B.INTERRUPTED
+        t0 = time.time()
+        while time.time() - t0 < 300 and p.poll() is None and not marker.exists():
+            time.sleep(0.05)
+        require(marker.exists() and p.poll() is None, "GIVEN not met: the restore never started loading", **out)
+        time.sleep(3.0)                            # inside the load (characters alone takes ~9 s)
+        loaders = loader_pids()
+        require(p.poll() is None and loaders, "GIVEN not met: the restore wasn't loading when it was killed",
+                loaders=loaders, **out)
+        os.kill(p.pid, signal.SIGKILL)
+        p.wait(timeout=30)
+        out["killed"] = {"pid": p.pid, "loaders_running_at_kill": loaders, "marker": json.loads(marker.read_text())}
+        out["live_after_kill"] = diff_stats(live0, live_stats())[:10]
+        require(not out["live_after_kill"], "a live table changed during the killed restore", **out)
+        safety_id = out["killed"]["marker"]["safety"]
+        # the next test-shaped ./play
+        r = subprocess.run([PLAY, "--account", "test", "--client-cmd", str(root.parent / "hs-missing-standin.bat"),
+                            "--allow-test-client-dir"], cwd=P.ROOT, env=env, capture_output=True, text=True,
+                           timeout=600)
+        rec = json.loads(play.LAST.read_text()) if play.LAST.exists() else {}
+        fin = (rec.get("backup_plan") or {}).get("finished_interrupted_restore") or {}
+        out["next_run"] = {"rc": r.returncode, "output": human_lines(r.stdout)[-1500:], "outcome": rec.get("outcome"),
+                           "error": rec.get("error"), "finished": {x: fin.get(x) for x in
+                                                                   ("backup", "schemas", "killed_loaders", "compare")}}
+        require(fin.get("backup") == k["id"] and fin.get("schemas") == t and (fin.get("compare") or {}).get("ok"),
+                "the next run didn't finish the interrupted restore", **out)
+        require("no such file" in str(rec.get("error")), "the next run didn't get past the heal to its own start",
+                **out)
+        require(not marker.exists() and not loader_pids(), "the marker or a loader process is left", **out)
+        stack.mysql_up()
+        out["after_heal"] = {"differences_vs_backup": diff_stats(manifest_stats(k), target_stats(t))[:10],
+                             "live_differences": diff_stats(live0, live_stats())[:10],
+                             "backup_verify": B.verify(Path(k["path"]), k)["ok"],
+                             "safety_verify": B.verify(Path(B.find(root, safety_id)["path"]))["ok"]
+                             if B.find(root, safety_id) else False}
+        require(not out["after_heal"]["differences_vs_backup"], "the healed scratch schemas don't match the backup", **out)
+        require(not out["after_heal"]["live_differences"], "a live table changed", **out)
+        require(out["after_heal"]["backup_verify"] and out["after_heal"]["safety_verify"],
+                "the backup or its safety backup no longer verifies", **out)
+        ok = True
+        return out
+    except Exception:
+        ev["killed_restore"] = out
+        raise
+    finally:
+        if not stack.stack_processes()["mysqld"]:
+            stack.mysql_up()
+        drop_target(prefix, out)
+        stack.down()
+        (root.parent / f"{root.name}-settings.json").unlink(missing_ok=True)
+        if ok:
+            drop(root)
 
 
 # ---------------------------------------------------------------- backups.player_untouched
@@ -706,136 +778,173 @@ def player_untouched(ctx):
     return ev
 
 
-# ---------------------------------------------------------------- restores
+# ---------------------------------------------------------------- restores (into scratch hsbk_ schemas only)
 
-def restore_baseline(root: Path, ev: dict, tag: str) -> dict:
-    """mysqld only (stack down), a fresh backup of how things are now: the check's baseline."""
-    stack.mysql_up()
-    m = B.take("auto", P.TEST_USER, SCRATCH_CLIENT if SCRATCH_CLIENT.exists() else None, root)
-    ev[f"{tag}_baseline"] = {"id": m["id"], "level": next((c["level"] for c in m["characters"]
-                                                          if c["name"] == P.TEST_CHAR), None)}
-    return m
+def target_of(prefix: str) -> dict:
+    t = B.scratch_target(prefix)            # raises for anything but scratch hsbk_ names
+    assert not B.is_live(t)
+    return t
 
 
-def put_back(base: dict | None, root: Path, ev: dict) -> None:
-    """End state = the check's baseline (best effort; recorded)."""
-    if not base:
-        return
+def seed_target(m: dict, prefix: str) -> dict:
+    """Load a backup into the scratch schemas <prefix>_* (the test's stand-in for "the databases now")."""
+    t = target_of(prefix)
+    B.load(m, t)
+    return t
+
+
+def target_stats(t: dict) -> dict:
+    return {k: B.table_stats(t[k]) for k in B.DATABASES}
+
+
+def drop_target(prefix: str, ev: dict) -> None:
+    """Drop a check's scratch schemas (mysqld must run). Only hsbk_ names from scratch_target, never protected."""
+    from .. import db
+    t = target_of(prefix)
     try:
-        if stack.stack_processes()["worldserver"] or stack.stack_processes()["authserver"]:
-            stack.down()
-        res = B.restore(base["id"], root, SCRATCH_CLIENT if SCRATCH_CLIENT.exists() else None, say=lambda s: None)
-        ev["put_back"] = {k: res.get(k) for k in ("ok", "error", "code")}
-    except Exception as e:  # noqa: BLE001
-        ev["put_back"] = {"ok": False, "error": f"{type(e).__name__}: {e}"}
-    finally:
-        if any(stack.stack_processes().values()):
-            stack.down()
+        db.query("".join(f"DROP DATABASE IF EXISTS `{x}`;" for x in t.values()), root=True)
+    except db.SQLError as e:
+        ev["drop_target_error"] = str(e)
+
+
+def level_in(t: dict, name: str = P.TEST_CHAR) -> int | None:
+    from .. import db
+    v = db.scalar(f"SELECT level FROM `{t['characters']}`.characters WHERE name='{name}'", root=True)
+    return int(v) if v not in (None, "NULL") else None
+
+
+def exists_in(t: dict, name: str) -> bool:
+    from .. import db
+    return db.scalar(f"SELECT COUNT(*) FROM `{t['characters']}`.characters WHERE name='{name}'", root=True) == "1"
+
+
+def change_target(t: dict, new_level: int) -> None:
+    """In the scratch schemas only: the test character's level changes and a new test character appears (a copy of
+    its row under a new guid and name)."""
+    from .. import db
+    ch = f"`{t['characters']}`.characters"
+    db.query(f"UPDATE {ch} SET level={int(new_level)} WHERE name='{P.TEST_CHAR}'", root=True)
+    cols = [r[0] for r in db.query(f"SELECT column_name FROM information_schema.columns WHERE table_schema="
+                                   f"'{t['characters']}' AND table_name='characters' ORDER BY ordinal_position", root=True)]
+    guid = int(db.scalar(f"SELECT MAX(guid) FROM {ch}", root=True)) + 1
+    sel = [str(guid) if c == "guid" else f"'{NEW_CHAR}'" if c == "name" else f"`{c}`" for c in cols]
+    db.query(f"INSERT INTO {ch} ({', '.join(f'`{c}`' for c in cols)}) SELECT {', '.join(sel)} FROM {ch} "
+             f"WHERE name='{P.TEST_CHAR}'", root=True)
 
 
 @check("backups.restore_roundtrip", order=369, capability=CAP, stack="down", tier="full")
 def restore_roundtrip(ctx):
-    """Backup B (scratch folder, scratch play client), then the test character's level changes, a new test character
-    is created and the WTF folder changes. `./play --backups restore <B>` (scratch switches) takes a safety backup S
-    before loading anything; afterwards every table of the three databases matches B's manifest (row count +
-    CHECKSUM TABLE), the level is back, the new character is gone, the WTF folder matches B, and the stack is down.
-    Restoring S brings back the changed level, the new character and S's WTF folder. The player's account rows are
-    unchanged throughout; the check ends by restoring B."""
-    from .. import fixtures as F
-    from ..probe import client as probe
+    """Backup B (of the live databases, read only) is loaded into scratch schemas hsbk_rt_*; there the test character's
+    level changes and a new test character appears, and the scratch play client's WTF folder changes.
+    `./play --backups restore <B> --target hsbk_rt` (scratch switches) takes a safety backup S of the scratch schemas
+    before loading; afterwards every scratch table matches B's manifest (row count + CHECKSUM TABLE), the level is
+    back, the new character is gone, the WTF folder matches B, and the stack is down. Restoring S brings back the
+    changed level, the new character and S's WTF folder. Every live table's checksum is the same at the end."""
     ev: dict = {}
     given_clear(ev)
     root = scratch_root("restore")
-    base = None
+    prefix = "hsbk_rt"
+    ok = False
     try:
         ev["scratch_client"] = scratch_client(f"hs-restore-{time.time():.3f}")
-        stack.up(profile="m0")
-        ev["fixture"] = F.ensure()
-        stack.down()
-        base = restore_baseline(root, ev, "B")
-        player_before = player_rows()
-        lv = test_char_level()
-        require(lv is not None and not char_exists(NEW_CHAR), "GIVEN not met: no test character, or the extra one exists",
-                level=lv, **ev)
-        stack.mysql_down()
-        # changes after B
-        stack.up(profile="m0")
+        stack.mysql_up()
+        live_before = live_stats()
+        base = B.take("auto", P.TEST_USER, SCRATCH_CLIENT, root)
+        lv = next((c["level"] for c in base["characters"] if c["name"] == P.TEST_CHAR), None)
+        require(lv is not None, "GIVEN not met: the backup has no test character", **ev)
+        t = seed_target(base, prefix)
         new_level = lv + 1 if lv < 80 else lv - 1
-        ev["level_change"] = F.set_level(new_level)
-        lr, ws, _ = probe.open_world(P.TEST_USER, P.TEST_PASS)
-        with ws:
-            ev["char_create_code"] = ws.char_create(NEW_CHAR, F.RACE_HUMAN, F.CLASS_WARRIOR)
-        F.poll(lambda: char_exists(NEW_CHAR), bool, timeout=15)
-        ev["after_changes"] = {"level": test_char_level(), "new_char": char_exists(NEW_CHAR)}
+        change_target(t, new_level)
+        ev["after_changes"] = {"level": level_in(t), "new_char": exists_in(t, NEW_CHAR)}
         require(ev["after_changes"] == {"level": new_level, "new_char": True},
-                "GIVEN not met: the level change / new character didn't happen", **ev)
+                "GIVEN not met: the scratch level change / new character didn't happen", **ev)
         stack.down()
         (wtf_dir() / "macros-cache.txt").write_text("MACRO 2 \"changed\"\n/say after B\nEND\n")
         (wtf_dir() / "added-after-B.txt").write_text("x\n")
         wtf_changed = B.wtf_hashes(wtf_dir())
 
-        # restore B
-        r1 = backups_cli("restore", base["id"], root=root, client=SCRATCH_CLIENT, settings="patched")
+        r1 = backups_cli("restore", base["id"], "--target", prefix, root=root, client=SCRATCH_CLIENT, settings="patched")
         ev["restore_B"] = r1
         js = r1["json"] or {}
         require(r1["rc"] == 0 and js.get("ok"), f"restoring B failed: {js.get('error')}", **ev)
+        require(js.get("target") == t, "the restore didn't go to the scratch schemas", **ev)
         listed = {m["id"]: m for m in B.list_backups(root)}
         S_id = (js.get("safety") or {}).get("id")
         S_m = listed.get(S_id)
-        ev["safety"] = {"id": S_id, "kind": S_m and S_m["kind"], "completed_at": S_m and js["safety"]["completed_at"],
-                        "load_start": js["timeline"].get("load_start")}
+        ev["safety"] = {"id": S_id, "kind": S_m and S_m["kind"], "completed_at": (js.get("safety") or {}).get("completed_at"),
+                        "load_start": js["timeline"].get("load_start"),
+                        "characters": S_m and S_m.get("characters")}
         require(S_m and S_m["kind"] == "before-restore", "no safety backup was taken", **ev)
         require(js["safety"]["completed_at"] < js["timeline"]["load_start"], "the safety backup wasn't complete before "
                 "the restore started loading", **ev)
+        require({m["schema"] for m in S_m["databases"].values()} == set(t.values()),
+                "the safety backup isn't of the restore's target", **ev)
         require(not any(stack.stack_processes().values()), "the stack isn't down after the restore", **ev)
         require(manifest_wtf(S_m) == wtf_changed, "the safety backup doesn't hold the WTF folder as it was", **ev)
         stack.mysql_up()
-        live = live_stats()
-        ev["after_restore_B"] = {"differences_vs_B": diff_stats(manifest_stats(base), live)[:10],
-                                 "level": test_char_level(), "new_char": char_exists(NEW_CHAR),
+        ev["after_restore_B"] = {"differences_vs_B": diff_stats(manifest_stats(base), target_stats(t))[:10],
+                                 "level": level_in(t), "new_char": exists_in(t, NEW_CHAR),
                                  "wtf_matches_B": B.wtf_hashes(wtf_dir()) == manifest_wtf(base)}
-        require(not ev["after_restore_B"]["differences_vs_B"], "after the restore the databases don't match B", **ev)
+        require(not ev["after_restore_B"]["differences_vs_B"], "after the restore the scratch databases don't match B", **ev)
         require(ev["after_restore_B"]["level"] == lv and not ev["after_restore_B"]["new_char"],
                 "the level isn't back / the new character still exists", **ev)
         require(ev["after_restore_B"]["wtf_matches_B"], "the WTF account folder doesn't match B", **ev)
         stack.mysql_down()
 
-        # restore S (undo)
-        r2 = backups_cli("restore", S_id, root=root, client=SCRATCH_CLIENT, settings="patched")
+        r2 = backups_cli("restore", S_id, "--target", prefix, root=root, client=SCRATCH_CLIENT, settings="patched")
         ev["restore_S"] = r2
         require(r2["rc"] == 0 and (r2["json"] or {}).get("ok"), "restoring the safety backup failed", **ev)
         require(not any(stack.stack_processes().values()), "the stack isn't down after restoring S", **ev)
         stack.mysql_up()
-        ev["after_restore_S"] = {"differences_vs_S": diff_stats(manifest_stats(S_m), live_stats())[:10],
-                                 "level": test_char_level(), "new_char": char_exists(NEW_CHAR),
+        ev["after_restore_S"] = {"differences_vs_S": diff_stats(manifest_stats(S_m), target_stats(t))[:10],
+                                 "level": level_in(t), "new_char": exists_in(t, NEW_CHAR),
                                  "wtf_matches_S": B.wtf_hashes(wtf_dir()) == manifest_wtf(S_m)}
-        require(not ev["after_restore_S"]["differences_vs_S"], "after restoring S the databases don't match S", **ev)
+        require(not ev["after_restore_S"]["differences_vs_S"], "after restoring S the scratch databases don't match S", **ev)
         require(ev["after_restore_S"]["level"] == new_level and ev["after_restore_S"]["new_char"],
                 "restoring S didn't bring back the changed level and the new character", **ev)
         require(ev["after_restore_S"]["wtf_matches_S"], "restoring S didn't bring back the changed WTF folder", **ev)
-        player_after = player_rows()
-        ev["player_rows_unchanged"] = player_after == player_before
-        require(player_after == player_before, "the real player's account rows changed", **ev)
+        ev["live_differences"] = diff_stats(live_before, live_stats())[:10]
+        require(not ev["live_differences"], "a live table changed", **ev)
+        ok = True
         return ev
     finally:
-        put_back(base, root, ev)
-        drop(root, SCRATCH_CLIENT)
+        if not stack.stack_processes()["mysqld"]:
+            stack.mysql_up()
+        drop_target(prefix, ev)
+        stack.down()
+        if ok:                         # a failed run keeps its backups for inspection (env/tmp/)
+            drop(root, SCRATCH_CLIENT)
+
+
+def watch_stack(samples: list, stop: threading.Event) -> threading.Thread:
+    def run():
+        while not stop.is_set():
+            samples.append(stack_clear())
+            stop.wait(0.05)
+    th = threading.Thread(target=run, daemon=True)
+    th.start()
+    return th
 
 
 @check("backups.restore_refusals", order=370, capability=CAP, stack="down", tier="full")
 def restore_refusals(ctx):
-    """(a) A backup with one byte of one dump changed: the restore exits nonzero naming the damaged file, takes no
-    safety backup, starts nothing, and every table's checksum is unchanged. (b) With a play session running (the play
-    lock held): the restore exits nonzero with "already running", and the session (client, stack, lock) continues
-    unaffected and later exits 0."""
+    """(a) A backup with one byte of one dump changed: the restore (into scratch schemas) exits nonzero naming the
+    damaged file, takes no safety backup, starts nothing, and no scratch or live table changes. (a2) A test-shaped
+    restore naming the live schemas (`--target live`, `--target acore`) and one naming no target are refused with a
+    nonzero exit before anything starts, with no safety backup and every live table unchanged. (b) With a play session
+    running (the play lock held): the restore exits nonzero with "already running", and the session (client, stack,
+    lock) continues unaffected and later exits 0."""
     ev: dict = {}
     given_clear(ev)
     root = scratch_root("refuse2")
+    prefix = "hsbk_rf"
     sess = None
+    ok = False
     try:
         stack.mysql_up()
         good = B.take("auto", P.TEST_USER, None, root)
-        before = live_stats()
+        t = seed_target(good, prefix)
+        live_before, t_before = live_stats(), target_stats(t)
         stack.down()
         bad = clone_backup(good, root, datetime.now() - timedelta(hours=1), "auto")
         f = Path(bad["path"]) / "auth.sql.gz"
@@ -846,28 +955,31 @@ def restore_refusals(ctx):
         f.write_bytes(bytes(data))
         ev["damaged"] = {"id": bad["id"], "file": "auth.sql.gz", "byte": i}
         ids_before = ids(root)
-        samples: list = []
-        stop = threading.Event()
-
-        def watch():
-            while not stop.is_set():
-                samples.append(stack_clear())
-                stop.wait(0.05)
-        th = threading.Thread(target=watch, daemon=True)
-        th.start()
-        r = backups_cli("restore", bad["id"], root=root)
-        stop.set()
-        th.join(timeout=5)
-        js = r["json"] or {}
-        ev["damaged_restore"] = r | {"stack_seen": [s for s in samples if s][:3]}
-        require(r["rc"] != 0 and not js.get("ok"), "the damaged backup wasn't refused", **ev)
-        require("auth.sql.gz" in str(js.get("error")), "the refusal doesn't name the damaged file", **ev)
-        require(ids(root) == ids_before, "a backup (safety or other) appeared", ids_after=ids(root), **ev)
-        require(not [s for s in samples if s], "something was started for the refused restore", **ev)
+        runs = {}
+        for name, args in (("damaged", ("restore", bad["id"], "--target", prefix)),
+                           ("live target (--target live)", ("restore", good["id"], "--target", "live")),
+                           ("live target (--target acore)", ("restore", good["id"], "--target", "acore")),
+                           ("no target", ("restore", good["id"]))):
+            samples: list = []
+            stop = threading.Event()
+            th = watch_stack(samples, stop)
+            r = backups_cli(*args, root=root)
+            stop.set()
+            th.join(timeout=5)
+            runs[name] = r | {"stack_seen": [s for s in samples if s][:3], "ids_after": ids(root)}
+        ev["refused_runs"] = runs
+        for name, r in runs.items():
+            js = r["json"] or {}
+            require(r["rc"] != 0 and not js.get("ok"), f"{name}: the restore wasn't refused", **ev)
+            require(not r["stack_seen"], f"{name}: something was started for the refused restore", **ev)
+            require(r["ids_after"] == ids_before, f"{name}: a backup (safety or other) appeared", **ev)
+        require("auth.sql.gz" in str((runs["damaged"]["json"] or {}).get("error")),
+                "the damaged-backup refusal doesn't name the damaged file", **ev)
         stack.mysql_up()
-        after = live_stats()
-        ev["damaged_differences"] = diff_stats(before, after)[:10]
-        require(not ev["damaged_differences"], "a table changed although the restore was refused", **ev)
+        ev["damaged_scratch_differences"] = diff_stats(t_before, target_stats(t))[:10]
+        ev["live_differences"] = diff_stats(live_before, live_stats())[:10]
+        require(not ev["damaged_scratch_differences"], "a scratch table changed although the restore was refused", **ev)
+        require(not ev["live_differences"], "a live table changed", **ev)
         stack.down()
 
         # (b) a running session holds the lock
@@ -875,7 +987,7 @@ def restore_refusals(ctx):
         up = sess.start()
         require(up["up"], f"the session never came up: {up.get('why')}", output=sess.s.output()[-2000:], **ev)
         st_before, lock_before = stack.stack_processes(), play.LOCK.read_text().strip()
-        r2 = backups_cli("restore", good["id"], root=root)
+        r2 = backups_cli("restore", good["id"], "--target", prefix, root=root)
         js2 = r2["json"] or {}
         time.sleep(2)
         ev["running_restore"] = r2 | {"stack_before": st_before, "stack_after": stack.stack_processes(),
@@ -890,13 +1002,18 @@ def restore_refusals(ctx):
         res = sess.quit_and_wait()
         ev["session_end"] = {k: res[k] for k in ("exit_code", "remaining_after", "record_backup")}
         require(res["exit_code"] == 0 and is_clear(res["remaining_after"]), "the session didn't end normally", **ev)
+        ok = True
         return ev
     finally:
         if sess:
             sess.cleanup()
-        if any(stack.stack_processes().values()):
-            stack.down()
-        drop(root)
+        if not stack.stack_processes()["mysqld"]:
+            stack.mysql_up()
+        drop_target(prefix, ev)
+        stack.down()
+        if ok:
+            drop(root)
+
 
 
 # ---------------------------------------------------------------- the app: Backups window, shutdown backup stage
@@ -905,7 +1022,7 @@ CAP_APP = "mac-app"
 
 
 def _app_run(root: Path, script: str, tag: str, ev: dict, key: str, go_file: Path | None = None,
-             on_go=None) -> dict:
+             on_go=None, target: str | None = None) -> dict:
     """Open the built app with the Option key injected and a scripted Backups window (test hook). Samples the stack
     and this prefix's Wine processes until the app exits. on_go(run) runs once the app waits for go_file, then
     go_file is created."""
@@ -934,7 +1051,8 @@ def _app_run(root: Path, script: str, tag: str, ev: dict, key: str, go_file: Pat
         run["open"] = open_app(clientbuild_app(), hook, "--account", "test", "--client-cmd", str(s.bat),
                                "--allow-test-client-dir",
                                env={"HS_SETTINGS": str(sfile), "HS_BACKUP_DIR": str(root),
-                                    "HS_APP_TEST_OPTION": "1", "HS_APP_TEST_BACKUPS": script})
+                                    "HS_APP_TEST_OPTION": "1", "HS_APP_TEST_BACKUPS": script,
+                                    **({"HS_APP_TEST_RESTORE_TARGET": target} if target else {})})
         require(run["open"]["rc"] == 0, "`open` failed to launch the app", **ev)
         if go_file is not None:
             t0 = time.time()
@@ -996,80 +1114,84 @@ def verify_window_shown(run: dict, root_rows: list[dict]) -> dict:
 
 @check("app.backups_window", order=386, capability=CAP_APP, stack="down", tier="full")
 def backups_window(ctx):
-    """Built app, scratch folder with 3 backups (two real ones with different test-character levels, one clone as a
-    safety backup), Option reported held (test hook): (1) the Backups window lists the 3 newest first with date, kind
-    and characters, nothing of the stack, Wine or the client starts, and closing it exits 0 with nothing running;
-    (2) choosing Restore and cancelling the confirmation takes no safety backup and changes no table; (3) choosing
-    the older backup and confirming: the confirmation names its date and the safety backup, a safety backup appears,
-    every table then matches the chosen backup's manifest (checked while the app waits), and Play starts the normal
-    loading flow with the stand-in client; the app exits 0 afterwards."""
-    from .. import fixtures as F
+    """Built app, scratch folder with 3 backups (one of the live databases, one of scratch schemas where the test
+    character is a level higher, and a clone as a safety backup), Option reported held (test hook): (1) the Backups
+    window lists the 3 newest first with date, kind and characters, nothing of the stack, Wine or the client starts,
+    and closing it exits 0 with nothing running; (2) choosing Restore and cancelling the confirmation takes no safety
+    backup and changes no table; (3) choosing the older backup and confirming (restore target: scratch schemas
+    hsbk_app_*, through the test hook): the confirmation names its date and the safety backup, a safety backup
+    appears, every scratch table then matches the chosen backup's manifest and no live table changed (checked while
+    the app waits), and Play starts the normal loading flow with the stand-in client; the app exits 0 afterwards."""
     from .app_checks import build_app, require_clear
     ev: dict = {}
     build_app(ev)
     require_clear(ev)
     root = scratch_root("appwin")
     go = root.parent / f"{root.name}-go"
-    base = None
+    prefix = "hsbk_app"
+    ok = False
     try:
-        # two real backups with different levels (old: lv, new: lv+1), plus a clone as the oldest safety backup
-        stack.up(profile="m0")
-        F.ensure()
-        stack.down()
-        base = restore_baseline(root, ev, "old")                  # mysqld up
-        lv = test_char_level()
-        stack.mysql_down()
-        stack.up(profile="m0")
-        ev["level_change"] = F.set_level(lv + 1 if lv < 80 else lv - 1)
-        stack.down()
         stack.mysql_up()
-        newer = B.take("auto", P.TEST_USER, None, root)
+        live_before = live_stats()
+        old = B.take("auto", P.TEST_USER, None, root)                     # live, read only
+        lv = next(c["level"] for c in old["characters"] if c["name"] == P.TEST_CHAR)
+        t = seed_target(old, prefix)
+        from .. import db
+        db.query(f"UPDATE `{t['characters']}`.characters SET level={lv % 79 + 1} WHERE name='{P.TEST_CHAR}'", root=True)
+        newer = B.take("auto", P.TEST_USER, None, root, schemas=t)          # the scratch "now", a level higher
         clone_backup(newer, root, datetime.now() - timedelta(days=1), "before-restore")
-        before_stats = live_stats()
+        t_before = target_stats(t)
         stack.down()
         rows = expected_rows(root)
         ev["given_rows"] = rows
-        require(len(rows) == 3 and [r["id"] for r in rows] == sorted((r["id"] for r in rows), reverse=True),
-                "GIVEN not met: the folder doesn't hold 3 backups", **ev)
+        require(len(rows) == 3 and [r["id"] for r in rows] == sorted((r["id"] for r in rows), reverse=True)
+                and rows[0]["characters"] != rows[1]["characters"],
+                "GIVEN not met: the folder doesn't hold 3 backups with different levels", **ev)
 
         # (1) list, start nothing, close
-        r1 = _app_run(root, "close", "bkapp1", ev, "list_and_close")
+        go1 = root.parent / f"{root.name}-go1"         # the window stays open ~3 s while the stack is sampled
+        r1 = _app_run(root, f"wait:{go1};close", "bkapp1", ev, "list_and_close", target=prefix, go_file=go1,
+                      on_go=lambda run: time.sleep(3) or {"held_open_s": 3})
+        go1.unlink(missing_ok=True)
         out1 = verify_window_shown(r1, rows)
         closed = [e for e in r1["events"] if e.get("kind") == "backups_window" and e.get("state") == "closed"]
         ev["list_and_close_verdict"] = out1 | {"closed": closed}
-        require(not r1["stack_or_wine_seen"] and not r1["stand_in_started"] and r1["samples"] >= 3,
+        require(r1.get("waiting_seen") and not r1["stack_or_wine_seen"] and not r1["stand_in_started"]
+                and r1["samples"] >= 5,
                 "something was started while the Backups window was open", **ev)
         require(closed and closed[0].get("why") == "closed" and r1["app_exit_code"] == 0,
                 "closing the Backups window didn't exit the app with 0", **ev)
         require(is_clear(r1["remaining_after"]), "something is running after the app exited", **ev)
 
         # (2) restore, cancel
-        target = base["id"]
-        r2 = _app_run(root, f"select:{target};restore;cancel;close", "bkapp2", ev, "cancel")
+        target = old["id"]
+        r2 = _app_run(root, f"select:{target};restore;cancel;close", "bkapp2", ev, "cancel", target=prefix)
         conf = [e for e in r2["events"] if e.get("kind") == "confirm"]
         stack.mysql_up()
-        after_cancel = live_stats()
-        stack.down()
         ev["cancel_verdict"] = {"confirm": conf, "rows_after": expected_rows(root) == rows,
-                                "differences": diff_stats(before_stats, after_cancel)[:10],
+                                "scratch_differences": diff_stats(t_before, target_stats(t))[:10],
+                                "live_differences": diff_stats(live_before, live_stats())[:10],
                                 "restore_events": [e for e in r2["events"] if e.get("kind") == "restore"]}
+        stack.down()
         require(conf and conf[0].get("answer") == "cancel" and conf[0].get("id") == target,
                 "GIVEN not met: the confirmation wasn't shown and cancelled", **ev)
         require(ev["cancel_verdict"]["rows_after"] and not ev["cancel_verdict"]["restore_events"],
                 "cancelling still restored or took a backup", **ev)
-        require(not ev["cancel_verdict"]["differences"], "a table changed after cancelling", **ev)
+        require(not ev["cancel_verdict"]["scratch_differences"] and not ev["cancel_verdict"]["live_differences"],
+                "a table changed after cancelling", **ev)
         require(r2["app_exit_code"] == 0 and is_clear(r2["remaining_after"]), "the cancel run didn't end cleanly", **ev)
 
         # (3) restore, confirm, play
         def at_wait(run):
             stack.mysql_up()
             try:
-                return {"differences_vs_chosen": diff_stats(manifest_stats(base), live_stats())[:10],
-                        "level": test_char_level(), "listed": ids(root)}
+                return {"differences_vs_chosen": diff_stats(manifest_stats(old), target_stats(t))[:10],
+                        "level": level_in(t), "live_differences": diff_stats(live_before, live_stats())[:10],
+                        "listed": ids(root)}
             finally:
                 stack.down()
         r3 = _app_run(root, f"select:{target};restore;confirm;wait:{go};play", "bkapp3", ev, "restore_play",
-                      go_file=go, on_go=at_wait)
+                      go_file=go, on_go=at_wait, target=prefix)
         conf = [e for e in r3["events"] if e.get("kind") == "confirm"]
         rest = [e for e in r3["events"] if e.get("kind") == "restore" and e.get("state") == "done"]
         stages = [e for e in r3["events"] if e.get("kind") == "stage"]
@@ -1085,17 +1207,24 @@ def backups_window(ctx):
         require(rest and rest[0].get("ok") and rest[0].get("safety") in new_safety,
                 "the restore didn't run, or no safety backup appeared", **ev)
         require(r3.get("waiting_seen") and not aw.get("differences_vs_chosen") and aw.get("level") == lv,
-                "after the restore the databases don't match the chosen backup", **ev)
+                "after the restore the scratch databases don't match the chosen backup", **ev)
+        require(not aw.get("live_differences"), "a live table changed during the app's restore", **ev)
         require("launching" in ev["restore_verdict"]["stage_ids"] and r3.get("client_up_after_play_s") is not None,
                 "Play didn't start the normal loading flow and the stand-in client", **ev)
         require(r3["app_exit_code"] == 0 and is_clear(r3["remaining_after"]), "the play run didn't end cleanly", **ev)
+        ok = True
         return ev
     finally:
         go.unlink(missing_ok=True)
-        if any(stack.stack_processes().values()):
+        if stack.stack_processes()["worldserver"] or stack.stack_processes()["authserver"]:
             stack.down()
-        put_back(base, root, ev)
-        drop(root)
+        if not stack.stack_processes()["mysqld"]:
+            stack.mysql_up()
+        drop_target(prefix, ev)
+        stack.down()
+        if ok:
+            drop(root)
+
 
 
 def backup_stage_app_run(ev: dict) -> dict:
