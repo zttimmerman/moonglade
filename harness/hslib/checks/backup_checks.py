@@ -1121,7 +1121,11 @@ def backups_window(ctx):
     backup and changes no table; (3) choosing the older backup and confirming (restore target: scratch schemas
     hsbk_app_*, through the test hook): the confirmation names its date and the safety backup, a safety backup
     appears, every scratch table then matches the chosen backup's manifest and no live table changed (checked while
-    the app waits), and Play starts the normal loading flow with the stand-in client; the app exits 0 afterwards."""
+    the app waits), and Play starts the normal loading flow with the stand-in client; the app exits 0 afterwards.
+    seamless-experience: after (3)'s restore, before Play, the window says "Restored. Your save is now from <date>."
+    (the chosen backup's date); (4) choosing a damaged backup (one byte of a dump changed) and confirming: the window
+    says the restore didn't happen and names the reason (the damaged file) before Quit, no safety backup appears and
+    the app exits 0."""
     from .app_checks import build_app, require_clear
     ev: dict = {}
     build_app(ev)
@@ -1212,6 +1216,28 @@ def backups_window(ctx):
         require("launching" in ev["restore_verdict"]["stage_ids"] and r3.get("client_up_after_play_s") is not None,
                 "Play didn't start the normal loading flow and the stand-in client", **ev)
         require(r3["app_exit_code"] == 0 and is_clear(r3["remaining_after"]), "the play run didn't end cleanly", **ev)
+        # seamless-experience: the done message, shown in the window after the restore and before Play
+        ev["restore_feedback"] = verify_restore_feedback(r3["events"], ok=True, expect=f"Your save is now from {date}.")
+
+        # (4) a damaged backup: the restore fails and the window names the reason
+        bad = clone_backup(old, root, datetime.now() - timedelta(days=2), "auto")
+        f = Path(bad["path"]) / "auth.sql.gz"
+        data = bytearray(f.read_bytes())
+        data[len(data) // 2] ^= 0x01
+        f.unlink()                                          # a clone shares blocks: write a new file, not in place
+        f.write_bytes(bytes(data))
+        before4 = ids(root)
+        r4 = _app_run(root, f"select:{bad['id']};restore;confirm;close", "bkapp4", ev, "restore_fails", target=prefix)
+        rest4 = [e for e in r4["events"] if e.get("kind") == "restore" and e.get("state") == "done"]
+        ev["damaged_verdict"] = {"damaged": bad["id"], "restore_done": rest4, "ids_after": ids(root),
+                                 "ids_before": before4}
+        require(rest4 and rest4[0].get("ok") is False and rest4[0].get("id") == bad["id"],
+                "GIVEN not met: the damaged backup's restore didn't run and fail", **ev)
+        ev["failure_feedback"] = verify_restore_feedback(r4["events"], ok=False, expect="auth.sql.gz",
+                                                         before_step="close")
+        require(ids(root) == before4, "a backup (safety or other) appeared for the failed restore", **ev)
+        require(r4["app_exit_code"] == 0 and is_clear(r4["remaining_after"]), "the failed-restore run didn't end "
+                "cleanly", **ev)
         ok = True
         return ev
     finally:
@@ -1225,6 +1251,28 @@ def backups_window(ctx):
         if ok:
             drop(root)
 
+
+
+def verify_restore_feedback(events: list[dict], ok: bool, expect: str, before_step: str = "play") -> dict:
+    """seamless-experience (mac-app "Restore confirms when it's done"): the Backups window's status line after a restore
+    ("backups_status" hook event, recorded with the window visible) says it's done and which save is in place, or
+    that it didn't happen and why; and it came before the next scripted click (Play / Quit)."""
+    st = [(i, e) for i, e in enumerate(events) if e.get("kind") == "backups_status" and e.get("after") == "restore"]
+    nxt = [i for i, e in enumerate(events) if e.get("kind") == "script_step" and e.get("step") == before_step]
+    out = {"status_events": [e for _, e in st], "next_step_index": nxt[:1], "status_index": [i for i, _ in st][:1]}
+    require(st, "the Backups window showed no message after the restore", **out)
+    i, e = st[0]
+    text = e.get("text") or ""
+    if ok:
+        require(e.get("ok") is True and text.startswith("Restored. Your save is now from ") and expect in text,
+                "the Backups window doesn't say \"Restored. Your save is now from <date>.\" with the backup's date",
+                expected=expect, **out)
+    else:
+        require(e.get("ok") is False and text.startswith("The restore didn't happen: ") and expect in text,
+                "the Backups window doesn't say the restore failed and why", expected=expect, **out)
+    require(e.get("visible") and nxt and i < nxt[0], f"the message wasn't shown in the window before {before_step}",
+            **out)
+    return out
 
 
 def backup_stage_app_run(ev: dict) -> dict:
