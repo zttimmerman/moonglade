@@ -19,7 +19,7 @@ repo = os.path.realpath(sys.argv[1])
 CLIENT = os.path.join(repo, "client")
 LINKED = ("client", "env", "data", "server")
 READ_ONLY = {"ls", "cat", "less", "more", "head", "tail", "shasum", "sha256sum", "md5", "md5sum", "file", "stat",
-             "du", "wc", "grep", "rg", "ugrep", "find", "diff", "cmp", "strings", "otool", "codesign", "xxd", "hexdump",
+             "du", "wc", "grep", "rg", "ugrep", "diff", "cmp", "strings", "otool", "codesign", "xxd", "hexdump",
              "od", "echo", "printf", "test", "[", "true", "false", "pwd", "realpath", "readlink", "basename", "dirname",
              "which", "type", "sort", "uniq", "cut", "awk", "jq", "tree", "mdls", "lsof", "pgrep", "ps", "open"}
 TRUSTED = ("harness/hs", "./play", "./bootstrap", "play", "bootstrap")
@@ -27,6 +27,8 @@ WRITE_ALL_ARGS = {"rm", "rmdir", "touch", "mkdir", "chmod", "chflags", "chown", 
                   "unlink", "shred", "setfile", "mv", "ln", "patch", "srm"}
 WRITE_LAST_ARG = {"cp", "rsync", "ditto", "install", "scp", "gcp"}
 INPLACE = {"sed", "perl", "ruby", "gsed"}
+SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "fish"}
+FIND_ACTIONS = ("-delete", "-exec", "-execdir", "-ok", "-okdir", "-fprint", "-fprint0", "-fprintf", "-fls")
 def block(why):
     sys.stderr.write("Blocked by .claude/hooks/guard-client.sh: " + why + "\n"
                      "client/ is the pristine game client and is never written by hand; env/, data/, server/ and "
@@ -102,7 +104,46 @@ def verb_and_args(seg):
     return (seg[i] if i < len(seg) else ""), seg[i + 1:]
 
 
-def check_bash(cmd, cwd):
+def inner_shell_code(base, args):
+    """The command string a wrapped shell runs: `sh|bash|zsh ... -c '<code>'` (also -lc, -ec, ...) or `eval <words>`.
+    None when there's none (a plain `bash script.sh` runs a file the hook can't see, like any other program)."""
+    if base == "eval":
+        return " ".join(args)
+    if base in SHELLS:
+        for k, a in enumerate(args):
+            if a.startswith("-") and not a.startswith("--") and "c" in a[1:]:
+                return args[k + 1] if k + 1 < len(args) else ""
+            if not a.startswith("-") and not a.startswith("+"):
+                return None
+    return None
+
+
+def check_find(args, cwd, cd_client):
+    """`find <paths> ... -delete | -exec cmd ... | -ok ... | -fprint f`: a write when a start path is in client/
+    (or relative after `cd client`). -exec/-ok of a read-only command (shasum, ls, ...) is still a read."""
+    starts = []
+    for a in args:
+        if a.startswith("-") or a in ("(", "!", ")"):
+            break
+        starts.append(a)
+    if not starts:
+        starts = ["."]
+    in_c = [a for a in starts if in_client(a, cwd) or (cd_client and not a.startswith("/") and "$" not in a)]
+    for k, a in enumerate(args):
+        if a in ("-fprint", "-fprint0", "-fprintf", "-fls") and k + 1 < len(args) and in_client(args[k + 1], cwd):
+            block(f"`find {a}` writes {args[k + 1]}, inside client/.")
+    if not in_c:
+        return
+    for k, a in enumerate(args):
+        if a == "-delete":
+            block(f"`find {in_c[0]} ... -delete` would delete files inside client/.")
+        if a in ("-exec", "-execdir", "-ok", "-okdir"):
+            run = args[k + 1] if k + 1 < len(args) else ""
+            if os.path.basename(run) not in READ_ONLY or os.path.basename(run) in ("find",):
+                block(f"`find {in_c[0]} ... {a} {run}` runs a command on files inside client/.")
+
+
+def check_bash(cmd, cwd, depth=0):
     text = cmd
     # 1. symlinking the repo's runtime folders anywhere (ln -s / os.symlink / symlink_to) with one of them named
     links = re.search(r"(^|[\s;&|(])ln\s+(-[a-zA-Z]*s|--symbolic)", text) or re.search(r"os\.symlink|symlink_to\(", text)
@@ -120,6 +161,18 @@ def check_bash(cmd, cwd):
             cd_client = bool(args) and in_client(args[0], cwd)
             continue
         if verb in TRUSTED or verb.endswith("/harness/hs") or base == "git":
+            continue
+        inner = inner_shell_code(base, args)
+        if inner is not None:
+            # a wrapped shell (`bash -c "cp x client/Wow.exe"`, `eval ...`): the inner code gets the same rules;
+            # code the hook can't parse to the end (too deep) is blocked only when it names client/
+            if depth < 4:
+                check_bash(inner, os.path.join(cwd, "client") if cd_client else cwd, depth + 1)
+            elif re.search(r"(^|[\s/\"'=])client(/|\s|$)", inner):
+                block("deeply nested shell code that names client/.")
+            continue
+        if base == "find":
+            check_find(args, cwd, cd_client)
             continue
         # redirections inside this segment: > or >> followed by a target
         for j, t in enumerate(seg):

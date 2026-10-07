@@ -413,6 +413,14 @@ ALLOWED = [
     "./play",
     "rm -rf env/check-play-seamless",
     "sed -i '' 's/a/b/' patches/client/0001-x.json",
+    # B32: read-only find / wrapped shells stay allowed
+    "find client -name '*.MPQ'",
+    "find client -name '*.exe' -exec shasum -a 256 {} \\;",
+    "bash -c \"ls -la client/Data\"",
+    "zsh -c 'shasum client/Wow.exe'",
+    "bash -lc 'harness/hs run --only client.inspect'",
+    "find env/tmp -name '*.part' -delete",
+    "eval \"$(/opt/homebrew/bin/brew shellenv)\"",
 ]
 BLOCKED = [
     "for d in baseline build client data dist env server vendor; do ln -s $R/$d $d; done",   # the actual 08:21 loop
@@ -427,6 +435,17 @@ BLOCKED = [
     "cd client && touch new.dll",
     "python3 -c \"open('client/Wow.exe','wb').write(b'x')\"",
     "tee client/WTF/Config.wtf < x",
+    # B32: wrapped shells (the inner code gets the same rules) and find's write actions
+    "bash -c \"cp x client/Wow.exe\"",
+    "zsh -c \"rm -rf client\"",
+    "sh -lc 'printf x > client/WTF/Config.wtf'",
+    "eval \"mv client/Wow.exe /tmp/w\"",
+    "bash -c \"zsh -c 'rm -rf client/Data'\"",
+    "env FOO=1 bash -c 'chflags -R nouchg client'",
+    "find client -name x -delete",
+    "find client -name '*.dll' -exec rm {} \\;",
+    "find client/Data -type f -execdir mv {} {}.bak \\;",
+    "cd client && find . -name '*.wtf' -delete",
 ]
 
 
@@ -440,8 +459,9 @@ def run_hook(payload: dict) -> dict:
 def agent_guard_hook(ctx):
     """The committed PreToolUse hook (.claude/settings.json → .claude/hooks/guard-client.sh, for Bash, Write, Edit and
     NotebookEdit) blocks each harmful sample (the 08:21 symlink loop, cp/mv/sed -i/redirect/rm/chflags/cd/inline
-    Python into client/, Edit/Write/NotebookEdit on a client path) with exit 2 and a reason, and lets each allowed
-    one through (harness/hs, reads, git, scratch work, client-install)."""
+    Python into client/, the same wrapped in `sh|bash|zsh -c` or `eval`, `find client ... -delete|-exec`,
+    Edit/Write/NotebookEdit on a client path) with exit 2 and a reason, and lets each allowed one through
+    (harness/hs, reads incl. read-only find/-exec and wrapped reads, git, scratch work, client-install)."""
     ev: dict = {"hook": str(HOOK.relative_to(P.ROOT))}
     require(HOOK.is_file() and os.access(HOOK, os.X_OK), "the hook script is missing or not executable", **ev)
     cfg = json.loads(SETTINGS.read_text())
