@@ -13,7 +13,7 @@ This page is the detailed reference: what you need, what each bootstrap step doe
 | | |
 |---|---|
 | **Mac** | Apple Silicon (M1 or newer). **macOS 26.2 or newer**: the pinned Wine runtime's binaries are built for macOS 26.2 (their `LC_BUILD_VERSION` minimum, read with `otool -l`), and macOS refuses to load a binary built for a newer system. Developed and measured on an M2 Pro with 16 GB RAM, macOS 26.6 (ADR-0002, `docs/research/m2-population-tuning.md`). 16 GB is enough for the default ~500-bot world, though memory is tight (`openspec/specs/performance-budget/spec.md`). |
-| **Disk** | About **31 GB** for a full install, measured by a fresh bootstrap on the dev Mac (2026-10-07; table below), plus headroom. Bootstrap checks free space first and needs about 35 GB free for a first run (the client install alone wants 19 GB free when it starts). |
+| **Disk** | About **28 GB** for a full install, measured by a fresh bootstrap on the dev Mac (2026-10-07; table below), plus headroom. Bootstrap checks free space first and needs about 35 GB free for a first run (the client install alone wants 19 GB free when it starts). |
 | **Network** | Only during setup: the pinned sources (about 1.4 GB of git history), the server data (1.2 GB) and the Wine runtime (64 MB). Playing is fully offline. |
 | **A WoW client** | **Not included.** You supply your own Windows **3.3.5a (build 12340) enUS** client, as a zip or a folder. Bootstrap reads it and never changes it. |
 | **Tools** | Xcode Command Line Tools, Rosetta 2 and Homebrew (step 1). Bootstrap checks for each and tells you the exact command when one is missing. |
@@ -95,7 +95,7 @@ The steps, in order, with the times measured on the dev Mac (2026-10-07):
 | 9 | Building Moonglade.app | `dist/Moonglade.app`, ad-hoc signed | `harness/hs app` |
 | 10 | Moonglade's default settings | the defaults above into `env/settings.json`, where unset | `harness/hs world-size normal`, `harness/hs client-mode patched` |
 
-Measured on the dev Mac with the pinned downloads already cached and a warm compiler cache: a fresh bootstrap took about 26 minutes (most of it the database creation and the server build), a re-run about 15 seconds. See `openspec/changes/easy-setup/design.md` ("Measurements") for the numbers and how they were taken.
+Measured on the dev Mac (M2 Pro, 2026-10-07): a fresh bootstrap took **36 minutes** with an empty compiler cache (32 of them cloning and building the server) and **7 minutes** with a warm one (server 5 min, databases 1.5 min, everything else under a minute; the server data and Wine runtime came from a download cache). A re-run took **2 seconds**. See `openspec/changes/easy-setup/design.md` ("Measurements") for the numbers and how they were taken.
 
 ### Pinned downloads
 

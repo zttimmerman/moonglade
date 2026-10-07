@@ -120,3 +120,26 @@ use temp folders renamed into place; the bootstrap lock is a flock (released by 
   second account can use the existing Homebrew read-only; it can't install into it (only the owner can run `brew bundle install`),
   and its first server build compiles from scratch (ccache lives in each account's `~/Library/Caches`). Documented in
   docs/setup.md step 1. The human-verify scenario (2.2) remains the real proof.
+
+## Measurements (B29, 2026-10-07, M2 Pro 16 GB, macOS 26.6.2, `setup.fresh_clone`)
+
+| | Cold compiler cache (run 1) | Warm compiler cache (run 3) |
+|---|---|---|
+| fresh `./bootstrap --yes` | 2179 s (36.3 min) | 435 s (7.3 min) |
+| of which: server build (clone + compile) | 1935 s | 300 s |
+| server data (from the cache: verify + unzip) | 33 s | 26 s |
+| databases (first `hs up` + `hs down`, m0) | 135 s | 82 s |
+| Wine runtime / client install (18 GB, folder source) / play client / app | 10 / 51 / 6 / 9 s | 5 / 17 / 2 / 2 s |
+| re-run (every step "already done", no output changed) | — | 1.8 s |
+| resume after SIGKILL at 4.3 GB into the client install | — | 30 s (client + play client redone; nothing earlier touched; no `.hs-part` left) |
+| `./play` stand-in to "ready" (incl. the 120 s no-window fallback, first Wine prefix) | — | 238 s; resumed install 140 s |
+
+Disk (`du`-style sums in the scratch clone): vendor 2.4 GB, build 1.4 GB, server 0.05 GB, data 4.4 GB (client-data 3.1 + MySQL),
+client 17.9 GB, env 18.3 GB of which ~17 GB is the play client's copy-on-write clone (shares storage with client/): about **28 GB**
+on disk. Runs 1 and 3 used the default `hs build -j 8`; bootstrap has no jobs option (it calls `hs build --clean`).
+
+Real power-loss kill (2026-10-07 05:02): run 2 was killed mid server build (3 %). Left behind: `vendor/` complete and at the pins,
+a partial `build/` with **no** input-hash stamp, no `server/`, nothing else. `./bootstrap --check` afterwards: build "to do (no server
+binaries yet)" and every later step "to do"; a re-run would build from empty (no stamp = never trusted). No `.part`/`.unpack`
+leftovers. The main checkout's MySQL had been shut down cleanly at 04:24, so no InnoDB recovery was needed; `hs up` (ready in 18 s) and
+`hs down` (graceful) afterwards were clean.

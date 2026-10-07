@@ -19,7 +19,7 @@ It's a personal project, and nothing it produces is redistributed. **The WoW cli
 ## Requirements
 
 - An **Apple Silicon Mac** with **macOS 26.2 or newer** (the pinned Wine runtime is built for it). It's developed on an M2 Pro with 16 GB RAM running macOS 26.6.
-- About **31 GB of disk** for a full install (18 GB of it is your client; the play client is a copy-on-write clone, so it costs almost nothing extra), plus headroom: bootstrap wants about 35 GB free for a first run.
+- About **28 GB of disk** for a full install (18 GB of it is your client; the play client is a copy-on-write clone, so it costs almost nothing extra), plus headroom: bootstrap wants about 35 GB free for a first run.
 - **Homebrew** at `/opt/homebrew`. Bootstrap checks for the **Xcode Command Line Tools** and **Rosetta 2** and tells you the command if one is missing, and installs the Homebrew packages in the `Brewfile` with your OK.
 - Your own **WoW 3.3.5a (12340) enUS Windows client**, as a zip or a folder.
 
@@ -43,7 +43,7 @@ cd project-moonglade
 ./play
 ```
 
-`./bootstrap` checks the Mac and your client first and changes nothing until those pass. Then it installs the Homebrew packages it needs (it asks first; `--yes` skips the question), builds the pinned server, downloads the pinned server data and Wine runtime (each checked against its SHA-256 in `fork.lock`), creates the databases, installs your client (only reading your copy), builds the play client and the app, and sets [Moonglade's defaults](docs/setup.md#moonglades-defaults) (vanilla mode on, the normal world size, the front menu). The first run takes about half an hour to an hour, depending on the Mac and the network. Run it again any time: finished steps are skipped (a re-run takes seconds), and an interrupted run continues where it stopped. If a step fails, it says which one, why, and what to do.
+`./bootstrap` checks the Mac and your client first and changes nothing until those pass. Then it installs the Homebrew packages it needs (it asks first; `--yes` skips the question), builds the pinned server, downloads the pinned server data and Wine runtime (each checked against its SHA-256 in `fork.lock`), creates the databases, installs your client (only reading your copy), builds the play client and the app, and sets [Moonglade's defaults](docs/setup.md#moonglades-defaults) (vanilla mode on, the normal world size, the front menu). The first run took 36 minutes on the dev Mac (M2 Pro), most of it building the server. Run it again any time: finished steps are skipped (a re-run takes seconds), and an interrupted run continues where it stopped. If a step fails, it says which one, why, and what to do.
 
 **First run of the game:** Moonglade creates your personal account `PLAYER` with a random password (not a GM) and saves it in `env/player.json`. That file is gitignored and readable only by you. To pick your own name and password, create that file before the first run (see docs/setup.md, "First run").
 
