@@ -143,3 +143,85 @@ a partial `build/` with **no** input-hash stamp, no `server/`, nothing else. `./
 binaries yet)" and every later step "to do"; a re-run would build from empty (no stamp = never trusted). No `.part`/`.unpack`
 leftovers. The main checkout's MySQL had been shut down cleanly at 04:24, so no InnoDB recovery was needed; `hs up` (ready in 18 s) and
 `hs down` (graceful) afterwards were clean.
+
+## As built: pristine-client protection (B30, 2026-10-07, task 1.8)
+
+**How the 08:22 incident happened (reproduced on scratch folders).** The makeshift copy's `client` was a symlink to the real
+`client/`. `clientbuild.build` ran `cp -cR <base> <tmp>`; BSD `cp -R` copies a symlink named on the command line as the link
+itself, so the staging folder *was* a link to the real `client/`. The build then ran `shutil.rmtree(tmp/<state folder>)` for
+WTF, Screenshots, Cache, Logs and Errors (**this deleted the real `client/WTF` and the other state folders**: none is in the install
+record, so `client.inspect` stayed green), patched `tmp/Wow.exe` (= `client/Wow.exe`) by `os.replace`, and only the MPQ writer's
+own identity guard stopped it. Evidence that `client/WTF` existed before: the 01:49 and 07:41 runs' scratch builds record "carried
+over (copied) from …/client/WTF"; at 10:4x it was gone.
+
+**1. OS write protection** (`harness/hslib/pristine.py`). `lock()` removes every write bit and sets the user-immutable flag
+(`chmod a-w` + `chflags uchg`) on every file and folder of the install, the folder itself last. Measured on APFS, macOS 26.6, as the
+owner: overwrite (`>`, `>>`, `r+b`), `os.replace` onto a file, `cp` over, rename, delete, create (file, archive, folder), `rm -rf`,
+`shutil.rmtree`, renaming the client folder and `chmod u+w` all fail (EPERM), both directly and through a symlinked path. `chmod a-w`
+alone isn't enough: the folder itself could still be renamed and its entries deleted (counterexample run). Kept writable on purpose:
+the game's own state folders `WTF/ Cache/ Logs/ Errors/ Screenshots/` (stock mode runs Wow.exe from `client/` and the game writes
+them; `lock()` creates them empty when missing, since a locked folder can't get new entries) and mtld3d's `mtld3d_shaders.bin`. None
+of them is in the install record. `client.stock_mode` passes on the locked client.
+An APFS clone (`cp -cR`) inherits `uchg` on files and the read-only folders, so `clientbuild` clears both on its clone
+(`make_writable`: new inodes, the source is untouched); `client.pristine_locked` proves the play client comes out writable, unflagged
+and patched. `clientinst.install` runs inside `pristine.unlocked()`: it lifts the lock, installs, and re-locks in a `finally`, so also on
+failure. A SIGKILL leaves the folder unlocked; the next `hs client-install` re-locks it, and bootstrap's client step `done()` reports
+"installed, but not write-protected", so a re-run reinstalls (idempotent) and re-locks. `hs client-lock [--status]` locks or reports. The real `client/`
+was locked with it on 2026-10-07 11:21 (Zach approved); `client.inspect` passes, 0 manifest mismatches.
+Scratch trees holding a locked install are deleted with `pristine.remove_tree` (setup.fresh_clone's clone; `_flip_copy` unlocks its clone).
+
+**2. Writer guards by identity.** `pristine.inside()` (moved from `mpq._under_client`, which now calls it) compares st_dev/st_ino of
+every existing ancestor (resolved and lexical), so symlinks, `..` and case variants are caught. Before writing anything,
+`clientbuild.build` refuses a destination, staging or trash path inside `client/`, the test stand-in or the base. It clones the base's
+*real* folder (`realpath`) and checks the clone is a separate real folder (not a link, not the base's inode). `apply_binary` and the
+add-on copy re-check their targets. The MPQ writer also checks every protected root. `clientcfg` (stock mode configures `client/` itself)
+may write only `WTF/Config.wtf` and `Data/<locale>/realmlist.wtf` inside the pristine client. `frontmenu.write` keeps its own check.
+
+**3. Per-run fingerprint.** The runner fingerprints the pristine client at the start: the folder inode; per file outside the state
+folders its inode, size, mtime, flags and mode; the .exe/.dll SHA-256s; the install-record comparison; the lock state. `report.client_pristine`
+(post-run, every run) compares it with the end and fails naming the changed paths. Its self-test (unfiltered runs and runs whose
+filter names it; ~1 s) starts two nested `hs run`s whose root is a scratch stand-in (`$HS_TEST_PRISTINE_CLIENT`). Untouched, it passes.
+With `$HS_TEST_PRISTINE_MUTATE`, a probe check (registered only under both switches) appends to one file, and it fails naming that file.
+The switches are refused by `./play` and by every `hs` command except a nested `hs run` (`$HS_HARNESS_RUN` already set). The stand-in
+can never be `client/` or a folder holding it.
+
+**4. Agent hook.** `.claude/hooks/guard-client.sh` (POSIX sh + `python3 -I`, repo = its grandparent folder or `$CLAUDE_PROJECT_DIR`),
+wired in `.claude/settings.json` as a PreToolUse hook for `Bash|Write|Edit|MultiEdit|NotebookEdit` (exit 2 + reason on stderr). It
+blocks:
+- a symlink-making command (`ln -s`, `os.symlink`, `symlink_to`) whose text names `client`, `env`, `data` or `server`;
+- writes into `client/`: redirections, `tee`, `cp`/`rsync` destinations, `mv`/`rm`/`touch`/`mkdir`/`chmod`/`chflags`/…, `sed -i`,
+  `dd of=`, extractors, writes after `cd client`, and inline-code write calls whose argument is a `client/` path;
+- Write/Edit/NotebookEdit on a path inside `client/`.
+
+Allowed: reads, git, `harness/hs`, `./play`, `./bootstrap`. Known false positives, because the rules match the command *text*: a
+heredoc or echo whose text mentions a symlink command next to those folder names, or an inline write call to a `client/` path, is
+blocked even when it only writes documentation (seen twice while building this). `repo.agent_guard_hook` feeds 31 samples (including
+the literal 08:21 loop) and checks the wiring.
+
+## As built: the two verifier FAILs of 2026-10-07 (B30, task 1.9)
+
+**`play.offline` (fixed).** Wine's ping reaches `sendto()` and gets EPERM from the sandbox (WINEDEBUG `+nsi`: "sendto() rets -1 errno 1"),
+so the deny works. What changed after the 05:05 reboot is the kernel's *logging*. For non-Apple (ad-hoc signed) processes, the first
+violation report is usually not emitted at all (not in `log stream` either). Only the later "N duplicate reports for Sandbox: <proc>(pid)
+deny(1) …" summary appears, and only when the process repeats the denial and lives a moment longer. No first report in 10+ tries at
+10:2x for Homebrew Python, a freshly compiled ad-hoc binary or winedevice.exe; always one for Apple's `/sbin/ping` and CLT Python. Self-test A only passed
+because its IPv4+IPv6 connects to :443 made a duplicate summary. This is outside our control: no SBPL modifier changes it (`(with report)`
+is refused for deny rules, and `(debug deny)` has no effect). The self-test now sends 4 echoes and reads the log while the prefix still
+runs, then stops it. The requirement is unchanged: a kernel log line naming a `.exe` with `deny network-outbound`, non-DNS (`_LINE_RE`
+matches it inside a duplicate summary). 3/3 pass (one even got a first report); with 1 echo it fails again. Caveat for the loop window: a
+*single* denied attempt by the loop could now go unlogged; the deny itself is enforced either way.
+
+**`client.wording_addon` (not fixed: diagnosis only).** easy-setup's diff is not involved: the run builds a scratch play client, so the F28
+path takes the old `clientbuild.build` branch unchanged, and HS_TEST_OWN_CLIENT is unset. Two different failure modes:
+- *Since 08:22* the scratch play client gets no settings, because the incident deleted `client/WTF` (builds carry it over). The intro
+  movie plays and the TOS/EULA screens are pending (`movie`, `readTOS` and `readEULA` were in it), so the front menu never logs in ("no add-on
+  report"). The checks silently depended on that undeclared `client/WTF` state.
+- *07:41–08:19* (with `client/WTF` present; reproduced by seeding those three settings into the scratch): the character enters the world
+  and leaves it 0.07–0.4 s later by an orderly logout. connection.log shows a second `COP_LOGIN_CHARACTER … TRUE`, then `COP_GET_CHARACTERS`;
+  the server log has Login and Logout in the same second; the add-on records `LOGOUT_CANCEL` and `PLAYER_LEAVING_WORLD`, then saves.
+  Ruled out: the add-on (no Lua `Logout`/`Quit`/`ForceQuit` call, no `StopCinematic`; the same happens with the test hook not planted),
+  the harness (its SIGTERM comes after the save), and focus or keys (Wine `+event,+keyboard`: no key, close or activation event). The cause is
+  still open. Candidates: server or DB state of the test account or character since the 01:49 pass (account re-created, character level 10,
+  `account_access` row).
+  The add-on's test hook now records LOGOUT_CANCEL, PLAYER_LEAVING_WORLD, PLAYER_CAMPING, any Logout/Quit caller, its own
+  StopCinematic calls and the state at logout, so the next failure shows this directly.
