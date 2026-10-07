@@ -57,3 +57,9 @@ No game data values. Downloads are pinned by URL + sha256 in fork.lock.
   alternative is a client binary patch (ADR + Zach's yes). `login.auto_login` still injects no keystrokes; no scenario
   text changed. Also: scratch play clients no longer copy `client/WTF`; each seeds `movie`, `readEULA`, `readTOS`,
   `hwDetect`, `realmName` and the test account's SavedVariables itself and refuses to launch without them.
+- 2026-10-07 (addition): new play-client requirement "A freshly built play client starts at the front menu" (check
+  `client.first_start_settings`). Reason (B32): on a play client built from a settings-less pristine client, the intro
+  movie, EULA/TOS screens, realm list and 1024x768 hardware detection stood between a friend and the front menu. Seeding
+  `readEULA`/`readTOS` accepts the client's EULA/ToS screens on the player's behalf; flagged for Zach. Also added
+  (tooling, no scenario): unfiltered full/slow/gui runs refuse to start when the screen is locked, the display is asleep
+  or the battery is below 35% on battery (`--ignore-gui-preflight` overrides), per Zach's 2026-10-07 OK on test-loop speedups.

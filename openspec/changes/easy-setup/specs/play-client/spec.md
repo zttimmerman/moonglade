@@ -47,3 +47,13 @@ A Claude Code PreToolUse hook (committed in `.claude/settings.json`) SHALL block
 - **WHEN** each is fed to the hook as Claude Code would
 - **THEN** each harmful one is blocked with a reason and each allowed one passes
 - Check: `repo.agent_guard_hook`
+
+### Requirement: A freshly built play client starts at the front menu
+A play client built from a pristine client that has no settings of its own SHALL skip the intro movie, the EULA and Terms of Use screens, the realm list and the first-start hardware detection. The build adds `movie`, `readEULA`, `readTOS`, `hwDetect` and `realmName` only where they are not already set, and never writes inside `client/`.
+
+#### Scenario: A friend's first launch reaches the front menu
+- GIVEN a pristine client whose `WTF/Config.wtf` sets none of `movie`, `readEULA`, `readTOS`, `hwDetect`, `realmName`
+- WHEN a play client is built from it the way `hs client-build` builds one and launched
+- THEN all five settings are present, the front menu is the first screen, one Continue reaches the character list, and the window matches the configured aspect ratio
+- AND settings that were already set are left unchanged
+- Check: `client.first_start_settings`
