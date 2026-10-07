@@ -195,7 +195,7 @@ blocks:
 
 Allowed: reads, git, `harness/hs`, `./play`, `./bootstrap`. Known false positives, because the rules match the command *text*: a
 heredoc or echo whose text mentions a symlink command next to those folder names, or an inline write call to a `client/` path, is
-blocked even when it only writes documentation (seen twice while building this). `repo.agent_guard_hook` feeds 31 samples (including
+blocked even when it only writes documentation (seen twice while building this). `repo.agent_guard_hook` feeds 34 samples (including
 the literal 08:21 loop) and checks the wiring.
 
 ## As built: the two verifier FAILs of 2026-10-07 (B30, task 1.9)
