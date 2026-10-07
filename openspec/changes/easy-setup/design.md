@@ -195,7 +195,7 @@ blocks:
 
 Allowed: reads, git, `harness/hs`, `./play`, `./bootstrap`. Known false positives, because the rules match the command *text*: a
 heredoc or echo whose text mentions a symlink command next to those folder names, or an inline write call to a `client/` path, is
-blocked even when it only writes documentation (seen twice while building this). `repo.agent_guard_hook` feeds 34 samples (including
+blocked even when it only writes documentation (seen twice while building this). `repo.agent_guard_hook` feeds 51 samples since B32 (including
 the literal 08:21 loop) and checks the wiring.
 
 ## As built: the two verifier FAILs of 2026-10-07 (B30, task 1.9)
@@ -274,3 +274,58 @@ shown and read, the add-on's own Logout followed (3/3 since).
 - `client.wording_addon` now also fails, with that diagnosis, when PLAYER_LEAVING_WORLD comes before the add-on's own Logout
   call (counterexample: press skipped, guard told it worked). Counterexample for the guard: SendInput injected 0.
 - A real player is not affected in practice: any key or mouse input resets the timer; the client's behaviour is unchanged.
+
+## As built: B32 (2026-10-07)
+
+**`play.offline` self-test B made deterministic.** The 14:02 FAIL (1 in 7): Wine's ping was blocked ("General failure") but
+the log had no line, because winedevice.exe exited (the prefix shut down after the 4th echo) before the kernel's
+"N duplicate reports" summary was emitted (`wineserver -k` exit 1 = no server left). Now `_selftest_wine` starts
+`ping -n 60` under the profile and polls `/usr/bin/log show` (predicate: this run's unique tag) every 2 s while it runs;
+as soon as a `.exe` non-DNS deny line appears it stops the prefix. Bound 75 s. Fail-closed: no line within the bound, or
+any "Reply from 1.1.1.1" in the ping output, fails. The prefix's pids during the self-test are excluded from the loop's
+denial window (a late summary for a self-test process can't count against the loop). Measured: line seen after 3-6 s in
+19/19 runs (11 standalone + 8 `play.offline`), first-report or duplicate-summary. Counterexample: the profile without the
+deny rule → 60 replies, no line, FAIL after 63 s.
+
+**Agent hook.** `sh|bash|zsh|dash|ksh|fish -c '<code>'` (also `-lc`, `-ec`, after `env`/`sudo`/...) and `eval <words>`
+get their inner code checked with the same rules (recursively, depth 4). `find` left the read-only list: with a start path
+in `client/` (or relative after `cd client`), `-delete`, `-exec/-execdir/-ok/-okdir` of a command that isn't read-only,
+and `-fprint*` into `client/` are blocked; `find client -name x` and `-exec shasum {} \;` pass. 10 blocked + 7 allowed rows
+added; the previous hook lets all 10 new blocked rows through. Known gap: `bash script.sh` (a file the hook can't see),
+`find . -delete` from the repo root (the OS lock still refuses it).
+
+**GUI preflight.** `hs run` with no `--only` and tier full/slow/gui checks `guienv.probe()` (screen lock via ioreg,
+`CGDisplayIsAsleep`, `pmset -g batt`) and refuses in < 1 s with one line and exit 2 when the screen is locked, the display
+asleep, or the Mac is on battery below 35 %. `--ignore-gui-preflight` overrides. Unknown probe values don't refuse.
+Filtered, quick and backups runs never refuse (nested runs inside checks are all quick).
+
+**`report.timing`.** Its own evidence called the run's build total `build_s`, which `build_claim_warnings` then read as a
+claim by `report.timing` ("claims 30 s ... not on the allowlist"). Renamed to `run_build_s`; synthetic case (g) proves
+report.timing's own record over a 420 s-build run raises no warning, while case (e) still warns for a real check's claim.
+
+**Scratch env.** `setup_checks.scratch_env` drops `HS_TEST_PRISTINE_CLIENT`, `HS_TEST_PRISTINE_MUTATE` and any `HS_TEST_*`.
+
+**Manifest `client_dir`.** Written repo-relative (`"client"`) by `clientinst.manifest_client_dir`; an install outside the
+repo stays absolute. A no-op reinstall heals an old value (`heal_manifest_client_dir`: rewrites only that field of the
+manifest, never opens `client/`); the dev Mac's manifest was healed with that function (it named the pre-rename
+[redacted] folder). `client.inspect` now requires the field to be current.
+
+**Friend first launch (item 6).** Confirmed: a play client built from a `client/` without saved settings (a friend's: the
+lock creates an empty `client/WTF`, stock mode adds only realmlist/patchlist/gxWindow/gxApi) starts with the intro movie,
+then the EULA/TOS screens, at a 1024x768 window from hardware detection, and never reaches the front menu or the character
+list without input (measured: counterexample run, no menu marker in 2 screenshots, both 1024x768, no character list in
+90 s). `clientbuild.build` now adds `movie "0"`, `readEULA "1"`, `readTOS "1"`, `hwDetect "0"` and `realmName` (auth DB if
+up, else AzerothCore's base SQL) to `WTF/Config.wtf` **only for keys not set yet** (`clientcfg.add_missing_settings`, never
+inside `client/`), after the state folders are moved in, so an existing play client's settings are never changed; an
+up-to-date play client isn't touched at all. readEULA/readTOS are seeded because B30/B31 measured that those screens come
+before the login screen (`AccountLogin_ShowUserAgreements`); for Zach to confirm: this accepts the client's EULA/TOS
+screens on the player's behalf, and skips the intro movie. New check `client.first_start_settings` (full tier, real client,
+~70 s): build exactly as `hs client-build` does, the five settings present; the front menu is the first screen; one Continue
+reaches the character list; the window has the configured resolution's aspect ratio. Not yet mapped to a spec scenario
+(orchestrator: add one to play-client). Zach's `env/client-play` already has all five; it was byte- and stat-identical
+before/after this work.
+
+**Idle logout and real players (item 7).** No path enters the world without player input: `EnterWorld()` in the glue
+add-ons runs only under `HS_TEST` (the test hook's `enterworld` act and `enter_world_after_charlist`), and the front menu
+waits for a Continue click (`login.fresh_menu_waits`), then the player clicks Play. Those clicks are hardware input, which
+resets the client's idle timer, so a real player gets the stock 30-minute AFK logout only after 30 minutes without input.
