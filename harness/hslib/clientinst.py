@@ -269,6 +269,12 @@ def install(src: Path, client: Path = P.CLIENT, manifest_path: Path = P.CLIENT_M
         if manifest_path.exists():
             manifest_path.unlink()
         client.mkdir(parents=True, exist_ok=True)
+        # easy-setup (kill-safe): a SIGKILLed install leaves its in-progress <name>.hs-part behind; drop those first
+        stale = [p for p in client.rglob("*.hs-part") if p.is_file()]
+        for p in stale:
+            p.unlink()
+        if stale:
+            log(f"removed {len(stale)} unfinished file(s) left by an interrupted install")
         done_bytes, last = 0, time.time()
         hashes: dict[str, str] = {}
         corrupt = []
