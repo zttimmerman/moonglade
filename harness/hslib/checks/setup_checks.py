@@ -702,7 +702,7 @@ def _verify_install(clone: Path, tag: str, ev: dict) -> dict:
     m = clone / "env/wowsilicon-r17/.hs-runtime-sha256"
     v["wine_runtime_pinned"] = m.exists() and m.read_text().strip() == pin["wowsilicon_runtime_sha256"] \
         and (clone / "env/wowsilicon-r17/.wine-runtime/bin/wine").exists()
-    rdir = SCRATCH_ROOT / f"inspect-{tag}"
+    rdir = clone / "harness" / "out" / f"inspect-{tag}"      # the runner writes results inside its own repo
     shutil.rmtree(rdir, ignore_errors=True)
     r = subprocess.run([str(clone / "harness/hs"), "run", "--tier", "quick", "--only", "client.inspect",
                         "--results-dir", str(rdir)], capture_output=True, text=True, env=scratch_env(HS_HARNESS_RUN="1"),
@@ -713,7 +713,8 @@ def _verify_install(clone: Path, tag: str, ev: dict) -> dict:
     except (OSError, ValueError, KeyError):
         ci = {}
     v["client_inspect"] = {"status": ci.get("status"), "message": ci.get("message"),
-                           "client_dir": (ci.get("evidence") or {}).get("client_dir")}
+                           "client_dir": (ci.get("evidence") or {}).get("client_dir"), "run_rc": r.returncode,
+                           **({} if ci else {"run_stderr_tail": r.stderr[-800:]})}
     shutil.rmtree(rdir, ignore_errors=True)
     rec0001 = json.loads(sorted((clone / "patches/client").glob("0001-*.json"))[0].read_text())
     from ..clientinst import sha256_file
