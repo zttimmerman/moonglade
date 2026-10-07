@@ -25,6 +25,13 @@ def inspect(ctx):
     man = load_manifest()
     require(man is not None, "no install manifest; run `harness/hs client-install <zip-or-dir>`", **ev)
     ev["installed_at"] = man.get("installed_at")
+    # B32: the manifest names the install folder repo-relative (clientinst.manifest_client_dir), never a stale
+    # absolute path from before a repo move/rename
+    from ..clientinst import manifest_client_dir
+    ev["manifest_client_dir"] = {"recorded": man.get("client_dir"), "expected": manifest_client_dir(client)}
+    require(man.get("client_dir") == manifest_client_dir(client),
+            f"the install manifest names client_dir {man.get('client_dir')!r}, not {manifest_client_dir(client)!r} "
+            "(a stale path; `harness/hs client-install <your client>` rewrites it without changing any client file)", **ev)
     wow = client / "Wow.exe"
     require(wow.is_file(), "client/Wow.exe missing", **ev)
 

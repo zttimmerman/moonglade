@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import time
+from pathlib import Path
 
 from .. import paths as P
 from ..registry import REGISTRY, TIERS, check, require, tiers_for
@@ -11,7 +12,8 @@ from ..registry import REGISTRY, TIERS, check, require, tiers_for
 SCENARIO_RE = re.compile(r"^#### Scenario:\s*(.+)$", re.M)
 CHECK_RE = re.compile(r"Check:\s*`([^`]+)`")
 HUMAN_RE = re.compile(r"\[human-verify\]\s*(\S.{10,})")
-POST_IDS = ("report.coverage", "report.schema", "report.full_run", "report.tiers", "report.timing")
+POST_IDS = ("report.coverage", "report.schema", "report.full_run", "report.tiers", "report.client_pristine",
+            "report.timing")
 QUICK_BUDGET_S = 180          # spec: the quick tier finishes in under 3 minutes on the target Mac
 NOT_QUICK = ("build.clean", "client.launch_smoke", "lifecycle.persist")   # named by the spec
 QUICK_DIR = P.OUT / "quick-tier"   # where report.tiers' nested quick run writes its results
@@ -211,6 +213,14 @@ def tiers_nested(leave_up: bool) -> dict:
     return _tiers_record(probs, ev | tev, t0)
 
 
+def _repo_rel(p: Path) -> str:
+    """p relative to the repo, or absolute when it lies outside (`hs run --results-dir` elsewhere)."""
+    try:
+        return str(Path(p).resolve().relative_to(P.ROOT.resolve()))
+    except ValueError:
+        return str(Path(p).resolve())
+
+
 def full_run_record(doc: dict, referenced: set, extra: list, reg: dict | None = None,
                     gui_rule_now: dict | None = None, backups_rule_now: dict | None = None) -> dict:
     """report.full_run over a results document (+ the post-run records in `extra`): a full run passes only if every
@@ -257,13 +267,13 @@ def full_run_record(doc: dict, referenced: set, extra: list, reg: dict | None = 
                          "backups_rule_rechecked": bk_now,
                          "backups_skips_accepted": bool(bk_skipped) and all(i in ok_skips for i in bk_skipped),
                          "non_passing": failing, "checks_executed": len(executed) - len(ok_skips),
-                         "outputs": [str(P.RESULTS.relative_to(P.ROOT)), str(P.SUMMARY.relative_to(P.ROOT))]},
+                         "outputs": [_repo_rel(P.RESULTS), _repo_rel(P.SUMMARY)]},
             "duration_s": 0.0,
             **({} if ok else {"message": (why[0] if not full else
                                           "not a clean full run: " + ", ".join(not_run + failing))[:300]})}
 
 
-def post_run(doc, selected_ids, t_start=None, leave_up=False):
+def post_run(doc, selected_ids, t_start=None, leave_up=False, pristine_start=None):
     out = []
     t0 = time.time()
     ok, ev = coverage()
@@ -291,6 +301,15 @@ def post_run(doc, selected_ids, t_start=None, leave_up=False):
                 "evidence": {"schema": "harness/results.schema.json", "errors": errs[:50], "empty_evidence": empty,
                              "records_validated": len(doc["checks"]) + 1},
                 "duration_s": round(time.time() - t0, 2), **({} if ok else {"message": "results.json fails schema"})})
+
+    # report.client_pristine (easy-setup, play-client): the pristine client unchanged since the run started; its
+    # self-test (nested runs on a scratch stand-in) runs on unfiltered runs and when the filter names it, never nested
+    from . import pristine_checks
+    from .. import pristine as _pristine
+    import os as _os
+    selftest = (not _os.environ.get(_pristine.TEST_ENV)
+                and (not m.get("filter") or any(fnmatch.fnmatch("report.client_pristine", g) for g in m.get("filter") or [])))
+    out.append(pristine_checks.post_run_record(pristine_start, selftest))
 
     out.append(full_run_record(doc, set(ev["referenced_ids"]), out))
     if self_mode:
@@ -343,7 +362,9 @@ def timing_problems(doc: dict, extra: list, wall_s: float, baseline: dict | None
         if t.get(k) != want.get(k):
             probs.append(f"the timing summary's {k} ({t.get(k)}) doesn't match the records ({want.get(k)})")
     ev = {"timing_summary_checks": len(per), "records": len(recs), "top10": top, "wall_s_now": round(wall_s, 1),
-          "backups_tier_s": bk_s, "build_s": want["build_s"], "build_by_check_s": want["build_by_check_s"],
+          # the run's total build time, under a name that isn't `build_s` (B32: report.timing's own record would
+          # otherwise read as a check claiming build time, runner.build_claim_warnings)
+          "backups_tier_s": bk_s, "run_build_s": want["build_s"], "build_by_check_s": want["build_by_check_s"],
           "new_checks_s": want.get("new_checks_s"), "warnings": want.get("warnings"),
           "full_tier_unfiltered": m.get("full_run") is True and m.get("tier") == "full"}
     if not ev["full_tier_unfiltered"]:
@@ -383,41 +404,74 @@ def timing_problems(doc: dict, extra: list, wall_s: float, baseline: dict | None
     return probs, ev
 
 
+RACE_BASELINE = "core.login_logout_race_baseline"     # on runner.BUILD_CLAIM_ALLOWLIST
+
+
 def synthetic_timing_cases() -> dict:
-    """harness-reporting "Slowdowns fail, new checks and rebuilds don't": timing_problems on synthetic full-run
-    documents against a known baseline (t.a 600 s, t.b 400 s, build.clean 20 s of build). (a) the baseline checks 15 %
-    slower; (b) unchanged + 300 s of new checks; (c) unchanged + a from-empty build adding 400 s (build.clean, and a
-    check's own rebuild via evidence build_s); (d) one new check of 200 s. Each case's verdict is computed by the
-    guard's own code (runner.timing_summary + timing_problems)."""
+    """harness-reporting "Slowdowns fail, new checks and rebuilds don't" and (easy-setup, F33) "Only allowlisted checks
+    may claim build time": timing_problems on synthetic full-run documents against a known baseline (t.a 600 s, the
+    race baseline 400 s, build.clean 20 s of build). (a) the baseline checks 15 % slower; (b) unchanged + 300 s of new
+    checks; (c) unchanged + a from-empty build adding 400 s (build.clean, and the allowlisted race baseline's own
+    rebuild via evidence build_s); (d) one new check of 200 s; (e) the non-allowlisted t.a 600 s slower, claiming
+    600 s of build_s; (f) the race baseline claiming its real rebuild time (its record in harness/timing-baseline.json:
+    duration and build_s); (g) report.timing's own record over case (c) raises no claim warning (its run total is
+    `run_build_s`, not a claim). Each case's verdict is computed by the guard's own code (runner.timing_summary +
+    timing_problems)."""
     from .. import runner
     from ..registry import Check
-    ids = ("t.a", "t.b", "build.clean", "t.new1", "t.new2", "t.big")
+    ids = ("t.a", RACE_BASELINE, "build.clean", "t.new1", "t.new2", "t.big")
     reg = {i: Check(i, lambda c: {}, n, "synthetic", "any", "", "full", True, None, False, False)
            for n, i in enumerate(ids)}
     base = {"host": {"machine": "arm64"}, "runs": {"r": {"source": "synthetic"}},
-            "checks": {"t.a": {"s": 600.0, "run": "r"}, "t.b": {"s": 400.0, "run": "r"},
+            "checks": {"t.a": {"s": 600.0, "run": "r"}, RACE_BASELINE: {"s": 400.0, "run": "r"},
                        "build.clean": {"s": 0.0, "run": "r", "build_s": 20.0}}}
+    try:
+        real = runner.load_timing_baseline(TIMING_BASELINE)["checks"][RACE_BASELINE]
+        real = {"s": float(real["s"]), "duration_s": float(real["duration_s"]), "build_s": float(real["build_s"])}
+    except (OSError, ValueError, KeyError, TypeError) as e:
+        real = {"error": f"{type(e).__name__}: {e}"}
 
     def r(i, s, build=None):
         return {"id": i, "status": "pass", "duration_s": s, "evidence": {"x": 1, **({"build_s": build} if build else {})}}
 
-    def run(recs):
+    def run(recs, b=base):
         meta = {"full_run": True, "tier": "full", "filter": [], "host": {"machine": "arm64"},
                 "backups_tier_skipped": [], "backups_rule": {"changed_backup_paths": []}}
         wall = sum(x["duration_s"] for x in recs)
-        meta["timing"] = runner.timing_summary(recs, wall, reg, base)
-        probs, ev = timing_problems({"meta": meta, "checks": recs}, [], wall, base, reg)
+        meta["timing"] = runner.timing_summary(recs, wall, reg, b)
+        probs, ev = timing_problems({"meta": meta, "checks": recs}, [], wall, b, reg)
         return {"problems": probs, "now_sum_s": ev.get("now_sum_s"), "limit_s": ev.get("limit_s"),
-                "build_s": ev.get("build_s"), "new_checks_s": ev.get("new_checks_s"), "warnings": ev.get("warnings")}
+                "build_s": ev.get("run_build_s"), "build_by_check_s": ev.get("build_by_check_s"),
+                "new_checks_s": ev.get("new_checks_s"), "warnings": ev.get("warnings"), "_ev": ev}
     cases = {
-        "a_baseline_15pct_slower": run([r("t.a", 690.0), r("t.b", 460.0), r("build.clean", 20.0)]),
-        "b_new_checks_300s": run([r("t.a", 600.0), r("t.b", 400.0), r("build.clean", 20.0), r("t.new1", 150.0),
-                                  r("t.new2", 150.0)]),
-        "c_from_empty_build_400s": run([r("t.a", 750.0, build=150.0), r("t.b", 400.0), r("build.clean", 270.0)]),
-        "d_new_check_200s": run([r("t.a", 600.0), r("t.b", 400.0), r("build.clean", 20.0), r("t.big", 200.0)]),
+        "a_baseline_15pct_slower": run([r("t.a", 690.0), r(RACE_BASELINE, 460.0), r("build.clean", 20.0)]),
+        "b_new_checks_300s": run([r("t.a", 600.0), r(RACE_BASELINE, 400.0), r("build.clean", 20.0),
+                                  r("t.new1", 150.0), r("t.new2", 150.0)]),
+        "c_from_empty_build_400s": run([r("t.a", 600.0), r(RACE_BASELINE, 550.0, build=150.0),
+                                        r("build.clean", 270.0)]),
+        "d_new_check_200s": run([r("t.a", 600.0), r(RACE_BASELINE, 400.0), r("build.clean", 20.0), r("t.big", 200.0)]),
+        "e_unallowlisted_claim_600s": run([r("t.a", 1200.0, build=600.0), r(RACE_BASELINE, 400.0),
+                                           r("build.clean", 20.0)]),
     }
-    a, b_, c, d = (cases[k] for k in ("a_baseline_15pct_slower", "b_new_checks_300s", "c_from_empty_build_400s",
-                                      "d_new_check_200s"))
+    if "error" not in real:
+        base_f = {**base, "checks": {**base["checks"], RACE_BASELINE: {"s": real["s"], "run": "r"}}}
+        cases["f_race_baseline_real_rebuild"] = run([r("t.a", 600.0), r(RACE_BASELINE, real["duration_s"],
+                                                                         build=real["build_s"]),
+                                                     r("build.clean", 20.0)], base_f) | {"real_record": real}
+    else:
+        cases["f_race_baseline_real_rebuild"] = {"problems": [real["error"]], "real_record": real}
+    # (g) report.timing's own record (its evidence over case c, a run with 420 s of build time) next to the other
+    # records: the guard's summary of the run's build time is not a claim, so no warning names report.timing
+    g_recs = [r("t.a", 600.0), r(RACE_BASELINE, 550.0, build=150.0), r("build.clean", 270.0)]
+    g_self = {"id": runner.TIMING_SELF, "status": "pass", "duration_s": 0.5, "evidence": cases["c_from_empty_build_400s"]["_ev"]}
+    cases["g_timing_self_record"] = {"warnings": runner.build_claim_warnings(g_recs + [g_self]),
+                                     "self_run_build_s": g_self["evidence"].get("run_build_s")}
+    for v in cases.values():
+        v.pop("_ev", None)
+    a, b_, c, d, e, f = (cases[k] for k in ("a_baseline_15pct_slower", "b_new_checks_300s", "c_from_empty_build_400s",
+                                            "d_new_check_200s", "e_unallowlisted_claim_600s",
+                                            "f_race_baseline_real_rebuild"))
+    claim = lambda case, cid: any(f"`{cid}` claims" in w for w in case.get("warnings") or [])
     verdict = {
         "a_fails": bool(a["problems"]),
         "b_passes_reporting_new_time": not b_["problems"] and b_["new_checks_s"] == {"t.new1": 150.0, "t.new2": 150.0}
@@ -425,8 +479,16 @@ def synthetic_timing_cases() -> dict:
         "c_passes_reporting_build_time": not c["problems"] and c["build_s"] == 420.0 and not c["new_checks_s"],
         "d_passes_with_warning": not d["problems"] and d["new_checks_s"] == {"t.big": 200.0}
                                  and any("t.big" in w for w in d["warnings"] or []),
+        "e_fails_and_warns_about_the_claim": bool(e["problems"]) and claim(e, "t.a")
+                                             and not (e["build_by_check_s"] or {}).get("t.a"),
+        "g_own_record_is_not_a_claim": cases["g_timing_self_record"]["self_run_build_s"] == 420.0
+                                        and not cases["g_timing_self_record"]["warnings"],
+        "f_passes_reporting_the_build_time": not f["problems"] and "error" not in real
+                                             and (f.get("build_by_check_s") or {}).get(RACE_BASELINE) == real.get("build_s")
+                                             and not claim(f, RACE_BASELINE),
     }
-    return {"cases": cases, "verdict": verdict}
+    return {"cases": cases, "verdict": verdict, "allowlist": {"whole_check": list(runner.BUILD_CHECKS),
+                                                              "evidence_build_s": runner.BUILD_CLAIM_ALLOWLIST}}
 
 
 def timing_record(doc: dict, extra: list, wall_s: float) -> dict:

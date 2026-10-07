@@ -1,184 +1,130 @@
-# Setting up Moonglade on a fresh Mac
+# Setting up Moonglade on a Mac
 
-These are the steps to go from a fresh clone to playing, in order. They're **manual today**. Automating them (a Brewfile, an `hs bootstrap` command) is follow-up **F6** in [STATUS.md](../STATUS.md). Until that lands, this page is the reference. Anything not yet verified is marked **unverified**. Check it by hand and fix this page once you have.
+One command takes a fresh clone to a ready `dist/Moonglade.app`:
 
-Every command runs from the repo root.
+```sh
+./bootstrap ~/Downloads/YourClient_3.3.5a.zip     # or the folder that holds Wow.exe
+```
+
+This page is the detailed reference: what you need, what each bootstrap step does, how long it takes, and how to do any step by hand. Every command runs from the repo root.
 
 ## 0. What you need
 
 | | |
 |---|---|
-| **Mac** | Apple Silicon. Developed and measured on an Apple M2 Pro with 16 GB RAM, macOS 26.6 (ADR-0002, `docs/research/m2-population-tuning.md`). 16 GB is enough for the default ~500-bot world, though memory is tight (see `openspec/specs/performance-budget/spec.md`). |
-| **Disk** | About 29 GB measured on the dev Mac (2026-10-05; plus 2.7 GB for the dev-only `baseline/`), plus headroom. `hs client-install` needs 19 GB free at the moment it runs. The table below breaks it down. |
-| **Network** | Needed only during setup, to clone the pinned sources and download data and the Wine runtime. Playing is fully offline. |
-| **A WoW client** | **Not included.** You supply your own Windows **3.3.5a (build 12340) enUS** client, as a zip or a folder. |
+| **Mac** | Apple Silicon (M1 or newer). **macOS 26.2 or newer**: the pinned Wine runtime's binaries are built for macOS 26.2 (their `LC_BUILD_VERSION` minimum, read with `otool -l`), and macOS refuses to load a binary built for a newer system. Developed and measured on an M2 Pro with 16 GB RAM, macOS 26.6 (ADR-0002, `docs/research/m2-population-tuning.md`). 16 GB is enough for the default ~500-bot world, though memory is tight (`openspec/specs/performance-budget/spec.md`). |
+| **Disk** | About **28 GB** for a full install, measured by a fresh bootstrap on the dev Mac (2026-10-07; table below), plus headroom. Bootstrap checks free space first and needs about 35 GB free for a first run (the client install alone wants 19 GB free when it starts). |
+| **Network** | Only during setup: the pinned sources (about 1.4 GB of git history), the server data (1.2 GB) and the Wine runtime (64 MB). Playing is fully offline. |
+| **A WoW client** | **Not included.** You supply your own Windows **3.3.5a (build 12340) enUS** client, as a zip or a folder. Bootstrap reads it and never changes it. |
+| **Tools** | Xcode Command Line Tools, Rosetta 2 and Homebrew (step 1). Bootstrap checks for each and tells you the exact command when one is missing. |
 
-Disk use per part (measured with `du -sh`, 2026-10-05):
+Disk use per part (fresh bootstrap on the dev Mac, 2026-10-07; `du`):
 
 | Path | Size | What |
 |---|---|---|
-| `client/` | 17 GB | your installed client (`hs client-install` needs 19 GB free to start) |
+| `client/` | 17.9 GB | your installed client (a copy; `hs client-install` needs 19 GB free to start) |
 | `env/client-play/` | ~0 extra | the play client, an APFS copy-on-write clone of `client/`. `du` reports 17 GB, but unchanged files share storage with `client/` (ADR-0009) |
-| `data/client-data/` | 3.1 GB | server map and DBC data (ADR-0003) |
+| `data/client-data/` | 3.1 GB | server map and game-table data (ADR-0003) |
 | `vendor/` | 2.3 GB | pinned AzerothCore and mod-playerbots sources |
 | `build/` | 1.8 GB | cmake build tree (Release) |
-| `~/Library/Caches/ccache` | 1.4 GB | compiler cache, outside the repo |
 | `data/mysql/` | 1.4 GB | the repo's own MySQL data (characters, world) |
-| `env/ghidra_*` | 0.9 GB | optional: Ghidra, for read-only client analysis |
-| `env/wowsilicon-r17/` | 0.4 GB | the Wine runtime |
-| `env/wineprefix-mtld3d/` | 0.3 GB | the Wine prefix |
-| `data/vmangos/` + `data/downloads/` | 0.2 GB | optional: VMaNGOS data, used only by vanilla-mode checks and the era-diff tool |
+| `env/wowsilicon-r17/` + `env/wineprefix-mtld3d/` | 0.7 GB | the Wine runtime and its prefix |
 | `server/` | 52 MB | installed server binaries and configs |
-| `baseline/` | 2.7 GB | dev-only: the unpatched baseline server built by the `core.login_logout_race_baseline` check (`harness/hslib/baseline.py`) |
+| `~/Library/Caches/ccache` | about 1.5 GB | compiler cache, outside the repo (Homebrew's ccache default) |
+| `baseline/` | 2.7 GB | dev-only: the unpatched baseline server built by the `core.login_logout_race_baseline` check |
+| `env/ghidra_*` | 0.9 GB | optional: Ghidra, for read-only client analysis |
 
-## 1. Tools
+## Moonglade's defaults
+
+After setup you play with the same settings as the dev Mac. This table is generated from `harness/hslib/settings.py` (`DEFAULTS`, the one place they're defined; bootstrap writes them, and the `setup.fresh_clone` check compares this table with that source):
+
+<!-- defaults:begin -->
+| Setting | Default | What it means | Show it | Change it |
+|---|---|---|---|---|
+| World size | **normal** | about 500 AI players | `harness/hs world-size` | `harness/hs world-size <small, normal, large or a number>` |
+| Vanilla mode | **on** | levels 1-60 at the pre-2.3 pace and difficulty | `harness/hs vanilla-mode` | no supported switch yet (see the README) |
+| Game client | **patched** | the play client with the Moonglade front menu | `harness/hs client-mode` | `harness/hs client-mode <stock or patched>` |
+<!-- defaults:end -->
+
+Bootstrap only fills in a setting that isn't set yet; a choice you already made in `env/settings.json` is kept.
+
+## 1. Before bootstrap: the tools
 
 ```sh
-xcode-select --install              # Command Line Tools: clang, xcrun, codesign (server build and Moonglade.app)
-softwareupdate --install-rosetta    # the Wine runtime is x86_64 and runs under Rosetta 2
+xcode-select --install                                  # Command Line Tools: clang, git, codesign
+softwareupdate --install-rosetta --agree-to-license     # the Wine runtime is x86_64 and runs under Rosetta 2
 ```
 
-Rosetta works if `arch -x86_64 /usr/bin/true` exits cleanly.
-
-Install [Homebrew](https://brew.sh) at its default `/opt/homebrew`. The build looks for its dependencies there (`harness/hslib/build.py`, `cmake_args()`). Then:
+Install [Homebrew](https://brew.sh) at its default `/opt/homebrew` (the build looks for its packages there):
 
 ```sh
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 eval "$(/opt/homebrew/bin/brew shellenv)"   # put Homebrew on PATH; add this line to ~/.zprofile to keep it
-brew install cmake mysql boost openssl@3 readline ccache python
-python3 --version                           # must report 3.10 or newer
 ```
 
-`harness/hs` and `./play` run whatever `python3` is first on your PATH, so make sure it's Homebrew's (or another 3.10+), not an older system one.
+If `python3 --version` says less than 3.10 (a new Mac's is 3.9), `./bootstrap` stops and says `brew install python`. Everything else it installs from the `Brewfile` itself, with your OK.
 
-These are the dev Mac's versions (`brew list --versions`, 2026-10-05): cmake 3.31.0, mysql 9.2.0, boost 1.92.0, openssl@3 3.6.x, readline 8.x, ccache 4.14.1, Python 3.14.7. The harness needs **Python 3.10 or newer** and uses only the standard library, so there's no `pip install` step. `hs app` refuses an older `python3`.
+**A second macOS account on a Mac that already has Homebrew** (e.g. a friend's account on your Mac, or a test account): `/opt/homebrew` belongs to the account that installed it, but everything in it is readable and runnable by every account (`drwxr-xr-x`). Moonglade only reads and runs Homebrew's tools (cmake, clang via ccache, mysqld with the repo's own data folder), so a second account can use them as they are. It can't *install* packages there: if `./bootstrap` reports a missing package, the account that owns `/opt/homebrew` has to run the `brew bundle install` line it prints.
 
-MySQL 9.x is newer than AzerothCore's documented minimum of 8.0. It works here. ADR-0002 describes a fallback in case it ever doesn't (Docker `mysql:8.4` on the same port).
-
-**Optional:**
-- `brew install openjdk@21`, for Ghidra (`hs ghidra-install`, `hs re`). This is read-only client analysis, ADR-0005.
-- **Node 20** for the `openspec` CLI (`@fission-ai/openspec`, 1.14.0 on the dev Mac), needed only for development. The dev Mac uses nvm: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`. Its default shell Node is 16, which is too old. Install it with `npm install -g @fission-ai/openspec` under Node 20.
-- `gh` (GitHub CLI), used by the development loop for PRs.
-
-Whisky.app is **not** needed. The default Wine layer is the pinned WoWSilicon runtime from step 5. Whisky's Wine 7.7 is only an optional A/B layer (`HS_WINE=whisky`, ADR-0004). The older parts of `docs/client-setup.md` still mention Whisky as a prerequisite, and that text predates ADR-0004's revision.
-
-## 2. Clone
+## 2. Clone and bootstrap
 
 ```sh
-git clone https://github.com/zttimmerman/project-moonglade.git   # private repo
+git clone https://github.com/zttimmerman/project-moonglade.git
 cd project-moonglade
+./bootstrap ~/Downloads/YourClient_3.3.5a.zip
 ```
 
-The repo lives in `~/Documents` on the dev Mac. That's why `Moonglade.app` asks for Documents-folder access on its first launch (see the README's Troubleshooting section). Another location should work too; whether the macOS prompt changes outside `~/Documents` is **unverified**.
+Any folder works: nothing depends on where the repo lives. (If the repo is in `~/Documents`, macOS asks once whether Moonglade may use the Documents folder; allow it.)
 
-## 3. Build the server
+Options: `--yes` installs missing Homebrew packages without asking; `--check` only checks the Mac and the client and changes nothing. Once `client/` is installed, a later `./bootstrap` doesn't need the client argument.
 
-```sh
-harness/hs build
-```
+**Every step is skipped when it's already done**, judged by its output (not by a "done" note): running `./bootstrap` again takes seconds and changes nothing. If a run is interrupted (Ctrl-C, a crash, a closed lid), run it again and it continues at the step that was running. When a step fails, bootstrap stops and prints the step, the problem and what to do.
 
-This clones the pinned sources into `vendor/` (core `mod-playerbots/azerothcore-wotlk@Playerbot` and `mod-playerbots/mod-playerbots`, the SHAs in `fork.lock`). It applies the patch queues `patches/core/*.patch` and `patches/playerbots/*.patch` in order, links `modules/*` (our `mod-era-profile`), then runs cmake configure, build and install into `server/`. It uses 8 parallel jobs by default (`-j N` changes that). A patch that no longer applies stops the build loudly (ADR-0001).
+The steps, in order, with the times measured on the dev Mac (2026-10-07):
 
-- `harness/hs build --clean` does a from-empty build only when the build inputs changed (pins, patches, modules, cmake args, compiler). Otherwise it proves the install is current.
-- `harness/hs build --force-clean` always wipes `build/` first.
-- A cold first build takes about 13 min with no ccache hits; a from-empty build with a warm ccache took 3 min 24 s (both 2026-10-02, `openspec/changes/archive/2026-10-02-core-server-mail-guard/design.md`).
+| # | Step | What it does | By hand |
+|---|---|---|---|
+| 1 | Checking this Mac and your client | Apple Silicon, macOS 26.2+, Rosetta, Command Line Tools, Homebrew at `/opt/homebrew`; the client is a zip or folder holding a 3.3.5a build 12340 enUS Wow.exe (read straight from the zip, nothing unpacked); nothing of Moonglade running; enough free disk for the steps still to do. Nothing changes before this passes. | `./bootstrap --check <client>` |
+| 2 | Homebrew packages | `brew bundle check --no-upgrade --file=Brewfile`; when something is missing, it shows the list and asks (or `--yes`), then `brew bundle install --no-upgrade`. It never upgrades or removes what you have. | `brew bundle install --no-upgrade --file=Brewfile` |
+| 3 | Building the game server | clones the pinned sources into `vendor/`, applies the patch queues, builds and installs into `server/` (about 15-30 min the first time; minutes with a warm compiler cache) | `harness/hs build --clean` |
+| 4 | Server data | downloads the pinned server data (1.2 GB), checks its SHA-256 against `fork.lock`, unpacks it into `data/client-data/` | `harness/hs download client-data` |
+| 5 | Creating the game databases | the first server start: the repo's own MySQL on 127.0.0.1:3307 (never Homebrew's MySQL service) creates and fills the game databases, then everything stops again | `harness/hs up && harness/hs down` |
+| 6 | Wine runtime | downloads the pinned WoWSilicon Wine runtime r17, checks its SHA-256, unpacks it into `env/wowsilicon-r17/` | `harness/hs wine-install` |
+| 7 | Installing your game client | copies your client into `client/` (CRC-checked; your zip or folder is only read), points it at this Mac, then runs the `client.inspect` check | `harness/hs client-install <client>` |
+| 8 | Building the play client | `env/client-play/`: a copy-on-write clone of `client/` plus the hash-checked patch queue `patches/client/` (the Moonglade front menu, ADR-0009) | `harness/hs client-build` |
+| 9 | Building Moonglade.app | `dist/Moonglade.app`, ad-hoc signed | `harness/hs app` |
+| 10 | Moonglade's default settings | the defaults above into `env/settings.json`, where unset | `harness/hs world-size normal`, `harness/hs client-mode patched` |
 
-## 4. Server data (client-data)
+Measured on the dev Mac (M2 Pro, 2026-10-07): a fresh bootstrap took **36 minutes** with an empty compiler cache (32 of them cloning and building the server) and **7 minutes** with a warm one (server 5 min, databases 1.5 min, everything else under a minute; the server data and Wine runtime came from a download cache). A re-run took **2 seconds**. See `openspec/changes/easy-setup/design.md` ("Measurements") for the numbers and how they were taken.
 
-The worldserver needs DBC, map, vmap and mmap files. These come from the pinned `wowgaming/client-data` release (ADR-0003), not from your client. **No `hs` command downloads them yet** (part of F6). Get them by hand:
+### Pinned downloads
 
-```sh
-mkdir -p data/downloads data/client-data
-curl -L -o data/downloads/Data.zip "$(grep '^client_data_url=' fork.lock | cut -d= -f2-)"
-unzip -q data/downloads/Data.zip -d data/client-data
-ls data/client-data   # expect: Cameras  dbc  maps  mmaps  vmaps
-rm data/downloads/Data.zip   # ~1.1 GB, no longer needed
-```
+Every file setup downloads is pinned in `fork.lock` by URL **and SHA-256** (server data, VMaNGOS data, Wine runtime, Ghidra) and checked before use. A file with the wrong hash is refused and removed, and nothing is unpacked from it; run the command again to download a fresh copy.
 
-The zip unpacks flat into those five folders (AzerothCore's own installer does the same: `vendor/azerothcore-wotlk/apps/installer/includes/functions.sh`). The server is configured with `DataDir = data/client-data` (`harness/hslib/config.py`), and the harness reads `data/client-data/dbc/`.
+To keep the downloads for a later setup (another clone, a reinstall), point `HS_DOWNLOAD_CACHE` at a folder: bootstrap looks there first (checking each file's hash like a fresh download) and keeps what it downloads there.
 
-**Optional, for development only:** the vanilla-mode checks and `tools/era-diff` read the pinned VMaNGOS database. Download it to the path the tool expects, and the tool unzips it into `data/vmangos/` by itself:
+### If you move or rename the repo folder
 
-```sh
-curl -L -o data/downloads/vmangos-db-sqlite.zip "$(grep '^vmangos_db_url=' fork.lock | cut -d= -f2-)"
-```
+The server build has the repo's folder built in. After a move, `./play` and `harness/hs up` stop and say so, naming the old and the new folder; rebuild once with `harness/hs build --force-clean` (about 15 minutes with a warm compiler cache). `harness/hs build` notices it by itself and rebuilds from empty, and the dev-only baseline build discards its old build tree by itself.
 
-## 5. MySQL and the first server start
+## 3. First run
 
-You don't install a database by hand. The harness runs its **own** `mysqld` (Homebrew's binary) with its data in `data/mysql/`, on `127.0.0.1:3307`. It never touches Homebrew's MySQL service or its data (ADR-0002). The first start initializes it:
+Double-click `dist/Moonglade.app` (or drag it to the Dock), or run `./play` in a terminal (that needs Homebrew's Python on your PATH: the `brew shellenv` line from step 1).
 
-```sh
-harness/hs up       # mysqld, authserver, worldserver; waits until they're ready
-harness/hs status   # processes, ports, readiness
-harness/hs down     # clean shutdown
-```
-
-On the first start, AzerothCore creates and fills its databases (`acore_auth`, `acore_world`, `acore_characters`, `acore_playerbots`). That's slow, so the harness allows up to 30 minutes for it (`stack.py`). Later starts take seconds to a few minutes.
-
-Everything listens on localhost only: MySQL 3307, auth 3724, world 8085, SOAP 7878. Server configs are regenerated from `server/etc/*.conf.dist` on every start, so never hand-edit `server/etc/*.conf`.
-
-This step is optional. `./play` starts the stack by itself, but running it once here surfaces build or data problems early.
-
-## 6. Wine runtime
-
-```sh
-harness/hs wine-install
-```
-
-This downloads the pinned WoWSilicon Wine runtime r17 (Wine 11.13 with mtld3d, which turns D3D9 into Metal), checks its SHA-256 against `fork.lock`, and unpacks it into `env/wowsilicon-r17/`. It never modifies anything on the client (ADR-0004). It's idempotent. `--force` downloads it again. The Wine prefix `env/wineprefix-mtld3d/` is created automatically on the first launch.
-
-## 7. Install and check your client
-
-```sh
-harness/hs client-install ~/Downloads/YourClient_3.3.5a.zip   # or a folder
-```
-
-This reads the source **read-only** and installs it into `client/`. It checks every zip member's CRC, then writes `env/client-manifest.json` (hashes of every `.exe`/`.dll`, the MPQ list, file sizes, and the Wow.exe version, which should be `3.3.5.12340`). Finally it points the client at `127.0.0.1` (`realmlist.wtf`, `WTF/Config.wtf`). It's safe to re-run. `docs/client-setup.md` has the details, including what to do when the source zip is damaged.
-
-Check the install at any time:
-
-```sh
-harness/hs run --only client.inspect
-```
-
-`client/` is the pristine base and is **never modified**. Patches go into the play client (next step).
-
-## 8. Build the play client
-
-```sh
-harness/hs client-build
-```
-
-This builds `env/client-play/`: an APFS clone of `client/`, plus the hash-checked patch queue in `patches/client/`. That queue holds `0001` (an 8-byte change so the client accepts a modified login screen, ADR-0009 Appendix A) and `0002` (the Moonglade front menu, built from `client-mods/glue/`). It refuses a client that doesn't match the expected hashes. `./play` also runs this automatically when needed, so this step mostly confirms that it works. The build keeps your settings in the play client's `WTF/`, `Screenshots/` and so on across rebuilds.
-
-## 9. Build the app
-
-```sh
-harness/hs app
-```
-
-This builds `dist/Moonglade.app`: a small launcher compiled from `harness/app/launcher.m`, ad-hoc signed, with the icon from `branding/AppIcon.icns`. It records this repo's path, so you can drag the app to `/Applications` or the Dock and it still finds the repo. It writes nothing outside the repo. (`harness/hs icon` regenerates the icon from `env/branding/logo-source.jpeg`, a file that isn't committed. You only need it if you change the logo.)
-
-## 10. First run
-
-Double-click `dist/Moonglade.app`, or run `./play` in a terminal.
-
-- The first run creates your personal account, **`PLAYER`**, with a random password. It's not a GM account. The name and password are saved in **`env/player.json`** (gitignored, readable only by you). `./play` prints them once. To choose your own name and password instead, create that file *before* the first run: `{"account": "NAME", "password": "secret"}` (letters and digits, up to 16 characters each).
-- With the default (`patched`) client, the login screen shows the Moonglade menu. Press **Continue** (or Enter) and you're in, with nothing to type. Create a character at character select as usual.
+- The first run creates your personal account, **`PLAYER`**, with a random password. It's not a GM account. The name and password are saved in **`env/player.json`** (gitignored, readable only by you). To choose your own name and password instead, create that file *before* the first run: `{"account": "NAME", "password": "secret"}` (letters and digits, up to 16 characters each).
+- The login screen shows the Moonglade menu. Press **Continue** (or Enter) and you're in. Create a character at character select as usual.
 - Quitting the game shuts everything down. `./play` prints `All stopped.`
 
-## 11. Optional: run the harness
+## 4. Optional
 
-```sh
-harness/hs run --tier quick   # about 1–2 min
-```
+**Run the harness:** `harness/hs run --tier quick` (about 2 min). See the README's Development section for the tiers. The harness uses its own accounts (`HSTEST`, `HSCOMP`, `HS_GM`) and never touches `PLAYER`.
 
-See the README's Development section for the tiers. The harness uses its own accounts (`HSTEST`, `HSCOMP`, `HS_GM`) and never touches `PLAYER`.
+**VMaNGOS data** (development only; the vanilla-mode checks and `tools/era-diff` read it): `harness/hs download vmangos` puts the pinned, SHA-256-checked zip in `data/downloads/`, and `tools/era-diff` unpacks it into `data/vmangos/` after checking the hash again.
 
-## Optional: Ghidra (read-only client analysis)
+**Ghidra** (read-only client analysis, ADR-0005): `brew install openjdk@21`, then `harness/hs ghidra-install`.
 
-```sh
-brew install openjdk@21
-harness/hs ghidra-install
-```
+**Development tools:** Node 20 for the `openspec` CLI (`npm install -g @fission-ai/openspec`, run under Node 20; e.g. `nvm use 20`), and `gh` for pull requests.
 
-This unpacks the pinned Ghidra into `env/` (ADR-0005). See `.claude/skills/hs-reverse-engineering/` for how `harness/hs re` is used.
+**Versions on the dev Mac** (`brew list --versions`, 2026-10-05): cmake 3.31.0, mysql 9.2.0, boost 1.92.0, openssl@3 3.6.x, readline 8.x, ccache 4.14.1, Python 3.14.7. MySQL 9.x is newer than AzerothCore's documented minimum of 8.0 and works here; ADR-0002 describes a fallback (Docker `mysql:8.4` on the same port). The harness needs Python 3.10 or newer and uses only the standard library (no `pip install`).
+
+Whisky.app is **not** needed. The default Wine layer is the pinned WoWSilicon runtime from step 6. Whisky's Wine 7.7 is only an optional A/B layer (`HS_WINE=whisky`, ADR-0004).

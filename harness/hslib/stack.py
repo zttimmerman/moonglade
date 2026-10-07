@@ -331,6 +331,10 @@ def up(world_datadir: Path | None = None, timeout: int | None = None, profile: s
     stage = on_stage or (lambda *a, **k: None)
     if not (P.SERVER_BIN / "worldserver").exists():
         raise StackError("server not built; run `harness/hs build` first")
+    from .build import moved_problem
+    moved = moved_problem()             # F30: a server built in another folder; refuse before starting anything
+    if moved:
+        raise StackError(moved["message"])
     name = config.profile_name(profile)
     was_running = bool(stack_processes()["worldserver"])
     if was_running:

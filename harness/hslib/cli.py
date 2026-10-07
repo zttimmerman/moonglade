@@ -49,6 +49,9 @@ def main(argv=None) -> int:
                         "a GUI path changed); backups: only the save-backups end-to-end checks (full runs include "
                         "them only when a backup path changed)")
     r.add_argument("--force-clean", action="store_true", help="build.clean always does a from-empty build")
+    r.add_argument("--ignore-gui-preflight", action="store_true",
+                   help="start an unfiltered full/slow/gui run although the screen is locked, the display asleep or "
+                        "the battery low (GUI checks will then fail; for runs that knowingly accept that)")
     r.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)   # nested runs (report.tiers) write here
     ps_ = sub.add_parser("pop-session", help="one M2 population session (cold start with the population profile, "
                                             "warm-up, 10 min of samples); tuning runs for the budget record")
@@ -73,6 +76,10 @@ def main(argv=None) -> int:
     ci = sub.add_parser("client-install",
                         help="install a 3.3.5a client (zip or folder, read-only) into client/ + manifest")
     ci.add_argument("source", type=Path)
+
+    cl = sub.add_parser("client-lock", help="write-protect the installed client/ (chmod a-w + chflags uchg; "
+                                            "client-install does this itself); --status only reports")
+    cl.add_argument("--status", action="store_true", help="report the protection, change nothing")
 
     wi = sub.add_parser("wine-install", help="fetch + SHA-256-verify the pinned Wine runtime (fork.lock) into env/")
     wi.add_argument("--force", action="store_true", help="re-download even if the pinned runtime is present")
@@ -120,6 +127,19 @@ def main(argv=None) -> int:
                                             "its own Moonglade-labelled icon) or off (no shim; ADR-0010)")
     dp.add_argument("value", nargs="?", choices=["accessory", "regular", "off"])
 
+    bs = sub.add_parser("bootstrap", help="set up from a fresh clone: check this Mac, Homebrew packages (Brewfile), "
+                                          "build the server, server data, databases, Wine, your client, the play "
+                                          "client and the app; skips what's done (./bootstrap wraps this)")
+    bs.add_argument("client", nargs="?", help="your WoW 3.3.5a (12340) enUS client: a .zip or a folder (optional "
+                                               "once client/ is installed)")
+    bs.add_argument("--yes", action="store_true", help="install missing Homebrew packages without asking")
+    bs.add_argument("--check", action="store_true", help="only check this Mac and the client; change nothing")
+    bs.add_argument("--allow-test-inject", action="store_true", help=argparse.SUPPRESS)   # setup.preflight only
+    dl = sub.add_parser("download", help="fetch one pinned, SHA-256-verified download (fork.lock); client-data is "
+                                         "also unpacked into data/client-data/")
+    dl.add_argument("name", choices=["client-data", "vmangos", "wine-runtime", "ghidra"])
+    sub.add_parser("vanilla-mode", help="show whether vanilla mode (the era profile) is on for ./play's world")
+
     sub.add_parser("app", help="build dist/Moonglade.app (double-clickable launcher for ./play; launcher-app) "
                                "and the Wine host shim env/dockshim/hsdock.dylib (ADR-0010)")
     tb = sub.add_parser("timing-baseline", help="per-check timing baseline (harness/timing-baseline.json): "
@@ -132,6 +152,12 @@ def main(argv=None) -> int:
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
 
     a = ap.parse_args(argv)
+
+    import os as _os
+    for _var in ("HS_TEST_PRISTINE_CLIENT", "HS_TEST_PRISTINE_MUTATE"):   # report.client_pristine's self-test only
+        if _os.environ.get(_var) and (a.cmd != "run" or _os.environ.get("HS_HARNESS_RUN") != "1"):
+            log(f"${_var} is a test switch of report.client_pristine's self-test (nested `hs run` only); unset it")
+            return 2
 
     if a.cmd == "build":
         from .build import build, BuildError
@@ -188,6 +214,12 @@ def main(argv=None) -> int:
         if a.results_dir:
             a.results_dir.mkdir(parents=True, exist_ok=True)
             P.RESULTS, P.SUMMARY = a.results_dir.resolve() / "results.json", a.results_dir.resolve() / "summary.md"
+        from . import guienv
+        from .runner import gui_preflight
+        msg = gui_preflight(a.tier, a.only, a.ignore_gui_preflight, guienv.probe)
+        if msg:
+            print(msg)
+            return 2
         return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean)
 
     if a.cmd == "pop-session":
@@ -261,6 +293,16 @@ def main(argv=None) -> int:
             return 1
         _print(res)
         return 0 if res.get("version_ok", True) else 1
+
+    if a.cmd == "client-lock":
+        from . import pristine, paths as Pc
+        if not Pc.CLIENT.is_dir():
+            log("no client/ installed; run `harness/hs client-install <zip-or-folder>`")
+            return 1
+        res = {} if a.status else {"lock": pristine.lock(Pc.CLIENT)}
+        st = pristine.status(Pc.CLIENT)
+        _print(res | {"client": str(Pc.CLIENT), "status": st})
+        return 0 if st["locked"] else 1
 
     if a.cmd == "wine-install":
         from .wineinst import install as wine_install, WineInstallError
@@ -348,6 +390,23 @@ def main(argv=None) -> int:
     if a.cmd == "app":
         from . import app
         return app.cli()
+
+    if a.cmd == "bootstrap":
+        from . import bootstrap
+        return bootstrap.main(a.client, a.yes, a.check, a.allow_test_inject)
+
+    if a.cmd == "download":
+        from . import downloads
+        return downloads.cli(a.name)
+
+    if a.cmd == "vanilla-mode":
+        from . import settings
+        try:
+            _print(settings.vanilla_mode())
+        except settings.SettingsError as e:
+            log(str(e))
+            return 1
+        return 0
 
     if a.cmd == "timing-baseline":
         from . import timingbase

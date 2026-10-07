@@ -18,62 +18,34 @@ It's a personal project, and nothing it produces is redistributed. **The WoW cli
 
 ## Requirements
 
-- An **Apple Silicon Mac**. It's developed on an M2 Pro with 16 GB RAM running macOS 26.6.
-- About **29 GB of disk** measured on the dev Mac (17 GB client, the rest sources, build, data and database; plus 2.7 GB more for the dev-only `baseline/`), plus headroom. The play client is a copy-on-write clone, so it costs almost nothing extra. `hs client-install` refuses to start with less than 19 GB free.
-- **Xcode Command Line Tools**, **Rosetta 2** (the Wine runtime is x86_64), and **Homebrew** at `/opt/homebrew` with `cmake mysql boost openssl@3 readline ccache python`. `harness/hs` and `./play` run the `python3` on your PATH, which must be **3.10 or newer** (Homebrew's, once `brew shellenv` is loaded); the harness uses only the standard library.
-- Optional: **Node 20** for the `openspec` CLI (development only), `openjdk@21` for Ghidra, and `gh`.
+- An **Apple Silicon Mac** with **macOS 26.2 or newer** (the pinned Wine runtime is built for it). It's developed on an M2 Pro with 16 GB RAM running macOS 26.6.
+- About **28 GB of disk** for a full install (18 GB of it is your client; the play client is a copy-on-write clone, so it costs almost nothing extra), plus headroom: bootstrap wants about 35 GB free for a first run.
+- **Homebrew** at `/opt/homebrew`. Bootstrap checks for the **Xcode Command Line Tools** and **Rosetta 2** and tells you the command if one is missing, and installs the Homebrew packages in the `Brewfile` with your OK.
 - Your own **WoW 3.3.5a (12340) enUS Windows client**, as a zip or a folder.
 
-[docs/setup.md](docs/setup.md) has the exact versions and a per-folder disk breakdown.
+[docs/setup.md](docs/setup.md) has what each setup step does, the measured times, a per-folder disk breakdown and the exact versions.
 
-## Setup from a fresh clone
-
-Setup is **manual today**. Automating it (a Brewfile, `hs bootstrap`) is tracked as **F6** in STATUS.md. The short version is below. **[docs/setup.md](docs/setup.md)** has every step explained, with any unverified spots marked.
+## Quick start
 
 ```sh
-# 1. tools
-xcode-select --install
-softwareupdate --install-rosetta
-# install Homebrew (https://brew.sh), then put it on PATH (add this line to ~/.zprofile to keep it):
-eval "$(/opt/homebrew/bin/brew shellenv)"
-brew install cmake mysql boost openssl@3 readline ccache python
-python3 --version         # must say 3.10 or newer
+# 1. Homebrew (https://brew.sh), if you don't have it yet
+/bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+eval "$(/opt/homebrew/bin/brew shellenv)"     # add this line to ~/.zprofile to keep it
 
 # 2. clone (private repo)
 git clone https://github.com/zttimmerman/project-moonglade.git
 cd project-moonglade
 
-# 3. build the pinned server (clones pinned sources into vendor/, applies patches/, installs into server/)
-harness/hs build
+# 3. set everything up with your own client (a .zip or a folder)
+./bootstrap ~/Downloads/YourClient_3.3.5a.zip
 
-# 4. server data (no hs command for this yet; unzips flat into Cameras dbc maps mmaps vmaps)
-mkdir -p data/downloads data/client-data
-curl -L -o data/downloads/Data.zip "$(grep '^client_data_url=' fork.lock | cut -d= -f2-)"
-unzip -q data/downloads/Data.zip -d data/client-data
-rm data/downloads/Data.zip   # ~1.1 GB, no longer needed
-
-# 5. first server start: initializes the repo's own MySQL (127.0.0.1:3307, data/mysql/) and the databases.
-#    The first time can take a long while (the harness allows up to 30 min).
-harness/hs up && harness/hs status && harness/hs down
-
-# 6. Wine runtime (pinned, SHA-256-checked, into env/wowsilicon-r17/)
-harness/hs wine-install
-
-# 7. your client: installed read-only into client/, with a manifest in env/client-manifest.json
-harness/hs client-install ~/Downloads/YourClient_3.3.5a.zip
-harness/hs run --only client.inspect
-
-# 8. the play client (env/client-play/ = clone of client/ + patches/client/); ./play also does this by itself
-harness/hs client-build
-
-# 9. the app
-harness/hs app            # -> dist/Moonglade.app
-
-# 10. play
-./play                    # or double-click dist/Moonglade.app
+# 4. play: open dist/Moonglade.app (double-click, or drag it to the Dock), or
+./play
 ```
 
-**First run:** Moonglade creates your personal account `PLAYER` with a random password (not a GM) and saves it in `env/player.json`. That file is gitignored and readable only by you. Look there if you ever need the login. To pick your own name and password, create that file before the first run (see docs/setup.md, step 10).
+`./bootstrap` checks the Mac and your client first and changes nothing until those pass. Then it installs the Homebrew packages it needs (it asks first; `--yes` skips the question), builds the pinned server, downloads the pinned server data and Wine runtime (each checked against its SHA-256 in `fork.lock`), creates the databases, installs your client (only reading your copy), builds the play client and the app, and sets [Moonglade's defaults](docs/setup.md#moonglades-defaults) (vanilla mode on, the normal world size, the front menu). The first run took 36 minutes on the dev Mac (M2 Pro), most of it building the server. Run it again any time: finished steps are skipped (a re-run takes seconds), and an interrupted run continues where it stopped. If a step fails, it says which one, why, and what to do.
+
+**First run of the game:** Moonglade creates your personal account `PLAYER` with a random password (not a GM) and saves it in `env/player.json`. That file is gitignored and readable only by you. To pick your own name and password, create that file before the first run (see docs/setup.md, "First run").
 
 ## Playing
 
@@ -166,6 +138,7 @@ Add and dismiss companions with chat commands: `.playerbots bot addclass <class>
 
 | Command | What it does |
 |---|---|
+| `hs bootstrap <client>` (`./bootstrap`) | the whole setup, skipping finished steps |
 | `hs build [--clean \| --force-clean]` | sync the pinned sources, apply the patch queues, build and install the server |
 | `hs up [--profile m0\|population\|wotlk]` / `hs down` / `hs status` | start, stop and inspect MySQL, authserver and worldserver |
 | `hs run [--tier quick\|full\|slow] [--only GLOB] [--force-clean]` | run checks, then write `harness/results.json` + `harness/summary.md` |
@@ -173,7 +146,8 @@ Add and dismiss companions with chat commands: `.playerbots bot addclass <class>
 | `hs gm CMD`, `hs sql DB SQL`, `hs fixture …`, `hs probe …` | drive a running server (GM over SOAP, SQL, test fixtures, the headless protocol probe) |
 | `hs client-install`, `hs client-config`, `hs client-build`, `hs client-mode` | client install, localhost config, the play client, stock vs patched |
 | `hs wine-install`, `hs launch [--smoke]` | the Wine runtime; start the client the harness way (test account) |
-| `hs world-size`, `hs pop-session` | world size setting; one measured population session |
+| `hs world-size`, `hs vanilla-mode`, `hs pop-session` | world size setting; whether vanilla mode is on; one measured population session |
+| `hs download <name>` | one pinned, SHA-256-checked download (`client-data` is also unpacked) |
 | `hs app`, `hs icon` | build `dist/Moonglade.app`; regenerate the icon |
 | `hs ghidra-install`, `hs re …`, `hs mpq …` | read-only client analysis, MPQ list/extract/write (never under `client/`) |
 
@@ -218,7 +192,8 @@ The practical procedure, run budget and pre-verification checklist are in `.clau
 | `client-mods/glue/` | the front-menu login screen (GlueXML Lua/XML) |
 | `tools/era-diff/` | VMaNGOS vs AzerothCore diff and SQL generator |
 | `branding/` | app icon |
-| `fork.lock` | every pinned upstream: core, playerbots, client-data, VMaNGOS, Wine runtime, Ghidra |
+| `fork.lock` | every pinned upstream: core, playerbots, and each download's URL + SHA-256 (client-data, VMaNGOS, Wine runtime, Ghidra) |
+| `bootstrap`, `Brewfile` | one-command setup (`harness/hslib/bootstrap.py`) and its Homebrew packages |
 | `openspec/specs/`, `openspec/changes/` | capability specs; open and archived changes |
 | `docs/` | ADRs, setup, research |
 | `.claude/` | skills (procedures), the verifier agent, session hooks |

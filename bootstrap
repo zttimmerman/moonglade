@@ -1,0 +1,33 @@
+#!/bin/sh
+# Moonglade setup: one command from a fresh clone to a ready dist/Moonglade.app (openspec/changes/easy-setup).
+#
+#   ./bootstrap ~/Downloads/YourClient_3.3.5a.zip      (or a client folder)
+#   ./bootstrap --yes <client>                          install missing Homebrew packages without asking
+#   ./bootstrap --check <client>                        only check this Mac and the client; change nothing
+#
+# Every step is skipped when it's already done, so running it again is safe and quick, and an interrupted run
+# continues where it stopped. The work is done by `harness/hs bootstrap` (harness/hslib/bootstrap.py); this wrapper
+# only makes sure a new enough Python is there to run it.
+HERE=$(cd "$(dirname "$0")" && pwd)
+PY=""
+for c in python3 /opt/homebrew/bin/python3; do
+  if command -v "$c" >/dev/null 2>&1 && "$c" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' 2>/dev/null; then
+    PY=$(command -v "$c"); break
+  fi
+done
+if [ -z "$PY" ]; then
+  echo "Moonglade setup needs Python 3.10 or newer, and this Mac doesn't have it yet." >&2
+  if [ -x /opt/homebrew/bin/brew ]; then
+    echo "Install it with:   /opt/homebrew/bin/brew install python" >&2
+  else
+    echo "Install Homebrew first (https://brew.sh):" >&2
+    echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"' >&2
+    echo "then:              /opt/homebrew/bin/brew install python" >&2
+  fi
+  echo "Then run ./bootstrap again." >&2
+  exit 1
+fi
+# the harness runs `python3` from PATH; make sure that's the one we just checked
+PATH="$(dirname "$PY"):$PATH"
+export PATH
+exec "$HERE/harness/hs" bootstrap "$@"

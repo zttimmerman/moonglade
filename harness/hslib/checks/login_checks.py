@@ -17,7 +17,7 @@ from pathlib import Path
 from .. import frontmenu, paths as P, play
 from ..registry import check, require
 from .play_checks import is_clear, remaining, require_given_clear, _delete_scratch
-from .playclient_util import (PlayRun, account_state, clear_logs, connection_log, db_ready, drop_scratch,
+from .playclient_util import (PlayRun, account_state, build_scratch, clear_logs, connection_log, db_ready, drop_scratch,
                               fresh_scratch, glue_logs, marker, screenshots)
 
 CAP = "login-screen"
@@ -136,8 +136,7 @@ def continue_session() -> dict:
         scratch = fresh_scratch("login")
         ev["fresh_scratch"] = {"dir": str(scratch), "existed_before_build": scratch.exists()}
         # a login file left behind by a killed ./play: the next run must remove it before anything else
-        from .. import clientbuild
-        clientbuild.build(dest=scratch)
+        ev["fresh_scratch"]["seeded"] = build_scratch(scratch)["seeded"]
         ev["fresh_scratch"] |= {"connection_log_before": (scratch / "Logs" / "connection.log").exists(),
                                 "screenshots_before": len(screenshots(scratch)),
                                 "account_name_in_config_before": _config_value(scratch, "accountName"),
@@ -542,3 +541,145 @@ def continue_context(ctx):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         ev["cleanup"] = [_delete_scratch(CTX_A), _delete_scratch(CTX_B)]
+
+
+# ---------------------------------------------------------------- first start of a freshly built play client (B32)
+
+# One screenshot on the front menu, one Continue, one screenshot at character select.
+FIRST_START_GLUE = {"marker": True, "script": [{"t": 5, "act": "shot"}, {"t": 8, "act": "continue"},
+                                               {"t": 35, "act": "shot"}]}
+FIRST_START_MENU_S = 120         # the front menu's screenshot must exist this long after the client came up
+FIRST_START_CHARS_S = 90         # and the character list must have arrived this long after it
+
+
+def _config_values(client_dir: Path, keys) -> dict:
+    p = Path(client_dir) / "WTF" / "Config.wtf"
+    text = p.read_text(errors="replace") if p.exists() else ""
+    out = {}
+    for k in keys:
+        m = re.findall(rf'^\s*SET\s+{k}\s+"([^"]*)"', text, re.M | re.I)
+        out[k] = m[-1] if m else None
+    return out
+
+
+# A base whose saved settings already set two of them, written the way a player's or the game's file may look: other
+# case in key names, CRLF line endings, values opposite to the defaults, and a line that isn't one of them.
+PRESET_CONFIG = b'SET gxWindow "1"\r\nSET movie "1"\r\nset READEULA "0"\r\n'
+PRESET_VALUES = {"movie": "1", "readEULA": "0"}
+
+
+def _preset_settings_kept(want: dict) -> dict:
+    """client.first_start_settings' "already set are left unchanged" clause: build a play client from a scratch clone
+    of client/ whose WTF/Config.wtf is PRESET_CONFIG; the built file must start with it byte-for-byte, keep its values,
+    and add only the missing keys (each once, CRLF)."""
+    from .. import clientbuild
+    from .pristine_checks import clone_client
+    base, dest = fresh_scratch("firststart-base"), fresh_scratch("firststart-preset")
+    ev: dict = {"preset": PRESET_CONFIG.decode()}
+    try:
+        clone_client(base)
+        shutil.rmtree(base / "WTF", ignore_errors=True)
+        (base / "WTF").mkdir()
+        (base / "WTF" / "Config.wtf").write_bytes(PRESET_CONFIG)
+        b = clientbuild.build(dest=dest, base=base)
+        got = (dest / "WTF" / "Config.wtf").read_bytes()
+        ev["built"] = got.decode("latin-1")
+        ev["state"] = (b.get("stamp") or {}).get("state", {}).get("first_start_settings")
+        vals = _config_values(dest, list(want))
+        ev["values"] = vals
+        missing = [k for k in want if k not in PRESET_VALUES]
+        tail = got[len(PRESET_CONFIG):]
+        ev["appended"] = tail.decode("latin-1")
+        expect_tail = b"".join(f'SET {k} "{want[k]}"\r\n'.encode() for k in missing)
+        require(got.startswith(PRESET_CONFIG),
+                "the build changed settings that were already set (the base's Config.wtf isn't a byte-for-byte "
+                "prefix of the built one)", **ev)
+        require(all(vals[k] == v for k, v in PRESET_VALUES.items()),
+                f"already-set values changed: {dict((k, vals[k]) for k in PRESET_VALUES)}", **ev)
+        require(tail == expect_tail, f"the build should append exactly the missing settings {missing} (CRLF), "
+                "and nothing for the ones already set", **ev)
+        return ev
+    finally:
+        drop_scratch(dest)
+        drop_scratch(base)
+
+
+def first_start_session(first_start: bool = True, real_run: bool = True) -> dict:
+    """client.first_start_settings' run. first_start=False is the counterexample (the build leaves the settings out)."""
+    from .. import clientbuild, clientcfg
+    want, realm = clientcfg.first_start_settings()
+    keys = list(want)
+    ev: dict = {"first_start_settings_expected": want, "realm": realm}
+    scratch = fresh_scratch("firststart")
+    run = None
+    try:
+        require_given_clear(ev)
+        # GIVEN: the base's saved settings (client/WTF, carried over by the build) set none of them, as on a friend's
+        # freshly bootstrapped client (an empty client/WTF; at most the stock-mode lines)
+        ev["given_base_config"] = _config_values(P.CLIENT, keys)
+        require(not any(ev["given_base_config"].values()),
+                "GIVEN not met: client/WTF/Config.wtf already sets a first-start setting, so the build can't be "
+                "shown to add it", **ev)
+        # WHEN: the play client is built the way bootstrap's playclient step / `hs client-build` builds it
+        b = clientbuild.build(dest=scratch, first_start=first_start)
+        ev["build"] = {"built": b["built"], "state": b["stamp"].get("state")}
+        ev["built_config"] = _config_values(scratch, keys)
+        wrong = {k: ev["built_config"][k] for k in keys if ev["built_config"][k] != want[k]}
+        require(b["built"] and not wrong, f"the freshly built play client's WTF/Config.wtf lacks or differs in {wrong}", **ev)
+        # AND: settings that were already set are left unchanged (structural; a scratch base, never client/)
+        ev["already_set"] = _preset_settings_kept(want)
+        if not real_run:
+            return ev
+        # THEN (real client): the front menu shows without the intro movie or the EULA/TOS screens, and one Continue
+        # reaches the character list without the realm list
+        clear_logs(scratch)
+        run = PlayRun("firststart", glue_test=FIRST_START_GLUE, scratch=scratch, seed=False)
+        run.start()
+        up = run.wait_client()
+        ev["client_up"] = {k: v for k, v in up.items() if k not in ("t",)}
+        require(up.get("up"), "the real Wow.exe never came up", output=run.output()[-2500:], **ev)
+        ev["config_at_launch"] = _config_values(scratch, keys + ["gxResolution"])
+        shot = _wait(lambda: screenshots(scratch), FIRST_START_MENU_S)
+        ev["menu_shot_after_s"] = round(time.time() - up["t"], 1) if shot else None
+        chars = _wait(lambda: re.search(r"COP_GET_CHARACTERS code=\d+ result=TRUE", connection_log(scratch)),
+                      FIRST_START_CHARS_S)
+        _wait(lambda: len(screenshots(scratch)) >= 2, 30)
+        shots = screenshots(scratch)
+        ev["screens"] = [marker(p) for p in shots]
+        conn = connection_log(scratch)
+        ev["connection_log"] = conn[-2000:]
+        ev["realm_list_polls"] = len(re.findall(r"COP_GET_REALMS", conn))
+        ev["logs"] = glue_logs(scratch)
+        _finish(run, ev)
+        first = ev["screens"][0] if ev["screens"] else {}
+        require(first.get("main_menu_up") is True,
+                "no screenshot of the front menu within the limit (the intro movie or the EULA/Terms of Use screens "
+                "came first)", **ev)
+        require(chars, "Continue didn't reach the character list (the realm list came up, or the login failed)", **ev)
+        gx = ev["config_at_launch"].get("gxResolution")
+        if gx and re.fullmatch(r"\d+x\d+", gx):
+            # the window (and so the screenshot) is scaled to fit the screen; its aspect ratio is the configured
+            # one's. Hardware detection's replacement is 4:3 (1024x768, measured B31), far outside the tolerance.
+            w, h = (int(v) for v in gx.split("x"))
+            sw, sh = first.get("size") or (0, 1)
+            ev["resolution"] = {"config": gx, "screenshot": [sw, sh], "config_aspect": round(w / h, 4),
+                                "screenshot_aspect": round(sw / sh, 4)}
+            require(abs((sw / sh) / (w / h) - 1) <= 0.02,
+                    "the client didn't use the configured resolution's aspect ratio (first-start hardware detection "
+                    "replaced it?)", **ev)
+        require(is_clear(ev["remaining_after"]), "something from this repo is still running", **ev)
+        return ev
+    finally:
+        if run is not None:
+            run.cleanup()
+        drop_scratch(scratch)
+
+
+@check("client.first_start_settings", order=389, capability="play-client", stack="down", tier="full")
+def first_start_settings(ctx):
+    """A play client built from a client with no saved settings (a friend's first bootstrap) gets the first-start
+    settings where absent (clientcfg.FIRST_START_SETTINGS + realmName: no intro movie, EULA/TOS accepted, no hardware
+    detection, the realm chosen) while a base whose Config.wtf already sets some of them keeps those lines byte-for-byte
+    (_preset_settings_kept), and the real client then shows the front menu first and reaches character select
+    with one Continue, at the configured resolution. Counterexample: the build without them fails the first clause."""
+    return first_start_session()

@@ -8,7 +8,7 @@ description: Moonglade's unit-of-work loop. OpenSpec change → branch → build
 CLAUDE.md §4/§6/§9 are the rules; this is the practiced procedure.
 
 ## Start a change
-1. `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH` (openspec needs Node 20), then `openspec new change <id>`.
+1. Put Node 20 on PATH (openspec needs it; with nvm: `nvm use 20`), then `openspec new change <id>`.
 2. Write proposal.md, `specs/<capability>/spec.md`, design.md and tasks.md. Every scenario needs a `Check: \`<id>\`` line or `[human-verify]` plus a reason. Data values cite sources (§7), never memory. Explain user-facing choices in plain gameplay language.
 3. `openspec validate <id>`.
 4. `git checkout -b change/<id>` from `main`; add `<id>` to `harness/active-changes`; commit; `git push -u origin change/<id>`.
@@ -40,9 +40,11 @@ Builders run this before handing over and put a short pass/fail line per item in
 11. **Shared databases are the player's save.** The isolated MySQL holds Zach's real characters. No ad-hoc script or command writes to, drops, renames or loads into the live `acore_*` schemas; only the harness's normal stack operations do. Any test that restores or bulk-loads uses scratch schemas, and starts with a full `mysqldump` safety copy in `env/tmp/` that is never deleted. Cleanup never deletes a backup a restore is using until the outcome is verified. Anything unexpected touching live data: stop and report, don't self-repair. (save-backups B25, 2026-10-06: a kill-during-restore test half-emptied `acore_characters`.)
 12. **Clean up.** No ad-hoc GUI programs that appear in Zach's Dock; use the harness's test switches (a verifier's throwaway `flick` program left ~20 ghost Dock icons, 2026-10-05). Scratch dirs and test accounts removed, stack down, no stray Wine/Wow/server processes, disk checked.
 13. **Docs match code.** design.md describes what was built (M-launcher: osascript vs AppKit drift).
+14. **No makeshift copies of the repo.** Never build a scratch tree (`git archive`, a worktree, a copied folder) with `client/`, `env/`, `data/` or `server/` symlinked to the real ones. A/B comparisons check out the other commit in the main checkout (stack down, nothing else running) or use the harness. (2026-10-07 08:22: such a copy ran `client.wording_addon`; the play-client build resolved into the real `client/`, replaced `client/Wow.exe` and deleted `client/WTF`. `.claude/hooks/guard-client.sh` now blocks the pattern.)
 
 ## Verify
 - Use the `verifier` agent type and give it only: spec deltas, `git diff <last-verified>..HEAD -- harness/ …`, and the harness command.
+- **No makeshift copies of the repo with linked runtime folders** (checklist item 14). To compare with another commit, check it out in the main checkout (stack down, nothing else running), or use the harness. `client/` is write-protected (`hs client-lock --status`); never lift it by hand.
 - **Run budget (Zach, 2026-10-07; verification length was the biggest drag on velocity). Target: a verifier cycle ≤ 90 min.**
   - **Builder:** quick tier + each new/changed check ≥3× + one counterexample per new/changed check + the pre-verification checklist. No full run.
   - **Verifier:** ONE unfiltered full run (`--force-clean` only when server build inputs changed); each new/changed check 3× (5× only for a check with a flake history); **no extra repeats of untouched checks** (the full run covers them); **spot-check 2–3** of the builder's counterexamples or its own, chosen for risk, not all; independent reading of risky code paths. Brief the verifier with this budget.

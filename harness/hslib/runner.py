@@ -368,18 +368,41 @@ def backups_tier_s(records: list[dict], reg: dict | None = None) -> float:
 # slowdowns only"): a per-check baseline, build time and new checks reported apart.
 TIMING_BASELINE = P.HARNESS / "timing-baseline.json"
 BUILD_CHECKS = ("build.clean",)      # their whole time is building server binaries
+# harness-reporting "Only allowlisted checks may claim build time" (easy-setup, F33): `evidence.build_s` is
+# self-reported, so only these checks' claims are subtracted; any other check's claim counts as check time and is a
+# warning. Reviewed list; each entry says what the claimed time is.
+BUILD_CLAIM_ALLOWLIST = {
+    "core.login_logout_race_baseline": "its rebuild of the unpatched baseline server (baseline.build_install wall "
+                                       "time, core_checks.py)",
+}
+BUILD_TIME_ALLOWLIST = BUILD_CHECKS + tuple(BUILD_CLAIM_ALLOWLIST)   # the checks that may have build time at all
 NEW_CHECK_WARN_S = 180.0             # spec: a check not in the baseline taking longer is a warning in summary.md
 TIMING_SELF = "report.timing"        # measured after everything else; never in the baseline
 
 
+def _claimed_build_s(rec: dict) -> float:
+    b = (rec.get("evidence") or {}).get("build_s")
+    return float(b) if isinstance(b, (int, float)) and not isinstance(b, bool) and b > 0 else 0.0
+
+
 def check_build_s(rec: dict) -> float:
-    """Seconds of a check record spent building server binaries: all of a BUILD_CHECKS check, else the evidence's
-    `build_s` (e.g. core.login_logout_race_baseline's baseline-server rebuild), capped at the check's own time."""
+    """Seconds of a check record spent building server binaries: all of a BUILD_CHECKS check, else, for a check on
+    BUILD_CLAIM_ALLOWLIST, the evidence's `build_s` (capped at the check's own time). Any other check: 0."""
     d = float(rec.get("duration_s") or 0.0)
     if rec["id"] in BUILD_CHECKS:
         return d
-    b = (rec.get("evidence") or {}).get("build_s")
-    return round(min(d, float(b)), 2) if isinstance(b, (int, float)) and not isinstance(b, bool) and b > 0 else 0.0
+    if rec["id"] not in BUILD_CLAIM_ALLOWLIST:
+        return 0.0
+    b = _claimed_build_s(rec)
+    return round(min(d, b), 2) if b else 0.0
+
+
+def build_claim_warnings(records: list[dict]) -> list[str]:
+    """A warning for each executed check that claims build time (evidence build_s) without being on the allowlist."""
+    return [f"`{r['id']}` claims {_claimed_build_s(r):.0f} s of build time (evidence build_s) but isn't on the "
+            "build-time allowlist (runner.BUILD_CLAIM_ALLOWLIST); counted as check time"
+            for r in sorted(records, key=lambda r: r["id"])
+            if r.get("status") != "skip" and r["id"] not in BUILD_TIME_ALLOWLIST and _claimed_build_s(r)]
 
 
 def load_timing_baseline(path: Path | None = None) -> dict:
@@ -412,14 +435,15 @@ def timing_summary(records: list[dict], wall_s: float | None, reg: dict | None =
            "total_wall_s": None if wall_s is None else round(wall_s, 1),
            "top10": [{"id": i, "s": v} for i, v in top],
            "build_s": round(sum(build.values()), 1), "build_by_check_s": build}
+    claims = build_claim_warnings(records)
     if baseline is None:
-        out |= {"new_checks_s": None, "warnings": ["no readable per-check timing baseline"]}
+        out |= {"new_checks_s": None, "warnings": ["no readable per-check timing baseline"] + claims}
         return out
     new = {r["id"]: float(r.get("duration_s") or 0.0) for r in records
            if r.get("status") != "skip" and r["id"] not in baseline["checks"] and r["id"] != TIMING_SELF}
     out |= {"new_checks_s": new, "new_checks_sum_s": round(sum(new.values()), 1),
             "warnings": [f"new check `{i}` took {s:.0f} s (over {NEW_CHECK_WARN_S:.0f} s)"
-                         for i, s in sorted(new.items()) if s > NEW_CHECK_WARN_S]}
+                         for i, s in sorted(new.items()) if s > NEW_CHECK_WARN_S] + claims}
     return out
 
 
@@ -434,6 +458,20 @@ def select(reg: dict, tier: str, only: list[str] | None, gui_skip_ids: set | fro
          and (not only or any(fnmatch.fnmatch(c.id, g) for g in only))),
         key=lambda c: (c.order, c.id),
     )
+
+
+def gui_preflight(tier: str, only: list[str] | None, ignore: bool, probe) -> str | None:
+    """`hs run`'s start-up refusal (B32): an unfiltered full/slow/gui run whose GUI preconditions already fail (screen
+    locked, display asleep, low battery on battery power; guienv.preflight_problem over `probe()`) doesn't start.
+    Returns the one-line reason, or None to go ahead (filtered or quick/backups runs, or `ignore`)."""
+    if ignore or only or tier not in ("full", "slow", "gui"):
+        return None
+    from .guienv import preflight_problem
+    why = preflight_problem(probe())
+    if not why:
+        return None
+    return (f"[hs] refusing to start an unfiltered {tier} run: {why}; its GUI checks would fail. Fix that and "
+            "rerun, or pass --ignore-gui-preflight to run anyway.")
 
 
 def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full",
@@ -474,6 +512,17 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
            "player_marker_sha256_start": player_marker_sha(),
            # save-backups: the player's env/backups/ must be byte-identical at the end (backups.player_untouched)
            "player_backups_fingerprint_start": backups.fingerprint(backups.PLAYER_ROOT)}
+    # easy-setup (F28): the player's play client build must be untouched at the end (client.player_client_not_rebuilt)
+    from . import clientbuild
+    try:
+        ctx["player_play_client_fingerprint_start"] = clientbuild.fingerprint(clientbuild.PLAY)
+        ctx["player_play_client_current_start"] = clientbuild.up_to_date(clientbuild.PLAY)
+    except Exception as e:  # noqa: BLE001  (the check fails on a missing/erroneous start record)
+        ctx["player_play_client_fingerprint_start"] = {"error": f"{type(e).__name__}: {e}"}
+    # easy-setup (pristine-client protection): the pristine client (or the test stand-in) at the start;
+    # report.client_pristine compares at the end
+    from .checks.pristine_checks import start_record
+    pristine_start = start_record()
     if rule is not None:
         log(f"GUI rule: {'GUI checks run' if gui_changed(rule) else 'GUI checks skipped by design'} "
             f"(changed GUI paths: {rule['changed_gui_paths']}{'; ' + rule['error'] if rule['error'] else ''})")
@@ -490,7 +539,7 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
     # post-run meta-checks (report.*) — computed over the document itself
     from .checks import reporting
     for rec in reporting.post_run(doc, selected_ids=[c.id for c in selected], t_start=t_start,
-                                  leave_up=leave_up):
+                                  leave_up=leave_up, pristine_start=pristine_start):
         doc["checks"].append(rec)
     doc["meta"]["finished"] = _now()      # after the post-run checks (report.tiers may run a nested quick tier)
     doc["meta"]["wall_s"] = round(time.time() - t_start, 1)

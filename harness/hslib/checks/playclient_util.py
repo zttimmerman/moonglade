@@ -21,6 +21,7 @@ import time
 from pathlib import Path
 
 from .. import launch, paths as P, play, stack
+from ..registry import require
 from .play_checks import PLAY, remaining
 
 PINNED = {"HS_PROFILE": "m0"}
@@ -38,10 +39,104 @@ def fresh_scratch(tag: str) -> Path:
     return d
 
 
+# Settings every real-client run on a scratch play client needs, seeded by the harness itself (easy-setup 1.9).
+# Without them the client plays the intro movie and then shows the EULA and Terms of Use screens before the login
+# screen (AccountLogin.lua AccountLogin_ShowUserAgreements: `not EULAAccepted()` / `not TOSAccepted()`, enUS
+# patch-enUS-3.MPQ; the other notices are off in enUS, GlueLocalization.lua), so the front menu never logs in. Until
+# 2026-10-07 the checks got them silently from client/WTF, which a play-client build carries over; measured by B30:
+# with client/WTF gone the run blocked, with these three seeded it reached the world. hwDetect "0": a client with no
+# saved settings runs its hardware detection at the first start and replaces the video settings (measured B31:
+# client.resolution_default's back buffer stayed 1024x768 despite the gxResolution the launch wrote; with hwDetect "0" it
+# took it). Plus realmName (the realm's name, realm_name()): without it the client shows the realm list after the
+# login instead of character select (measured B31: login.friendly_errors' Try again sat in COP_GET_REALMS polling).
+# Since B32 the play-client build itself adds them where absent (clientcfg.FIRST_START_SETTINGS, the same values);
+# seed_settings(fresh=True) still drops the carried-over WTF and seeds them, so a check never depends on client/WTF.
+from ..clientcfg import FIRST_START_SETTINGS as SEED_SETTINGS  # noqa: E402
+
+
+def _is_scratch(d: Path) -> bool:
+    d = Path(d)
+    return d.parent.resolve() == P.ENV.resolve() and d.name.startswith("check-play-")
+
+
+def seed_settings(client_dir: Path, fresh: bool = False) -> dict:
+    """Write SEED_SETTINGS into a scratch play client's WTF/Config.wtf (scratch clients only: env/check-play-*;
+    never client/ or env/client-play/). fresh=True first drops the WTF folder a build carried over from client/, so
+    the run doesn't depend on whatever client/WTF holds."""
+    from .. import clientcfg
+    client_dir = Path(client_dir)
+    require(_is_scratch(client_dir), "refusing to seed settings outside a scratch play client", dir=str(client_dir))
+    wtf = client_dir / "WTF"
+    out: dict = {}
+    if fresh and wtf.exists():
+        out["dropped_carried_over"] = sorted(str(p.relative_to(wtf)) for p in wtf.rglob("*"))[:20]
+        shutil.rmtree(wtf)
+    cfg = wtf / "Config.wtf"
+    cfg.parent.mkdir(parents=True, exist_ok=True)
+    realm = realm_name()
+    new, detail = clientcfg._update_config(cfg.read_bytes() if cfg.exists() else b"",
+                                           {**SEED_SETTINGS, "realmName": realm["name"]})
+    cfg.write_bytes(new)
+    # the test account has played before: its account- and character-wide SavedVariables files exist (empty when
+    # new). On a first login the client logs "Error loading WTF\Account\...\SavedVariables.lua" for each into
+    # FrameXML.log, which the checks require to be empty; until 2026-10-07 these came from client/WTF too.
+    sv = []
+    for f in (wtf / "Account" / P.TEST_USER / "SavedVariables.lua",
+              wtf / "Account" / P.TEST_USER / realm["name"] / P.TEST_CHAR / "SavedVariables.lua"):
+        if not f.exists():
+            f.parent.mkdir(parents=True, exist_ok=True)
+            f.write_bytes(b"")
+            sv.append(str(f.relative_to(client_dir)))
+    return out | {"config": str(cfg.relative_to(client_dir)), "settings": dict(SEED_SETTINGS), **detail,
+                  "saved_variables_created": sv, "realm": realm}
+
+
+def realm_name() -> dict:
+    """Realm 1's name (clientcfg.realm_name: the auth database when it's up, else AzerothCore's base SQL)."""
+    from ..clientcfg import realm_name as _rn
+    r = _rn()
+    require(r.get("name"), "can't find realm 1's name", realm=r)
+    return r
+
+
+def build_scratch(dest: Path, **kw) -> dict:
+    """clientbuild.build into a scratch play client, then its settings seeded from nothing (seed_settings fresh)."""
+    from .. import clientbuild
+    b = clientbuild.build(dest=dest, **kw)
+    b["seeded"] = seed_settings(dest, fresh=True)
+    return b
+
+
+def seeded_given(client_dir: Path) -> dict:
+    """The seeded settings as the scratch's Config.wtf holds them now: {"values", "missing"}."""
+    import re
+    cfg = Path(client_dir) / "WTF" / "Config.wtf"
+    text = cfg.read_text(errors="replace") if cfg.exists() else ""
+    values = {}
+    for k in (*SEED_SETTINGS, "realmName"):
+        m = re.findall(rf'^\s*SET\s+{k}\s+"([^"]*)"', text, re.M | re.I)
+        values[k] = m[-1] if m else None
+    missing = sorted(k for k, v in SEED_SETTINGS.items() if values[k] != v) + ([] if values["realmName"] else ["realmName"])
+    return {"config_exists": cfg.exists(), "values": values, "missing": missing}
+
+
+def require_seeded(client_dir: Path, ev: dict | None = None) -> dict:
+    """GIVEN of every real-client scratch run: the settings that keep the intro movie and the EULA/TOS screens from
+    blocking the login screen are in place. Fails naming the missing ones (instead of a timeout much later)."""
+    g = seeded_given(client_dir)
+    require(not g["missing"], "GIVEN not met: the scratch play client's WTF/Config.wtf lacks "
+            + ", ".join(f'{k} "{SEED_SETTINGS.get(k, "<realm name>")}"' for k in g["missing"])
+            + " (without them the intro movie and the EULA/Terms of Use screens block the login screen, hardware "
+              "detection replaces the video settings, or the realm list comes up instead of character select)",
+            seeded_given=g, **(ev or {}))
+    return g
+
+
 class PlayRun:
     def __init__(self, tag: str, mode: str = "patched", glue_test: dict | None = None, scratch: Path | None = None,
-                 extra_env: dict | None = None):
+                 extra_env: dict | None = None, seed: bool = True):
         self.tag = tag
+        self.seed = seed      # False: the scratch keeps the settings its build wrote (client.first_start_settings)
         self.tmp = Path(tempfile.mkdtemp(prefix=f"hs-pc-{tag}-")).resolve()
         self.settings = self.tmp / "settings.json"
         self.settings.write_text(json.dumps({"client": mode}))
@@ -56,8 +151,23 @@ class PlayRun:
             self.env["HS_GLUE_TEST"] = json.dumps(glue_test)
         self.proc: subprocess.Popen | None = None
         self.t0 = 0.0
+        self.seeded = self.given = None
 
     def start(self) -> None:
+        if self.scratch:
+            # GIVEN (easy-setup 1.9): the run establishes its own client settings; nothing comes from client/WTF.
+            # An unbuilt scratch is built here (the play loop then finds it current); a built one gets the settings
+            # (idempotent: the same lines are set again).
+            from .. import clientbuild
+            if not self.seed:
+                require(clientbuild.read_stamp(self.scratch) is not None, "PlayRun(seed=False) needs a built scratch",
+                        scratch=str(self.scratch))
+                self.seeded = {"skipped": "seed=False: the settings come from the play-client build"}
+            elif clientbuild.read_stamp(self.scratch) is None:
+                self.seeded = build_scratch(self.scratch)["seeded"]
+            else:
+                self.seeded = seed_settings(self.scratch)
+            self.given = require_seeded(self.scratch)
         self.t0 = time.time()
         fh = open(self.out, "w")
         self.proc = subprocess.Popen([PLAY, "--account", "test", "--allow-test-client-dir"], cwd=P.ROOT,

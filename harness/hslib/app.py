@@ -20,6 +20,7 @@ denies every file write outside the repo.
 """
 from __future__ import annotations
 
+import json
 import os
 import plistlib
 import shutil
@@ -131,8 +132,11 @@ def build() -> dict:
             raise AppBuildError(str(e), ev) from None
         if APP.exists():
             shutil.rmtree(APP)
+        STAMP.unlink(missing_ok=True)
         DIST.mkdir(exist_ok=True)
         stage.rename(APP)
+        STAMP.write_text(json.dumps(stamp_inputs() | {"exe_sha256": _sha(APP / "Contents" / "MacOS" / EXE_NAME)},
+                                    indent=2) + "\n")
     finally:
         shutil.rmtree(DIST / ".build", ignore_errors=True)
         shutil.rmtree(TMP.parent, ignore_errors=True)
@@ -140,9 +144,55 @@ def build() -> dict:
     return ev
 
 
+# easy-setup: bootstrap's "app" step is done only when the built app is current. The stamp (outside the bundle, so the
+# signature and the bundle contents are unchanged) records what the app was built from; up_to_date() compares it
+# with the current inputs, re-hashes the launcher binary and re-verifies the signature.
+STAMP = DIST / "app-stamp.json"
+
+
+def _sha(p: Path) -> str:
+    import hashlib
+    return hashlib.sha256(p.read_bytes()).hexdigest()
+
+
+def stamp_inputs() -> dict:
+    from . import dockshim
+    return {"launcher_sha256": _sha(SOURCE), "icns_sha256": _sha(icon.ICNS_OUT), "repo_path": str(P.ROOT.resolve()),
+            "python_dir": python_dir(), "macos": host_version(), "bundle_id": BUNDLE_ID, "designated": DESIGNATED,
+            "dockshim_source_sha256": dockshim.source_sha256()}
+
+
+def up_to_date() -> dict:
+    """{"current": bool, "why": ...}: the app exists, was built from the current inputs for this folder, its launcher
+    binary is the one built, its signature verifies, and the Wine host shim is current."""
+    from . import dockshim
+    try:
+        st = json.loads(STAMP.read_text())
+    except (OSError, ValueError):
+        return {"current": False, "why": "no record of an app build"}
+    exe = APP / "Contents" / "MacOS" / EXE_NAME
+    if not exe.is_file():
+        return {"current": False, "why": f"{APP} is missing"}
+    try:
+        now = stamp_inputs()
+    except AppBuildError as e:
+        return {"current": False, "why": str(e)}
+    diff = sorted(k for k, v in now.items() if st.get(k) != v)
+    if diff:
+        return {"current": False, "why": f"built from other inputs ({', '.join(diff)})"}
+    if _sha(exe) != st.get("exe_sha256"):
+        return {"current": False, "why": "the launcher binary isn't the one built"}
+    r = subprocess.run(["/usr/bin/codesign", "--verify", "--deep", "--strict", str(APP)], capture_output=True,
+                       text=True)
+    if r.returncode != 0:
+        return {"current": False, "why": f"signature doesn't verify: {(r.stderr or r.stdout).strip()[:200]}"}
+    if not dockshim.up_to_date():
+        return {"current": False, "why": "the Wine host shim isn't built from the current source"}
+    return {"current": True, "why": "built from the current inputs, signature valid"}
+
+
 def cli() -> int:
     from .util import log
-    import json
     try:
         ev = build()
     except AppBuildError as e:

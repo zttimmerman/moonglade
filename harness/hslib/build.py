@@ -32,11 +32,22 @@ def _head(repo) -> str:
 
 
 def _ensure_clone(repo_dir, url, branch, sha):
-    if not (repo_dir / ".git").exists():
-        P.VENDOR.mkdir(exist_ok=True)
-        run(["git", "clone", "--branch", branch, url, repo_dir])
-    if _git(repo_dir, "cat-file", "-e", f"{sha}^{{commit}}", check=False).returncode != 0:
-        _git(repo_dir, "fetch", "origin", capture=False)
+    if (repo_dir / ".git").exists() and _git(repo_dir, "rev-parse", "HEAD", check=False).returncode != 0:
+        log(f"{repo_dir} is an unfinished clone (an interrupted setup?); cloning it again")
+        shutil.rmtree(repo_dir)
+    try:
+        if not (repo_dir / ".git").exists():
+            P.VENDOR.mkdir(exist_ok=True)
+            run(["git", "clone", "--branch", branch, url, repo_dir])
+        if _git(repo_dir, "cat-file", "-e", f"{sha}^{{commit}}", check=False).returncode != 0:
+            _git(repo_dir, "fetch", "origin", capture=False)
+    except subprocess.CalledProcessError as e:
+        # easy-setup: a plain message (bootstrap shows it) instead of a traceback; a half-made clone is removed so a
+        # re-run starts the clone again
+        if (repo_dir / ".git").exists() and _git(repo_dir, "rev-parse", "HEAD", check=False).returncode != 0:
+            shutil.rmtree(repo_dir, ignore_errors=True)
+        raise BuildError(f"couldn't get the pinned sources from {url} ({' '.join(map(str, e.cmd[:3]))} exited "
+                         f"{e.returncode}); check the network connection and run it again") from None
 
 
 def pin_state(repo_dir, sha, ignore_untracked_prefix=None) -> list[str]:
@@ -353,13 +364,105 @@ def installed_digest() -> dict:
     return d
 
 
+# ----------------------------------------------------------------------------- moved repo (easy-setup, F30)
+# CMake bakes absolute paths into the build tree (CMakeCache.txt) and the binaries (e.g. the module config dir), so a
+# server built in another folder (the repo moved or renamed) misbehaves. The install record says which repo folder
+# the installed server was built for; `hs up` and ./play refuse a mismatch with the command to run, `hs build`
+# rebuilds from empty, and the baseline build (baseline.py) discards a foreign build tree by itself.
+
+INSTALL_RECORD = P.SERVER / ".hs-install.json"     # not under bin/ or etc/: never part of installed_digest()
+
+
+def cmake_cache_info(build_dir) -> dict | None:
+    """{cache_dir, home, prefix} recorded in build_dir/CMakeCache.txt, or None when there is no readable cache."""
+    try:
+        text = (build_dir / "CMakeCache.txt").read_text(errors="replace")
+    except OSError:
+        return None
+    out = {}
+    for line in text.splitlines():
+        for key, name in (("CMAKE_CACHEFILE_DIR:INTERNAL=", "cache_dir"), ("CMAKE_HOME_DIRECTORY:INTERNAL=", "home"),
+                          ("CMAKE_INSTALL_PREFIX:PATH=", "prefix")):
+            if line.startswith(key):
+                out[name] = line[len(key):].strip()
+    return out or None
+
+
+def foreign_build_tree(build_dir, src=None) -> dict | None:
+    """The CMakeCache in build_dir was made for another directory (or another source tree): {cache_dir, home, ...}."""
+    info = cmake_cache_info(build_dir)
+    if not info:
+        return None
+    here = os.path.realpath(build_dir)
+    if info.get("cache_dir") and os.path.realpath(info["cache_dir"]) != here:
+        return info | {"expected_cache_dir": here}
+    if src is not None and info.get("home") and os.path.realpath(info["home"]) != os.path.realpath(src):
+        return info | {"expected_home": os.path.realpath(src)}
+    return None
+
+
+def read_install_record(path=None) -> dict | None:
+    try:
+        rec = json.loads((path or INSTALL_RECORD).read_text())
+    except (OSError, ValueError):
+        return None
+    return rec if isinstance(rec, dict) else None
+
+
+def write_install_record() -> dict:
+    rec = {"repo": str(P.ROOT.resolve()), "build": str(P.BUILD.resolve()), "server": str(P.SERVER.resolve()),
+           "written": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "by": "harness/hs build"}
+    INSTALL_RECORD.write_text(json.dumps(rec, indent=2) + "\n")
+    return rec
+
+
+MOVED_FIX = "harness/hs build --force-clean"
+
+
+def moved_problem() -> dict | None:
+    """Was the installed server (its install record) or the build tree (its CMakeCache) made in another repo folder?
+    Returns {what, old_repo, new_repo, message} or None. A server with no install record (built before easy-setup) is
+    judged by its build tree alone."""
+    new = os.path.realpath(P.ROOT)
+    rec = read_install_record()
+    found = None
+    if rec and rec.get("repo") and os.path.realpath(rec["repo"]) != new:
+        found = {"what": "the installed server (server/)", "old_repo": rec["repo"], "evidence": str(INSTALL_RECORD)}
+    else:
+        f = foreign_build_tree(P.BUILD, P.CORE_SRC)
+        if f:
+            old = f.get("cache_dir") or f.get("home") or "?"
+            found = {"what": "the server build tree (build/)", "old_repo": os.path.dirname(old.rstrip("/")),
+                     "evidence": str(P.BUILD / "CMakeCache.txt"), "cache": f}
+    if not found:
+        return None
+    found["new_repo"] = new
+    found["message"] = (f"This Moonglade folder was moved or renamed: {found['what']} was built in "
+                        f"{found['old_repo']}, but the folder is now {new}. The server has its old folder built in, "
+                        f"so it has to be rebuilt once (about 15 minutes): {MOVED_FIX}")
+    return found
+
+
 def build(clean=False, jobs=8, force_clean=False) -> dict:
-    info = {"sync": sync_vendor()}
+    info = {}
+    moved = moved_problem()
+    if moved:
+        # F30: a build tree or install made in another folder can't be reused; wipe it before anything else
+        log(moved["message"].split(" so it has")[0] + "; rebuilding from empty.")
+        moved["stamps_dropped"] = _drop_stamps()
+        if P.BUILD.exists():
+            shutil.rmtree(P.BUILD)
+        moved["build_dir_removed"] = not P.BUILD.exists()
+        info["moved"] = moved
+        force_clean = True
+    info["sync"] = sync_vendor()
     manifest = input_manifest()
     h = input_hash(manifest)
     stamps = {"build": read_stamp(build_stamp_path()), "install": read_stamp(install_stamp_path())}
     if clean or force_clean:
         mode, reason = decide_mode(h, stamps["build"], stamps["install"], force_clean)
+        if moved:
+            reason = f"built in another folder ({moved['old_repo']})"
     else:
         mode, reason = "incremental", "plain `hs build`"
     info["clean"] = {"mode": mode, "reason": reason, "input_hash": h, "stamps_before": stamps,
@@ -394,6 +497,7 @@ def build(clean=False, jobs=8, force_clean=False) -> dict:
     if missing:
         raise BuildError(f"missing binaries after install: {missing}")
     info["log"] = str(blog)
+    info["install_record"] = write_install_record()
     c = info["clean"]
     if mode == "from-empty":
         _write_stamps(h, manifest)

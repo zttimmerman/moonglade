@@ -155,6 +155,34 @@ def load_manifest(path: Path = P.CLIENT_MANIFEST) -> dict | None:
         return None
 
 
+def manifest_client_dir(client: Path) -> str:
+    """The manifest's `client_dir`: relative to the repo when the install is inside it (normally "client"), so a
+    moved or renamed repo folder doesn't leave a stale absolute path (B32: the field still named the
+    pre-rename project folder); absolute only for an install outside the repo."""
+    c = Path(os.path.abspath(client))
+    try:
+        return str(c.relative_to(Path(os.path.abspath(P.ROOT))))
+    except ValueError:
+        return str(c)
+
+
+def heal_manifest_client_dir(manifest_path: Path = P.CLIENT_MANIFEST, client: Path = P.CLIENT) -> dict:
+    """Rewrite only the manifest's `client_dir` field when it isn't manifest_client_dir(client) (an older absolute
+    path). Reads and writes the manifest file only (env/), never anything in the install folder."""
+    m = load_manifest(Path(manifest_path))
+    if m is None:
+        return {"healed": False, "reason": "no manifest"}
+    want = manifest_client_dir(client)
+    if m.get("client_dir") == want:
+        return {"healed": False, "client_dir": want}
+    old = m.get("client_dir")
+    m["client_dir"] = want
+    tmp = Path(manifest_path).with_name(Path(manifest_path).name + ".tmp")
+    tmp.write_text(json.dumps(m, indent=2))
+    os.replace(tmp, manifest_path)
+    return {"healed": True, "from": old, "to": want}
+
+
 def mismatches(client: Path, manifest: dict, hash_binaries: bool = True) -> list[dict]:
     """Differences between client/ and the manifest (missing files, wrong sizes, wrong hashes).
     Config-managed files (realmlist.wtf) are skipped; client-config rewrites them by design."""
@@ -206,6 +234,20 @@ def _stream(srcobj, rel: str, dest: Path, want_hash: bool) -> str | None:
 
 def install(src: Path, client: Path = P.CLIENT, manifest_path: Path = P.CLIENT_MANIFEST,
             run_config: bool = True) -> dict:
+    """Install (or repair) the client. The install folder is write-protected at the file-system level (pristine.py):
+    the protection is lifted for the install only and restored on the way out, also when the install fails; a killed
+    install leaves it lifted, and the next install (or bootstrap) restores it."""
+    from . import pristine
+    client_p = Path(client)
+    if client_p.is_symlink():
+        raise ClientInstallError(f"the install folder {client_p} is a symlink; refusing (install into a real folder)")
+    with pristine.unlocked(client_p):
+        res = _install(src, client_p, Path(manifest_path), run_config)
+    res["write_protection"] = {k: v for k, v in pristine.status(client_p).items() if k != "paths"}
+    return res
+
+
+def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> dict:
     src = Path(src).expanduser().resolve()
     client = Path(client).resolve()
     if not src.exists():
@@ -233,6 +275,7 @@ def install(src: Path, client: Path = P.CLIENT, manifest_path: Path = P.CLIENT_M
             if not bad:
                 log("client/ already matches env/client-manifest.json; skipping extraction")
                 result = {"action": "skipped (client/ matches manifest)", "client_dir": str(client),
+                          "manifest_client_dir": heal_manifest_client_dir(manifest_path, client),
                           "manifest": str(manifest_path), "source_now": before,
                           "wow_exe_version": manifest.get("wow_exe_version")}
                 if run_config:
@@ -269,6 +312,12 @@ def install(src: Path, client: Path = P.CLIENT, manifest_path: Path = P.CLIENT_M
         if manifest_path.exists():
             manifest_path.unlink()
         client.mkdir(parents=True, exist_ok=True)
+        # easy-setup (kill-safe): a SIGKILLed install leaves its in-progress <name>.hs-part behind; drop those first
+        stale = [p for p in client.rglob("*.hs-part") if p.is_file()]
+        for p in stale:
+            p.unlink()
+        if stale:
+            log(f"removed {len(stale)} unfinished file(s) left by an interrupted install")
         done_bytes, last = 0, time.time()
         hashes: dict[str, str] = {}
         corrupt = []
@@ -324,7 +373,7 @@ def install(src: Path, client: Path = P.CLIENT, manifest_path: Path = P.CLIENT_M
     manifest = {
         "schema": 1,
         "installed_at": _now(),
-        "client_dir": str(client),
+        "client_dir": manifest_client_dir(client),
         "source": {**src_info, "before": before, "after": after},
         "wow_exe_version": {"file_version": ver["file_version"], "product_version": ver["product_version"],
                             "strings": ver["strings"]},

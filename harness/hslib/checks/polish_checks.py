@@ -53,19 +53,7 @@ PLAY_LINES_RENAMES = ((OLD_NAME, NEW_NAME),)
 
 # ---------------------------------------------------------------- environment probes
 
-def screen_locked() -> bool:
-    out = subprocess.run(["/usr/sbin/ioreg", "-n", "Root", "-d1", "-a"], capture_output=True, text=True).stdout
-    m = re.search(r"<key>CGSSessionScreenIsLocked</key>\s*<(true|false)/>", out)
-    c = re.search(r"<key>IOConsoleLocked</key>\s*<(true|false)/>", out)
-    return bool((m and m.group(1) == "true") or (c and c.group(1) == "true"))
-
-
-def display_asleep() -> bool | None:
-    r = subprocess.run(["osascript", "-l", "JavaScript", "-e",
-                        'ObjC.import("CoreGraphics"); $.CGDisplayIsAsleep($.CGMainDisplayID())'],
-                       capture_output=True, text=True, timeout=20)
-    v = r.stdout.strip()
-    return None if v not in ("0", "1", "true", "false") else v in ("1", "true")
+from ..guienv import display_asleep, screen_locked  # noqa: E402  (moved to guienv, B32)
 
 
 def display_state() -> dict:
@@ -1310,9 +1298,9 @@ def shim_perf(ctx):
     build_app(ev)
     require_clear(ev)
     runs: list = []
-    from .playclient_util import drop_scratch, fresh_scratch
+    from .playclient_util import build_scratch, drop_scratch, fresh_scratch
     fresh_scratch(PERF_SCRATCH.name.removeprefix("check-play-"))
-    clientbuild.build(dest=PERF_SCRATCH)              # once, before the runs: no build time inside a measurement
+    build_scratch(PERF_SCRATCH)              # once, before the runs: no build time inside a measurement
     try:
         for i in range(PERF_RUNS):
             for policy in (("accessory", "off") if i % 2 == 0 else ("off", "accessory")):

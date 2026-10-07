@@ -18,7 +18,8 @@ Rules
 - Deterministic: the build stamp (<dest>/hs-build.json) records the base manifest hash, each patch record's and
   source's hash, and every output hash. A rebuild with identical inputs (and intact outputs) is a no-op.
 - Player state survives rebuilds: WTF/, Screenshots/, Cache/, Logs/ and Errors/ of an existing play client are moved
-  into the new tree. The first build carries client/WTF over (a copy; never the other way).
+  into the new tree. The first build carries client/WTF over (a copy; never the other way). Then the first-start
+  settings (clientcfg.FIRST_START_SETTINGS + realmName) are added to WTF/Config.wtf where they aren't set yet.
 - Revert: `hs client-build --skip 0001` (or deleting env/client-play/, or the launcher setting client=stock).
 """
 from __future__ import annotations
@@ -31,7 +32,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from . import mpq, paths as P
+from . import mpq, paths as P, pristine
 from .clientinst import load_manifest, mismatches, sha256_file
 
 QUEUE = P.ROOT / "patches" / "client"
@@ -77,6 +78,7 @@ def locale(client: Path) -> str:
 def apply_binary(rec: dict, target: Path) -> dict:
     """Apply one binary record to `target` (a file in the build tree) after checking input hash and original bytes.
     Raises ClientBuildError naming the mismatch; never writes on a mismatch."""
+    pristine.refuse_inside(target, f"apply patch {rec['id']} to", exc=ClientBuildError)
     have = sha256_file(target)
     ev = {"patch": rec["id"], "file": rec["file"], "input_expected": rec["input_sha256"], "input_actual": have}
     if have != rec["input_sha256"]:
@@ -228,6 +230,40 @@ def read_stamp(dest: Path = PLAY) -> dict | None:
         return None
 
 
+def up_to_date(dest: Path = PLAY, base: Path = P.CLIENT, queue_dir: Path = QUEUE) -> dict:
+    """Would `build(dest)` be a no-op? Read-only: {"current": bool, "why": ...} (same comparison build() makes)."""
+    old = read_stamp(dest)
+    if not old or not dest.is_dir():
+        return {"current": False, "why": "no play client build stamp"}
+    try:
+        want = inputs(base, queue(queue_dir))
+    except (OSError, ClientBuildError, ValueError) as e:
+        return {"current": False, "why": f"inputs unreadable: {e}"}
+    if old.get("inputs") != want:
+        return {"current": False, "why": "patch inputs changed since the play client was built"}
+    bad = _outputs_intact(dest, old)
+    return {"current": not bad, "why": "up to date" if not bad else f"{len(bad)} output(s) changed"}
+
+
+def fingerprint(dest: Path = PLAY) -> dict | None:
+    """A play client's build, fingerprinted (play-launcher "Harness runs never rebuild the player's play client"): the
+    folder's inode, and for hs-build.json, Wow.exe and every stamped patch output its SHA-256, inode and mtime. A rebuild
+    replaces the folder (new inode) even when the bytes come out the same. None when there is no play client."""
+    dest = Path(dest)
+    if not dest.is_dir():
+        return None
+    st = read_stamp(dest) or {}
+
+    def one(rel):
+        f = dest / rel
+        if not f.is_file():
+            return None
+        s_ = f.stat()
+        return {"sha256": sha256_file(f), "ino": s_.st_ino, "mtime_ns": s_.st_mtime_ns}
+    files = {rel: one(rel) for rel in sorted({STAMP, "Wow.exe", *(st.get("outputs") or {})})}
+    return {"dir": str(dest), "dir_ino": dest.stat().st_ino, "files": files}
+
+
 def _outputs_intact(dest: Path, stamp: dict) -> list[dict]:
     bad = []
     for rel, want in (stamp.get("outputs") or {}).items():
@@ -265,14 +301,40 @@ def _check_base(base: Path, ev: dict, when: str) -> None:
         raise ClientBuildError(f"client/ doesn't match env/client-manifest.json {when} the build: {mm[:3]}", ev)
 
 
+def _drop_tmp(tmp: Path) -> None:
+    """Remove a staging folder; a symlink is unlinked, never followed (it may point at the pristine client)."""
+    if os.path.islink(tmp):
+        os.unlink(tmp)
+    elif tmp.exists():
+        pristine.remove_tree(tmp)
+
+
+def _check_clone(tmp: Path, src: Path, ev: dict) -> None:
+    """The clone must be a real, separate folder: not a symlink, not the base itself, not inside a pristine client."""
+    st, bs = os.lstat(tmp), os.stat(src)
+    ok = (not os.path.islink(tmp) and tmp.is_dir() and (st.st_dev, st.st_ino) != (bs.st_dev, bs.st_ino)
+          and pristine.protected_root_of(tmp, extra=(src,)) is None)
+    ev["clone"] = {"path": str(tmp), "is_symlink": os.path.islink(tmp), "ino": st.st_ino, "base_ino": bs.st_ino}
+    if not ok:
+        raise ClientBuildError(f"the play client clone {tmp} isn't a separate folder (it resolves to the pristine "
+                               f"client {src}); refusing to write", ev)
+
+
 def build(dest: Path = PLAY, base: Path = P.CLIENT, queue_dir: Path = QUEUE, skip: tuple[str, ...] = (),
-          force: bool = False) -> dict:
+          force: bool = False, first_start: bool = True) -> dict:
+    """Build (or keep, when current) the play client. first_start=False leaves out the first-start settings
+    (client.first_start_settings' counterexample only; no entry point passes it)."""
     t0 = time.time()
     base, dest = Path(base), Path(dest)
-    if dest.resolve() == base.resolve() or base.resolve() in dest.resolve().parents:
-        raise ClientBuildError("the play client can't be inside the base client")
-    if dest.resolve() == P.CLIENT.resolve() or P.CLIENT.resolve() in dest.resolve().parents:
-        raise ClientBuildError("refusing to build into client/")
+    tmp = dest.with_name(dest.name + f".build-{os.getpid()}")
+    trash = dest.with_name(dest.name + f".old-{os.getpid()}")
+    # pristine-client protection (easy-setup): nothing this build writes may be, or lie inside, the pristine client
+    # (client/, the harness's test stand-in) or the base it clones, decided by file identity (symlinks, `..`, case)
+    # and before anything is written. 2026-10-07: a scratch repo whose client/ was a symlink cloned the symlink
+    # itself (`cp -cR <link>`) and patched the real client/Wow.exe through it.
+    for what, path in (("build the play client into", dest), ("stage the play client build in", tmp),
+                       ("move the old play client to", trash)):
+        pristine.refuse_inside(path, what, extra=(base,), exc=ClientBuildError)
     ev: dict = {"dest": str(dest), "base": str(base), "skip": list(skip)}
     _check_base(base, ev, "before")
     recs = queue(queue_dir, skip)
@@ -287,13 +349,16 @@ def build(dest: Path = PLAY, base: Path = P.CLIENT, queue_dir: Path = QUEUE, ski
                          "seconds": round(time.time() - t0, 1)}
         ev["outputs_changed"] = bad
 
-    tmp = dest.with_name(dest.name + f".build-{os.getpid()}")
-    shutil.rmtree(tmp, ignore_errors=True)
+    _drop_tmp(tmp)
     tmp.parent.mkdir(parents=True, exist_ok=True)
     try:
-        r = subprocess.run(["cp", "-cR", str(base), str(tmp)], capture_output=True, text=True)
+        # the base's real folder (a symlinked base would otherwise be copied as the link itself)
+        src = Path(os.path.realpath(base))
+        r = subprocess.run(["cp", "-cR", str(src), str(tmp)], capture_output=True, text=True)
         if r.returncode != 0:
             raise ClientBuildError(f"cp -cR failed: {r.stderr.strip()}", ev)
+        _check_clone(tmp, src, ev)
+        ev["clone_unlocked"] = pristine.make_writable(tmp)     # the clone inherits client/'s lock (pristine.py)
         for d in STATE_DIRS:                       # the clone's copies of client/ state; replaced below
             shutil.rmtree(tmp / d, ignore_errors=True)
         loc = locale(tmp)
@@ -317,6 +382,7 @@ def build(dest: Path = PLAY, base: Path = P.CLIENT, queue_dir: Path = QUEUE, ski
                 written = {}
                 for rel, (src, sha) in loose_files(rec, base, shadow_check=True).items():
                     target = tmp / rel
+                    pristine.refuse_inside(target, "copy an add-on file to", extra=(base,), exc=ClientBuildError)
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(src, target)
                     got = sha256_file(target)
@@ -336,18 +402,26 @@ def build(dest: Path = PLAY, base: Path = P.CLIENT, queue_dir: Path = QUEUE, ski
         if "WTF" not in state and (base / "WTF").is_dir():
             shutil.copytree(base / "WTF", tmp / "WTF", symlinks=True)
             state["WTF"] = f"carried over (copied) from {base / 'WTF'}"
+        # first-start settings, only the ones not set yet (clientcfg.FIRST_START_SETTINGS: no intro movie, no
+        # EULA/TOS screens before the login, no hardware detection replacing the video settings, the realm chosen)
+        if first_start:
+            from . import clientcfg
+            want_settings, realm = clientcfg.first_start_settings()
+            cfg = tmp / "WTF" / "Config.wtf"
+            state["first_start_settings"] = clientcfg.add_missing_settings(cfg, want_settings) | {"realm": realm}
+        else:
+            state["first_start_settings"] = {"skipped": "first_start=False (test counterexample)"}
         stamp = {"inputs": want, "outputs": outputs, "applied": applied, "state": state,
                  "built_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
         (tmp / STAMP).write_text(json.dumps(stamp, indent=2) + "\n")
         if dest.exists():
-            trash = dest.with_name(dest.name + f".old-{os.getpid()}")
             dest.rename(trash)
             tmp.rename(dest)
             shutil.rmtree(trash, ignore_errors=True)
         else:
             tmp.rename(dest)
     except BaseException:
-        shutil.rmtree(tmp, ignore_errors=True)
+        _drop_tmp(tmp)
         raise
     _check_base(base, ev, "after")
     return ev | {"built": True, "stamp": stamp, "seconds": round(time.time() - t0, 1)}

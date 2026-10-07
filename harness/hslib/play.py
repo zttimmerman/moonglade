@@ -262,6 +262,38 @@ HARNESS_ENV = ("HS_HARNESS_RUN", "HS_PLAYER_FILE", "HS_PLAYER_DEFAULT_NAME", "HS
 OWN_CLIENT_TEST_ENV = "HS_TEST_OWN_CLIENT"
 
 
+def players_own_play_client(d: Path, environ=None, player_dir: Path | None = None) -> bool:
+    """Is `d` the player's own play client (env/client-play/, or the scratch named by the test-only
+    $HS_TEST_OWN_CLIENT, which can only make the harness-run guards stricter)? `player_dir` stands in for
+    env/client-play/ (client.player_client_not_rebuilt's control, on a scratch copy)."""
+    from .clientbuild import PLAY as PLAYER_CLIENT
+    env = os.environ if environ is None else environ
+    stand = env.get(OWN_CLIENT_TEST_ENV)
+    own = Path(player_dir or PLAYER_CLIENT).resolve()
+    return Path(d).resolve() == own or bool(stand and Path(d).resolve() == Path(stand).resolve())
+
+
+def prepare_play_client(dest: Path, args, skip: tuple = (), environ=None, player_dir: Path | None = None) -> dict:
+    """The play loop's play-client step. F28 (easy-setup, play-launcher "Harness runs never rebuild the player's play
+    client"): a harness-shaped run (harness_signs) never rebuilds, re-patches or replaces the player's own play client;
+    only a genuine player launch may (clientbuild.build, a no-op when up to date). A harness run uses the player's
+    client as it is (such runs only ever start a stand-in there: the real game is refused in Loop.run) and stops when
+    there is none. Scratch play clients ($HS_PLAY_CLIENT_DIR) are built as before."""
+    from . import clientbuild
+    own = players_own_play_client(dest, environ, player_dir)
+    signs = harness_signs(args, environ)
+    if own and signs:
+        st = clientbuild.read_stamp(dest)
+        if st is None or not (Path(dest) / "Wow.exe").is_file():
+            raise clientbuild.ClientBuildError(
+                "a test run (" + ", ".join(signs) + f") can't build your own play client ({dest}); tests use a "
+                f"scratch play client (${PLAY_CLIENT_ENV})")
+        return {"built": False, "reason": "not rebuilt: a harness run never rebuilds the player's own play client "
+                                          "(F28)", "stamp": st, "current": clientbuild.up_to_date(Path(dest))["current"],
+                "harness_signs": signs, "players_own": True}
+    return clientbuild.build(dest=dest, skip=skip) | {"players_own": own, "harness_signs": signs}
+
+
 def harness_signs(args, environ=None) -> list[str]:
     """Why this ./play isn't a genuine player launch ([] = it is)."""
     environ = os.environ if environ is None else environ
@@ -320,10 +352,12 @@ class Loop:
                 skip = tuple(x for x in os.environ.get(SKIP_ENV, "").split(",") if x)
                 if skip and not os.environ.get(PLAY_CLIENT_ENV):
                     raise clientbuild.ClientBuildError(f"${SKIP_ENV} is test-only and needs ${PLAY_CLIENT_ENV}")
-                b = clientbuild.build(dest=dest, skip=skip)
+                b = prepare_play_client(dest, self.args, skip)
+                own = b["players_own"]
                 launch.select_client(dest)
                 info = {"mode": mode, "dir": str(dest), "built": b["built"], "reason": b.get("reason"),
-                        "outputs": b["stamp"]["outputs"], "state": b["stamp"].get("state")}
+                        "outputs": b["stamp"]["outputs"], "state": b["stamp"].get("state"),
+                        "players_own": own, **({"current": b["current"]} if "current" in b else {})}
                 if b["built"]:
                     say("Prepared the game client (play client with the Moonglade login screen).")
             else:
@@ -582,12 +616,24 @@ def main(argv=None) -> int:
             say(f"{var} is set: that's a test switch for the harness, not for playing. "
                 f"Unset it (`unset {var}`) and run ./play again.")
             return EXIT_FAIL
+    # report.client_pristine's self-test switches belong to `harness/hs run` only; ./play refuses them even in tests
+    from .pristine import TEST_ENV as PRISTINE_TEST_ENV
+    for var in (PRISTINE_TEST_ENV, "HS_TEST_PRISTINE_MUTATE"):
+        if os.environ.get(var):
+            say(f"{var} is set: that's a test switch for the harness, not for playing. "
+                f"Unset it (`unset {var}`) and run ./play again.")
+            return EXIT_FAIL
     # the Wine host shim's test-only knobs (ADR-0010) only ever reach a --client-cmd stand-in, never the game
     for var in sorted(k for k in os.environ if k == "HSDOCK_TEST" or k.startswith("HSDOCK_TEST_")):
         if not args.client_cmd:
             say(f"{var} is set: that's a test switch for the harness, not for playing. "
                 f"Unset it (`unset {var}`) and run ./play again.")
             return EXIT_FAIL
+    from .build import moved_problem
+    moved = moved_problem()                  # F30: the repo folder moved since the server was built
+    if moved:
+        say(f"Couldn't start: {moved['message']}")
+        return EXIT_FAIL
     from . import backups
     try:                                     # save-backups: $HS_BACKUP_DIR & co. only with the test flag
         backup_plan = backups.plan(args)

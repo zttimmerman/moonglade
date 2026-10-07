@@ -121,3 +121,12 @@ Checks that exercise save backups end to end (every `backups.*` check and `app.b
 - **WHEN** a full run happens (a) with no change to the backup path list and (b) with a change to one of those paths; and a slow-tier run happens
 - **THEN** in (a) every backups-marked check is recorded as skipped with a by-design reason, and `report.full_run` passes; in (b) every backups-marked check runs, and a failing or skipped one fails `report.full_run`; the slow run executes them all; and `--tier backups` runs exactly the backups-marked checks
 - Check: `report.backups_tier_rule`
+
+### Requirement: Only allowlisted checks may claim build time
+The timing guard SHALL subtract self-reported build time (`evidence.build_s`) only for checks on a reviewed allowlist (today `build.clean` and `core.login_logout_race_baseline`). Build time claimed by any other check SHALL count as check time and SHALL be listed as a warning.
+
+#### Scenario: A non-allowlisted check can't hide a slowdown as build time
+- **GIVEN** synthetic timing records against a known baseline
+- **WHEN** a non-allowlisted baseline check is 600 s slower and claims 600 s of `build_s`, and separately the allowlisted race baseline claims its real rebuild time
+- **THEN** the first fails the guard and warns about the claim; the second passes with the build time reported
+- Check: `report.timing`

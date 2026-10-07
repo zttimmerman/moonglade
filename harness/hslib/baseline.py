@@ -96,30 +96,53 @@ def cmake_args() -> list[str]:
             for a in build.cmake_args()]
 
 
-def build_install(jobs=8) -> dict:
-    """cmake configure + build + install into baseline/ (incremental after the first time). Log: BUILD_LOG."""
+def discard_foreign_build(build_dir=None, src=None) -> dict | None:
+    """F30 (easy-setup): a baseline build tree whose CMakeCache was made in another folder (the repo moved or was
+    renamed) can't be reused (cmake refuses it, and its paths are baked in): remove it so the build starts fresh.
+    Returns what was discarded, or None."""
+    build_dir, src = build_dir or BUILD, src or SRC
+    foreign = build.foreign_build_tree(build_dir, src)
+    if not foreign:
+        return None
+    log(f"baseline build tree {build_dir} was made in another folder ({foreign.get('cache_dir')}); discarding it")
+    shutil.rmtree(build_dir)
+    return foreign | {"discarded": str(build_dir), "removed": not build_dir.exists()}
+
+
+def build_install(jobs=8, build_dir=None, src=None, configure_only=False, log_path=None) -> dict:
+    """cmake configure + build + install into baseline/ (incremental after the first time). Log: BUILD_LOG.
+    A build tree made in another folder is discarded first (discard_foreign_build). `build_dir`/`src`/`configure_only`
+    let build.moved_repo exercise that on a scratch build dir without building."""
+    bdir, sdir = build_dir or BUILD, src or SRC
     P.OUT.mkdir(parents=True, exist_ok=True)
-    BUILD.mkdir(parents=True, exist_ok=True)
-    first = not (BUILD / "CMakeCache.txt").exists()
+    discarded = discard_foreign_build(bdir, sdir)
+    bdir.mkdir(parents=True, exist_ok=True)
+    first = not (bdir / "CMakeCache.txt").exists()
     t0 = time.time()
     steps = []
-    with open(BUILD_LOG, "w") as fh:
-        for step in (["cmake", "-S", str(SRC), "-B", str(BUILD), *cmake_args()],
-                     ["cmake", "--build", str(BUILD), "-j", str(jobs)],
-                     ["cmake", "--install", str(BUILD)]):
+    plan = [["cmake", "-S", str(sdir), "-B", str(bdir), *cmake_args()]]
+    if not configure_only:
+        plan += [["cmake", "--build", str(bdir), "-j", str(jobs)], ["cmake", "--install", str(bdir)]]
+    blog = log_path or BUILD_LOG
+    with open(blog, "w") as fh:
+        for step in plan:
             s0 = time.time()
-            log("$ " + " ".join(step) + f"   (log: {BUILD_LOG})")
+            log("$ " + " ".join(step) + f"   (log: {blog})")
             fh.write("\n$ " + " ".join(step) + "\n")
             fh.flush()
             r = subprocess.run(step, stdout=fh, stderr=subprocess.STDOUT)
             steps.append({"cmd": step[:3], "exit": r.returncode, "s": round(time.time() - s0, 1)})
             if r.returncode != 0:
-                raise BaselineError(f"baseline build step failed: {' '.join(step[:3])}; see {BUILD_LOG}", steps=steps)
+                raise BaselineError(f"baseline build step failed: {' '.join(step[:3])}; see {blog}", steps=steps,
+                                    discarded_foreign_build=discarded)
+    if configure_only:
+        return {"first_build": first, "steps": steps, "wall_s": round(time.time() - t0, 1), "log": str(blog),
+                "discarded_foreign_build": discarded, "cache": build.cmake_cache_info(bdir)}
     wb = SERVER_BIN / "worldserver"
     if not os.access(wb, os.X_OK):
         raise BaselineError("baseline worldserver missing after install", steps=steps)
-    return {"first_build": first, "steps": steps, "wall_s": round(time.time() - t0, 1), "log": str(BUILD_LOG),
-            "worldserver": str(wb), "worldserver_sha256": build._sha256_file(wb)}
+    return {"first_build": first, "steps": steps, "wall_s": round(time.time() - t0, 1), "log": str(blog),
+            "worldserver": str(wb), "worldserver_sha256": build._sha256_file(wb), "discarded_foreign_build": discarded}
 
 
 def worldserver_pids() -> list[int]:
