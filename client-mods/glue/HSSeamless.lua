@@ -8,6 +8,10 @@
 --    looked up by name at call time (GlueDialog.xml OnEvent; GlueDialog.lua), so wrapping the globals intercepts them:
 --    while the overlay is up, a progress dialog is recorded and not shown. The login state machine itself is untouched:
 --    nothing here calls into it except what the stock dialog's own buttons would (StatusDialogClick via OnAccept).
+--    The overlay's bar shows real progress (seamless-polish): each login step the client reports through those dialogs
+--    moves it forward to that step's mark (STEPS); between steps it creeps toward the next mark without reaching it; it
+--    never goes down during one load, starts empty at every load (BeginPhase) and is full when the character list is
+--    on screen (EndPhase "charlist").
 -- 2. Friendly errors. An error dialog during that time (and a disconnect at any time) becomes a plain message with
 --    Try again / Back to menu and a "Show details" toggle that reveals the client's original text. Both buttons first do
 --    what the stock dialog's Okay button does (its OnAccept / OnCancel, e.g. StatusDialogClick), then retry the login
@@ -15,6 +19,8 @@
 -- 3. Character select. The realm name (CharSelectRealmName) and Change Realm (CharSelectChangeRealmButton) are hidden;
 --    Enter World (CharSelectEnterWorldButton) reads "Play" and Back (CharacterSelectBackButton) reads "Main Menu".
 --    Their OnClick scripts (CharacterSelect_EnterWorld / CharacterSelect_Exit, CharacterSelect.xml) are unchanged.
+--    With the realm controls hidden, the first character button moves up into their place (seamless-polish), so the
+--    list starts at the top of its panel (CharacterSelectCharacterFrame) with stock WoW's spacing.
 -- Frame names, dialog keys and strings are the installed client's (Interface\GlueXML\GlueDialog.lua, GlueParent.lua,
 -- CharacterSelect.xml/.lua, GlueStrings.lua, read with `harness/hs mpq`).
 --
@@ -31,7 +37,10 @@
 --   adler> friendly error shown   D:<visible>:<len>:<adler> details opened (what they show)   R / B Try again / Back to
 --   menu   L<n> character list with n characters   Q:<screen>:<realm shown>:<change realm shown>:<play label>:<back
 --   label>:<play shown>:<overlay shown> character select inspected   P:<label> Play clicked   W EnterWorld
---   E<n> Lua errors counted by the test error handler (at the hand-out). Lower case: the test hook's own clicks
+--   E<n> Lua errors counted by the test error handler (at the hand-out)   G:<first>:<samples>:<decreases>:<step
+--   advances>:<last> the loading bar during one overlay (per mille of full, read back from the bar's width every
+--   frame; a step advance is the bar growing inside a reported step's event handler; just before its H)   Y:<panel top>:<first button top>:<panel bottom>:<lowest button bottom> character list
+--   layout (GetTop/GetBottom, rounded; with Q)   M Main Menu clicked on character select. Lower case: the test hook's own clicks
 --   (d details, r<1|0> Try again while the error was shown or not).
 -- Without HS_TEST nothing is recorded and nothing extra is stored.
 
@@ -39,6 +48,33 @@ local ELLIPSIS = "\226\128\166";                -- UTF-8 "..." (one glyph)
 local CAPTION_LOGIN = "Entering Azeroth" .. ELLIPSIS;
 local CAPTION_LIST = "Loading" .. ELLIPSIS;
 local BACK_AFTER_S = 15;                        -- the overlay offers "Back to menu" if a login takes this long
+
+-- The login steps the client reports (the texts of its progress dialog: OPEN_STATUS_DIALOG / UPDATE_STATUS_DIALOG),
+-- as their GlueStrings.lua keys (Interface\GlueXML\GlueStrings.lua in the installed client, patch-enUS-3.MPQ, read
+-- with `harness/hs mpq`), in login order, with the bar's mark for each. The texts are looked up from the client's own
+-- globals at run time, so they are always the installed client's wording.
+local STEPS = {
+	{ "LOGIN_STATE_CONNECTING", 0.10 },         -- "Connecting"
+	{ "LOGIN_STATE_HANDSHAKING", 0.20 },        -- "Handshaking"
+	{ "LOGIN_STATE_AUTHENTICATING", 0.30 },     -- "Authenticating"
+	{ "LOGIN_STATE_CHECKINGVERSIONS", 0.35 },   -- "Validating Version"
+	{ "LOGIN_STATE_AUTHENTICATED", 0.45 },      -- "Success!"
+	{ "REALM_LIST_IN_PROGRESS", 0.55 },         -- "Retrieving realm list"
+	{ "REALM_LIST_SUCCESS", 0.65 },             -- "Realm list retrieved"
+	{ "CHAR_LIST_RETRIEVING", 0.75 },           -- "Retrieving character list"
+	{ "CHAR_LIST_RETRIEVED", 0.90 },            -- "Character list retrieved"
+};
+local BAR_W = 290;                              -- HSLoadingOverlayBarBg's width (HSFrontMenu.xml)
+local CREEP_SHARE = 0.7;                        -- between steps the bar creeps up to this share of the way to the next mark
+local CREEP_RATE = 1.2;                         -- how fast it creeps (per second, exponential approach)
+local UNKNOWN_SHARE = 0.3;                      -- an unknown step text moves the reached mark this share toward the next
+
+-- Character select (Interface\GlueXML\CharacterSelect.xml, patch-enUS-3.MPQ, read with `harness/hs mpq`): inside
+-- CharacterSelectCharacterFrame, CharSelectRealmName is anchored TOP y=-10 with height 13, CharSelectChangeRealmButton
+-- (height 33) hangs below it, and CharSelectCharacterButton1 is anchored TOPLEFT x=24 y=-65: 9 units below Change Realm.
+-- With both hidden, the first button keeps x and that 9-unit gap below the panel's top edge.
+local CS_FIRST_X, CS_FIRST_Y = 24, -65;
+local CS_REALM_BLOCK = 10 + 13 + 33;
 
 -- The friendly wording. Never server, realm, connect, authenticate or account (login-screen spec, "Friendly errors").
 HS_FRIENDLY = {
@@ -61,7 +97,8 @@ local ERRORS = { OKAY = true, OKAY_HTML = true, OKAY_HTML_EXIT = true, OKAY_WITH
                  CONNECTION_HELP = true, CONNECTION_HELP_HTML = true, DISCONNECTED = true };
 
 local S = { phase = nil, t = 0, since = 0, frames = 0, overlayFrames = 0, dialogFrames = 0, intercepted = 0,
-            pending = nil, err = nil, logins = 0, visibleSeen = {}, enteredWorld = false };
+            pending = nil, err = nil, logins = 0, visibleSeen = {}, enteredWorld = false,
+            bar = 0, reached = 0, bs = nil };
 HSSeamlessState = S;
 
 local function mark(e)
@@ -111,12 +148,69 @@ end
 
 -- ---------------------------------------------------------------- the overlay
 
+-- The mark of a reported step text (nil if it isn't one of STEPS), and the next mark above `v` (1 if none).
+local function stepMark(text)
+	if ( not text ) then return nil; end
+	for _, st in ipairs(STEPS) do
+		if ( _G[st[1]] and text == _G[st[1]] ) then return st[2]; end
+	end
+	return nil;
+end
+
+local function nextMark(v)
+	for _, st in ipairs(STEPS) do
+		if ( st[2] > v + 1e-6 ) then return st[2]; end
+	end
+	return 1;
+end
+
+-- The bar as drawn, and the test record's view of it: every frame's width, read back, in per mille of full.
+local function barSample()
+	if ( not HS_TEST or not S.bs ) then return; end
+	local v = math.floor(HSLoadingOverlayBarFill:GetWidth() * 1000 / BAR_W + 0.5);
+	local b = S.bs;
+	if ( b.n == 0 ) then b.first = v; end
+	if ( b.n > 0 and v < b.last ) then b.dec = b.dec + 1; end
+	b.n = b.n + 1;
+	b.last = v;
+end
+
+local function setBar(v)
+	S.bar = math.max(S.bar, math.min(1, v));        -- forward only
+	HSLoadingOverlayBarFill:SetWidth(math.max(1, BAR_W * S.bar));
+end
+
+-- A login step reported by the client (the progress dialog's text): the bar moves forward to its mark at once.
+function HSSeamless_Step(text)
+	if ( not S.phase ) then return; end
+	local m = stepMark(text);
+	if ( m ) then
+		S.reached = math.max(S.reached, m);
+	else
+		S.reached = S.reached + UNKNOWN_SHARE * (nextMark(S.reached) - S.reached);
+	end
+	setBar(S.reached);
+end
+
+-- A reported step, and the test record's view of it: a "step advance" is the bar's drawn width growing inside the
+-- step's own event handler (no time passes there, so a bar that only moves with time never counts).
+local function stepped(text)
+	local w0 = HSLoadingOverlayBarFill:GetWidth();
+	HSSeamless_Step(text);
+	if ( S.bs and HSLoadingOverlayBarFill:GetWidth() > w0 + 0.5 ) then S.bs.adv = S.bs.adv + 1; end
+end
+
 function HSSeamless_BeginPhase(caption, why)
 	if ( HSErrorDialog:IsShown() ) then HSErrorDialog:Hide(); end
 	S.phase = why or "?";
 	S.since = S.t;
 	S.frames, S.overlayFrames, S.dialogFrames, S.intercepted = 0, 0, 0, 0;
 	S.visibleSeen = {};
+	-- every load starts from an empty bar
+	S.bar, S.reached = 0, 0;
+	HSLoadingOverlayBarFill:SetWidth(1);
+	S.bs = HS_TEST and { n = 0, dec = 0, adv = 0, first = -1, last = -1 } or nil;
+	barSample();
 	local b = HSFrontMenuState and HSFrontMenuState.backdrop;
 	if ( b and b.logo ) then HSLoadingOverlayLogo:SetTexture(b.logo); end
 	HSLoadingOverlayText:SetText(caption);
@@ -129,6 +223,12 @@ end
 
 function HSSeamless_EndPhase(why)
 	if ( not S.phase ) then return; end
+	if ( why == "charlist" ) then setBar(1); end      -- the character list is on screen: the bar is full
+	barSample();
+	if ( S.bs ) then
+		rec(format("G:%d:%d:%d:%d:%d", S.bs.first, S.bs.n, S.bs.dec, S.bs.adv, S.bs.last));
+		S.bs = nil;
+	end
 	mark(format("ov:hide:%s:frames=%d,overlay=%d,dialog=%d,icpt=%d,secs=%.1f", clean(why), S.frames, S.overlayFrames,
 		S.dialogFrames, S.intercepted, S.t - S.since));
 	rec(format("H:%s:%d:%d:%d:%d", clean(why), S.frames, S.overlayFrames, S.dialogFrames, S.intercepted));
@@ -164,9 +264,11 @@ function HSSeamless_OnUpdate(self, elapsed)
 			rec("V:" .. clean(w));
 		end
 	end
-	-- a slow sweep on the loading bar; the "Back to menu" link once a login takes unusually long
-	local f = (S.t * 0.6) % 1;
-	HSLoadingOverlayBarFill:SetWidth(math.max(1, 290 * (f < 0.5 and f * 2 or (1 - f) * 2)));
+	-- the loading bar creeps toward the next step's mark (never reaching it before the client reports that step)
+	local ceiling = S.reached + CREEP_SHARE * (nextMark(S.reached) - S.reached);
+	setBar(S.bar + (ceiling - S.bar) * (1 - math.exp(-CREEP_RATE * elapsed)));
+	barSample();
+	-- the "Back to menu" link once a login takes unusually long
 	if ( S.t - S.since > BACK_AFTER_S and not HSLoadingOverlayBack:IsShown() ) then
 		HSLoadingOverlayBack:Show();
 	end
@@ -257,6 +359,7 @@ function GlueDialog_Show(which, text, data)
 		if ( not S.phase ) then HSSeamless_BeginPhase(CAPTION_LIST, "charlist"); end
 		S.pending = { which = which, text = text };
 		S.intercepted = S.intercepted + 1;
+		stepped(text);
 		mark("icpt:" .. clean(which) .. ":" .. clean(text));
 		if ( not S.kinds[which] ) then S.kinds[which] = true; rec("I:" .. clean(which)); end
 		return;
@@ -281,6 +384,7 @@ function GlueDialog_OnEvent(self, event, arg1, arg2, arg3)
 				HSSeamless_ShowError(p.which, arg1, "login", GlueDialogTypes[p.which] and GlueDialogTypes[p.which].OnAccept);
 			else
 				S.pending.text = arg1;
+				stepped(arg1);
 			end
 		end
 		return;
@@ -304,6 +408,10 @@ end
 function HSSeamless_CharSelectWording()
 	CharSelectRealmName:Hide();
 	CharSelectChangeRealmButton:Hide();
+	-- the first character moves up into the realm controls' place (the other buttons hang below it)
+	CharSelectCharacterButton1:ClearAllPoints();
+	CharSelectCharacterButton1:SetPoint("TOPLEFT", CharacterSelectCharacterFrame, "TOPLEFT", CS_FIRST_X,
+		CS_FIRST_Y + CS_REALM_BLOCK);
 	CharSelectEnterWorldButton:SetText(HS_FRIENDLY.play);
 	CharacterSelectBackButton:SetText(HS_FRIENDLY.main_menu);
 	CharacterSelectBackButton:SetWidth(math.max(100, CharacterSelectBackButton:GetTextWidth() + 30));
@@ -333,6 +441,17 @@ function HSSeamless_InspectCharSelect()
 		CharSelectChangeRealmButton:IsVisible() and 1 or 0, clean(CharSelectEnterWorldButton:GetText()),
 		clean(CharacterSelectBackButton:GetText()), CharSelectEnterWorldButton:IsVisible() and 1 or 0,
 		HSLoadingOverlay:IsVisible() and 1 or 0));
+	-- the list's layout: the panel's edges, the first button's top and the lowest button's bottom (all ten buttons)
+	local low;
+	for i = 1, MAX_CHARACTERS_DISPLAYED or 10 do
+		local btn = _G["CharSelectCharacterButton" .. i];
+		if ( btn and btn:GetBottom() and (not low or btn:GetBottom() < low) ) then low = btn:GetBottom(); end
+	end
+	local function r(x) return x and math.floor(x + 0.5) or -1; end
+	mark(format("cs:layout:panel=%s-%s,first=%s,low=%s", tostring(CharacterSelectCharacterFrame:GetTop()),
+		tostring(CharacterSelectCharacterFrame:GetBottom()), tostring(CharSelectCharacterButton1:GetTop()), tostring(low)));
+	rec(format("Y:%d:%d:%d:%d", r(CharacterSelectCharacterFrame:GetTop()), r(CharSelectCharacterButton1:GetTop()),
+		r(CharacterSelectCharacterFrame:GetBottom()), r(low)));
 end
 
 -- ---------------------------------------------------------------- test record out (HS_TEST only)
@@ -360,6 +479,7 @@ function HSFrontMenu_Mark(event)
 	elseif ( strsub(event, 1, 11) == "press:play:" ) then rec("P:" .. clean(strsub(event, 12)));
 	elseif ( strsub(event, 1, 12) == "press:retry:" ) then rec("r" .. strsub(event, 13));
 	elseif ( event == "press:details" ) then rec("d");
+	elseif ( event == "press:mainmenu" ) then rec("M");
 	end
 end
 

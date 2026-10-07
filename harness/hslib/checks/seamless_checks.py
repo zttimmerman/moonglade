@@ -21,6 +21,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import signal
 import time
 import zlib
@@ -43,12 +44,19 @@ FORBIDDEN_FRIENDLY = ("server", "realm", "connect", "authenticat", "account")   
 SERVER_FLAVOUR = ("logout", "log out", "logged out", "server", "disconnect", "connection", "realm")
 
 CONTINUE_AT = 20
-# Run B (shared by login.loading_overlay, login.charselect_wording, client.wording_addon): menu shot at 4 s; Continue
-# at 20 s with a shot in the same frame (the overlay is up); at character select the wording is recorded, a shot is
-# taken, and Play is clicked; in the world the add-on logs out after 8 s (its test hook).
+# Run B (shared by login.loading_overlay, login.charselect_wording, client.wording_addon, login.overlay_progress,
+# login.overlay_progress_reload, login.charselect_layout): menu shot at 4 s; Continue at 20 s with a shot in the same
+# frame (the overlay is up); at character select the wording and layout are recorded and a shot is taken; then Zach's
+# quick reload (seamless-polish): Main Menu, and Continue again RELOAD_GAP_S later; at the second character select
+# Play is clicked; in the world the add-on logs out after 8 s (its test hook).
+MAINMENU_AT = 3
+RELOAD_GAP_S = 2             # "within a few seconds" (login-screen spec, quick second load)
 GLUE_PLAY = {"marker": True,
              "script": [{"t": 4, "act": "shot"}, {"t": CONTINUE_AT, "act": "continue"}, {"t": CONTINUE_AT, "act": "shot"}],
-             "charselect": [{"t": 1.5, "act": "csinspect"}, {"t": 2, "act": "shot"}, {"t": 4, "act": "play"}]}
+             "charselect": [{"t": 1.5, "act": "csinspect"}, {"t": 2, "act": "shot"}, {"t": MAINMENU_AT, "act": "mainmenu"},
+                            {"t": MAINMENU_AT + RELOAD_GAP_S, "act": "continue"}],
+             "charselect_again": [{"t": 2, "act": "play"}]}
+CHARSELECT_SHOT = "seamless-charselect.jpg"   # harness/out/: the character-select screenshot of the last run B
 ADDON_HOOK = '-- planted by the harness (seamless_checks.py): the wording add-on\'s test hook\r\nMoongladeTest = {\r\n\t["hook"] = 1,\r\n}\r\n'
 # Run A (login.friendly_errors): the login server is stopped before Continue; the friendly error is photographed,
 # its details opened and photographed; the login server is started again; Try again at RETRY_AT; at character select
@@ -409,6 +417,10 @@ def play_session() -> dict:
         ev["frame_log"] = glue_logs(scratch)
         shots = [p for p in screenshots(scratch) if p.stat().st_mtime >= t_up - 5]
         ev["screens"] = [shot_info(p) for p in shots]
+        if len(shots) >= 3:          # the character-select shot, kept for a human look (harness/out/, git-ignored)
+            P.OUT.mkdir(parents=True, exist_ok=True)
+            shutil.copyfile(shots[2], P.OUT / CHARSELECT_SHOT)
+            ev["charselect_shot"] = str((P.OUT / CHARSELECT_SHOT).relative_to(P.ROOT))
         ev["t_client_up"] = round(t_up, 3)
         ev["connection_log"] = connection_log(scratch)[-1500:]
         ev["addon_files"] = sorted(str(p.relative_to(scratch)) for p in (scratch / "Interface" / "AddOns" / "Moonglade").glob("*"))
@@ -604,6 +616,180 @@ def wording_addon(ctx):
             "a file under Interface/FrameXML differs from the stock client's", **ev)
     require(any(r.startswith("Interface/AddOns/Moonglade/") for r in fx.get("added_outputs", [])),
             "the add-on isn't part of the play client build", **ev)
+    require(is_clear(s["remaining_after"]), "something is still running", **ev)
+    return ev
+
+
+# ---------------------------------------------------------------- seamless-polish: the bar, the character list
+
+BAR_EMPTY_MAX = 5            # per mille: the bar's 1-pixel minimum width (of 290) reads back as 3
+BAR_FULL = 1000
+
+
+def _bar(seg: list[str]) -> dict:
+    """G:<first>:<samples>:<decreases>:<step advances>:<last> (HSSeamless.lua EndPhase) of one overlay phase."""
+    g = [t for t in seg if t.startswith("G:")]
+    if len(g) != 1:
+        return {"tokens": g}
+    f = g[0].split(":")
+    if len(f) != 6 or not all(re.fullmatch(r"-?\d+", x) for x in f[1:]):
+        return {"tokens": g}
+    return {"token": g[0], "first": int(f[1]), "samples": int(f[2]), "decreases": int(f[3]), "step_advances": int(f[4]),
+            "last": int(f[5])}
+
+
+def _load_ok(rec: list[str], i_o: int, ev: dict, name: str, need_advance: bool) -> dict:
+    """The overlay phase starting at rec[i_o]: shown at a Continue, ended by the character list, with a bar that
+    starts empty, never decreases and ends full (and, if need_advance, moved at least once on a reported step)."""
+    require(i_o is not None and i_o < len(rec) and rec[i_o].startswith("O:continue:"),
+            f"{name}: the overlay wasn't shown at the Continue press", **ev)
+    ph = _overlay_phase(rec, i_o)
+    b = _bar(ph["tokens"])
+    ev[name] = {"phase_tokens": ph["tokens"], "bar": b}
+    lists = [t for t in ph["tokens"] + rec[ph["end"] + 1:ph["end"] + 2] if re.fullmatch(r"L\d+", t)] \
+        if ph["end"] is not None else []
+    require(ph["hide"].get("why") == "charlist" and lists and int(lists[-1][1:]) >= 1,
+            f"{name}: the load didn't end at character select", **ev)
+    require("first" in b, f"{name}: no bar summary (G token) for the load", **ev)
+    require(b["samples"] >= 3, f"{name}: too few bar samples", **ev)
+    require(0 <= b["first"] <= BAR_EMPTY_MAX, f"{name}: the bar didn't start empty", **ev)
+    require(b["decreases"] == 0, f"{name}: the bar went backwards ({b['decreases']} decreases)", **ev)
+    if need_advance:
+        require(b["step_advances"] >= 1, f"{name}: the bar never moved on a reported login step (only with time)", **ev)
+    require(b["last"] == BAR_FULL, f"{name}: the bar wasn't full when the overlay hid", **ev)
+    return ph
+
+
+def _step_keys_in_client() -> dict:
+    """The login-step keys HSSeamless.lua's STEPS names, each with its text in the installed client's GlueStrings.lua."""
+    text = (P.ROOT / "client-mods" / "glue" / "HSSeamless.lua").read_text()
+    block = re.search(r"local STEPS = \{(.*?)\n\};", text, re.S).group(1)
+    keys = re.findall(r'\{ "([A-Z_]+)", ([0-9.]+) \}', block)
+    gs = stock_strings("Interface\\GlueXML\\GlueStrings.lua")
+    return {"source": gs["__source__"], "steps": [{"key": k, "mark": float(m), "text": gs.get(k)} for k, m in keys]}
+
+
+def _common_record(s: dict, ev: dict) -> list[str]:
+    rec = s.get("glue_record") or []
+    ev["record"] = record_ok(rec)
+    require(rec and not ev["record"]["truncated"], "no complete test record came out of the client", **ev)
+    require(ev["record"]["lua_errors"] == "0", "Lua errors (test error handler)", **ev)
+    require(not any((v or "").strip() for v in (s.get("frame_log") or {}).values()), "GlueXML.log / FrameXML.log hold "
+            "errors", **ev)
+    return rec
+
+
+@check("login.overlay_progress", order=392, capability=CAP_LOGIN, stack="down", tier="full")
+def overlay_progress(ctx):
+    """Continue on a scratch patched play client until character select: the loading bar, read back from its width
+    every frame by the test hook, starts empty, never decreases, grows at least once inside the event handler of a
+    client-reported login step (no time passes there, so a bar that only moves with time can't), and is full when
+    the overlay hides. The
+    steps it reacts to are the installed client's own GlueStrings texts, in login order."""
+    if "play" not in _SESSIONS:
+        play_session()
+    s = _session_ok("play")
+    ev = {k: s.get(k) for k in ("glue_record", "remaining_after", "shared_run")}
+    steps = _step_keys_in_client()
+    ev["steps"] = steps
+    require(steps["steps"] and all(x["text"] for x in steps["steps"]),
+            "a login step in STEPS isn't a GlueStrings.lua key of the installed client", **ev)
+    marks = [x["mark"] for x in steps["steps"]]
+    require(marks == sorted(set(marks)) and 0 < marks[0] and marks[-1] < 1, "the step marks aren't strictly rising", **ev)
+    rec = _common_record(s, ev)
+    i_c = tok(rec, "C")
+    require(i_c is not None, "the record has no Continue press", **ev)
+    _load_ok(rec, i_c + 1, ev, "first_load", need_advance=True)
+    require(is_clear(s["remaining_after"]), "something is still running", **ev)
+    return ev
+
+
+@check("login.overlay_progress_reload", order=392, capability=CAP_LOGIN, stack="down", tier="full")
+def overlay_progress_reload(ctx):
+    """Zach's repro: Continue -> character select -> Main Menu -> Continue again RELOAD_GAP_S seconds later. The
+    first load ends with a full bar; the second load's bar starts empty again, never decreases and ends full at the
+    second character select."""
+    if "play" not in _SESSIONS:
+        play_session()
+    s = _session_ok("play")
+    ev = {k: s.get(k) for k in ("glue_record", "remaining_after", "shared_run")}
+    ev["timing"] = {"mainmenu_after_charlist_s": MAINMENU_AT, "continue_after_mainmenu_s": RELOAD_GAP_S}
+    require(RELOAD_GAP_S <= 5, "GIVEN not met: the second Continue isn't within a few seconds", **ev)
+    rec = _common_record(s, ev)
+    i_c = tok(rec, "C")
+    require(i_c is not None, "the record has no Continue press", **ev)
+    ph1 = _load_ok(rec, i_c + 1, ev, "first_load", need_advance=False)
+    i_m = tok(rec, "M", ph1["end"])
+    require(i_m is not None, "GIVEN not met: Main Menu wasn't clicked at character select", **ev)
+    i_c2 = tok(rec, "C", i_m)
+    require(i_c2 is not None and i_c2 == i_m + 1, "the second Continue didn't follow Main Menu (from the login "
+            "screen)", **ev)
+    _load_ok(rec, i_c2 + 1, ev, "second_load", need_advance=False)
+    require(is_clear(s["remaining_after"]), "something is still running", **ev)
+    return ev
+
+
+def stock_charselect_gap() -> dict:
+    """The stock gap between the realm controls and the first character (Interface\\GlueXML\\CharacterSelect.xml of the
+    installed client): CharSelectCharacterButton1's TOPLEFT y offset below the panel's top, minus the realm name's
+    top offset and height and Change Realm's height."""
+    data, src = clientbuild.effective_file(P.CLIENT, "Interface\\GlueXML\\CharacterSelect.xml")
+    x = data.decode("utf-8", errors="replace")
+
+    def block(name: str) -> str:
+        i = x.index(f'name="{name}"')
+        return x[i:i + 1500]
+
+    def dims(b: str) -> list[tuple[int, int]]:
+        return [(int(a), int(c)) for a, c in re.findall(r'<AbsDimension x="(-?\d+)" y="(-?\d+)"/>', b)]
+    realm = block("CharSelectRealmName")
+    realm_h = dims(realm)[0][1]                      # <Size>
+    realm_top = dims(realm)[1][1]                    # <Anchor point="TOP"> offset
+    change_h = dims(block("CharSelectChangeRealmButton"))[0][1]
+    btn = dims(block("CharSelectCharacterButton1"))[0]
+    gap = -btn[1] - (-realm_top + realm_h + change_h)
+    return {"source": src, "realm_top": realm_top, "realm_h": realm_h, "change_h": change_h, "first_button": btn,
+            "gap_below_realm_controls": gap}
+
+
+LAYOUT_TOL = 2               # UI units (each GetTop is rounded to the unit)
+
+
+@check("login.charselect_layout", order=392, capability=CAP_LOGIN, stack="down", tier="full")
+def charselect_layout(ctx):
+    """At character select (realm controls hidden, the test account's one character) the test hook's layout reading
+    (GetTop/GetBottom of CharacterSelectCharacterFrame and the character buttons): the gap between the panel's top and
+    the first character's top is within LAYOUT_TOL of the stock gap below the realm controls (from the installed
+    client's CharacterSelect.xml), and every character button (all ten) lies inside the panel."""
+    if "play" not in _SESSIONS:
+        play_session()
+    s = _session_ok("play")
+    ev = {k: s.get(k) for k in ("glue_record", "remaining_after", "shared_run", "charselect_shot")}
+    stock = stock_charselect_gap()
+    ev["stock"] = stock
+    require(stock["gap_below_realm_controls"] > 0, "couldn't read the stock layout", **ev)
+    rec = _common_record(s, ev)
+    q = [t for t in rec if t.startswith("Q:")]
+    ys = [t for t in rec if t.startswith("Y:")]
+    ev["inspection"] = {"Q": q, "Y": ys}
+    require(len(q) == 1 and len(ys) == 1 and rec.index(ys[0]) == rec.index(q[0]) + 1,
+            "the test hook didn't record character select's layout once", **ev)
+    lists = [t for t in rec[:rec.index(q[0])] if re.fullmatch(r"L\d+", t)]
+    require(lists and int(lists[-1][1:]) >= 1, "GIVEN not met: character select listed no character", **ev)
+    qf = q[0].split(":")
+    require(len(qf) == 8 and qf[1] == "charselect" and qf[2] == "0" and qf[3] == "0",
+            "the realm name or Change Realm is shown (or not on character select)", **ev)
+    f = ys[0].split(":")
+    require(len(f) == 5 and all(re.fullmatch(r"-?\d+", v) for v in f[1:]), "malformed layout token", **ev)
+    top, first, bottom, low = (int(v) for v in f[1:])
+    require(top > bottom > 0 and first > 0 and low > 0, "the layout reading is missing a value", **ev)
+    gap = top - first
+    ev["measured"] = {"panel_top": top, "first_top": first, "panel_bottom": bottom, "lowest_button_bottom": low,
+                      "gap": gap, "want": stock["gap_below_realm_controls"], "tolerance": LAYOUT_TOL}
+    require(abs(gap - stock["gap_below_realm_controls"]) <= LAYOUT_TOL,
+            f"the first character sits {gap} units below the panel's top, not "
+            f"{stock['gap_below_realm_controls']} (stock spacing)", **ev)
+    require(first <= top and low >= bottom, "a character button sticks out of the panel", **ev)
     require(is_clear(s["remaining_after"]), "something is still running", **ev)
     return ev
 
