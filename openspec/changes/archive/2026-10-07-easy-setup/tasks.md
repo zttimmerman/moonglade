@@ -1,0 +1,12 @@
+# Tasks
+- [x] 1.1 Bootstrap command, Brewfile, preflight, steps, resumability — verify: `setup.preflight`, `setup.fresh_clone`
+- [x] 1.2 Pinned downloads (client-data, VMaNGOS sha256) + cache — verify: `build.downloads_pinned`
+- [x] 1.3 F30 moved-repo detection — verify: `build.moved_repo`
+- [x] 1.4 F28 harness never rebuilds the player's play client — verify: `client.player_client_not_rebuilt`
+- [x] 1.5 Portability scan + fixes — verify: `repo.portable`
+- [x] 1.6 F33 build-time allowlist — verify: `report.timing`
+- [x] 1.7 README quick start + docs/setup.md rewritten around bootstrap; defaults in one place — verify: `setup.fresh_clone`
+- [x] 1.8 Pristine-client protection: OS write-protection of `client/` (lift/restore in client-install, kill-safe), writer guards by identity, per-run fingerprint, agent PreToolUse hook — verify: `client.pristine_locked`, `client.build_refuses_pristine`, `report.client_pristine`, `repo.agent_guard_hook`
+- [x] 1.9 Diagnose the two verifier FAILs: `play.offline` Wine self-test (no winedevice denial in the log since the 05:05 reboot; fails on main's code too) and `client.wording_addon` (camp popup not shown; failed 07:4x–08:19, before the 08:22 incident). Fix the cause; no loosening without a spec-change log entry for Zach's review
+- [x] 2.1 Verifier pass + full harness (+ one slow run of `setup.fresh_clone`)
+- [ ] 2.2 (pending: Zach/a friend) Human: README quick start on another Mac or a new macOS account
