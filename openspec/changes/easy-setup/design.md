@@ -95,9 +95,9 @@ SHA-256, inode and mtime of hs-build.json, Wow.exe and every stamped output).
 (`BUILD_CHECKS`). Any other check's `evidence.build_s` counts as check time and adds a timing warning.
 
 **Portability.** `repo.portable` scans `git ls-files --cached --others --exclude-standard` (working-tree content; binaries
-skipped) for: `/Users/<x>`, `-Users-<x>`, `~name/`, this Mac's user name as a word, home folder, hostnames (`hostname`,
+skipped) for: `/Users/<x>`, `-Users-<x>`, `~` followed by a user name and a slash, this Mac's user name as a word, home folder, hostnames (`hostname`,
 `scutil` ComputerName/LocalHostName), the repo's absolute path, the dev Mac's repo-folder convention (`Documents` + `/repos/`), and
-an nvm install path. Fixed: the change-loop skill's nvm path, docs/setup.md, a `zach` variable name in two checks (renamed
+an nvm install path. Fixed: the change-loop skill's nvm path, docs/setup.md, a variable named after the dev account in two checks (renamed
 `player_cfg`), a sample `accountName` in client_checks. Allowlist (7 entries, each with its reason in `setup_checks.PORTABLE_ALLOW`):
 STATUS.md (orchestrator-owned), tools/rename-folder.sh and the naming check that pins its lines, the archived rename change, the
 easy-setup spec text (before and after archiving), and a report heading anchor naming the person.
