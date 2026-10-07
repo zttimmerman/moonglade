@@ -48,3 +48,12 @@ No game data values. Downloads are pinned by URL + sha256 in fork.lock.
   `client.wording_addon` on main's code; the play-client build resolved into `client/` and replaced `client/Wow.exe` with
   the patched one (the MPQ writer refused, the Wow.exe writer had no guard). Restored from `env/re/bin/Wow.exe`
   (manifest sha256 aa63a575…) with Zach's OK at 10:19; the patched file is kept at `env/tmp/Wow.exe.patched-set-aside-0822`.
+- 2026-10-07 (test method change, for review at the next human gate): the seamless play session behind
+  `client.wording_addon` now sends one hardware Shift key press into the client's Wine prefix after the front menu is up
+  (`harness/hslib/checks/clientinput.py`). Reason (B31): the 3.3.5a client's 30-minute idle logout compares
+  milliseconds-since-boot minus the last-real-input time as a signed 32-bit value (RE of the `env/re` copy, 0x0052b24c →
+  0x006b1930); the harness never sends real input, so with Mac uptime between 30 min and ~24.8 days the client logs
+  itself out within a second of entering the world. Every pass before 05:02 was on a 37.8-day uptime. The only
+  alternative is a client binary patch (ADR + Zach's yes). `login.auto_login` still injects no keystrokes; no scenario
+  text changed. Also: scratch play clients no longer copy `client/WTF`; each seeds `movie`, `readEULA`, `readTOS`,
+  `hwDetect`, `realmName` and the test account's SavedVariables itself and refuses to launch without them.
