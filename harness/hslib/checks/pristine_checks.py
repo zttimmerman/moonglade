@@ -119,10 +119,10 @@ def pristine_locked(ctx):
         allowed = ([a["attempt"] for a in ev["direct"] if not a["refused"]]
                    + [a["attempt"] + " (via symlink)" for a in ev["via_symlink"] if not a["refused"]])
         ev["allowed"] = allowed
+        require(not allowed, f"write attempts succeeded on a protected install: {allowed}", **ev)
         fp1 = pristine.fingerprint(inst, manifest=man)
         ev["changes"] = pristine.diff(fp0, fp1)
         ev["manifest_mismatches"] = clientinst.mismatches(inst, man)
-        require(not allowed, f"write attempts succeeded on a protected install: {allowed}", **ev)
         require(not ev["changes"] and not ev["manifest_mismatches"],
                 "the protected install changed (fingerprint or install record)", **ev)
         # the game's own state folder stays writable (stock mode)
