@@ -308,7 +308,7 @@ report.timing's own record over a 420 s-build run raises no warning, while case 
 **Manifest `client_dir`.** Written repo-relative (`"client"`) by `clientinst.manifest_client_dir`; an install outside the
 repo stays absolute. A no-op reinstall heals an old value (`heal_manifest_client_dir`: rewrites only that field of the
 manifest, never opens `client/`); the dev Mac's manifest was healed with that function (it named the pre-rename
-[redacted] folder). `client.inspect` now requires the field to be current.
+old project folder). `client.inspect` now requires the field to be current.
 
 **Friend first launch (item 6).** Confirmed: a play client built from a `client/` without saved settings (a friend's: the
 lock creates an empty `client/WTF`, stock mode adds only realmlist/patchlist/gxWindow/gxApi) starts with the intro movie,
