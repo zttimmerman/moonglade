@@ -4,6 +4,7 @@ import json
 import re
 import subprocess
 import time
+from pathlib import Path
 
 from .. import paths as P
 from ..registry import REGISTRY, TIERS, check, require, tiers_for
@@ -212,6 +213,14 @@ def tiers_nested(leave_up: bool) -> dict:
     return _tiers_record(probs, ev | tev, t0)
 
 
+def _repo_rel(p: Path) -> str:
+    """p relative to the repo, or absolute when it lies outside (`hs run --results-dir` elsewhere)."""
+    try:
+        return str(Path(p).resolve().relative_to(P.ROOT.resolve()))
+    except ValueError:
+        return str(Path(p).resolve())
+
+
 def full_run_record(doc: dict, referenced: set, extra: list, reg: dict | None = None,
                     gui_rule_now: dict | None = None, backups_rule_now: dict | None = None) -> dict:
     """report.full_run over a results document (+ the post-run records in `extra`): a full run passes only if every
@@ -258,7 +267,7 @@ def full_run_record(doc: dict, referenced: set, extra: list, reg: dict | None = 
                          "backups_rule_rechecked": bk_now,
                          "backups_skips_accepted": bool(bk_skipped) and all(i in ok_skips for i in bk_skipped),
                          "non_passing": failing, "checks_executed": len(executed) - len(ok_skips),
-                         "outputs": [str(P.RESULTS.relative_to(P.ROOT)), str(P.SUMMARY.relative_to(P.ROOT))]},
+                         "outputs": [_repo_rel(P.RESULTS), _repo_rel(P.SUMMARY)]},
             "duration_s": 0.0,
             **({} if ok else {"message": (why[0] if not full else
                                           "not a clean full run: " + ", ".join(not_run + failing))[:300]})}

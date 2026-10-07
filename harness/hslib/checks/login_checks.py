@@ -562,6 +562,48 @@ def _config_values(client_dir: Path, keys) -> dict:
     return out
 
 
+# A base whose saved settings already set two of them, written the way a player's or the game's file may look: other
+# case in key names, CRLF line endings, values opposite to the defaults, and a line that isn't one of them.
+PRESET_CONFIG = b'SET gxWindow "1"\r\nSET movie "1"\r\nset READEULA "0"\r\n'
+PRESET_VALUES = {"movie": "1", "readEULA": "0"}
+
+
+def _preset_settings_kept(want: dict) -> dict:
+    """client.first_start_settings' "already set are left unchanged" clause: build a play client from a scratch clone
+    of client/ whose WTF/Config.wtf is PRESET_CONFIG; the built file must start with it byte-for-byte, keep its values,
+    and add only the missing keys (each once, CRLF)."""
+    from .. import clientbuild
+    from .pristine_checks import clone_client
+    base, dest = fresh_scratch("firststart-base"), fresh_scratch("firststart-preset")
+    ev: dict = {"preset": PRESET_CONFIG.decode()}
+    try:
+        clone_client(base)
+        shutil.rmtree(base / "WTF", ignore_errors=True)
+        (base / "WTF").mkdir()
+        (base / "WTF" / "Config.wtf").write_bytes(PRESET_CONFIG)
+        b = clientbuild.build(dest=dest, base=base)
+        got = (dest / "WTF" / "Config.wtf").read_bytes()
+        ev["built"] = got.decode("latin-1")
+        ev["state"] = (b.get("stamp") or {}).get("state", {}).get("first_start_settings")
+        vals = _config_values(dest, list(want))
+        ev["values"] = vals
+        missing = [k for k in want if k not in PRESET_VALUES]
+        tail = got[len(PRESET_CONFIG):]
+        ev["appended"] = tail.decode("latin-1")
+        expect_tail = b"".join(f'SET {k} "{want[k]}"\r\n'.encode() for k in missing)
+        require(got.startswith(PRESET_CONFIG),
+                "the build changed settings that were already set (the base's Config.wtf isn't a byte-for-byte "
+                "prefix of the built one)", **ev)
+        require(all(vals[k] == v for k, v in PRESET_VALUES.items()),
+                f"already-set values changed: {dict((k, vals[k]) for k in PRESET_VALUES)}", **ev)
+        require(tail == expect_tail, f"the build should append exactly the missing settings {missing} (CRLF), "
+                "and nothing for the ones already set", **ev)
+        return ev
+    finally:
+        drop_scratch(dest)
+        drop_scratch(base)
+
+
 def first_start_session(first_start: bool = True, real_run: bool = True) -> dict:
     """client.first_start_settings' run. first_start=False is the counterexample (the build leaves the settings out)."""
     from .. import clientbuild, clientcfg
@@ -584,6 +626,8 @@ def first_start_session(first_start: bool = True, real_run: bool = True) -> dict
         ev["built_config"] = _config_values(scratch, keys)
         wrong = {k: ev["built_config"][k] for k in keys if ev["built_config"][k] != want[k]}
         require(b["built"] and not wrong, f"the freshly built play client's WTF/Config.wtf lacks or differs in {wrong}", **ev)
+        # AND: settings that were already set are left unchanged (structural; a scratch base, never client/)
+        ev["already_set"] = _preset_settings_kept(want)
         if not real_run:
             return ev
         # THEN (real client): the front menu shows without the intro movie or the EULA/TOS screens, and one Continue
@@ -635,6 +679,7 @@ def first_start_session(first_start: bool = True, real_run: bool = True) -> dict
 def first_start_settings(ctx):
     """A play client built from a client with no saved settings (a friend's first bootstrap) gets the first-start
     settings where absent (clientcfg.FIRST_START_SETTINGS + realmName: no intro movie, EULA/TOS accepted, no hardware
-    detection, the realm chosen), and the real client then shows the front menu first and reaches character select
+    detection, the realm chosen) while a base whose Config.wtf already sets some of them keeps those lines byte-for-byte
+    (_preset_settings_kept), and the real client then shows the front menu first and reaches character select
     with one Continue, at the configured resolution. Counterexample: the build without them fails the first clause."""
     return first_start_session()

@@ -104,18 +104,38 @@ def verb_and_args(seg):
     return (seg[i] if i < len(seg) else ""), seg[i + 1:]
 
 
+SHELL_OPT_ARG = {"-o", "+o", "-O", "+O", "--rcfile", "--init-file"}   # shell options that take the next word
+
+
 def inner_shell_code(base, args):
-    """The command string a wrapped shell runs: `sh|bash|zsh ... -c '<code>'` (also -lc, -ec, ...) or `eval <words>`.
-    None when there's none (a plain `bash script.sh` runs a file the hook can't see, like any other program)."""
+    """The command string a wrapped shell runs: `sh|bash|zsh ... -c '<code>'` (also -lc, -ec, `-o pipefail -c`, ...),
+    `bash <<< '<code>'` (a here-string) or `eval <words>`. "" + STDIN when the shell reads its code from stdin (a pipe
+    `... | sh`, a heredoc, `< file`), which the caller judges by the whole command. None when there's none (a plain
+    `bash script.sh` runs a file the hook can't see, like any other program)."""
     if base == "eval":
         return " ".join(args)
     if base in SHELLS:
-        for k, a in enumerate(args):
+        k = 0
+        while k < len(args):
+            a = args[k]
+            if a == "<<<":
+                return args[k + 1] if k + 1 < len(args) else ""
+            if a in SHELL_OPT_ARG or (re.match(r"^[-+][a-zA-Z]*[oO]$", a) and "c" not in a[1:]):
+                k += 2          # -o pipefail, +O extglob, -eo pipefail: the option's value isn't a script
+                continue
             if a.startswith("-") and not a.startswith("--") and "c" in a[1:]:
                 return args[k + 1] if k + 1 < len(args) else ""
-            if not a.startswith("-") and not a.startswith("+"):
-                return None
+            if a in ("-", "--", "-s") or a.startswith("--") or a.startswith("-") or a.startswith("+"):
+                k += 1
+                continue
+            if a in ("<", "<<", "<<-", "0<"):
+                return STDIN
+            return None         # a script file
+        return STDIN
     return None
+
+
+STDIN = "\x00stdin"
 
 
 def check_find(args, cwd, cd_client):
@@ -163,6 +183,12 @@ def check_bash(cmd, cwd, depth=0):
         if verb in TRUSTED or verb.endswith("/harness/hs") or base == "git":
             continue
         inner = inner_shell_code(base, args)
+        if inner == STDIN:
+            # `echo 'cp x client/Wow.exe' | sh`, `sh <<EOF ... EOF`, `cat f | bash`: the code arrives on stdin, so
+            # the hook judges the whole command: blocked when it names client/
+            if re.search(r"(^|[\s/\"'=])client(/|\s|$)", text):
+                block(f"`{base}` reads its code from stdin (a pipe or heredoc) in a command that names client/.")
+            continue
         if inner is not None:
             # a wrapped shell (`bash -c "cp x client/Wow.exe"`, `eval ...`): the inner code gets the same rules;
             # code the hook can't parse to the end (too deep) is blocked only when it names client/

@@ -329,3 +329,26 @@ before/after this work.
 add-ons runs only under `HS_TEST` (the test hook's `enterworld` act and `enter_world_after_charlist`), and the front menu
 waits for a Continue click (`login.fresh_menu_waits`), then the player clicks Play. Those clicks are hardware input, which
 resets the client's idle timer, so a real player gets the stock 30-minute AFK logout only after 30 minutes without input.
+
+## As built: B33 (2026-10-07)
+
+**`client.first_start_settings`: "settings already set are left unchanged".** New structural sub-case
+(`login_checks._preset_settings_kept`, runs right after the first clause, before the client launches): an APFS clone of
+`client/` (read-only use; `pristine_checks.clone_client`) in `env/check-play-firststart-base` gets a `WTF/Config.wtf` of
+`SET gxWindow "1"`, `SET movie "1"`, `set READEULA "0"` (CRLF, mixed case, values opposite to the defaults); a play client is
+built from it with `clientbuild.build(base=...)`. The built file must start with those bytes exactly, `movie`/`readEULA` keep
+`1`/`0`, and exactly `readTOS`, `hwDetect`, `realmName` are appended (CRLF), nothing for the keys already set. Both scratch
+folders are removed. Counterexample: `add_missing_settings` replaced by an overwrite (`clientcfg._update_config`) → FAIL
+("the base's Config.wtf isn't a byte-for-byte prefix").
+
+**Agent hook.** Three more ways into a shell are covered: shell options that take a value before `-c` (`-o pipefail`,
+`-eo pipefail`, `+o nomatch`, `-O`/`+O`, `--rcfile`, `--init-file`); a here-string (`bash <<< '<code>'`, whose code gets
+the same rules); and a shell that reads its code from stdin (`... | sh|bash|zsh`, `bash -s`, a heredoc, `bash < file`),
+which is blocked when the command's text names `client/` (the piped text isn't parsed; a read-only pipeline that names
+`client/` and feeds a shell is blocked too, a known false positive). 10 blocked + 5 allowed rows added to
+`repo.agent_guard_hook` (now 66 rows); the previous hook lets all 10 new blocked rows through. Left alone on purpose:
+obfuscation such as `$(echo cp) x client/Wow.exe` or a variable holding the verb; the OS write protection of `client/`
+(`hs client-lock`) refuses those writes anyway.
+
+**`hs run --results-dir` outside the repo.** `full_run_record`'s `outputs` used `relative_to(P.ROOT)`, which raised for a
+results folder outside the repo; it now falls back to the absolute path (`reporting._repo_rel`).

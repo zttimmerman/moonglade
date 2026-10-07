@@ -421,6 +421,12 @@ ALLOWED = [
     "bash -lc 'harness/hs run --only client.inspect'",
     "find env/tmp -name '*.part' -delete",
     "eval \"$(/opt/homebrew/bin/brew shellenv)\"",
+    # B33: option values, pipes and here-strings into a shell that don't touch client/ stay allowed
+    "bash -o pipefail -c 'ls -la client/Data | wc -l'",
+    "echo 'harness/hs run --only client.inspect' | sh",
+    "bash <<< 'shasum -a 256 client/Wow.exe'",
+    "ls client/Data | wc -l",
+    "bash -o pipefail scripts/x.sh",
 ]
 BLOCKED = [
     "for d in baseline build client data dist env server vendor; do ln -s $R/$d $d; done",   # the actual 08:21 loop
@@ -446,6 +452,17 @@ BLOCKED = [
     "find client -name '*.dll' -exec rm {} \\;",
     "find client/Data -type f -execdir mv {} {}.bak \\;",
     "cd client && find . -name '*.wtf' -delete",
+    # B33: shell options that take a value before -c, code piped into a shell, here-strings
+    "bash -o pipefail -c 'cp x client/Wow.exe'",
+    "bash -eo pipefail -c 'rm -rf client/Data'",
+    "zsh +o nomatch -c 'cp x client/Wow.exe'",
+    "echo 'cp x client/Wow.exe' | sh",
+    "printf 'rm -rf client/Data' | bash",
+    "echo 'cp x client/Wow.exe' | zsh",
+    "echo 'cp x client/Wow.exe' | bash -s",
+    "bash <<< 'cp x client/Wow.exe'",
+    "zsh <<< \"rm -rf client\"",
+    "bash <<'EOF'\ncp x client/Wow.exe\nEOF",
 ]
 
 
@@ -459,7 +476,8 @@ def run_hook(payload: dict) -> dict:
 def agent_guard_hook(ctx):
     """The committed PreToolUse hook (.claude/settings.json → .claude/hooks/guard-client.sh, for Bash, Write, Edit and
     NotebookEdit) blocks each harmful sample (the 08:21 symlink loop, cp/mv/sed -i/redirect/rm/chflags/cd/inline
-    Python into client/, the same wrapped in `sh|bash|zsh -c` or `eval`, `find client ... -delete|-exec`,
+    Python into client/, the same wrapped in `sh|bash|zsh -c` (also after `-o <option>`), `eval`, a here-string or
+    code piped or heredoc'd into a shell, `find client ... -delete|-exec`,
     Edit/Write/NotebookEdit on a client path) with exit 2 and a reason, and lets each allowed one through
     (harness/hs, reads incl. read-only find/-exec and wrapped reads, git, scratch work, client-install)."""
     ev: dict = {"hook": str(HOOK.relative_to(P.ROOT))}
