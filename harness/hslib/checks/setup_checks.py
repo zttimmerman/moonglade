@@ -940,6 +940,8 @@ def fresh_clone(ctx):
                 and st4.get("client") == "done",
                 "the resumed bootstrap didn't continue at the client install (or redid an earlier step)", **ev)
         require(not ev["resume"]["earlier_outputs_changed"], "the resumed bootstrap touched earlier steps' outputs", **ev)
+        ev["resume"]["stale_part_files"] = sorted(str(x.relative_to(CLONE)) for x in (CLONE / "client").rglob("*.hs-part"))
+        require(not ev["resume"]["stale_part_files"], "the killed install's unfinished files are still there", **ev)
         ev["resume"]["verify"] = v2 = _verify_install(CLONE, "2", ev)
         require(v2["install_ok"] and v2["defaults_ok"], "after the resumed bootstrap, an output is missing or invalid",
                 **ev)
