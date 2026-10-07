@@ -225,3 +225,52 @@ path takes the old `clientbuild.build` branch unchanged, and HS_TEST_OWN_CLIENT 
   `account_access` row).
   The add-on's test hook now records LOGOUT_CANCEL, PLAYER_LEAVING_WORLD, PLAYER_CAMPING, any Logout/Quit caller, its own
   StopCinematic calls and the state at logout, so the next failure shows this directly.
+
+## As built: `client.wording_addon` fixed (B31, 2026-10-07, task 1.9 remainder)
+
+**Failure mode A: settings the scratch client silently took from client/WTF.** Every scratch play client a real-client check
+builds now gets its preconditions from the harness, never from `client/` (`playclient_util.build_scratch` /
+`seed_settings`; `PlayRun.start` seeds an existing or not-yet-built scratch itself):
+- the WTF folder the build carried over from `client/WTF` is dropped, and `WTF/Config.wtf` gets `movie "0"`, `readEULA "1"`,
+  `readTOS "1"` (without them the intro movie, then the EULA and Terms of Use screens come before the login screen:
+  `AccountLogin_ShowUserAgreements` in the client's GlueXML; the other notices are off in enUS, `GlueLocalization.lua`),
+  `hwDetect "0"` (measured: with no saved settings the client's first-start hardware detection replaced the video settings,
+  so `client.resolution_default`'s back buffer stayed 1024x768 despite the written gxResolution; with it, it passed) and
+  `realmName` = realm 1's name (measured: without it `login.friendly_errors`' Try again sat on the realm list polling
+  `COP_GET_REALMS`, and the seamless run's first Continue ended in an error before a retry reached character select);
+- the test account's empty `WTF/Account/HSTEST/SavedVariables.lua` and `…/<realm>/Hstester/SavedVariables.lua` (a first login
+  logs "Error loading …SavedVariables.lua" into FrameXML.log, which the checks require to be empty; the old `client/WTF`
+  held them). The realm name comes from `auth.realmlist` when MySQL is up, else from AzerothCore's base SQL
+  (`data/sql/base/db_auth/realmlist.sql`; the harness never renames the realm).
+- `PlayRun.start` requires these settings before launching: "GIVEN not met: the scratch play client's WTF/Config.wtf lacks
+  movie "0", readEULA "1", … " (counterexample: seeding disabled, fails in 2 s). If the login screen still never
+  comes up (screens pending despite the guard), `client.wording_addon` says so: no screenshot shows the front menu's marker, with
+  the settings at launch (counterexample: opposite values seeded, guard bypassed).
+- Call sites moved to `build_scratch`: the seamless play and error sessions, the login continue session, `client.resolution_default`'s
+  e2e (its "fresh scratch has no resolution" GIVEN depended on client/WTF too), `app.shim_perf`'s scratch. The backdrop and
+  stock-mode scratches are built by `PlayRun.start`. Stand-in runs (backups, F28) never start the real client.
+
+**Failure mode B: the client's own idle logout.** The client sends `CMSG_LOGOUT_REQUEST` itself, right after its login burst
+(server opcode trace, `Logger.network.opcode` at trace, temporary: `…CMSG_TUTORIAL_FLAG, CMSG_VOICE_SESSION_ENABLE,
+CMSG_LOGOUT_REQUEST`), not through Lua (the add-on's Logout/Quit hooks saw no call). Read-only disassembly of the env/re copy
+of Wow.exe 12340 (llvm-objdump; sha256 aa63a575…): the in-world idle check at 0x0052b24c takes the millisecond clock
+(0x0086ae20; GetTickCount/timeGetTime, i.e. since the Mac booted), subtracts the last hardware input time (0x00b499a4,
+zero-initialised, written only by the keyboard/mouse event handlers at 0x004943e2…0x004954ad), compares it *signed* with
+5 and 30 minutes, and at 30 minutes raises IDLE_MESSAGE and calls the logout routine 0x006b1930 (the one Lua `Logout()`
+reaches via 0x00510430). The harness drives the client only through the GlueXML test hook (Lua clicks are not hardware
+input), so the client's "idle time" is the Mac's uptime. Before the 05:02 power loss the Mac had been up 37.8 days
+(since Aug 30): more than 2^31 ms, so the signed difference was negative and the check never fired; that is why every run
+up to 03:35 passed. After the reboot the uptime was 2-7 h: every world entry ended 0.07-0.4 s later (the second
+`COP_LOGIN_CHARACTER` line is the client's own logout path, then `COP_GET_CHARACTERS`). Not the cause: easy-setup's diff
+(no client-path change since main's 438d6df), the test account or character (a freshly re-created level-1 character fails
+the same), DB updates (none since), the screen lock (08:15 run failed with the screen unlocked and the display on).
+Causal test: one Shift press sent into the client's prefix after its window was up → the character stayed, the popup was
+shown and read, the add-on's own Logout followed (3/3 since).
+- Fix (`checks/clientinput.py`): a 1 KB PE32 program written byte by byte in Python (no Windows toolchain), run with the
+  prefix's own wine: `SendInput` with VK_SHIFT down/up, exit code = events injected. The seamless play session runs it once
+  the front menu's first screenshot exists and requires 2 injected (GIVEN). Shift alone does nothing in the glue screens
+  or the world. Only that session (the one that must stay in the world) uses it; `login.auto_login`'s "no keystrokes
+  injected" run does not.
+- `client.wording_addon` now also fails, with that diagnosis, when PLAYER_LEAVING_WORLD comes before the add-on's own Logout
+  call (counterexample: press skipped, guard told it worked). Counterexample for the guard: SendInput injected 0.
+- A real player is not affected in practice: any key or mouse input resets the timer; the client's behaviour is unchanged.
