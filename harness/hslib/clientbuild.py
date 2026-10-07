@@ -158,20 +158,41 @@ def mpq_files(rec: dict, base: Path) -> tuple[dict, dict]:
 FILES_ROOT = "Interface/AddOns/"           # the only place a "files" record may write (an add-on folder)
 
 
-def loose_files(rec: dict, base: Path) -> dict:
-    """{dest rel path: (source Path, sha256)} for a "files" record; refuses anything outside Interface/AddOns/, any
-    FrameXML/GlueXML path and any path the base client already has."""
+def _base_archives(base: Path) -> list[Path]:
+    return sorted(base.glob("Data/*.MPQ")) + sorted(base.glob("Data/*/*.MPQ"))
+
+
+def loose_files(rec: dict, base: Path, shadow_check: bool = False) -> dict:
+    """{dest rel path: (source Path, sha256)} for a "files" record. Refuses: a destination outside an add-on folder
+    under Interface/AddOns/, any FrameXML/GlueXML path, a folder named like Blizzard's own add-ons (Blizzard_*) or one
+    the base client already has loose, a path the base client already has, and a source outside the repo (resolved,
+    so a symlink or an absolute path can't escape). With shadow_check (the actual build, not the input hashing): also a
+    destination that any of the base client's archives holds (a loose file would shadow it)."""
     out = {}
+    root = P.ROOT.resolve()
     for dest, src in rec["files"].items():
         rel = dest.replace("\\", "/")
         parts = rel.split("/")
-        if (not rel.startswith(FILES_ROOT) or len(parts) < 4 or ".." in parts
+        if (not rel.startswith(FILES_ROOT) or len(parts) < 4 or ".." in parts or "" in parts
                 or any(x.lower() in ("framexml", "gluexml") for x in parts)):
             raise ClientBuildError(f"patch {rec['id']}: {dest} is not inside an add-on folder under {FILES_ROOT}")
+        folder = parts[2]
+        if folder.lower().startswith("blizzard_") or (base / FILES_ROOT / folder).exists():
+            raise ClientBuildError(f"patch {rec['id']}: {dest} is in add-on folder {folder}, which is Blizzard's or "
+                                   "already in the base client; refusing")
         if (base / rel).exists():
             raise ClientBuildError(f"patch {rec['id']}: {rel} already exists in the base client; refusing to overwrite it")
-        b = (P.ROOT / src).read_bytes()
-        out[rel] = (P.ROOT / src, _sha_bytes(b))
+        srcp = (P.ROOT / src).resolve()
+        if root not in srcp.parents or not srcp.is_file():
+            raise ClientBuildError(f"patch {rec['id']}: source {src} is not a file inside the repo; refusing")
+        out[rel] = (srcp, _sha_bytes(srcp.read_bytes()))
+    if shadow_check:
+        for arc_path in _base_archives(base):
+            with mpq.Archive(arc_path) as arc:
+                for rel in out:
+                    if arc.find(rel.replace("/", "\\")) is not None:
+                        raise ClientBuildError(f"patch {rec['id']}: {rel} is in the base client's "
+                                               f"{arc_path.relative_to(base)}; a loose copy would shadow it; refusing")
     return out
 
 
@@ -294,7 +315,7 @@ def build(dest: Path = PLAY, base: Path = P.CLIENT, queue_dir: Path = QUEUE, ski
                 a = {"patch": rec["id"], "archive": rel, "files": prov, "bytes": w["bytes"]}
             elif rec["kind"] == "files":
                 written = {}
-                for rel, (src, sha) in loose_files(rec, base).items():
+                for rel, (src, sha) in loose_files(rec, base, shadow_check=True).items():
                     target = tmp / rel
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copyfile(src, target)

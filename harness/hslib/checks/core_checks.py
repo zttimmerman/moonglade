@@ -269,6 +269,9 @@ def login_logout_race_baseline(ctx):
     try:
         ev["baseline_src"] = B.sync_src()
         ev["baseline_build"] = B.build_install()
+        # harness-reporting timing guard: this rebuild of the baseline server is build time, reported apart and left
+        # out of the per-check comparison (runner.check_build_s reads `build_s`)
+        ev["build_s"] = ev["baseline_build"]["wall_s"]
         dylib = CT.build(B.TMP / "crashtrace.dylib")
     except (B.BaselineError, CT.CrashTraceError) as e:
         require(False, f"baseline build failed: {e}", **ev, **getattr(e, "evidence", {}))

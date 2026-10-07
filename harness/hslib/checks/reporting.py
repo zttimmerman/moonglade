@@ -87,8 +87,10 @@ def coverage() -> tuple[bool, dict]:
 def _validate(inst, schema, path="$"):
     errs = []
     t = schema.get("type")
-    tmap = {"object": dict, "array": list, "string": str, "boolean": bool, "number": (int, float)}
-    if t and not isinstance(inst, tmap[t]) or (t == "number" and isinstance(inst, bool)):
+    tmap = {"object": dict, "array": list, "string": str, "boolean": bool, "number": (int, float),
+            "null": type(None)}
+    ts = t if isinstance(t, list) else [t] if t else []
+    if ts and not any(isinstance(inst, tmap[x]) and not (x == "number" and isinstance(inst, bool)) for x in ts):
         return [f"{path}: expected {t}"]
     if "enum" in schema and inst not in schema["enum"]:
         errs.append(f"{path}: {inst!r} not in {schema['enum']}")
@@ -304,17 +306,19 @@ def post_run(doc, selected_ids, t_start=None, leave_up=False):
 # ----------------------------------------------------------------------------- full-run timing
 
 TIMING_BASELINE = P.HARNESS / "timing-baseline.json"
-TIMING_TARGET = 1.10              # spec: wall time <= 110 % of the recorded baseline (no regression)
+TIMING_TARGET = 1.10              # spec: the baseline checks together take <= 110 % of their baseline times
 
 
 def timing_problems(doc: dict, extra: list, wall_s: float, baseline: dict | None, reg: dict | None = None) -> tuple:
-    """report.timing over a results document (+ the post-run records before it): the timing summary covers every
-    record; on an unfiltered full-tier run, every check the baseline executed was executed again (minus by-design
-    GUI skips) and the wall time is <= TIMING_TARGET x the baseline's (harness-reporting "Full-run timing is
-    recorded and guarded"). save-backups: the summary carries the backups tier's total (it must equal the executed
-    backups-marked checks' time), by-design backups-tier skips are excused like GUI skips, and the wall time compared
-    with the baseline is the run's wall time minus the backups tier's time (the baseline has no backups checks)."""
-    from ..runner import backups_tier_s, is_backups_skip, is_gui_skip
+    """report.timing over a results document (+ the post-run records before it), harness-reporting "Full-run timing is
+    recorded and guarded" (seamless-experience: per-check baseline). The timing summary covers every record and its
+    build time, backups-tier total, new checks and warnings agree with the records. On an unfiltered full-tier run:
+    every baseline check ran (minus by-design GUI and backups-tier skips), and the executed baseline checks' times,
+    each minus its time spent building server binaries (runner.check_build_s), sum to <= TIMING_TARGET x the same
+    checks' baseline sum. Checks not in the baseline and build time are reported, never failed; a new check over
+    runner.NEW_CHECK_WARN_S is a warning."""
+    from ..runner import (TIMING_SELF, backups_tier_s, check_build_s, is_backups_skip, is_gui_skip,
+                          timing_summary)
     m = doc["meta"]
     recs = doc["checks"] + extra
     t = m.get("timing") or {}
@@ -334,11 +338,16 @@ def timing_problems(doc: dict, extra: list, wall_s: float, baseline: dict | None
     if t.get("backups_tier_s") != bk_s:
         probs.append(f"the timing summary's backups_tier_s ({t.get('backups_tier_s')}) isn't the executed backups "
                      f"checks' time ({bk_s})")
+    want = timing_summary(doc["checks"], None, reg, baseline)
+    for k in ("build_s", "new_checks_s", "warnings"):
+        if t.get(k) != want.get(k):
+            probs.append(f"the timing summary's {k} ({t.get(k)}) doesn't match the records ({want.get(k)})")
     ev = {"timing_summary_checks": len(per), "records": len(recs), "top10": top, "wall_s_now": round(wall_s, 1),
-          "backups_tier_s": bk_s, "wall_minus_backups_s": round(wall_s - bk_s, 1),
+          "backups_tier_s": bk_s, "build_s": want["build_s"], "build_by_check_s": want["build_by_check_s"],
+          "new_checks_s": want.get("new_checks_s"), "warnings": want.get("warnings"),
           "full_tier_unfiltered": m.get("full_run") is True and m.get("tier") == "full"}
     if not ev["full_tier_unfiltered"]:
-        ev["speed_target"] = ("not evaluated: the baseline is an unfiltered full-tier run, this is "
+        ev["speed_target"] = ("not evaluated: the guard compares an unfiltered full-tier run, this is "
                               f"tier {m.get('tier')}{' (filtered)' if m.get('filter') else ''}")
         return probs, ev
     if not baseline:
@@ -346,44 +355,93 @@ def timing_problems(doc: dict, extra: list, wall_s: float, baseline: dict | None
         return probs, ev
     gui_skipped = sorted(r["id"] for r in doc["checks"] if is_gui_skip(r, m, reg))
     bk_skipped = sorted(r["id"] for r in doc["checks"] if is_backups_skip(r, m, reg))
+    by_id = {r["id"]: r for r in recs}
     executed = {r["id"] for r in recs if r["status"] != "skip"}
-    need = set(baseline["executed_ids"]) - set(gui_skipped) - set(bk_skipped)
-    compared = wall_s - bk_s
-    not_again = sorted(need - executed)
-    limit = round(TIMING_TARGET * baseline["wall_s"], 1)
-    ev |= {"baseline": {k: baseline.get(k) for k in ("repo_sha", "wall_s", "counts", "host", "source")},
-           "baseline_executed": len(baseline["executed_ids"]), "gui_skipped_by_design": gui_skipped,
-           "backups_skipped_by_design": bk_skipped, "compared_wall_s": round(compared, 1),
-           "executed_now": len(executed), "baseline_ids_not_executed_now": not_again,
-           "new_ids_executed": sorted(executed - set(baseline["executed_ids"])),
-           "same_machine": (m.get("host") or {}).get("machine") == (baseline.get("host") or {}).get("machine"),
-           "wall_limit_s": limit, "wall_ratio": round(compared / baseline["wall_s"], 3),
-           "speedup_pct": round(100 * (1 - compared / baseline["wall_s"]), 1)}
+    base = baseline["checks"]
+    need = set(base) - set(gui_skipped) - set(bk_skipped) - {TIMING_SELF}
+    not_run = sorted(need - executed)
+    compared = sorted(need & executed)
+    now = {i: round(float(by_id[i].get("duration_s") or 0.0) - check_build_s(by_id[i]), 2) for i in compared}
+    now_sum = round(sum(now.values()), 1)
+    base_sum = round(sum(float(base[i]["s"]) for i in compared), 1)
+    limit = round(TIMING_TARGET * base_sum, 1)
+    slower = sorted(((i, round(now[i] - float(base[i]["s"]), 1)) for i in compared), key=lambda kv: -kv[1])[:10]
+    ev |= {"baseline_runs": baseline.get("runs"), "baseline_checks": len(base), "compared_checks": len(compared),
+           "gui_skipped_by_design": gui_skipped, "backups_skipped_by_design": bk_skipped,
+           "baseline_ids_not_executed_now": not_run, "now_sum_s": now_sum, "baseline_sum_s": base_sum,
+           "limit_s": limit, "ratio": round(now_sum / base_sum, 3) if base_sum else None,
+           "most_slower_s": slower,
+           "same_machine": (m.get("host") or {}).get("machine") == (baseline.get("host") or {}).get("machine")}
     if not ev["same_machine"]:
         probs.append(f"not the baseline's machine type ({(m.get('host') or {}).get('machine')} vs "
                      f"{(baseline.get('host') or {}).get('machine')})")
-    if not_again or len(executed) < len(need):
-        probs.append(f"baseline checks not executed in this run: {not_again}")
-    if compared > limit:
-        probs.append(f"wall {wall_s:.0f} s minus backups tier {bk_s:.0f} s = {compared:.0f} s > {limit:.0f} s "
-                     f"({int(TIMING_TARGET * 100)} % of the baseline {baseline['wall_s']} s)")
+    if not_run:
+        probs.append(f"baseline checks not executed in this run: {not_run}")
+    if now_sum > limit:
+        probs.append(f"the baseline checks took {now_sum:.0f} s (build time excluded) > {limit:.0f} s "
+                     f"({int(TIMING_TARGET * 100)} % of their baseline {base_sum:.0f} s)")
     return probs, ev
 
 
+def synthetic_timing_cases() -> dict:
+    """harness-reporting "Slowdowns fail, new checks and rebuilds don't": timing_problems on synthetic full-run
+    documents against a known baseline (t.a 600 s, t.b 400 s, build.clean 20 s of build). (a) the baseline checks 15 %
+    slower; (b) unchanged + 300 s of new checks; (c) unchanged + a from-empty build adding 400 s (build.clean, and a
+    check's own rebuild via evidence build_s); (d) one new check of 200 s. Each case's verdict is computed by the
+    guard's own code (runner.timing_summary + timing_problems)."""
+    from .. import runner
+    from ..registry import Check
+    ids = ("t.a", "t.b", "build.clean", "t.new1", "t.new2", "t.big")
+    reg = {i: Check(i, lambda c: {}, n, "synthetic", "any", "", "full", True, None, False, False)
+           for n, i in enumerate(ids)}
+    base = {"host": {"machine": "arm64"}, "runs": {"r": {"source": "synthetic"}},
+            "checks": {"t.a": {"s": 600.0, "run": "r"}, "t.b": {"s": 400.0, "run": "r"},
+                       "build.clean": {"s": 0.0, "run": "r", "build_s": 20.0}}}
+
+    def r(i, s, build=None):
+        return {"id": i, "status": "pass", "duration_s": s, "evidence": {"x": 1, **({"build_s": build} if build else {})}}
+
+    def run(recs):
+        meta = {"full_run": True, "tier": "full", "filter": [], "host": {"machine": "arm64"},
+                "backups_tier_skipped": [], "backups_rule": {"changed_backup_paths": []}}
+        wall = sum(x["duration_s"] for x in recs)
+        meta["timing"] = runner.timing_summary(recs, wall, reg, base)
+        probs, ev = timing_problems({"meta": meta, "checks": recs}, [], wall, base, reg)
+        return {"problems": probs, "now_sum_s": ev.get("now_sum_s"), "limit_s": ev.get("limit_s"),
+                "build_s": ev.get("build_s"), "new_checks_s": ev.get("new_checks_s"), "warnings": ev.get("warnings")}
+    cases = {
+        "a_baseline_15pct_slower": run([r("t.a", 690.0), r("t.b", 460.0), r("build.clean", 20.0)]),
+        "b_new_checks_300s": run([r("t.a", 600.0), r("t.b", 400.0), r("build.clean", 20.0), r("t.new1", 150.0),
+                                  r("t.new2", 150.0)]),
+        "c_from_empty_build_400s": run([r("t.a", 750.0, build=150.0), r("t.b", 400.0), r("build.clean", 270.0)]),
+        "d_new_check_200s": run([r("t.a", 600.0), r("t.b", 400.0), r("build.clean", 20.0), r("t.big", 200.0)]),
+    }
+    a, b_, c, d = (cases[k] for k in ("a_baseline_15pct_slower", "b_new_checks_300s", "c_from_empty_build_400s",
+                                      "d_new_check_200s"))
+    verdict = {
+        "a_fails": bool(a["problems"]),
+        "b_passes_reporting_new_time": not b_["problems"] and b_["new_checks_s"] == {"t.new1": 150.0, "t.new2": 150.0}
+                                       and not b_["warnings"],
+        "c_passes_reporting_build_time": not c["problems"] and c["build_s"] == 420.0 and not c["new_checks_s"],
+        "d_passes_with_warning": not d["problems"] and d["new_checks_s"] == {"t.big": 200.0}
+                                 and any("t.big" in w for w in d["warnings"] or []),
+    }
+    return {"cases": cases, "verdict": verdict}
+
+
 def timing_record(doc: dict, extra: list, wall_s: float) -> dict:
+    from ..runner import load_timing_baseline
     t0 = time.time()
     try:
-        baseline = json.loads(TIMING_BASELINE.read_text())
-        for k in ("wall_s", "executed_ids"):
-            if k not in baseline:
-                raise ValueError(f"baseline has no {k}")
+        baseline, err = load_timing_baseline(TIMING_BASELINE), None
     except (OSError, ValueError) as e:
         baseline, err = None, str(e)
-    else:
-        err = None
     probs, ev = timing_problems(doc, extra, wall_s, baseline)
     if err:
         ev["baseline_error"] = err
+    syn = synthetic_timing_cases()
+    ev["synthetic"] = syn
+    probs += [f"synthetic case {k} has the wrong verdict" for k, ok in syn["verdict"].items() if not ok]
     ok = not probs
     return {"id": "report.timing", "capability": "harness-reporting", "status": "pass" if ok else "fail",
             "evidence": ev | {"problems": probs, "baseline_file": str(TIMING_BASELINE.relative_to(P.ROOT))},
@@ -757,38 +815,43 @@ def _scratch_repo_backup_paths() -> dict:
 
 
 def _timing_cases() -> dict:
-    """report.timing's verdict on synthetic full-run documents (the baseline: 1690 s, ids t.a and t.b): the
-    backups tier's time is subtracted from the wall time, by-design backups-tier skips are excused, and a run whose
-    non-backups time exceeds 110 % still fails."""
+    """report.timing's verdict on synthetic full-run documents, as far as the backups tier goes (per-check baseline:
+    t.a 800 s, t.b 750 s, t.bk 600 s; t.bk backups-marked). seamless-experience changed the guard from the run's wall
+    time minus the backups tier against one number to a per-check comparison, so the backups tier is no longer
+    subtracted from a wall time: its checks are compared like any baseline check when they run, and excused when
+    skipped by design. A run whose baseline checks exceed 110 % still fails, and a forged backups skip still does."""
     from .. import runner
     from ..registry import Check
     reg = {i: Check(i, lambda c: {}, n, "synthetic", "any", "", "full", True, None, False, bk)
            for n, (i, bk) in enumerate([("t.a", False), ("t.b", False), ("t.bk", True)])}
-    base = {"wall_s": 1690.0, "executed_ids": ["t.a", "t.b"], "host": {"machine": "arm64"}}
+    base = {"host": {"machine": "arm64"}, "runs": {"r": {"source": "synthetic"}},
+            "checks": {"t.a": {"s": 800.0, "run": "r"}, "t.b": {"s": 750.0, "run": "r"}, "t.bk": {"s": 600.0, "run": "r"}}}
 
-    def doc(recs, wall, bk_skipped=(), bk_changed=()):
+    def doc(recs, bk_skipped=(), bk_changed=()):
+        wall = sum(x["duration_s"] for x in recs)
         meta = {"full_run": True, "tier": "full", "filter": [], "host": {"machine": "arm64"},
                 "backups_tier_skipped": list(bk_skipped), "backups_rule": {"changed_backup_paths": list(bk_changed)}}
         d = {"meta": meta, "checks": recs}
-        meta["timing"] = runner.timing_summary(recs, wall, reg)
+        meta["timing"] = runner.timing_summary(recs, wall, reg, base)
         return timing_problems(d, [], wall, base, reg)
 
     def r(i, s, st="pass", msg=None):
-        return {"id": i, "status": st, "duration_s": s, **({"message": msg} if msg else {})}
+        return {"id": i, "status": st, "duration_s": s, "evidence": {"x": 1}, **({"message": msg} if msg else {})}
     out = {}
-    # the verifier's run: 2433 s wall, ~690 s of it backups checks -> 1743 s <= 1859 s
-    out["backups_ran_within_limit"] = doc([r("t.a", 900), r("t.b", 800), r("t.bk", 690)], 2433.0, bk_changed=["play"])
-    # the same wall time with nothing from the backups tier: 2433 s > 1859 s
-    out["no_backups_time_over_limit"] = doc([r("t.a", 1300), r("t.b", 1100)], 2433.0)
-    # backups tier ran, but the rest alone is over the limit: 2600 - 690 = 1910 s > 1859 s
-    out["non_backups_over_limit"] = doc([r("t.a", 1000), r("t.b", 900), r("t.bk", 690)], 2600.0, bk_changed=["play"])
+    # backups tier ran, everything within 110 %: 850 + 780 + 640 = 2270 s <= 2365 s
+    out["backups_ran_within_limit"] = doc([r("t.a", 850), r("t.b", 780), r("t.bk", 640)], bk_changed=["play"])
+    # backups tier skipped by design, the other baseline checks over 110 %: 1000 + 900 > 1705 s
+    out["no_backups_time_over_limit"] = doc([r("t.a", 1000), r("t.b", 900),
+                                             r("t.bk", 0.0, "skip", runner.BACKUPS_SKIP_MSG)], ["t.bk"])
+    # backups tier ran, the total over 110 %: 1000 + 900 + 690 = 2590 s > 2365 s
+    out["non_backups_over_limit"] = doc([r("t.a", 1000), r("t.b", 900), r("t.bk", 690)], bk_changed=["play"])
     # backups tier skipped by design (no backup path changed): excused, under the limit
-    out["backups_skipped_by_design"] = doc([r("t.a", 900), r("t.b", 800),
-                                            r("t.bk", 0.0, "skip", runner.BACKUPS_SKIP_MSG)], 1750.0, ["t.bk"])
+    out["backups_skipped_by_design"] = doc([r("t.a", 820), r("t.b", 760),
+                                            r("t.bk", 0.0, "skip", runner.BACKUPS_SKIP_MSG)], ["t.bk"])
     # a baseline check skipped with the backups message (not backups-marked): not excused
-    out["baseline_check_forges_skip"] = doc([r("t.a", 900), r("t.b", 0.0, "skip", runner.BACKUPS_SKIP_MSG)],
-                                            1750.0, ["t.b"])
-    return {k: {"problems": v[0], "compared_wall_s": v[1].get("compared_wall_s"),
+    out["baseline_check_forges_skip"] = doc([r("t.a", 820), r("t.b", 0.0, "skip", runner.BACKUPS_SKIP_MSG),
+                                             r("t.bk", 600)], ["t.b"])
+    return {k: {"problems": v[0], "now_sum_s": v[1].get("now_sum_s"), "limit_s": v[1].get("limit_s"),
                 "backups_tier_s": v[1].get("backups_tier_s")} for k, v in out.items()}
 
 
@@ -799,8 +862,9 @@ def backups_tier_rule(ctx):
     skipped one fails report.full_run (also a backup path that changed although the checks were skipped, and a forged
     "backups tier" skip message); a slow run executes them all; `--tier backups` runs exactly the backups checks. The
     path rule is the fixed list (spec paths at least; not an import closure) on a scratch git repo. The live registry
-    marks exactly the 8 backups checks. report.timing subtracts the backups tier's time and excuses its by-design
-    skips, and still fails a run whose non-backups time exceeds 110 % of the baseline."""
+    marks exactly the 8 backups checks. report.timing excuses the backups tier's by-design skips (not a forged one) and
+    still fails a run whose baseline checks exceed 110 % of their baseline (per-check guard since seamless-experience;
+    the backups tier is no longer subtracted from a wall time)."""
     from .. import runner
     from ..registry import Check, CheckFail, CheckSkip
 

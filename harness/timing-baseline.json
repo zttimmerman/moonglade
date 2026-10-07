@@ -1,214 +1,793 @@
 {
- "what": "Pre-change baseline for harness-reporting 'Full-run timing is recorded and faster' (report.timing).",
- "source": "harness/out/verify-lp2/full2.results.json: the launcher-polish verifier's second unfiltered full-tier run (cycle 2, PASS), the last green full run before harness-speed; harness/out/ is not in git, so the values it needs are copied here.",
- "repo_sha": "9265c01da56f27a3a59ddd429ce7512ab224b4f0",
- "started": "2026-10-05T17:46:06+00:00",
- "finished": "2026-10-05T18:14:23+00:00",
- "tier": "full",
- "full_run": true,
- "wall_s": 1697.7,
- "counts": {
-  "pass": 86,
-  "fail": 0,
-  "error": 0,
-  "skip": 8
+ "checks": {
+  "app.backups_window": {
+   "build_s": 0.0,
+   "duration_s": 141.22,
+   "run": "save-backups-verifier2",
+   "s": 141.22,
+   "status_in_run": "pass"
+  },
+  "app.bundle_valid": {
+   "build_s": 0.0,
+   "duration_s": 6.67,
+   "run": "save-backups-verifier2",
+   "s": 6.67,
+   "status_in_run": "pass"
+  },
+  "app.handoff_focus": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "seamless-experience-verifier1",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "app.icon": {
+   "build_s": 0.0,
+   "duration_s": 2.63,
+   "run": "save-backups-verifier2",
+   "s": 2.63,
+   "status_in_run": "pass"
+  },
+  "app.launch_lifecycle": {
+   "build_s": 0.0,
+   "duration_s": 40.85,
+   "run": "save-backups-verifier2",
+   "s": 40.85,
+   "status_in_run": "pass"
+  },
+  "app.loading_stages": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "save-backups-verifier2",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "app.loading_stages_warm": {
+   "build_s": 0.0,
+   "duration_s": 35.29,
+   "run": "save-backups-verifier2",
+   "s": 35.29,
+   "status_in_run": "pass"
+  },
+  "app.names_running": {
+   "build_s": 0.0,
+   "duration_s": 40.94,
+   "run": "save-backups-verifier2",
+   "s": 40.94,
+   "status_in_run": "pass"
+  },
+  "app.relocatable": {
+   "build_s": 0.0,
+   "duration_s": 40.97,
+   "run": "save-backups-verifier2",
+   "s": 40.97,
+   "status_in_run": "pass"
+  },
+  "app.reopen_during_loading": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "seamless-experience-verifier1",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "app.reopen_focuses_game": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "seamless-experience-verifier1",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "app.reopen_unminimizes": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "seamless-experience-verifier1",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "app.shim_scope": {
+   "build_s": 0.0,
+   "duration_s": 0.05,
+   "run": "save-backups-verifier2",
+   "s": 0.05,
+   "status_in_run": "pass"
+  },
+  "app.shutdown_window": {
+   "build_s": 0.0,
+   "duration_s": 43.8,
+   "run": "save-backups-verifier2",
+   "s": 43.8,
+   "status_in_run": "pass"
+  },
+  "app.single_dock_icon": {
+   "build_s": 0.0,
+   "duration_s": 55.21,
+   "run": "save-backups-verifier2",
+   "s": 55.21,
+   "status_in_run": "pass"
+  },
+  "app.single_instance": {
+   "build_s": 0.0,
+   "duration_s": 80.27,
+   "run": "save-backups-verifier2",
+   "s": 80.27,
+   "status_in_run": "pass"
+  },
+  "app.startup_failure": {
+   "build_s": 0.0,
+   "duration_s": 11.05,
+   "run": "save-backups-verifier2",
+   "s": 11.05,
+   "status_in_run": "pass"
+  },
+  "backups.failure_nonblocking": {
+   "build_s": 0.0,
+   "duration_s": 79.46,
+   "run": "save-backups-verifier2",
+   "s": 79.46,
+   "status_in_run": "pass"
+  },
+  "backups.kill_safe": {
+   "build_s": 0.0,
+   "duration_s": 155.84,
+   "run": "save-backups-verifier2",
+   "s": 155.84,
+   "status_in_run": "pass"
+  },
+  "backups.on_quit": {
+   "build_s": 0.0,
+   "duration_s": 67.49,
+   "run": "save-backups-verifier2",
+   "s": 67.49,
+   "status_in_run": "pass"
+  },
+  "backups.player_untouched": {
+   "build_s": 0.0,
+   "duration_s": 0.61,
+   "run": "save-backups-verifier2",
+   "s": 0.61,
+   "status_in_run": "pass"
+  },
+  "backups.restore_refusals": {
+   "build_s": 0.0,
+   "duration_s": 86.04,
+   "run": "save-backups-verifier2",
+   "s": 86.04,
+   "status_in_run": "pass"
+  },
+  "backups.restore_roundtrip": {
+   "build_s": 0.0,
+   "duration_s": 97.29,
+   "run": "save-backups-verifier2",
+   "s": 97.29,
+   "status_in_run": "pass"
+  },
+  "backups.rotation": {
+   "build_s": 0.0,
+   "duration_s": 39.58,
+   "run": "save-backups-verifier2",
+   "s": 39.58,
+   "status_in_run": "pass"
+  },
+  "build.clean": {
+   "build_s": 15.43,
+   "duration_s": 15.43,
+   "run": "save-backups-verifier2",
+   "s": 0.0,
+   "status_in_run": "pass"
+  },
+  "build.clean_smart": {
+   "build_s": 0.0,
+   "duration_s": 0.18,
+   "run": "save-backups-verifier2",
+   "s": 0.18,
+   "status_in_run": "pass"
+  },
+  "build.pin_enforced": {
+   "build_s": 0.0,
+   "duration_s": 18.11,
+   "run": "save-backups-verifier2",
+   "s": 18.11,
+   "status_in_run": "pass"
+  },
+  "build.playerbots_active": {
+   "build_s": 0.0,
+   "duration_s": 0.09,
+   "run": "save-backups-verifier2",
+   "s": 0.09,
+   "status_in_run": "pass"
+  },
+  "client.config_gate": {
+   "build_s": 0.0,
+   "duration_s": 68.26,
+   "run": "save-backups-verifier2",
+   "s": 68.26,
+   "status_in_run": "pass"
+  },
+  "client.config_gen": {
+   "build_s": 0.0,
+   "duration_s": 0.19,
+   "run": "save-backups-verifier2",
+   "s": 0.19,
+   "status_in_run": "pass"
+  },
+  "client.inspect": {
+   "build_s": 0.0,
+   "duration_s": 0.04,
+   "run": "save-backups-verifier2",
+   "s": 0.04,
+   "status_in_run": "pass"
+  },
+  "client.launch_smoke": {
+   "build_s": 0.0,
+   "duration_s": 39.72,
+   "run": "save-backups-verifier2",
+   "s": 39.72,
+   "status_in_run": "pass"
+  },
+  "client.patch0001_recorded": {
+   "build_s": 0.0,
+   "duration_s": 0.04,
+   "run": "save-backups-verifier2",
+   "s": 0.04,
+   "status_in_run": "pass"
+  },
+  "client.play_build": {
+   "build_s": 0.0,
+   "duration_s": 0.92,
+   "run": "save-backups-verifier2",
+   "s": 0.92,
+   "status_in_run": "pass"
+  },
+  "client.play_revert": {
+   "build_s": 0.0,
+   "duration_s": 0.88,
+   "run": "save-backups-verifier2",
+   "s": 0.88,
+   "status_in_run": "pass"
+  },
+  "client.player_config_untouched": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "save-backups-verifier2",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "client.protocol_badpass": {
+   "build_s": 0.0,
+   "duration_s": 5.32,
+   "run": "save-backups-verifier2",
+   "s": 5.32,
+   "status_in_run": "pass"
+  },
+  "client.protocol_probe": {
+   "build_s": 0.0,
+   "duration_s": 0.58,
+   "run": "save-backups-verifier2",
+   "s": 0.58,
+   "status_in_run": "pass"
+  },
+  "client.real_client_refused": {
+   "build_s": 0.0,
+   "duration_s": 2.49,
+   "run": "save-backups-verifier2",
+   "s": 2.49,
+   "status_in_run": "pass"
+  },
+  "client.realmlist": {
+   "build_s": 0.0,
+   "duration_s": 0.08,
+   "run": "save-backups-verifier2",
+   "s": 0.08,
+   "status_in_run": "pass"
+  },
+  "client.resolution_default": {
+   "build_s": 0.0,
+   "duration_s": 73.23,
+   "run": "save-backups-verifier2",
+   "s": 73.23,
+   "status_in_run": "pass"
+  },
+  "client.resolution_gate": {
+   "build_s": 0.0,
+   "duration_s": 0.22,
+   "run": "save-backups-verifier2",
+   "s": 0.22,
+   "status_in_run": "pass"
+  },
+  "client.stock_mode": {
+   "build_s": 0.0,
+   "duration_s": 108.43,
+   "run": "save-backups-verifier2",
+   "s": 108.43,
+   "status_in_run": "pass"
+  },
+  "comp.add_remove": {
+   "build_s": 0.0,
+   "duration_s": 6.02,
+   "run": "save-backups-verifier2",
+   "s": 6.02,
+   "status_in_run": "pass"
+  },
+  "comp.assists": {
+   "build_s": 0.0,
+   "duration_s": 59.44,
+   "run": "save-backups-verifier2",
+   "s": 59.44,
+   "status_in_run": "pass"
+  },
+  "comp.follows": {
+   "build_s": 0.0,
+   "duration_s": 29.17,
+   "run": "save-backups-verifier2",
+   "s": 29.17,
+   "status_in_run": "pass"
+  },
+  "comp.quest_shared": {
+   "build_s": 0.0,
+   "duration_s": 6.35,
+   "run": "save-backups-verifier2",
+   "s": 6.35,
+   "status_in_run": "pass"
+  },
+  "core.login_logout_race": {
+   "build_s": 0.0,
+   "duration_s": 5.47,
+   "run": "save-backups-verifier2",
+   "s": 5.47,
+   "status_in_run": "pass"
+  },
+  "core.login_logout_race_baseline": {
+   "build_s": 19.2,
+   "duration_s": 69.2,
+   "run": "save-backups-verifier2",
+   "s": 50.0,
+   "status_in_run": "pass"
+  },
+  "core.patch_applied": {
+   "build_s": 0.0,
+   "duration_s": 0.17,
+   "run": "save-backups-verifier2",
+   "s": 0.17,
+   "status_in_run": "pass"
+  },
+  "core.playerbots_patches_applied": {
+   "build_s": 0.0,
+   "duration_s": 0.63,
+   "run": "save-backups-verifier2",
+   "s": 0.63,
+   "status_in_run": "pass"
+  },
+  "era.default_on": {
+   "build_s": 0.0,
+   "duration_s": 0.85,
+   "run": "save-backups-verifier2",
+   "s": 0.85,
+   "status_in_run": "pass"
+  },
+  "era.elites": {
+   "build_s": 0.0,
+   "duration_s": 9.79,
+   "run": "save-backups-verifier2",
+   "s": 9.79,
+   "status_in_run": "pass"
+  },
+  "era.mounts": {
+   "build_s": 0.0,
+   "duration_s": 5.02,
+   "run": "save-backups-verifier2",
+   "s": 5.02,
+   "status_in_run": "pass"
+  },
+  "era.quest_xp": {
+   "build_s": 0.0,
+   "duration_s": 1.42,
+   "run": "save-backups-verifier2",
+   "s": 1.42,
+   "status_in_run": "pass"
+  },
+  "era.scope_guard": {
+   "build_s": 0.0,
+   "duration_s": 45.77,
+   "run": "save-backups-verifier2",
+   "s": 45.77,
+   "status_in_run": "pass"
+  },
+  "era.sql_deterministic": {
+   "build_s": 0.0,
+   "duration_s": 4.01,
+   "run": "save-backups-verifier2",
+   "s": 4.01,
+   "status_in_run": "pass"
+  },
+  "era.toggle_roundtrip": {
+   "build_s": 0.0,
+   "duration_s": 49.97,
+   "run": "save-backups-verifier2",
+   "s": 49.97,
+   "status_in_run": "pass"
+  },
+  "era.xp_curve": {
+   "build_s": 0.0,
+   "duration_s": 0.91,
+   "run": "save-backups-verifier2",
+   "s": 0.91,
+   "status_in_run": "pass"
+  },
+  "fixture.account_character": {
+   "build_s": 0.0,
+   "duration_s": 0.56,
+   "run": "save-backups-verifier2",
+   "s": 0.56,
+   "status_in_run": "pass"
+  },
+  "fixture.add_item": {
+   "build_s": 0.0,
+   "duration_s": 0.34,
+   "run": "save-backups-verifier2",
+   "s": 0.34,
+   "status_in_run": "pass"
+  },
+  "fixture.instant_logout": {
+   "build_s": 0.0,
+   "duration_s": 1.08,
+   "run": "save-backups-verifier2",
+   "s": 1.08,
+   "status_in_run": "pass"
+  },
+  "fixture.level": {
+   "build_s": 0.0,
+   "duration_s": 0.35,
+   "run": "save-backups-verifier2",
+   "s": 0.35,
+   "status_in_run": "pass"
+  },
+  "fixture.start_quest": {
+   "build_s": 0.0,
+   "duration_s": 0.81,
+   "run": "save-backups-verifier2",
+   "s": 0.81,
+   "status_in_run": "pass"
+  },
+  "fixture.teleport": {
+   "build_s": 0.0,
+   "duration_s": 0.32,
+   "run": "save-backups-verifier2",
+   "s": 0.32,
+   "status_in_run": "pass"
+  },
+  "gm.invalid": {
+   "build_s": 0.0,
+   "duration_s": 0.15,
+   "run": "save-backups-verifier2",
+   "s": 0.15,
+   "status_in_run": "pass"
+  },
+  "gm.server_info": {
+   "build_s": 0.0,
+   "duration_s": 0.14,
+   "run": "save-backups-verifier2",
+   "s": 0.14,
+   "status_in_run": "pass"
+  },
+  "harness.prefix_scope": {
+   "build_s": 0.0,
+   "duration_s": 5.11,
+   "run": "save-backups-verifier2",
+   "s": 5.11,
+   "status_in_run": "pass"
+  },
+  "lifecycle.down": {
+   "build_s": 0.0,
+   "duration_s": 5.93,
+   "run": "save-backups-verifier2",
+   "s": 5.93,
+   "status_in_run": "pass"
+  },
+  "lifecycle.failfast": {
+   "build_s": 0.0,
+   "duration_s": 6.38,
+   "run": "save-backups-verifier2",
+   "s": 6.38,
+   "status_in_run": "pass"
+  },
+  "lifecycle.idempotent": {
+   "build_s": 0.0,
+   "duration_s": 0.68,
+   "run": "save-backups-verifier2",
+   "s": 0.68,
+   "status_in_run": "pass"
+  },
+  "lifecycle.isolated": {
+   "build_s": 0.0,
+   "duration_s": 0.13,
+   "run": "save-backups-verifier2",
+   "s": 0.13,
+   "status_in_run": "pass"
+  },
+  "lifecycle.persist": {
+   "build_s": 0.0,
+   "duration_s": 24.91,
+   "run": "save-backups-verifier2",
+   "s": 24.91,
+   "status_in_run": "pass"
+  },
+  "lifecycle.up": {
+   "build_s": 0.0,
+   "duration_s": 18.64,
+   "run": "save-backups-verifier2",
+   "s": 18.64,
+   "status_in_run": "pass"
+  },
+  "login.auto_login": {
+   "build_s": 0.0,
+   "duration_s": 79.83,
+   "run": "save-backups-verifier2",
+   "s": 79.83,
+   "status_in_run": "pass"
+  },
+  "login.backdrop_choice": {
+   "build_s": 0.0,
+   "duration_s": 0.02,
+   "run": "save-backups-verifier2",
+   "s": 0.02,
+   "status_in_run": "pass"
+  },
+  "login.cancel_shows_list": {
+   "build_s": 0.0,
+   "duration_s": 151.62,
+   "run": "save-backups-verifier2",
+   "s": 151.62,
+   "status_in_run": "pass"
+  },
+  "login.continue_context": {
+   "build_s": 0.0,
+   "duration_s": 1.01,
+   "run": "save-backups-verifier2",
+   "s": 1.01,
+   "status_in_run": "pass"
+  },
+  "login.fresh_menu_waits": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "save-backups-verifier2",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "login.no_glue_errors": {
+   "build_s": 0.0,
+   "duration_s": 0.02,
+   "run": "save-backups-verifier2",
+   "s": 0.02,
+   "status_in_run": "pass"
+  },
+  "play.client_crash_cleanup": {
+   "build_s": 0.0,
+   "duration_s": 33.59,
+   "run": "save-backups-verifier2",
+   "s": 33.59,
+   "status_in_run": "pass"
+  },
+  "play.dock_identity": {
+   "build_s": 0.0,
+   "duration_s": 39.64,
+   "run": "save-backups-verifier2",
+   "s": 39.64,
+   "status_in_run": "pass"
+  },
+  "play.interrupt_clean_exit": {
+   "build_s": 0.0,
+   "duration_s": 62.89,
+   "run": "save-backups-verifier2",
+   "s": 62.89,
+   "status_in_run": "pass"
+  },
+  "play.loop_clean_exit": {
+   "build_s": 0.0,
+   "duration_s": 39.19,
+   "run": "save-backups-verifier2",
+   "s": 39.19,
+   "status_in_run": "pass"
+  },
+  "play.offline": {
+   "build_s": 0.0,
+   "duration_s": 53.6,
+   "run": "save-backups-verifier2",
+   "s": 53.6,
+   "status_in_run": "pass"
+  },
+  "play.player_account": {
+   "build_s": 0.0,
+   "duration_s": 95.74,
+   "run": "save-backups-verifier2",
+   "s": 95.74,
+   "status_in_run": "pass"
+  },
+  "play.player_account_untouched": {
+   "build_s": 0.0,
+   "duration_s": 1.14,
+   "run": "save-backups-verifier2",
+   "s": 1.14,
+   "status_in_run": "pass"
+  },
+  "play.single_instance": {
+   "build_s": 0.0,
+   "duration_s": 37.24,
+   "run": "save-backups-verifier2",
+   "s": 37.24,
+   "status_in_run": "pass"
+  },
+  "play.stage_lines": {
+   "build_s": 0.0,
+   "duration_s": 0.09,
+   "run": "save-backups-verifier2",
+   "s": 0.09,
+   "status_in_run": "pass"
+  },
+  "play.startup_failure": {
+   "build_s": 0.0,
+   "duration_s": 8.58,
+   "run": "save-backups-verifier2",
+   "s": 8.58,
+   "status_in_run": "pass"
+  },
+  "play.world_progress": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "save-backups-verifier2",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "re.ghidra_installed": {
+   "build_s": 0.0,
+   "duration_s": 0.19,
+   "run": "save-backups-verifier2",
+   "s": 0.19,
+   "status_in_run": "pass"
+  },
+  "re.ghidra_readonly": {
+   "build_s": 0.0,
+   "duration_s": 12.68,
+   "run": "save-backups-verifier2",
+   "s": 12.68,
+   "status_in_run": "pass"
+  },
+  "re.ghidra_refuses_mismatch": {
+   "build_s": 0.0,
+   "duration_s": 0.1,
+   "run": "save-backups-verifier2",
+   "s": 0.1,
+   "status_in_run": "pass"
+  },
+  "re.mpq_readonly": {
+   "build_s": 0.0,
+   "duration_s": 4.42,
+   "run": "save-backups-verifier2",
+   "s": 4.42,
+   "status_in_run": "pass"
+  },
+  "re.mpq_write_roundtrip": {
+   "build_s": 0.0,
+   "duration_s": 0.77,
+   "run": "save-backups-verifier2",
+   "s": 0.77,
+   "status_in_run": "pass"
+  },
+  "repo.naming": {
+   "build_s": 0.0,
+   "duration_s": 0.11,
+   "run": "save-backups-verifier2",
+   "s": 0.11,
+   "status_in_run": "pass"
+  },
+  "repo.rename_script": {
+   "build_s": 0.0,
+   "duration_s": 5.63,
+   "run": "save-backups-verifier2",
+   "s": 5.63,
+   "status_in_run": "pass"
+  },
+  "report.backups_tier_rule": {
+   "build_s": 0.0,
+   "duration_s": 0.47,
+   "run": "save-backups-verifier2",
+   "s": 0.47,
+   "status_in_run": "pass"
+  },
+  "report.coverage": {
+   "build_s": 0.0,
+   "duration_s": 0.01,
+   "run": "save-backups-verifier2",
+   "s": 0.01,
+   "status_in_run": "pass"
+  },
+  "report.full_run": {
+   "build_s": 0.0,
+   "duration_s": 0.0,
+   "run": "save-backups-verifier2",
+   "s": 0.0,
+   "status_in_run": "fail"
+  },
+  "report.gui_tier_rule": {
+   "build_s": 0.0,
+   "duration_s": 7.36,
+   "run": "save-backups-verifier2",
+   "s": 7.36,
+   "status_in_run": "pass"
+  },
+  "report.schema": {
+   "build_s": 0.0,
+   "duration_s": 0.01,
+   "run": "save-backups-verifier2",
+   "s": 0.01,
+   "status_in_run": "pass"
+  },
+  "report.slow_tier_rule": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "save-backups-verifier2",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "report.tiers": {
+   "build_s": 0.0,
+   "duration_s": 91.37,
+   "run": "save-backups-verifier2",
+   "s": 91.37,
+   "status_in_run": "pass"
+  },
+  "report.tiers_declared": {
+   "build_s": 0.0,
+   "duration_s": 0.15,
+   "run": "save-backups-verifier2",
+   "s": 0.15,
+   "status_in_run": "pass"
+  },
+  "sql.assert_selftest": {
+   "build_s": 0.0,
+   "duration_s": 0.09,
+   "run": "save-backups-verifier2",
+   "s": 0.09,
+   "status_in_run": "pass"
+  },
+  "sql.world_populated": {
+   "build_s": 0.0,
+   "duration_s": 0.11,
+   "run": "save-backups-verifier2",
+   "s": 0.11,
+   "status_in_run": "pass"
+  }
  },
  "host": {
+  "disk_free_gb": 65.9,
+  "machine": "arm64",
   "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
-  "machine": "arm64"
+  "python": "3.14.7"
  },
- "executed_ids": [
-  "app.bundle_valid",
-  "app.handoff_focus",
-  "app.icon",
-  "app.launch_lifecycle",
-  "app.loading_stages",
-  "app.loading_stages_warm",
-  "app.relocatable",
-  "app.reopen_focuses_game",
-  "app.reopen_unminimizes",
-  "app.shim_scope",
-  "app.single_dock_icon",
-  "app.single_instance",
-  "app.startup_failure",
-  "build.clean",
-  "build.clean_smart",
-  "build.pin_enforced",
-  "build.playerbots_active",
-  "client.config_gen",
-  "client.inspect",
-  "client.launch_smoke",
-  "client.patch0001_recorded",
-  "client.play_build",
-  "client.play_revert",
-  "client.protocol_badpass",
-  "client.protocol_probe",
-  "client.realmlist",
-  "client.stock_mode",
-  "comp.add_remove",
-  "comp.assists",
-  "comp.follows",
-  "comp.quest_shared",
-  "core.login_logout_race",
-  "core.login_logout_race_baseline",
-  "core.patch_applied",
-  "core.playerbots_patches_applied",
-  "era.default_on",
-  "era.elites",
-  "era.mounts",
-  "era.quest_xp",
-  "era.scope_guard",
-  "era.sql_deterministic",
-  "era.toggle_roundtrip",
-  "era.xp_curve",
-  "fixture.account_character",
-  "fixture.add_item",
-  "fixture.instant_logout",
-  "fixture.level",
-  "fixture.start_quest",
-  "fixture.teleport",
-  "gm.invalid",
-  "gm.server_info",
-  "lifecycle.down",
-  "lifecycle.failfast",
-  "lifecycle.idempotent",
-  "lifecycle.isolated",
-  "lifecycle.persist",
-  "lifecycle.up",
-  "login.auto_login",
-  "login.backdrop_choice",
-  "login.cancel_shows_list",
-  "login.continue_context",
-  "login.no_glue_errors",
-  "play.client_crash_cleanup",
-  "play.dock_identity",
-  "play.interrupt_clean_exit",
-  "play.loop_clean_exit",
-  "play.offline",
-  "play.player_account",
-  "play.player_account_untouched",
-  "play.single_instance",
-  "play.stage_lines",
-  "play.startup_failure",
-  "play.world_progress",
-  "re.ghidra_installed",
-  "re.ghidra_readonly",
-  "re.ghidra_refuses_mismatch",
-  "re.mpq_readonly",
-  "re.mpq_write_roundtrip",
-  "report.coverage",
-  "report.full_run",
-  "report.schema",
-  "report.slow_tier_rule",
-  "report.tiers",
-  "report.tiers_declared",
-  "sql.assert_selftest",
-  "sql.world_populated"
- ],
- "skipped_ids": [
-  "app.shim_perf",
-  "perf.population_tuned",
-  "perf.server_budget",
-  "pop.bots_active",
-  "pop.fresh_start_scope",
-  "pop.size_setting",
-  "pop.size_stable",
-  "pop.zones_covered"
- ],
- "per_check_s": {
-  "report.tiers_declared": 0.13,
-  "report.slow_tier_rule": 0.03,
-  "build.pin_enforced": 21.07,
-  "build.clean": 19.43,
-  "build.clean_smart": 0.19,
-  "core.patch_applied": 0.21,
-  "core.playerbots_patches_applied": 0.85,
-  "lifecycle.failfast": 6.49,
-  "lifecycle.up": 18.66,
-  "lifecycle.idempotent": 0.72,
-  "lifecycle.isolated": 0.16,
-  "gm.server_info": 0.16,
-  "gm.invalid": 0.16,
-  "sql.world_populated": 0.13,
-  "sql.assert_selftest": 0.09,
-  "build.playerbots_active": 0.09,
-  "client.realmlist": 0.09,
-  "fixture.account_character": 0.56,
-  "fixture.level": 0.35,
-  "fixture.teleport": 0.35,
-  "fixture.add_item": 0.38,
-  "fixture.start_quest": 0.86,
-  "client.protocol_probe": 0.6,
-  "client.protocol_badpass": 5.34,
-  "fixture.instant_logout": 1.09,
-  "core.login_logout_race": 5.64,
-  "core.login_logout_race_baseline": 69.32,
-  "login.continue_context": 1.1,
-  "comp.add_remove": 7.32,
-  "comp.follows": 29.34,
-  "comp.assists": 61.74,
-  "comp.quest_shared": 6.25,
-  "era.sql_deterministic": 4.27,
-  "era.default_on": 0.87,
-  "era.xp_curve": 0.95,
-  "era.quest_xp": 1.37,
-  "era.elites": 9.99,
-  "era.mounts": 5.22,
-  "era.toggle_roundtrip": 50.38,
-  "era.scope_guard": 48.57,
-  "lifecycle.persist": 25.13,
-  "lifecycle.down": 5.98,
-  "client.config_gen": 0.22,
-  "client.inspect": 0.06,
-  "client.launch_smoke": 62.01,
-  "re.ghidra_installed": 0.31,
-  "re.ghidra_readonly": 15.75,
-  "re.mpq_readonly": 4.69,
-  "re.ghidra_refuses_mismatch": 0.1,
-  "re.mpq_write_roundtrip": 0.82,
-  "client.patch0001_recorded": 0.04,
-  "client.play_build": 0.98,
-  "client.play_revert": 1.02,
-  "play.loop_clean_exit": 48.66,
-  "play.interrupt_clean_exit": 71.85,
-  "play.client_crash_cleanup": 35.69,
-  "play.startup_failure": 8.93,
-  "play.single_instance": 38.52,
-  "play.offline": 56.72,
-  "play.player_account": 98.27,
-  "play.player_account_untouched": 19.58,
-  "app.icon": 2.9,
-  "app.bundle_valid": 9.21,
-  "app.launch_lifecycle": 47.81,
-  "app.startup_failure": 11.31,
-  "app.single_instance": 85.67,
-  "app.relocatable": 41.46,
-  "client.stock_mode": 75.47,
-  "login.auto_login": 47.01,
-  "login.cancel_shows_list": 100.38,
-  "login.no_glue_errors": 83.06,
-  "login.backdrop_choice": 94.3,
-  "play.dock_identity": 41.68,
-  "play.stage_lines": 0.1,
-  "play.world_progress": 0.03,
-  "app.single_dock_icon": 60.03,
-  "app.handoff_focus": 0.03,
-  "app.reopen_focuses_game": 0.03,
-  "pop.size_setting": 0.0,
-  "app.reopen_unminimizes": 0.03,
-  "app.loading_stages": 0.03,
-  "app.shim_scope": 0.06,
-  "app.loading_stages_warm": 39.11,
-  "pop.zones_covered": 0.0,
-  "pop.size_stable": 0.0,
-  "pop.bots_active": 0.0,
-  "pop.fresh_start_scope": 0.0,
-  "perf.server_budget": 0.0,
-  "perf.population_tuned": 0.0,
-  "app.shim_perf": 0.0,
-  "report.coverage": 0.01,
-  "report.tiers": 81.94,
-  "report.schema": 0.01,
-  "report.full_run": 0.0
- }
+ "runs": {
+  "save-backups-verifier2": {
+   "finished": "2026-10-06T18:30:59+00:00",
+   "machine": "arm64",
+   "repo_sha": "c21526c416b37432c55d9fd103f4a38dc8e4fb2b",
+   "source": "env/tmp/verifier2-20261006-134945/results-full.json",
+   "started": "2026-10-06T17:50:12+00:00",
+   "wall_s": 2447.7
+  },
+  "seamless-experience-verifier1": {
+   "finished": "2026-10-07T01:34:31+00:00",
+   "machine": "arm64",
+   "repo_sha": "ba92a27778805f9f7d01c97eddd7dfa3ca125e67",
+   "source": "env/tmp/verifier-se-20261006-204241/results-full.json",
+   "started": "2026-10-07T00:42:58+00:00",
+   "used_for": [
+    "app.handoff_focus",
+    "app.reopen_during_loading",
+    "app.reopen_focuses_game",
+    "app.reopen_unminimizes"
+   ],
+   "wall_s": 3093.1,
+   "why": "these GUI focus checks failed instantly on a locked screen in save-backups-verifier2"
+  }
+ },
+ "schema": 2,
+ "what": "Per-check timing baseline for report.timing (harness-reporting 'Full-run timing is recorded and guarded'); see harness/hslib/timingbase.py. Built 2026-10-07 by B26 from the save-backups cycle-2 verifier full run (c21526c); the 4 GUI focus checks from the seamless-experience cycle-1 verifier full run. seamless-experience's new checks join at merge (`harness/hs timing-baseline join`)."
 }

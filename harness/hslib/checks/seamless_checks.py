@@ -48,7 +48,7 @@ CONTINUE_AT = 20
 GLUE_PLAY = {"marker": True,
              "script": [{"t": 4, "act": "shot"}, {"t": CONTINUE_AT, "act": "continue"}, {"t": CONTINUE_AT, "act": "shot"}],
              "charselect": [{"t": 1.5, "act": "csinspect"}, {"t": 2, "act": "shot"}, {"t": 4, "act": "play"}]}
-ADDON_HOOK = '-- planted by the harness (seamless_checks.py): the wording add-on\'s test hook\r\nMoongladeTest = {\r\n\t["hook"] = 1,\r\n\t["logout_after"] = 8,\r\n}\r\n'
+ADDON_HOOK = '-- planted by the harness (seamless_checks.py): the wording add-on\'s test hook\r\nMoongladeTest = {\r\n\t["hook"] = 1,\r\n}\r\n'
 # Run A (login.friendly_errors): the login server is stopped before Continue; the friendly error is photographed,
 # its details opened and photographed; the login server is started again; Try again at RETRY_AT; at character select
 # Play is clicked (entering the world hands the record out).
@@ -515,10 +515,12 @@ def _addon_wording() -> dict[str, str]:
 @check("client.wording_addon", order=393, capability=CAP_CONN, stack="down", tier="full")
 def wording_addon(ctx):
     """A test character enters the world on a scratch patched play client and logs out: the add-on's report (its
-    SavedVariables, written at logout) shows it loaded and enabled, each listed global string (Logout and its
-    countdown, the disconnect / lost-connection lines) with its new value in place and the original equal to the
-    client's own GlobalStrings.lua, the countdown popup showing the new text, 0 Lua errors; no file under
-    Interface/FrameXML differs from the stock client's."""
+    SavedVariables, written at logout) shows it loaded and enabled; every string it replaces is listed, at least
+    LOGOUT, CAMP_TIMER (the logout countdown), IDLE_MESSAGE and ERR_COMSAT_DISCONNECT (the in-world disconnect /
+    lost-connection lines), each with its new value in place, its format kept, no server wording left and the original
+    equal to the client's own GlobalStrings.lua; the game menu button reads the new LOGOUT; the logout countdown popup,
+    shown in the world and read once its countdown is filled in, shows the new CAMP_TIMER text; 0 Lua errors; no file
+    under Interface/FrameXML differs from the stock client's."""
     if "play" not in _SESSIONS:
         play_session()
     s = _session_ok("play")
@@ -552,9 +554,10 @@ def wording_addon(ctx):
     ui = rep.get("ui") or {}
     ev["ui"] = ui
     camp_re = "^" + re.escape(want["CAMP_TIMER"]).replace("%d", r"\d+").replace("%s", r"\S+") + "$"
-    require(ui.get("logout_button") == want["LOGOUT"] and ui.get("camp_popup_template") == want["CAMP_TIMER"]
-            and re.match(camp_re, ui.get("camp_popup_shown") or ""),
-            "the game menu button or the logout countdown doesn't show the new wording", **ev)
+    ev["hook_timeline"] = rep.get("diag")
+    require(ui.get("logout_button") == want["LOGOUT"], "the game menu button doesn't show the new wording", **ev)
+    require(ui.get("camp_popup_template") == want["CAMP_TIMER"] and re.match(camp_re, ui.get("camp_popup_shown") or ""),
+            "the logout countdown popup doesn't show the new wording (see hook_timeline)", **ev)
     require(rep.get("errors") == 0, "the add-on's test hook counted Lua errors", **ev)
     require(not any((v or "").strip() for v in s["frame_log"].values()), "GlueXML.log / FrameXML.log hold errors", **ev)
     fx = s.get("scratch_frame_xml") or {}

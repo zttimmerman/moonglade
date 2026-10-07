@@ -122,6 +122,12 @@ def main(argv=None) -> int:
 
     sub.add_parser("app", help="build dist/Moonglade.app (double-clickable launcher for ./play; launcher-app) "
                                "and the Wine host shim env/dockshim/hsdock.dylib (ADR-0010)")
+    tb = sub.add_parser("timing-baseline", help="per-check timing baseline (harness/timing-baseline.json): "
+                        "`join <results.json> --label <change>` adds the checks a merging change's verifier full run "
+                        "executed that the baseline lacks (existing times never change)")
+    tb.add_argument("action", choices=["join"])
+    tb.add_argument("results")
+    tb.add_argument("--label", required=True)
     ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns from env/branding/logo-source.jpeg")
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
 
@@ -343,6 +349,9 @@ def main(argv=None) -> int:
         from . import app
         return app.cli()
 
+    if a.cmd == "timing-baseline":
+        from . import timingbase
+        return timingbase.cli(a)
     if a.cmd == "icon":
         from . import icon
         try:

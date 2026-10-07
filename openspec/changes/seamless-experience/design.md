@@ -132,3 +132,27 @@ used to assert on the single text); `app.backups_window` gained the done message
 ### F29
 Patch 0002's title and the two mod-era-profile comment lines now say Moonglade; their three naming allowlist entries
 are gone (the module change already changes the server build inputs).
+
+### Verifier cycle 1 fixes (B26, 2026-10-07)
+- **1.8 `client.wording_addon` flake, root cause:** a freshly created test character's first world login plays the
+  intro cinematic (server: `CharacterHandler.cpp` "Show cinematic at the first time that player login"). During it
+  `InCinematic()` is true, UIParent is hidden, and `StaticPopup_Show("CAMP")` returns nil (`StaticPopup.lua`: popups
+  without `interruptCinematic` are refused), so the hook's timed popup read came out nil. Full runs recreate HSTEST
+  (`fixture.account_character`, `play.player_account_untouched`), which is why only the full run hit it. Reproduced:
+  `fixture.account_character` then the add-on run gave `CINEMATIC_START`, `show nil cin=1 uip=0`, popup nil; the next
+  run (character no longer new) passed. Fix: the add-on's test hook is now sequenced by state, not timers. It skips the
+  cinematic as the player's Escape does (`StopCinematic()`, repeated once a second while it runs, because a call during
+  the loading screen doesn't take). It waits until the world UI has been up 3 s, shows the popup, reads it once its
+  countdown is filled in, then logs out. It gives up after 20 s and says why in the report's `diag` timeline, which
+  the check shows as `hook_timeline`. The check is unchanged in strength: it still requires the popup's text to match
+  the new CAMP_TIMER format.
+- **`files` patch kind:** sources must resolve to a file inside the repo. Add-on folders named `Blizzard_*` or already
+  loose in the base client are refused. On a real build, a destination that any base archive holds (`mpq.find`) is
+  refused too: a loose copy would shadow it.
+- **1.9 per-check timing guard:** `harness/timing-baseline.json` (schema 2) holds each check's time minus its build
+  time, with its source run (`harness/hslib/timingbase.py`). `runner.timing_summary` adds `build_s`,
+  `build_by_check_s`, `new_checks_s` and `warnings`. `report.timing` compares the executed baseline checks' sum, each
+  minus its build time (`build.clean` entirely; `core.login_logout_race_baseline`'s `build_s`, its baseline-server
+  rebuild), with 110 % of their baseline sum. It also runs the spec's synthetic cases a–d through the same code on every
+  run. summary.md gets a timing line plus one line per warning. At merge, new checks join with
+  `harness/hs timing-baseline join <verifier results-full.json> --label <change>`, which only adds entries.
