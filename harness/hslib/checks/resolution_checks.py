@@ -18,7 +18,7 @@ from pathlib import Path
 from .. import clientbuild, launch, paths as P, play, resolution as R, stack
 from ..registry import check, require
 from .play_checks import PLAY, is_clear, remaining, require_given_clear
-from .playclient_util import PlayRun, drop_scratch, fresh_scratch
+from .playclient_util import PlayRun, build_scratch, drop_scratch, fresh_scratch
 
 CAP = "client-connectivity"
 ASPECT_TOL = 0.02                            # spec: aspect ratio within 2%
@@ -166,7 +166,7 @@ def e2e_one(ev: dict, spec: str) -> None:
     scratch = fresh_scratch("res")
     run = None
     try:
-        clientbuild.build(dest=scratch)
+        build_scratch(scratch)
         ev["e2e_given"] = {"gxResolution": R.current(scratch), "marker": R.marker(scratch)}
         require(ev["e2e_given"]["gxResolution"] is None, "GIVEN not met: the fresh scratch client has a resolution", **ev)
         off = P.WINE_LOG.stat().st_size if P.WINE_LOG.exists() else 0

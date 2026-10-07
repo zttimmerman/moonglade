@@ -1310,9 +1310,9 @@ def shim_perf(ctx):
     build_app(ev)
     require_clear(ev)
     runs: list = []
-    from .playclient_util import drop_scratch, fresh_scratch
+    from .playclient_util import build_scratch, drop_scratch, fresh_scratch
     fresh_scratch(PERF_SCRATCH.name.removeprefix("check-play-"))
-    clientbuild.build(dest=PERF_SCRATCH)              # once, before the runs: no build time inside a measurement
+    build_scratch(PERF_SCRATCH)              # once, before the runs: no build time inside a measurement
     try:
         for i in range(PERF_RUNS):
             for policy in (("accessory", "off") if i % 2 == 0 else ("off", "accessory")):

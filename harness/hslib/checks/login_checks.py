@@ -17,7 +17,7 @@ from pathlib import Path
 from .. import frontmenu, paths as P, play
 from ..registry import check, require
 from .play_checks import is_clear, remaining, require_given_clear, _delete_scratch
-from .playclient_util import (PlayRun, account_state, clear_logs, connection_log, db_ready, drop_scratch,
+from .playclient_util import (PlayRun, account_state, build_scratch, clear_logs, connection_log, db_ready, drop_scratch,
                               fresh_scratch, glue_logs, marker, screenshots)
 
 CAP = "login-screen"
@@ -136,8 +136,7 @@ def continue_session() -> dict:
         scratch = fresh_scratch("login")
         ev["fresh_scratch"] = {"dir": str(scratch), "existed_before_build": scratch.exists()}
         # a login file left behind by a killed ./play: the next run must remove it before anything else
-        from .. import clientbuild
-        clientbuild.build(dest=scratch)
+        ev["fresh_scratch"]["seeded"] = build_scratch(scratch)["seeded"]
         ev["fresh_scratch"] |= {"connection_log_before": (scratch / "Logs" / "connection.log").exists(),
                                 "screenshots_before": len(screenshots(scratch)),
                                 "account_name_in_config_before": _config_value(scratch, "accountName"),

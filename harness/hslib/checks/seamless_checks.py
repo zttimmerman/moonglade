@@ -27,9 +27,10 @@ import zlib
 from pathlib import Path
 
 from .. import clientbuild, mpq, paths as P, stack
+from . import clientinput
 from ..registry import check, require
 from .play_checks import is_clear, remaining, require_given_clear
-from .playclient_util import (PlayRun, _bmp_pixels, _classify, connection_log, drop_scratch, fresh_scratch,
+from .playclient_util import (SEED_SETTINGS, PlayRun, _bmp_pixels, _classify, build_scratch, connection_log, drop_scratch, fresh_scratch,
                               glue_logs, marker, screenshots)
 
 CAP_LOGIN = "login-screen"
@@ -278,6 +279,19 @@ def server_logins(name: str) -> list[dict]:
     return out
 
 
+def server_char_lines(name: str, since: float) -> list[str]:
+    """Every Players.log / Server.log / Playerbots.log line naming the character (Login, Logout, ...) at or after `since`: what the server saw of
+    the client's world session (diagnosis evidence, easy-setup 1.9)."""
+    out = []
+    for f in ("Players.log", "Server.log", "Playerbots.log"):
+        p = P.LOGS / f
+        for l in (p.read_text(errors="replace").splitlines() if p.exists() else []):
+            m = re.match(r"^(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}) (.*)$", l)
+            if m and name.lower() in l.lower() and time.mktime(time.strptime(m.group(1), "%Y-%m-%d %H:%M:%S")) >= since:
+                out.append(f"{f}: {l[:200]}")
+    return out[:30]
+
+
 def black_fraction(path: Path) -> dict:
     """Share of near-black pixels on a grid over the screenshot, leaving out the overlay's own drawings (logo at the
     top, caption and loading bar in the middle band) and the test marker (top right)."""
@@ -371,15 +385,23 @@ def play_session() -> dict:
     try:
         require_given_clear(ev)
         scratch = fresh_scratch("seamless")
-        build = clientbuild.build(dest=scratch)
+        build = build_scratch(scratch)
         ev["scratch"] = {"dir": str(scratch), "outputs": build["stamp"]["outputs"]}
         ev["addon_hook"] = plant_addon_hook(scratch)
         run = PlayRun("seamless", glue_test=GLUE_PLAY, scratch=scratch)
         run.start()
+        ev["seeded_given"] = run.given
         up = run.wait_client()
         ev["client_up"] = {k: v for k, v in up.items() if k != "t"}
         require(up.get("up"), "the real Wow.exe never came up", output=run.output()[-2500:], **ev)
         t_up = up["t"]
+        # GIVEN (easy-setup 1.9): the client has had hardware input since it started, or its own idle logout fires
+        # the moment the character enters the world (clientinput.py). One Shift press once its window is up (the
+        # front menu's first screenshot, at 4 s).
+        _wait(lambda: [p for p in screenshots(scratch) if p.stat().st_mtime >= t_up - 5], 120, step=0.5)
+        ev["client_input"] = clientinput.press_shift(run.tmp)
+        require(ev["client_input"]["injected"] == 2, "GIVEN not met: the hardware key press didn't reach the "
+                "client (its idle logout would end the world session at once)", **ev)
         rec = _wait(lambda: glue_record(scratch), LOG_TIMEOUT, step=2)
         ev["glue_record"] = rec
         rep = _wait(lambda: addon_report(scratch), REPORT_TIMEOUT, step=2) if rec else None
@@ -396,6 +418,7 @@ def play_session() -> dict:
         logins = server_logins(P.TEST_CHAR)
         ev["server_logins"] = logins
         ev["server_logins_after_client_up"] = [x for x in logins if x["t"] >= int(t_up)]
+        ev["server_log_after_client_up"] = server_char_lines(P.TEST_CHAR, int(t_up))
         return ev
     except Exception as e:  # noqa: BLE001  (recorded for all three checks; the first caller re-raises)
         ev["session_error"] = f"{type(e).__name__}: {e}"
@@ -526,7 +549,17 @@ def wording_addon(ctx):
     s = _session_ok("play")
     rep = s.get("addon_report")
     ev = {k: s.get(k) for k in ("addon_report", "addon_hook", "addon_files", "frame_log", "scratch_frame_xml",
-                                "remaining_after", "shared_run")}
+                                "remaining_after", "shared_run", "seeded_given", "connection_log", "server_log_after_client_up")}
+    if not s.get("glue_record"):
+        # easy-setup 1.9: name the precondition when the client never got past the screens before the login screen
+        ev["screens"] = s.get("screens")
+        menu_seen = any(x.get("main_menu_up") is not None for x in (s.get("screens") or []))
+        ev["front_menu_marker_seen"] = menu_seen
+        require(False, "the front menu never handed out its test record (no world entry); "
+                + ("no screenshot shows the front menu's test marker, so the login screen never came up: the intro "
+                   "movie or the EULA/Terms of Use screens were in the way (settings at launch: "
+                   f"{(s.get('seeded_given') or {}).get('values')}; needed: {SEED_SETTINGS})" if not menu_seen else
+                   "see glue_record / screens"), **ev)
     require(isinstance(rep, dict) and not rep.get("parse_error"), "no add-on report (it never logged out, or the "
             "SavedVariables file didn't parse)", **ev)
     require(rep.get("at") == "PLAYER_LOGOUT" and rep.get("loaded") == 1 and rep.get("enabled") == 1,
@@ -555,6 +588,12 @@ def wording_addon(ctx):
     ev["ui"] = ui
     camp_re = "^" + re.escape(want["CAMP_TIMER"]).replace("%d", r"\d+").replace("%s", r"\S+") + "$"
     ev["hook_timeline"] = rep.get("diag")
+    ev["client_input"] = s.get("client_input")
+    diag = rep.get("diag") or []
+    left = next((i for i, d in enumerate(diag) if "PLAYER_LEAVING_WORLD" in d), None)
+    require(left is None or any("called Logout" in d for d in diag[:left]),
+            "the client left the world by itself before the add-on's logout (the client's idle logout: it had no "
+            "hardware input; see client_input and hook_timeline)", **ev)
     require(ui.get("logout_button") == want["LOGOUT"], "the game menu button doesn't show the new wording", **ev)
     require(ui.get("camp_popup_template") == want["CAMP_TIMER"] and re.match(camp_re, ui.get("camp_popup_shown") or ""),
             "the logout countdown popup doesn't show the new wording (see hook_timeline)", **ev)
@@ -584,7 +623,7 @@ def error_session() -> dict:
     try:
         require_given_clear(ev)
         scratch = fresh_scratch("seamlesserr")
-        clientbuild.build(dest=scratch)
+        build_scratch(scratch)
         run = PlayRun("seamlesserr", glue_test=GLUE_ERR, scratch=scratch)
         run.start()
         up = run.wait_client()
