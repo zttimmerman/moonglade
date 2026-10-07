@@ -51,7 +51,7 @@ if ( StaticPopupDialogs and StaticPopupDialogs["CAMP"] ) then StaticPopupDialogs
 -- world UI is up, shows the countdown popup, reads it once its countdown text is filled in (StaticPopup_OnUpdate), and only then logs out.
 -- If the popup can't be shown and read within GIVE_UP_S, it logs out anyway and the report says why (the check fails).
 local SETTLE_S, GIVE_UP_S = 3, 20
-local test = { on = false, errors = 0, errorMsgs = {}, popup = nil, clock = 0, readyAt = nil, phase = nil, diag = {} };
+local test = { on = false, errors = 0, errorMsgs = {}, popup = nil, clock = 0, readyAt = nil, phase = nil, diag = {}, ticks = 0 };
 
 local function diag(e)
 	if ( #test.diag < 30 ) then table.insert(test.diag, format("%.2f %s", test.clock, e)); end
@@ -71,6 +71,8 @@ local function report(at)
 		       camp_popup_template = StaticPopupDialogs["CAMP"] and StaticPopupDialogs["CAMP"].text,
 		       camp_popup_shown = test.popup },
 		errors = test.errors, error_msgs = test.errorMsgs, diag = test.diag,
+		at_logout = { phase = test.phase, ticks = test.ticks, clock = test.clock, ui_visible = UIParent:IsVisible() and 1 or 0,
+		              cinematic = InCinematic() and 1 or 0 },
 		build = select(4, GetBuildInfo()),
 	};
 end
@@ -85,11 +87,19 @@ frame:RegisterEvent("PLAYER_ENTERING_WORLD");
 frame:RegisterEvent("PLAYER_LOGOUT");
 frame:RegisterEvent("CINEMATIC_START");
 frame:RegisterEvent("CINEMATIC_STOP");
+frame:RegisterEvent("PLAYER_LEAVING_WORLD");
+frame:RegisterEvent("PLAYER_CAMPING");
+frame:RegisterEvent("LOGOUT_CANCEL");
 frame:SetScript("OnEvent", function(self, event, arg1)
 	if ( event == "ADDON_LOADED" and arg1 == "Moonglade" ) then
 		if ( type(MoongladeTest) == "table" and MoongladeTest.hook == 1 ) then
 			test.on = true;
 			MoongladeTest.report = nil;
+			for _, fn in ipairs({ "Logout", "Quit", "ForceQuit", "ForceLogout" }) do
+				if ( _G[fn] ) then
+					hooksecurefunc(fn, function() diag("called " .. fn .. " from " .. gsub(debugstack(3, 2, 0) or "?", "\n", " | ")); end);
+				end
+			end
 			local previous = geterrorhandler();
 			seterrorhandler(function(msg, ...)
 				test.errors = test.errors + 1;
@@ -116,11 +126,13 @@ end);
 frame:SetScript("OnUpdate", function(self, elapsed)
 	if ( not test.on or not test.phase ) then return; end
 	test.clock = test.clock + elapsed;
+	test.ticks = test.ticks + 1;
 	if ( test.phase == "settle" ) then
 		-- a StopCinematic() during the loading screen doesn't take (measured: the intro then played to its end, 88 s);
 		-- repeat it once a second while a cinematic runs, as a player pressing Escape again would
 		if ( InCinematic() and test.clock - (test.lastStop or -10) >= 1 ) then
 			test.lastStop = test.clock;
+			diag("settle: StopCinematic (InCinematic, UIParent " .. (UIParent:IsVisible() and 1 or 0) .. ")");
 			StopCinematic();
 		end
 		-- the world UI must be up (no loading screen, no cinematic) for SETTLE_S, as when a player opens the menu

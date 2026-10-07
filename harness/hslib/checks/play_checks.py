@@ -409,6 +409,7 @@ def single_instance(ctx):
 # ---------------------------------------------------------------- offline proof (task 2.1)
 
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
+WINE_ECHOES = 4      # self-test B: repeated denials, so the kernel's duplicate-report summary line is logged (see there)
 LOG = "/usr/bin/log"
 _LINE_RE = re.compile(r"Sandbox: (?P<proc>.+?)\((?P<pid>\d+)\) (?P<verdict>deny|allow)(?:\(\d+\))? (?P<op>\S+) ?(?P<target>\S*)")
 
@@ -514,15 +515,22 @@ def offline(ctx):
         require(any(r["op"] == "network-outbound" and not r["dns"] for r in ev["selftest_direct"]["denials"]),
                 "self-test: the refused connection isn't in the denial log", **ev)
 
-        # 2. self-test B: the same through the Wine layer (Wine's ping to 1.1.1.1; Wine sends ICMP from winedevice.exe)
+        # 2. self-test B: the same through the Wine layer (Wine's ping to 1.1.1.1; Wine sends ICMP from winedevice.exe).
+        # Several echoes, and the denial log is read while the prefix still runs (easy-setup 1.9, B30): since the
+        # 2026-10-07 reboot this Mac's kernel emits no first violation report for a non-Apple (ad-hoc signed) process,
+        # only its "N duplicate reports for Sandbox: <proc>(<pid>) deny(1) ..." summary, which needs a repeated denial
+        # and is emitted a moment later (lost when the prefix is stopped at once). A single echo then leaves no line.
         t_wine = time.time()
-        wine = subprocess.run([SANDBOX_EXEC, "-f", str(prof), str(launch.WINE), "cmd", "/c", "ping -n 1 1.1.1.1"],
+        wine = subprocess.run([SANDBOX_EXEC, "-f", str(prof), str(launch.WINE), "cmd", "/c",
+                               f"ping -n {WINE_ECHOES} 1.1.1.1"],
                               env=launch.wine_env(), cwd=work, capture_output=True, text=True, timeout=180)
-        ev["selftest_wine"] = {"exit": wine.returncode, "stdout_tail": wine.stdout[-600:],
-                               "stop_prefix": launch.stop_prefix()}
+        ev["selftest_wine"] = {"exit": wine.returncode, "echoes": WINE_ECHOES, "stdout_tail": wine.stdout[-600:]}
         rows = _wait_denials(tag, since, lambda rs: any(r["proc"].lower().endswith(".exe") and r["verdict"] == "deny"
                                                         and not r["dns"] for r in rs))
+        ev["selftest_wine"]["stop_prefix"] = launch.stop_prefix()
         ev["selftest_wine"]["denials"] = [r for r in rows if r["proc"].lower().endswith(".exe") and not r["dns"]]
+        ev["selftest_wine"]["denial_kinds"] = sorted({"duplicate-summary" if "duplicate report" in r["message"]
+                                                      else "first-report" for r in ev["selftest_wine"]["denials"]})
         require(ev["selftest_wine"]["denials"], "self-test: a Wine process's non-loopback attempt wasn't denied+logged", **ev)
         time.sleep(2)
         t_loop = datetime.now()
