@@ -1,6 +1,7 @@
 """`hs run`: execute checks, write results.json + summary.md."""
 import fnmatch
 import json
+from pathlib import Path
 import platform
 import shutil
 import subprocess
@@ -363,15 +364,63 @@ def backups_tier_s(records: list[dict], reg: dict | None = None) -> float:
                      if r.get("status") != "skip" and r["id"] in reg and reg[r["id"]].backups), 1)
 
 
-def timing_summary(records: list[dict], wall_s: float | None, reg: dict | None = None) -> dict:
-    """harness-reporting "Full-run timing": per-check wall time, their sum, the run's wall time, the 10 slowest, and
-    the backups tier's total."""
+# harness-reporting "Full-run timing is recorded and guarded" (seamless-experience, Zach 2026-10-07: "catch real
+# slowdowns only"): a per-check baseline, build time and new checks reported apart.
+TIMING_BASELINE = P.HARNESS / "timing-baseline.json"
+BUILD_CHECKS = ("build.clean",)      # their whole time is building server binaries
+NEW_CHECK_WARN_S = 180.0             # spec: a check not in the baseline taking longer is a warning in summary.md
+TIMING_SELF = "report.timing"        # measured after everything else; never in the baseline
+
+
+def check_build_s(rec: dict) -> float:
+    """Seconds of a check record spent building server binaries: all of a BUILD_CHECKS check, else the evidence's
+    `build_s` (e.g. core.login_logout_race_baseline's baseline-server rebuild), capped at the check's own time."""
+    d = float(rec.get("duration_s") or 0.0)
+    if rec["id"] in BUILD_CHECKS:
+        return d
+    b = (rec.get("evidence") or {}).get("build_s")
+    return round(min(d, float(b)), 2) if isinstance(b, (int, float)) and not isinstance(b, bool) and b > 0 else 0.0
+
+
+def load_timing_baseline(path: Path | None = None) -> dict:
+    """The per-check baseline ({"checks": {id: {"s", "run", ...}}, "runs": {...}, "host": ...}); raises on a missing or
+    malformed file."""
+    b = json.loads(Path(path or TIMING_BASELINE).read_text())
+    if not isinstance(b.get("checks"), dict) or not b["checks"]:
+        raise ValueError("baseline has no per-check times")
+    for i, e in b["checks"].items():
+        if not isinstance(e.get("s"), (int, float)) or e.get("run") not in (b.get("runs") or {}):
+            raise ValueError(f"baseline entry {i} lacks a time or a known source run")
+    return b
+
+
+def timing_summary(records: list[dict], wall_s: float | None, reg: dict | None = None,
+                   baseline: dict | None | str = "file") -> dict:
+    """harness-reporting "Full-run timing": per-check wall time, their sum, the run's wall time, the 10 slowest, the
+    backups tier's total, the time spent building server binaries (per check and total), and the executed checks that
+    aren't in the per-check baseline with their times, plus a warning for each one over NEW_CHECK_WARN_S."""
+    if baseline == "file":
+        try:
+            baseline = load_timing_baseline()
+        except (OSError, ValueError):
+            baseline = None
     per = {r["id"]: float(r.get("duration_s") or 0.0) for r in records}
     top = sorted(per.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
-    return {"per_check_s": per, "checks_sum_s": round(sum(per.values()), 1),
-            "backups_tier_s": backups_tier_s(records, reg),
-            "total_wall_s": None if wall_s is None else round(wall_s, 1),
-            "top10": [{"id": i, "s": v} for i, v in top]}
+    build = {r["id"]: check_build_s(r) for r in records if r.get("status") != "skip" and check_build_s(r) > 0}
+    out = {"per_check_s": per, "checks_sum_s": round(sum(per.values()), 1),
+           "backups_tier_s": backups_tier_s(records, reg),
+           "total_wall_s": None if wall_s is None else round(wall_s, 1),
+           "top10": [{"id": i, "s": v} for i, v in top],
+           "build_s": round(sum(build.values()), 1), "build_by_check_s": build}
+    if baseline is None:
+        out |= {"new_checks_s": None, "warnings": ["no readable per-check timing baseline"]}
+        return out
+    new = {r["id"]: float(r.get("duration_s") or 0.0) for r in records
+           if r.get("status") != "skip" and r["id"] not in baseline["checks"] and r["id"] != TIMING_SELF}
+    out |= {"new_checks_s": new, "new_checks_sum_s": round(sum(new.values()), 1),
+            "warnings": [f"new check `{i}` took {s:.0f} s (over {NEW_CHECK_WARN_S:.0f} s)"
+                         for i, s in sorted(new.items()) if s > NEW_CHECK_WARN_S]}
+    return out
 
 
 def select(reg: dict, tier: str, only: list[str] | None, gui_skip_ids: set | frozenset = frozenset()) -> list:
@@ -457,6 +506,19 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
     return 0 if doc["meta"]["ok"] else 1
 
 
+def timing_lines(doc) -> list[str]:
+    """summary.md: the timing guard's numbers (report.timing's evidence) and every timing warning."""
+    t = doc["meta"].get("timing") or {}
+    rt = next((r for r in doc["checks"] if r["id"] == TIMING_SELF), None)
+    ev = (rt or {}).get("evidence") or {}
+    out = [f"- Timing: build {t.get('build_s', '?')} s, backups tier {t.get('backups_tier_s', '?')} s, "
+           f"new checks {len(t.get('new_checks_s') or {})} ({t.get('new_checks_sum_s', '?')} s)"
+           + (f"; baseline checks {ev['now_sum_s']} s vs {ev['baseline_sum_s']} s "
+              f"(limit {ev['limit_s']} s, ratio {ev['ratio']})" if "now_sum_s" in ev else "")]
+    out += [f"- WARNING (timing): {w}" for w in t.get("warnings") or []]
+    return out
+
+
 def summary_md(doc) -> str:
     m = doc["meta"]
     c = m["counts"]
@@ -469,6 +531,7 @@ def summary_md(doc) -> str:
         f"- Repo: `{m['repo_sha']}`  core `{m['fork_lock'].get('core_sha', '')[:12]}`  playerbots `{m['fork_lock'].get('playerbots_sha', '')[:12]}`",
         f"- Counts: {c['pass']} pass, {c['fail']} fail, {c['error']} error, {c['skip']} skip. Disk free: {m['host']['disk_free_gb']} GB",
         "- Slowest: " + ", ".join(f"`{t['id']}` {t['s']}s" for t in (m.get("timing") or {}).get("top10", [])[:5]),
+        *timing_lines(doc),
         "",
         "| Check | Status | Time | Note |",
         "|---|---|---|---|",

@@ -57,7 +57,17 @@
 //   confirm | cancel (the answer to the confirmation), wait:<file> (until the file exists), play, close).
 //   HS_APP_TEST_RESTORE_TARGET=hsbk_<name> passes `--target` to the restore (tests restore into scratch schemas only).
 //   The ./play --backups calls get --allow-test-client-dir only when the app itself was given it.
+//
+// seamless-experience (openspec/changes/seamless-experience, mac-app):
+// - Friendly error dialogs: the main text says what happened in plain words (no server, database, MySQL, port, realm or
+//   SOAP; the stage it stopped at is named by its friendly name, kFriendlyStage) and a "Show details" disclosure in
+//   the alert's accessory view reveals the technical error (the play loop's error, the server's own words) and the
+//   log path. The hook event carries "text" (the main text) and "details". In test mode with HS_APP_SNAPSHOT_DIR the
+//   alert is also rendered off screen, collapsed and expanded, to <dir>/dialog-<id>[-details].png.
+// - Restore feedback: after a restore the Backups window's status line says "Restored. Your save is now from <date>."
+//   or "The restore didn't happen: <reason>." (hook event {"kind":"backups_status"}), before Play or Quit.
 #import <Cocoa/Cocoa.h>
+#import <objc/runtime.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -324,6 +334,110 @@ static NSString *const kTestTargetEnv = @"HS_APP_TEST_RESTORE_TARGET";
         [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:self.logPath]];
 }
 
+// The loading stages as the error dialog's main text names them (stages.py ids). The loading window's labels name the
+// login server and the database; the main text of an error doesn't (mac-app "Friendly launcher errors").
+static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
+    return @{@"prepare": @"Getting ready", @"database": @"Opening your save", @"login": @"Getting ready to play",
+             @"world": @"Loading the world", @"bots": @"Waking the AI players", @"account": @"Checking your profile",
+             @"game_setup": @"Preparing the game", @"launching": @"Launching the game", @"ready": @"Ready"};
+}
+
+// A friendly error: plain main text, and a "Show details" disclosure with the technical text (error + log path).
+- (NSAlert *)errorAlert:(NSString *)title text:(NSString *)text details:(NSString *)details {
+    NSAlert *a = [NSAlert new];
+    a.alertStyle = NSAlertStyleCritical;
+    a.messageText = title;
+    a.informativeText = text;
+    [a addButtonWithTitle:@"OK"];
+    if (self.logPath) [a addButtonWithTitle:@"Show Log"];
+    NSView *acc = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 420, 24)];
+    NSButton *tri = [[NSButton alloc] initWithFrame:NSMakeRect(0, 2, 20, 20)];
+    tri.bezelStyle = NSBezelStyleDisclosure;
+    tri.buttonType = NSButtonTypePushOnPushOff;
+    tri.title = @"";
+    NSButton *label = [NSButton buttonWithTitle:@"Show details" target:nil action:nil];
+    label.bordered = NO;
+    label.frame = NSMakeRect(22, 2, 200, 20);
+    label.alignment = NSTextAlignmentLeft;
+    NSScrollView *sv = [[NSScrollView alloc] initWithFrame:NSMakeRect(0, 0, 420, 160)];
+    sv.hasVerticalScroller = YES;
+    sv.borderType = NSBezelBorder;
+    NSTextView *tv = [[NSTextView alloc] initWithFrame:sv.bounds];
+    tv.editable = NO;
+    tv.selectable = YES;
+    tv.font = [NSFont userFixedPitchFontOfSize:11];
+    tv.string = details;
+    tv.verticallyResizable = YES;
+    tv.textContainer.widthTracksTextView = YES;
+    sv.documentView = tv;
+    sv.hidden = YES;
+    [acc addSubview:tri];
+    [acc addSubview:label];
+    [acc addSubview:sv];
+    a.accessoryView = acc;
+    __weak NSAlert *wa = a;
+    void (^toggle)(BOOL) = ^(BOOL open) {
+        tri.state = open ? NSControlStateValueOn : NSControlStateValueOff;
+        label.title = open ? @"Hide details" : @"Show details";
+        sv.hidden = !open;
+        acc.frame = NSMakeRect(0, 0, 420, open ? 190 : 24);
+        tri.frame = NSMakeRect(0, acc.frame.size.height - 22, 20, 20);
+        label.frame = NSMakeRect(22, acc.frame.size.height - 22, 200, 20);
+        [wa layout];
+    };
+    objc_setAssociatedObject(tri, "hs_toggle", toggle, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    objc_setAssociatedObject(label, "hs_toggle", toggle, OBJC_ASSOCIATION_COPY_NONATOMIC);
+    objc_setAssociatedObject(label, "hs_tri", tri, OBJC_ASSOCIATION_RETAIN_NONATOMIC);
+    tri.target = self;
+    tri.action = @selector(detailsToggled:);
+    label.target = self;
+    label.action = @selector(detailsToggled:);
+    toggle(NO);
+    return a;
+}
+
+- (void)detailsToggled:(NSButton *)sender {
+    void (^toggle)(BOOL) = objc_getAssociatedObject(sender, "hs_toggle");
+    NSButton *tri = objc_getAssociatedObject(sender, "hs_tri") ?: sender;
+    BOOL open = (sender == tri) ? tri.state == NSControlStateValueOn : tri.state != NSControlStateValueOn;
+    if (toggle) toggle(open);
+}
+
+// Test mode: render the alert off screen (never shown), collapsed and with its details open.
+- (void)snapshotAlert:(NSAlert *)a tag:(NSString *)tag {
+    if (!self.snapshotDir) return;
+    for (int open = 0; open < 2; open++) {
+        NSView *acc = a.accessoryView;
+        for (NSView *v in acc.subviews)
+            if ([v isKindOfClass:[NSButton class]] && objc_getAssociatedObject(v, "hs_toggle") && !objc_getAssociatedObject(v, "hs_tri")) {
+                void (^toggle)(BOOL) = objc_getAssociatedObject(v, "hs_toggle");
+                toggle(open == 1);
+            }
+        [a layout];
+        NSView *v = a.window.contentView;
+        [v layoutSubtreeIfNeeded];
+        NSBitmapImageRep *rep = [v bitmapImageRepForCachingDisplayInRect:v.bounds];
+        [v cacheDisplayInRect:v.bounds toBitmapImageRep:rep];
+        NSData *png = [rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}];
+        [png writeToFile:[self.snapshotDir stringByAppendingPathComponent:
+                          [NSString stringWithFormat:@"dialog-%@%@.png", tag, open ? @"-details" : @""]] atomically:YES];
+    }
+}
+
+- (void)errorDialog:(NSString *)ident title:(NSString *)title text:(NSString *)text details:(NSString *)details {
+    [self record:@{@"kind": @"dialog", @"id": ident, @"title": title, @"text": text, @"details": details,
+                   @"details_control": @"Show details"}];
+    if ([self testMode]) {
+        if (self.snapshotDir) [self snapshotAlert:[self errorAlert:title text:text details:details] tag:ident];
+        return;
+    }
+    [self hideStatus];
+    NSAlert *a = [self errorAlert:title text:text details:details];
+    [NSApp activateIgnoringOtherApps:YES];
+    if ([a runModal] == NSAlertSecondButtonReturn && self.logPath)
+        [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:self.logPath]];
+}
+
 // ------------------------------------------------------------------ startup
 
 - (NSString *)resource:(NSString *)name {
@@ -434,9 +548,11 @@ static NSString *const kTestTargetEnv = @"HS_APP_TEST_RESTORE_TARGET";
     [self showStatus:@"starting" text:@"Moonglade is starting…"];
     NSError *err = nil;
     if (![t launchAndReturnError:&err]) {
-        [self dialog:@"error" title:@"Moonglade couldn't start"
-                text:[NSString stringWithFormat:@"The play loop couldn't be started: %@\n\nLog: %@",
-                      err.localizedDescription, self.logPath] style:NSAlertStyleCritical showLog:YES];
+        [self errorDialog:@"error" title:@"Moonglade couldn't start"
+                     text:@"Moonglade couldn't start the game. Try opening it again; if it keeps happening, Show "
+                          @"details says what went wrong."
+                  details:[NSString stringWithFormat:@"The play loop couldn't be started: %@\n\nThe full log is at:\n%@",
+                           err.localizedDescription, self.logPath]];
         [self finish:1];
     }
     self.task = t;
@@ -572,14 +688,24 @@ static NSString *const kTestTargetEnv = @"HS_APP_TEST_RESTORE_TARGET";
     if (self.stopRequested && code >= 128 && ![[rec[@"cleanup"] objectForKey:@"remaining"] count]) [self finish:0];
     BOOL started = [rec[@"client_started"] boolValue] || self.clientStarted;
     NSString *title = started ? @"Moonglade stopped because of a problem" : @"Moonglade couldn't start";
-    NSString *stageLabel = nil;                        // the loading stage it stopped at (play-last.json, else ours)
-    if ([rec[@"stage"] isKindOfClass:[NSDictionary class]] && [rec[@"stage"][@"label"] isKindOfClass:[NSString class]])
+    NSString *stageId = nil, *stageLabel = nil;        // the loading stage it stopped at (play-last.json, else ours)
+    if ([rec[@"stage"] isKindOfClass:[NSDictionary class]] && [rec[@"stage"][@"label"] isKindOfClass:[NSString class]]) {
         stageLabel = rec[@"stage"][@"label"];
-    else if (!started && [self.stage[@"label"] isKindOfClass:[NSString class]] && ![self.stage[@"state"] isEqual:@"done"])
+        stageId = [rec[@"stage"][@"id"] isKindOfClass:[NSString class]] ? rec[@"stage"][@"id"] : nil;
+    } else if (!started && [self.stage[@"label"] isKindOfClass:[NSString class]] && ![self.stage[@"state"] isEqual:@"done"]) {
         stageLabel = self.stage[@"label"];
-    NSString *at = stageLabel ? [NSString stringWithFormat:@"It stopped at: %@.\n\n", stageLabel] : @"";
-    NSString *text = [NSString stringWithFormat:@"%@%@\n\nThe full log is at:\n%@", at, [self problemFrom:rec code:code], self.logPath];
-    [self dialog:@"error" title:title text:text style:NSAlertStyleCritical showLog:YES];
+        stageId = [self.stage[@"id"] isKindOfClass:[NSString class]] ? self.stage[@"id"] : nil;
+    }
+    NSString *friendlyStage = (stageId ? kFriendlyStage()[stageId] : nil) ?: (stageLabel ? @"Getting ready" : nil);
+    NSString *at = friendlyStage ? [NSString stringWithFormat:@" It stopped at: %@.", friendlyStage] : @"";
+    NSString *text = started
+        ? @"The game stopped unexpectedly. Open Moonglade again to keep playing."
+        : [NSString stringWithFormat:@"Moonglade couldn't get the game ready.%@ Try opening it again; if it keeps "
+                                     @"happening, Show details says what went wrong.", at];
+    NSString *stageLine = stageLabel ? [NSString stringWithFormat:@"Stage: %@\n\n", stageLabel] : @"";
+    NSString *details = [NSString stringWithFormat:@"%@%@\n\nThe full log is at:\n%@", stageLine,
+                         [self problemFrom:rec code:code], self.logPath];
+    [self errorDialog:@"error" title:title text:text details:details];
     [self finish:(code > 0 && code < 256) ? code : 1];
 }
 
@@ -1114,10 +1240,12 @@ static NSString *const kTestTargetEnv = @"HS_APP_TEST_RESTORE_TARGET";
     self.restoreTask = nil;
     [self loadBackups];
     self.backupsStatus.stringValue = ok
-        ? [NSString stringWithFormat:@"Restored the backup from %@. The safety backup of how things were is in the "
-                                     @"list (Before restore), if you want to undo it. Press Play to play.",
+        ? [NSString stringWithFormat:@"Restored. Your save is now from %@. The safety backup of how things were is "
+                                     @"in the list (Before restore) if you want to undo it. Press Play to play.",
                                      b[@"date_label"] ?: b[@"id"]]
-        : [NSString stringWithFormat:@"The restore didn't happen: %@", err];
+        : [NSString stringWithFormat:@"The restore didn't happen: %@%@", err, [err hasSuffix:@"."] ? @"" : @"."];
+    [self record:@{@"kind": @"backups_status", @"after": @"restore", @"ok": @(ok), @"text": self.backupsStatus.stringValue,
+                   @"visible": @(self.backupsWindow.visible), @"onscreen": @([self backupsWindowOnScreen])}];
     if (!ok && ![self testMode]) {
         NSAlert *a = [NSAlert new];
         a.alertStyle = NSAlertStyleWarning;

@@ -84,6 +84,14 @@ SMSG_CREATURE_QUERY_RESPONSE = 0x061
 CMSG_TRAINER_LIST = 0x1B0
 SMSG_TRAINER_LIST = 0x1B1
 
+# server text the player can read (seamless-experience client.login_text_clean; same Opcodes.h)
+SMSG_CHANNEL_NOTIFY = 0x099
+SMSG_CHAT_SERVER_MESSAGE = 0x291
+SMSG_AREA_TRIGGER_MESSAGE = 0x2B8
+SMSG_RAID_INSTANCE_MESSAGE = 0x2FA
+SMSG_DEFENSE_MESSAGE = 0x33A
+SMSG_MOTD = 0x33D
+
 OPCODE_NAMES = {v: k for k, v in list(globals().items()) if k.startswith(("CMSG_", "SMSG_")) and isinstance(v, int)}
 
 # --- ChatMsg (src/server/shared/SharedDefines.h enum ChatMsg) and Language (enum Language, same file)

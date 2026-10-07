@@ -63,12 +63,18 @@ Checks that need exclusive screen focus SHALL be marked `gui`. A full run SHALL 
 - Check: `report.gui_tier_rule`
 
 ### Requirement: Full-run timing is recorded and guarded
-The harness SHALL record per-check timing for every run, and an unfiltered full run SHALL NOT take more than 10% longer than the recorded baseline on the same machine, with no check removed or weakened. Time spent in backups-tier checks (which the baseline doesn't contain) SHALL be reported separately and excluded from the wall time compared with the baseline.
+The harness SHALL record per-check timing for every run. An unfiltered full run SHALL fail the timing guard only for a real slowdown: the checks recorded in the per-check timing baseline, taken together, SHALL NOT take more than 10% longer than their baseline times on the same machine, with no baseline check removed or weakened. Time spent building server binaries (`build.clean`, and any baseline-server rebuild inside a check) SHALL be reported separately and excluded from that comparison. Checks not in the baseline SHALL be reported with their times and SHALL NOT fail the guard; any single such check taking more than 180 s SHALL be listed as a warning in the summary. A check joins the baseline, with its time from the merging change's verifier full run, when that change merges; existing baseline times are never raised that way.
 
 #### Scenario: Timing summary and no regression
-- **GIVEN** the baseline full run (86 pass, ~1690 s at 9265c01) recorded in the repo
-- **WHEN** an unfiltered full run completes after this change
-- **THEN** results.json has a timing summary (per check, total, top 10, and the backups-tier total), the run has at least as many executed checks with the same ids (minus by-design GUI and backups-tier skips) as the baseline, and its wall time minus the backups-tier checks' time is ≤110% of the baseline
+- **GIVEN** a per-check timing baseline recorded in the repo (each check's time, with the run it came from)
+- **WHEN** an unfiltered full run completes
+- **THEN** results.json has a timing summary (per check, total, top 10, build time, backups-tier total, new checks and their times, warnings); every baseline check that the run's tiers execute ran (minus by-design GUI and backups-tier skips); and the sum of the executed baseline checks' times, minus build time, is ≤110% of the same checks' baseline sum
+- Check: `report.timing`
+
+#### Scenario: Slowdowns fail, new checks and rebuilds don't
+- **GIVEN** synthetic timing records against a known baseline
+- **WHEN** (a) the baseline checks are 15% slower in total, (b) they're unchanged but 300 s of new checks are added, (c) they're unchanged but a from-empty build adds 400 s, (d) a single new check takes 200 s
+- **THEN** (a) fails; (b) and (c) pass with the new time and build time reported; (d) passes with a warning naming the check
 - Check: `report.timing`
 
 ### Requirement: Leftover-process detection only counts our processes

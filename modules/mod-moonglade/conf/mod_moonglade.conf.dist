@@ -1,0 +1,19 @@
+#
+# mod-moonglade: Moonglade's single-player presentation (openspec/changes/seamless-experience).
+#
+[worldserver]
+
+###################################################################################################
+# MOONGLADE
+#
+#    Moonglade.QuietServerText
+#        Description: Entering the world shows no message of the day and none of the login announcements that
+#                     name a server, the core or the bot module (the core's motd packet and mod-playerbots' two
+#                     login lines; see src/MoongladeQuiet.cpp). Re-read on a config reload.
+#        Default:     1 - (Quiet)
+#                     0 - (Stock: the motd and the announcements are sent)
+
+Moonglade.QuietServerText = 1
+
+#
+###################################################################################################

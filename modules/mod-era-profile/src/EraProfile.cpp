@@ -1,5 +1,5 @@
 /*
- * mod-era-profile: Hearthstone "vanilla mode" (openspec/changes/m3-vanilla-mode).
+ * mod-era-profile: Moonglade "vanilla mode" (openspec/changes/m3-vanilla-mode).
  *
  * One switch, EraProfile.Enable (default 1), read once at server start. Two mechanisms (design.md "Hook research"):
  *

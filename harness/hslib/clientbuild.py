@@ -7,6 +7,9 @@
                        build with an error naming the mismatch).
         kind "mpq":    a patch MPQ built from repo sources (client-mods/...) by mpq.write_archive (the writer behind
                        `hs mpq write`); a "toc" entry is derived from the base client's own effective file at build time.
+        kind "files":  loose add-on files copied from repo sources (seamless-experience: the Moonglade wording add-on,
+                       Interface/AddOns/<name>/). Only under Interface/AddOns/ (never FrameXML or GlueXML), only new
+                       paths (a file the base client has is refused), each output hashed into the stamp.
 
 Rules
 - client/ is never written. It is verified against env/client-manifest.json (sizes + .exe/.dll hashes) before and
@@ -152,6 +155,47 @@ def mpq_files(rec: dict, base: Path) -> tuple[dict, dict]:
     return files, prov
 
 
+FILES_ROOT = "Interface/AddOns/"           # the only place a "files" record may write (an add-on folder)
+
+
+def _base_archives(base: Path) -> list[Path]:
+    return sorted(base.glob("Data/*.MPQ")) + sorted(base.glob("Data/*/*.MPQ"))
+
+
+def loose_files(rec: dict, base: Path, shadow_check: bool = False) -> dict:
+    """{dest rel path: (source Path, sha256)} for a "files" record. Refuses: a destination outside an add-on folder
+    under Interface/AddOns/, any FrameXML/GlueXML path, a folder named like Blizzard's own add-ons (Blizzard_*) or one
+    the base client already has loose, a path the base client already has, and a source outside the repo (resolved,
+    so a symlink or an absolute path can't escape). With shadow_check (the actual build, not the input hashing): also a
+    destination that any of the base client's archives holds (a loose file would shadow it)."""
+    out = {}
+    root = P.ROOT.resolve()
+    for dest, src in rec["files"].items():
+        rel = dest.replace("\\", "/")
+        parts = rel.split("/")
+        if (not rel.startswith(FILES_ROOT) or len(parts) < 4 or ".." in parts or "" in parts
+                or any(x.lower() in ("framexml", "gluexml") for x in parts)):
+            raise ClientBuildError(f"patch {rec['id']}: {dest} is not inside an add-on folder under {FILES_ROOT}")
+        folder = parts[2]
+        if folder.lower().startswith("blizzard_") or (base / FILES_ROOT / folder).exists():
+            raise ClientBuildError(f"patch {rec['id']}: {dest} is in add-on folder {folder}, which is Blizzard's or "
+                                   "already in the base client; refusing")
+        if (base / rel).exists():
+            raise ClientBuildError(f"patch {rec['id']}: {rel} already exists in the base client; refusing to overwrite it")
+        srcp = (P.ROOT / src).resolve()
+        if root not in srcp.parents or not srcp.is_file():
+            raise ClientBuildError(f"patch {rec['id']}: source {src} is not a file inside the repo; refusing")
+        out[rel] = (srcp, _sha_bytes(srcp.read_bytes()))
+    if shadow_check:
+        for arc_path in _base_archives(base):
+            with mpq.Archive(arc_path) as arc:
+                for rel in out:
+                    if arc.find(rel.replace("/", "\\")) is not None:
+                        raise ClientBuildError(f"patch {rec['id']}: {rel} is in the base client's "
+                                               f"{arc_path.relative_to(base)}; a loose copy would shadow it; refusing")
+    return out
+
+
 def archive_rel(rec: dict, loc: str) -> str:
     return rec["archive"].replace("{locale}", loc)
 
@@ -168,6 +212,8 @@ def inputs(base: Path, recs: list[dict]) -> dict:
         item = {"id": r["id"], "kind": r["kind"], "record_sha256": r["_sha256"]}
         if r["kind"] == "binary":
             item["base_file_sha256"] = sha256_file(base / r["file"])
+        elif r["kind"] == "files":
+            item["sources"] = {k: v[1] for k, v in loose_files(r, base).items()}
         else:
             _, prov = mpq_files(r, base)
             item["sources"] = {k: v["sha256"] for k, v in prov.items()}
@@ -267,6 +313,17 @@ def build(dest: Path = PLAY, base: Path = P.CLIENT, queue_dir: Path = QUEUE, ski
                 mpq.verify_written(target, files)
                 outputs[rel] = sha256_file(target)
                 a = {"patch": rec["id"], "archive": rel, "files": prov, "bytes": w["bytes"]}
+            elif rec["kind"] == "files":
+                written = {}
+                for rel, (src, sha) in loose_files(rec, base, shadow_check=True).items():
+                    target = tmp / rel
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copyfile(src, target)
+                    got = sha256_file(target)
+                    if got != sha:
+                        raise ClientBuildError(f"patch {rec['id']}: {rel} was written with SHA-256 {got}, expected {sha}", ev)
+                    outputs[rel] = written[rel] = got
+                a = {"patch": rec["id"], "files": written}
             else:
                 raise ClientBuildError(f"patch {rec['id']}: unknown kind {rec['kind']!r}", ev)
             applied.append(a)
