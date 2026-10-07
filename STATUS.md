@@ -1,3 +1,5 @@
+# STATUS
+
 ## ▶ Handoff / resume here (rewrite on every material change)
 _Updated 2026-10-07 13:15 (easy setup in verification; B31 fixed client.wording_addon)._
 
