@@ -65,10 +65,9 @@ except OSError as e:
 """
 
 
-def write_attempts(root: Path, via: str) -> list[dict]:
+def write_attempts(root: Path, via: str, loc: str) -> list[dict]:
     """A plain process's write attempts into an installed client (as `via` names it: the folder or a symlink)."""
     r = Path(via)
-    loc = clientbuild.locale(root)
     probe = root.parent / "probe-src.txt"
     probe.write_text("probe\n")
     sh = lambda c: ["/bin/sh", "-c", c]
@@ -114,8 +113,9 @@ def pristine_locked(ctx):
         link = SCRATCH / "link-to-install"
         link.unlink(missing_ok=True)
         link.symlink_to(inst)
-        ev["direct"] = write_attempts(inst, str(inst))
-        ev["via_symlink"] = write_attempts(inst, str(link))
+        loc = clientbuild.locale(inst)
+        ev["direct"] = write_attempts(inst, str(inst), loc)
+        ev["via_symlink"] = write_attempts(inst, str(link), loc)
         allowed = ([a["attempt"] for a in ev["direct"] if not a["refused"]]
                    + [a["attempt"] + " (via symlink)" for a in ev["via_symlink"] if not a["refused"]])
         ev["allowed"] = allowed
