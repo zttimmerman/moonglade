@@ -24,6 +24,9 @@ download with no checksum. Easy setup comes before M4 (Zach, 2026-10-06) and is 
   the dev-only baseline build heals itself.
 - **F33 (part):** only allowlisted checks may claim build time in the timing guard.
 - **F20:** pin the VMaNGOS download's sha256 too, alongside the client-data pin.
+- **Pristine-client protection (added 2026-10-07, Zach: "this should never happen again"):** `client/` is write-protected
+  at the file-system level, every client writer refuses it by identity, every run fingerprints it, and an agent hook blocks
+  linking/writing the project's client and runtime folders.
 
 Not in this change: Windows packages and releases (M5 item 8), going public (the `go-public` change).
 
@@ -34,9 +37,14 @@ Not in this change: Windows packages and releases (M5 item 8), going public (the
 - `play-launcher`: the player's play client is never rebuilt by a harness run (F28).
 - `server-build`: moved-repo detection; pinned data downloads (F30, F20).
 - `harness-reporting`: build-time allowlist for the timing guard (F33).
+- `play-client`: the pristine client can't be written (OS lock, writer guards, per-run fingerprint, agent hook).
 
 ## Data provenance (§7)
 No game data values. Downloads are pinned by URL + sha256 in fork.lock.
 
 ## Spec-change log
-(none yet)
+- 2026-10-07 (addition, tightening): new `play-client` requirements for pristine-client protection. Reason: at 08:22 the
+  verifier's ad-hoc A/B copy (scratch tree with `env/`, `client/` symlinked to the real ones) ran
+  `client.wording_addon` on main's code; the play-client build resolved into `client/` and replaced `client/Wow.exe` with
+  the patched one (the MPQ writer refused, the Wow.exe writer had no guard). Restored from `env/re/bin/Wow.exe`
+  (manifest sha256 aa63a575…) with Zach's OK at 10:19; the patched file is kept at `env/tmp/Wow.exe.patched-set-aside-0822`.
