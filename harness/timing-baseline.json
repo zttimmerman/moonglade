@@ -224,6 +224,13 @@
    "s": 39.72,
    "status_in_run": "pass"
   },
+  "client.login_text_clean": {
+   "build_s": 0.0,
+   "duration_s": 31.94,
+   "run": "seamless-experience",
+   "s": 31.94,
+   "status_in_run": "pass"
+  },
   "client.patch0001_recorded": {
    "build_s": 0.0,
    "duration_s": 0.04,
@@ -299,6 +306,13 @@
    "duration_s": 108.43,
    "run": "save-backups-verifier2",
    "s": 108.43,
+   "status_in_run": "pass"
+  },
+  "client.wording_addon": {
+   "build_s": 0.0,
+   "duration_s": 0.06,
+   "run": "seamless-experience",
+   "s": 0.06,
    "status_in_run": "pass"
   },
   "comp.add_remove": {
@@ -539,6 +553,13 @@
    "s": 151.62,
    "status_in_run": "pass"
   },
+  "login.charselect_wording": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "seamless-experience",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
   "login.continue_context": {
    "build_s": 0.0,
    "duration_s": 1.01,
@@ -551,6 +572,20 @@
    "duration_s": 0.03,
    "run": "save-backups-verifier2",
    "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "login.friendly_errors": {
+   "build_s": 0.0,
+   "duration_s": 123.4,
+   "run": "seamless-experience",
+   "s": 123.4,
+   "status_in_run": "pass"
+  },
+  "login.loading_overlay": {
+   "build_s": 0.0,
+   "duration_s": 73.7,
+   "run": "seamless-experience",
+   "s": 73.7,
    "status_in_run": "pass"
   },
   "login.no_glue_errors": {
@@ -771,6 +806,22 @@
    "source": "env/tmp/verifier2-20261006-134945/results-full.json",
    "started": "2026-10-06T17:50:12+00:00",
    "wall_s": 2447.7
+  },
+  "seamless-experience": {
+   "finished": "2026-10-07T06:38:25+00:00",
+   "machine": "arm64",
+   "repo_sha": "e081dc9bf2aa532a573544f0823bab30ca600000",
+   "source": "env/tmp/verifier-se2-20261007-014920/full-results.json",
+   "started": "2026-10-07T05:49:44+00:00",
+   "used_for": [
+    "client.login_text_clean",
+    "client.wording_addon",
+    "login.charselect_wording",
+    "login.friendly_errors",
+    "login.loading_overlay"
+   ],
+   "wall_s": 2921.5,
+   "why": "checks new with this change"
   },
   "seamless-experience-verifier1": {
    "finished": "2026-10-07T01:34:31+00:00",

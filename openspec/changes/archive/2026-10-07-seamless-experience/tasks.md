@@ -6,7 +6,7 @@
 - [x] 1.5 Wording add-on — verify: `client.wording_addon`
 - [x] 1.6 Launcher friendly errors + restore feedback — verify: `app.startup_failure`, `app.backups_window`
 - [x] 1.7 F29 old-name lines in patch inputs — verify: `repo.naming`
-- [ ] 1.8 Fix the flaky `client.wording_addon` (verifier cycle 1: 1 of 6 failed, camp_popup_shown missing) — verify: `client.wording_addon` ×10
-- [ ] 1.9 Per-check timing guard + per-check baseline — verify: `report.timing`
-- [ ] 2.1 Verifier pass + full harness
+- [x] 1.8 Fix the flaky `client.wording_addon` (verifier cycle 1: 1 of 6 failed, camp_popup_shown missing) — verify: `client.wording_addon` ×10
+- [x] 1.9 Per-check timing guard + per-check baseline — verify: `report.timing`
+- [x] 2.1 Verifier pass + full harness (cycle 2 PASS at e081dc9: full --force-clean 114/0, GUI and backups tiers ran, timing ratio 1.024; no flakes in 33 runs; cycle 1 FAIL fixed: wording_addon flake (intro cinematic) + per-check timing guard)
 - [ ] 2.2 (pending: Zach) Human: play the whole flow; nothing says server/realm/connecting/account
