@@ -32,10 +32,12 @@ Not in this change:
 - `login-screen`: loading overlay, character-select wording, friendly errors.
 - `client-connectivity`: no server-sent identity text; the in-game wording add-on.
 - `mac-app`: friendly launcher errors with details; restore feedback in the Backups window.
+- `harness-reporting`: the full-run timing guard catches real slowdowns only (per-check baseline).
 
 ## Data provenance (§7)
 No game data values. The stock strings being replaced are read from the installed client (GlueStrings/GlobalStrings),
 never typed from memory.
 
 ## Spec-change log
-(none yet)
+- 2026-10-07 (clarification, from verifier cycle 1): "the disconnect and lost-connection messages" in the wording add-on requirement now names the strings that exist in the in-world interface (IDLE_MESSAGE, ERR_COMSAT_DISCONNECT). B26 measured that FrameXML has no world-disconnect string: a disconnect returns to the glue screens, where the friendly error covers it. Not a loosening: the disconnect wording is still required, under login-screen.
+- 2026-10-07 (Zach's choice; **changes a guard, review at the M4 gate**): verifier cycle 1 FAILed `report.timing` (wall minus backups 2411 s against 1867.5 s). Measured against the save-backups verifier run: the 115 common checks were unchanged except the two that rebuild server binaries (`build.clean` +195 s from --force-clean; `core.login_logout_race_baseline` +164 s from its baseline rebuild), plus 229 s of new checks. The old guard (total wall against one fixed number) failed any change that adds checks or touches build inputs. Zach chose "catch real slowdowns only": a per-check baseline; build time and new checks are reported, not failed; a new check over 180 s is a warning.

@@ -12,7 +12,7 @@ Entering the world SHALL NOT produce a message of the day or any server or modul
 - Check: `client.login_text_clean`
 
 ### Requirement: In-game wording add-on
-The play client SHALL include a Moonglade add-on, enabled by default for the player's account, that replaces server-flavoured interface strings at runtime with game wording, at least: Logout → "Exit to Menu" (and its countdown text), and the disconnect and "lost connection" messages. It SHALL NOT modify FrameXML files and SHALL load with no Lua errors.
+The play client SHALL include a Moonglade add-on, enabled by default for the player's account, that replaces server-flavoured interface strings at runtime with game wording, at least: Logout → "Exit to Menu" (and its countdown text), and the in-world idle-disconnect and lost-connection messages that exist in the client's interface strings (IDLE_MESSAGE, ERR_COMSAT_DISCONNECT). Being disconnected from the world returns the player to the front menu, where the message is the login screen's friendly error ("Friendly errors on the front menu"). It SHALL NOT modify FrameXML files and SHALL load with no Lua errors.
 
 #### Scenario: Add-on loads and renames
 - **GIVEN** a scratch patched play client
