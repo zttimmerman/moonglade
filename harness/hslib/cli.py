@@ -120,6 +120,19 @@ def main(argv=None) -> int:
                                             "its own Moonglade-labelled icon) or off (no shim; ADR-0010)")
     dp.add_argument("value", nargs="?", choices=["accessory", "regular", "off"])
 
+    bs = sub.add_parser("bootstrap", help="set up from a fresh clone: check this Mac, Homebrew packages (Brewfile), "
+                                          "build the server, server data, databases, Wine, your client, the play "
+                                          "client and the app; skips what's done (./bootstrap wraps this)")
+    bs.add_argument("client", nargs="?", help="your WoW 3.3.5a (12340) enUS client: a .zip or a folder (optional "
+                                               "once client/ is installed)")
+    bs.add_argument("--yes", action="store_true", help="install missing Homebrew packages without asking")
+    bs.add_argument("--check", action="store_true", help="only check this Mac and the client; change nothing")
+    bs.add_argument("--allow-test-inject", action="store_true", help=argparse.SUPPRESS)   # setup.preflight only
+    dl = sub.add_parser("download", help="fetch one pinned, SHA-256-verified download (fork.lock); client-data is "
+                                         "also unpacked into data/client-data/")
+    dl.add_argument("name", choices=["client-data", "vmangos", "wine-runtime", "ghidra"])
+    sub.add_parser("vanilla-mode", help="show whether vanilla mode (the era profile) is on for ./play's world")
+
     sub.add_parser("app", help="build dist/Moonglade.app (double-clickable launcher for ./play; launcher-app) "
                                "and the Wine host shim env/dockshim/hsdock.dylib (ADR-0010)")
     tb = sub.add_parser("timing-baseline", help="per-check timing baseline (harness/timing-baseline.json): "
@@ -348,6 +361,23 @@ def main(argv=None) -> int:
     if a.cmd == "app":
         from . import app
         return app.cli()
+
+    if a.cmd == "bootstrap":
+        from . import bootstrap
+        return bootstrap.main(a.client, a.yes, a.check, a.allow_test_inject)
+
+    if a.cmd == "download":
+        from . import downloads
+        return downloads.cli(a.name)
+
+    if a.cmd == "vanilla-mode":
+        from . import settings
+        try:
+            _print(settings.vanilla_mode())
+        except settings.SettingsError as e:
+            log(str(e))
+            return 1
+        return 0
 
     if a.cmd == "timing-baseline":
         from . import timingbase

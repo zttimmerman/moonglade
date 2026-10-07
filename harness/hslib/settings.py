@@ -28,7 +28,22 @@ from . import config, paths as P
 
 FILE = P.ENV / "settings.json"
 ENV = "HS_SETTINGS"
-DEFAULT_SIZE = "normal"
+
+# Moonglade's defaults, in one place (easy-setup "The same setup as Zach's"): bootstrap writes the settings-file ones
+# into a new env/settings.json, the getters below fall back to them, and docs/setup.md's defaults table is generated
+# from this (defaults_table_md; setup.fresh_clone compares the two). Vanilla mode isn't a settings-file key: its
+# default is EraProfile.Enable in the module's .conf.dist (era-profile "Default is vanilla mode"); vanilla_mode()
+# reads it from the installed server, and this entry only states what it must be.
+DEFAULTS = {
+    "world_size": {"value": "normal", "setting": "World size", "means": "about 500 AI players",
+                   "show": "harness/hs world-size", "change": "harness/hs world-size <small, normal, large or a number>"},
+    "vanilla_mode": {"value": "on", "setting": "Vanilla mode", "means": "levels 1-60 at the pre-2.3 pace and difficulty",
+                     "show": "harness/hs vanilla-mode", "change": "no supported switch yet (see the README)"},
+    "client": {"value": "patched", "setting": "Game client", "means": "the play client with the Moonglade front menu",
+               "show": "harness/hs client-mode", "change": "harness/hs client-mode <stock or patched>"},
+}
+SETTINGS_FILE_KEYS = ("world_size", "client")       # the defaults bootstrap writes into env/settings.json
+DEFAULT_SIZE = DEFAULTS["world_size"]["value"]
 MIN_BOTS, MAX_BOTS = 10, 2000     # sanity bounds for a numeric size (accounts get created for every bot)
 
 
@@ -92,7 +107,7 @@ def play_world() -> dict:
 
 
 CLIENT_MODES = ("patched", "stock")
-DEFAULT_CLIENT = "patched"
+DEFAULT_CLIENT = DEFAULTS["client"]["value"]
 
 
 def client_mode() -> dict:
@@ -141,3 +156,47 @@ def set_dock_policy(value: str) -> dict:
     path().parent.mkdir(parents=True, exist_ok=True)
     path().write_text(json.dumps(data, indent=2) + "\n")
     return dock_policy()
+
+
+# ---------------------------------------------------------------- vanilla mode (read-only) and the defaults table
+
+ERA_CONF_DIST = P.SERVER_ETC / "modules" / "mod_era_profile.conf.dist"     # installed by `hs build`
+
+
+def vanilla_mode() -> dict:
+    """Vanilla mode for ./play's world: EraProfile.Enable in the installed module .conf.dist (configs are rendered from
+    it at every start), unless the population profile ./play uses overrides it (none does)."""
+    import re
+    try:
+        text = ERA_CONF_DIST.read_text()
+    except OSError:
+        raise SettingsError(f"{ERA_CONF_DIST} not found; build the server first (`harness/hs build`)") from None
+    m = re.search(r"^EraProfile\.Enable\s*=\s*\"?(\d+)\"?\s*$", text, re.M)
+    if not m:
+        raise SettingsError(f"{ERA_CONF_DIST} has no EraProfile.Enable line")
+    override = (config.PROFILES.get("population") or {}).get("era", {}).get("EraProfile.Enable")
+    val = override if override is not None else m.group(1)
+    return {"mode": "on" if str(val) == "1" else "off", "EraProfile.Enable": str(val), "file": str(ERA_CONF_DIST),
+            "play_profile_override": override}
+
+
+def defaults_table_md() -> str:
+    """docs/setup.md's defaults table (between its <!-- defaults:begin/end --> markers), generated from DEFAULTS."""
+    rows = ["| Setting | Default | What it means | Show it | Change it |", "|---|---|---|---|---|"]
+    for d in DEFAULTS.values():
+        rows.append(f"| {d['setting']} | **{d['value']}** | {d['means']} | `{d['show']}` | "
+                    + (f"`{d['change']}`" if d["change"].startswith("harness/") else d["change"]) + " |")
+    return "\n".join(rows) + "\n"
+
+
+def write_missing_defaults() -> dict:
+    """Bootstrap's last step: put the settings-file defaults into env/settings.json where a key is missing, through the
+    setters above. A value the player already chose is never changed."""
+    data = load()
+    written = {}
+    for k in SETTINGS_FILE_KEYS:
+        if k not in data:
+            v = DEFAULTS[k]["value"]
+            (set_world_size if k == "world_size" else set_client_mode)(v)
+            written[k] = v
+    return {"file": str(path()), "written": written, "kept": {k: data[k] for k in SETTINGS_FILE_KEYS if k in data}}

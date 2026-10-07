@@ -228,6 +228,40 @@ def read_stamp(dest: Path = PLAY) -> dict | None:
         return None
 
 
+def up_to_date(dest: Path = PLAY, base: Path = P.CLIENT, queue_dir: Path = QUEUE) -> dict:
+    """Would `build(dest)` be a no-op? Read-only: {"current": bool, "why": ...} (same comparison build() makes)."""
+    old = read_stamp(dest)
+    if not old or not dest.is_dir():
+        return {"current": False, "why": "no play client build stamp"}
+    try:
+        want = inputs(base, queue(queue_dir))
+    except (OSError, ClientBuildError, ValueError) as e:
+        return {"current": False, "why": f"inputs unreadable: {e}"}
+    if old.get("inputs") != want:
+        return {"current": False, "why": "patch inputs changed since the play client was built"}
+    bad = _outputs_intact(dest, old)
+    return {"current": not bad, "why": "up to date" if not bad else f"{len(bad)} output(s) changed"}
+
+
+def fingerprint(dest: Path = PLAY) -> dict | None:
+    """A play client's build, fingerprinted (play-launcher "Harness runs never rebuild the player's play client"): the
+    folder's inode, and for hs-build.json, Wow.exe and every stamped patch output its SHA-256, inode and mtime. A rebuild
+    replaces the folder (new inode) even when the bytes come out the same. None when there is no play client."""
+    dest = Path(dest)
+    if not dest.is_dir():
+        return None
+    st = read_stamp(dest) or {}
+
+    def one(rel):
+        f = dest / rel
+        if not f.is_file():
+            return None
+        s_ = f.stat()
+        return {"sha256": sha256_file(f), "ino": s_.st_ino, "mtime_ns": s_.st_mtime_ns}
+    files = {rel: one(rel) for rel in sorted({STAMP, "Wow.exe", *(st.get("outputs") or {})})}
+    return {"dir": str(dest), "dir_ino": dest.stat().st_ino, "files": files}
+
+
 def _outputs_intact(dest: Path, stamp: dict) -> list[dict]:
     bad = []
     for rel, want in (stamp.get("outputs") or {}).items():

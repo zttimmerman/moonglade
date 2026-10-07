@@ -6,6 +6,7 @@ the StringFileInfo string table. Opens the file read-only and never writes anyth
 """
 from __future__ import annotations
 
+import io
 import struct
 from pathlib import Path
 
@@ -114,10 +115,15 @@ def _children(b: bytes, rng):
         p = _align4(p + length)
 
 
-def version_info(path: Path) -> dict:
-    """Return the file's version resource: fixed file/product versions + string table."""
-    path = Path(path)
-    with path.open("rb") as f:
+def version_info(path: Path | bytes) -> dict:
+    """Return the file's version resource: fixed file/product versions + string table. `path` may also be the file's
+    bytes (easy-setup: bootstrap reads Wow.exe straight out of a client zip, writing nothing)."""
+    if isinstance(path, (bytes, bytearray)):
+        fobj, path = io.BytesIO(bytes(path)), "<bytes>"
+    else:
+        path = Path(path)
+        fobj = path.open("rb")
+    with fobj as f:
         hdr = _sections(f)
         if not hdr["rsrc_rva"]:
             raise PEError("PE has no resource section")

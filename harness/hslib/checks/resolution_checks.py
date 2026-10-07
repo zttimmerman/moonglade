@@ -208,8 +208,8 @@ def resolution_default(ctx):
     16:9 external, 21:9 ultrawide, 16:9 at scale 2 and 1) each get the right aspect and a size the client takes. End
     to end, ./play writes it into a fresh scratch play client and the real client opens with that aspect ratio
     (ultrawide at scale 2 and 16:9 at scale 1). The player's env/client-play/ is never written."""
-    zach = clientbuild.PLAY / "WTF" / "Config.wtf"
-    ev: dict = {"player_config_sha_before": _sha(zach)}
+    player_cfg = clientbuild.PLAY / "WTF" / "Config.wtf"
+    ev: dict = {"player_config_sha_before": _sha(player_cfg)}
     scratch = fresh_scratch("resunit")
     try:
         clientbuild.build(dest=scratch)
@@ -218,7 +218,7 @@ def resolution_default(ctx):
     finally:
         drop_scratch(scratch)
     e2e(ev)
-    ev["player_config_sha_after"] = _sha(zach)
+    ev["player_config_sha_after"] = _sha(player_cfg)
     require(ev["player_config_sha_after"] == ev["player_config_sha_before"], "the player's play client config changed",
             **ev)
     return ev
@@ -401,8 +401,8 @@ def config_gate(ctx):
     harness ./play stand-in run leaves every config file byte-identical and never writes the login file; the same run
     on a copy without the stand-in flag (ungated) does write gxApi, so the run would write if it weren't gated; and
     the player's own Config.wtf is unchanged."""
-    zach = clientbuild.PLAY / "WTF" / "Config.wtf"
-    ev: dict = {"player_config_sha_before": _sha(zach)}
+    player_cfg = clientbuild.PLAY / "WTF" / "Config.wtf"
+    ev: dict = {"player_config_sha_before": _sha(player_cfg)}
     require_given_clear(ev)
     scratch = fresh_scratch("cfggate")
     try:
@@ -429,7 +429,7 @@ def config_gate(ctx):
     finally:
         drop_scratch(scratch)
         drop_scratch(P.ENV / "check-play-cfggate-copy")
-    ev["player_config_sha_after"] = _sha(zach)
+    ev["player_config_sha_after"] = _sha(player_cfg)
     require(ev["player_config_sha_after"] == ev["player_config_sha_before"], "the player's play client config changed",
             **ev)
     return ev

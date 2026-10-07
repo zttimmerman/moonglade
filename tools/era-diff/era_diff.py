@@ -96,7 +96,12 @@ def sha256(path):
 def ensure_vmangos():
     if not VM_DB.exists():
         if not VM_ZIP.exists():
-            sys.exit(f"missing {VM_ZIP}; fetch it first (fork.lock vmangos_db_url)")
+            sys.exit(f"missing {VM_ZIP}; fetch it first: harness/hs download vmangos")
+        want = fork_lock().get("vmangos_db_sha256")
+        got = sha256(VM_ZIP)
+        if got != want:          # fork.lock pins the zip (easy-setup, F20): never unpack an unverified file
+            sys.exit(f"{VM_ZIP}: SHA-256 {got} isn't the pinned vmangos_db_sha256 {want}; "
+                     "delete it and run `harness/hs download vmangos`")
         VM_DIR.mkdir(parents=True, exist_ok=True)
         with zipfile.ZipFile(VM_ZIP) as z:
             z.extractall(VM_DIR)

@@ -14,7 +14,7 @@ STALE_CONFIG = (
     'SET realmlist "logon.example.com"\r\n'
     'SET gxResolution "1920x1080"\r\n'
     'SET realmName "Some Old Realm"\r\n'
-    'SET accountName "zach"\r\n'
+    'SET accountName "someone"\r\n'
     'SET SoundOutputDevice "Primary Sound Driver"\r\n'
 )
 

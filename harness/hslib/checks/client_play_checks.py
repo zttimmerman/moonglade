@@ -279,8 +279,8 @@ def player_path_run() -> dict:
     own record of the client it selected (dir, exe, exe sha256) and the player's Config.wtf hash before/after."""
     from .play_checks import StandIn
     from .. import play
-    zach = clientbuild.PLAY / "WTF" / "Config.wtf"
-    ev: dict = {"player_config_sha_before": sha256_file(zach) if zach.exists() else None,
+    player_cfg = clientbuild.PLAY / "WTF" / "Config.wtf"
+    ev: dict = {"player_config_sha_before": sha256_file(player_cfg) if player_cfg.exists() else None,
                 "env_overrides_present": [k for k in ("HS_PLAY_CLIENT_DIR", "HS_TEST_OWN_CLIENT", "HS_CLIENT_DIR")
                                           if os.environ.get(k)]}
     require(not ev["env_overrides_present"], "GIVEN not met: a client override is set in the harness environment", **ev)
@@ -297,7 +297,7 @@ def player_path_run() -> dict:
         ev |= {"exit_code": rc, "record_client": {k: (rec.get("client") or {}).get(k) for k in ("mode", "dir", "exe",
                                                                                               "exe_sha256")},
                "gate": rec.get("resolution_gate"), "client_config": (rec.get("prepare") or {}).get("client_config"),
-               "player_config_sha_after": sha256_file(zach) if zach.exists() else None}
+               "player_config_sha_after": sha256_file(player_cfg) if player_cfg.exists() else None}
         return ev
     finally:
         s.cleanup()

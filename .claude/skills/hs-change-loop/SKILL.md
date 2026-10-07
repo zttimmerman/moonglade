@@ -8,7 +8,7 @@ description: Moonglade's unit-of-work loop. OpenSpec change → branch → build
 CLAUDE.md §4/§6/§9 are the rules; this is the practiced procedure.
 
 ## Start a change
-1. `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH` (openspec needs Node 20), then `openspec new change <id>`.
+1. Put Node 20 on PATH (openspec needs it; with nvm: `nvm use 20`), then `openspec new change <id>`.
 2. Write proposal.md, `specs/<capability>/spec.md`, design.md and tasks.md. Every scenario needs a `Check: \`<id>\`` line or `[human-verify]` plus a reason. Data values cite sources (§7), never memory. Explain user-facing choices in plain gameplay language.
 3. `openspec validate <id>`.
 4. `git checkout -b change/<id>` from `main`; add `<id>` to `harness/active-changes`; commit; `git push -u origin change/<id>`.

@@ -4,7 +4,6 @@ import hashlib
 import shutil
 import subprocess
 import tarfile
-import urllib.request
 
 from . import paths as P
 from .util import log
@@ -38,21 +37,30 @@ def install(force: bool = False) -> dict:
     free_gb = shutil.disk_usage(P.ROOT).free / 2**30
     if free_gb < 1.0:
         raise WineInstallError(f"only {free_gb:.1f} GB free; need about 1 GB to download and unpack the runtime")
-    tmp = P.ENV / "wowsilicon-runtime.tar.xz.part"
-    log(f"downloading {url}")
-    with urllib.request.urlopen(url, timeout=120) as r, open(tmp, "wb") as fh:
-        shutil.copyfileobj(r, fh)
-    got = _sha256(tmp)
-    if got != want:
-        tmp.unlink()
-        raise WineInstallError(f"SHA-256 mismatch: got {got}, fork.lock pins {want}; refusing to unpack")
-    if RUNTIME_DIR.exists():
-        shutil.rmtree(RUNTIME_DIR)
-    RUNTIME_DIR.mkdir(parents=True)
-    with tarfile.open(tmp, "r:xz") as tf:
-        tf.extractall(RUNTIME_DIR, filter="tar")
-    tmp.unlink()
-    MARKER.write_text(want + "\n")
+    from .downloads import DownloadError, obtain
+    try:
+        got = obtain("wine-runtime", lock)        # pinned + SHA-256-verified (a mismatch is removed, never unpacked)
+    except DownloadError as e:
+        raise WineInstallError(str(e)) from None
+    tmp = got["path"]
+    # unpack next to the destination and rename into place when complete: a killed install leaves only the temp
+    # folder, which the next run removes
+    unpack = RUNTIME_DIR.with_name(RUNTIME_DIR.name + ".unpack")
+    shutil.rmtree(unpack, ignore_errors=True)
+    unpack.mkdir(parents=True)
+    try:
+        with tarfile.open(tmp, "r:xz") as tf:
+            tf.extractall(unpack, filter="tar")
+        (unpack / MARKER.name).write_text(want + "\n")
+        if RUNTIME_DIR.exists():
+            shutil.rmtree(RUNTIME_DIR)
+        unpack.rename(RUNTIME_DIR)
+    except BaseException:
+        shutil.rmtree(unpack, ignore_errors=True)
+        raise
+    if got["delete_after"]:
+        tmp.unlink(missing_ok=True)
+    got = got["sha256"]
     ver = subprocess.run([str(wine), "--version"], capture_output=True, text=True).stdout.strip()
     if not ver:
         raise WineInstallError(f"unpacked runtime's wine doesn't run: {wine}")
