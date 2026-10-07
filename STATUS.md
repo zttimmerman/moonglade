@@ -156,7 +156,8 @@ Audit of everything created so far (specs, ADRs, tasks, kickoff split, harness c
 - **M0 specs, design, tasks, ADR-0001/0002/0003, verifier agent, harness code**: no vanilla or VMaNGOS-as-codebase assumption found. All target 3.3.5a build 12340 (client-data v20.0 is 3.3.5a data).
 
 ## Open questions for Zach
-When convenient: play M2 + M3 (living world, companions, smoothness, vanilla pacing/elites); first double-click of `Moonglade.app` once its verifier passes.
+Done by Zach (2026-10-07): in-client login screen (human-verify) ✓; Testguy confirmed after the DB recovery ✓. **After the seamless verifier finishes** (it fingerprints them), ask Zach for a final OK to drop `hsbk_t` + `acore_characters_broken` and clear env/tmp scratch; keep the b25-safety dumps until then.
+Still to play (one ~45 min session): M2 living world (starting zone + capital), M2 companions (2 companions, ~15 min questing), M2 smoothness (10 min capital + 10 min starting zone), M3 vanilla mode (new character, an elite area); plus the M1 offline demo (Wi-Fi off, play briefly, quit, nothing left running).
 
 ## Environment notes
 - Node 20 needed for `openspec` (`~/.nvm/versions/node/v20.20.1/bin`); default shell node is 16.

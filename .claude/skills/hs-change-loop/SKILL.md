@@ -43,7 +43,12 @@ Builders run this before handing over and put a short pass/fail line per item in
 
 ## Verify
 - Use the `verifier` agent type and give it only: spec deltas, `git diff <last-verified>..HEAD -- harness/ …`, and the harness command.
-- **Run budget (Zach, 2026-10-05; replaces the 2026-10-02 two-full-runs rule): ONE full run per change, done by the verifier.** Builders run the **quick tier** plus **the checks the change adds or touches (≥3 repeats)** and their counterexamples, plus the pre-verification checklist. **No builder full run.** The verifier does the **single unfiltered full run** (`--force-clean` when build inputs changed), **≥5 repeats of the added/touched checks**, its own counterexamples, and independent checks outside the harness. If a verifier FAIL leads to a fix round, the builder again runs quick + affected only; the next verifier does the full run. Why: the builder's full run duplicated the verifier's (~25 min per change, ~50 with a fix round); the shift-left checklist covers what the builder run used to catch.
+- **Run budget (Zach, 2026-10-07; verification length was the biggest drag on velocity). Target: a verifier cycle ≤ 90 min.**
+  - **Builder:** quick tier + each new/changed check ≥3× + one counterexample per new/changed check + the pre-verification checklist. No full run.
+  - **Verifier:** ONE unfiltered full run (`--force-clean` only when server build inputs changed); each new/changed check 3× (5× only for a check with a flake history); **no extra repeats of untouched checks** (the full run covers them); **spot-check 2–3** of the builder's counterexamples or its own, chosen for risk, not all; independent reading of risky code paths. Brief the verifier with this budget.
+  - On a FAIL: the builder fixes and reruns quick + affected; a fresh verifier repeats the budget above.
+  - Flakiness: the weekly (or pre-gate) full ×3 sweep catches what fewer repeats miss. A failure in any run is still P0.
+  - Why: cycles reached 2.5–3 h each (full run + 5–10× repeats of GUI/client checks + full counterexample sets), doubling on a FAIL.
 - **Harness-wide flakiness:** a separate "full ×3" before each milestone gate or about weekly, not per change. A failure in any run is P0.
 - On FAIL: fix, run the full harness, then a **fresh** verifier (new context). After 3 failed cycles on one task, mark it blocked in STATUS.md and move on.
 - Weakened checks count as FAIL. Spec changes need a dated entry in the proposal's "Spec-change log" with the reason; tightenings and clarifications are fine, loosenings get reviewed at the next human gate.
