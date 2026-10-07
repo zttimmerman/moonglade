@@ -18,7 +18,8 @@ Rules
 - Deterministic: the build stamp (<dest>/hs-build.json) records the base manifest hash, each patch record's and
   source's hash, and every output hash. A rebuild with identical inputs (and intact outputs) is a no-op.
 - Player state survives rebuilds: WTF/, Screenshots/, Cache/, Logs/ and Errors/ of an existing play client are moved
-  into the new tree. The first build carries client/WTF over (a copy; never the other way).
+  into the new tree. The first build carries client/WTF over (a copy; never the other way). Then the first-start
+  settings (clientcfg.FIRST_START_SETTINGS + realmName) are added to WTF/Config.wtf where they aren't set yet.
 - Revert: `hs client-build --skip 0001` (or deleting env/client-play/, or the launcher setting client=stock).
 """
 from __future__ import annotations
@@ -320,7 +321,9 @@ def _check_clone(tmp: Path, src: Path, ev: dict) -> None:
 
 
 def build(dest: Path = PLAY, base: Path = P.CLIENT, queue_dir: Path = QUEUE, skip: tuple[str, ...] = (),
-          force: bool = False) -> dict:
+          force: bool = False, first_start: bool = True) -> dict:
+    """Build (or keep, when current) the play client. first_start=False leaves out the first-start settings
+    (client.first_start_settings' counterexample only; no entry point passes it)."""
     t0 = time.time()
     base, dest = Path(base), Path(dest)
     tmp = dest.with_name(dest.name + f".build-{os.getpid()}")
@@ -399,6 +402,15 @@ def build(dest: Path = PLAY, base: Path = P.CLIENT, queue_dir: Path = QUEUE, ski
         if "WTF" not in state and (base / "WTF").is_dir():
             shutil.copytree(base / "WTF", tmp / "WTF", symlinks=True)
             state["WTF"] = f"carried over (copied) from {base / 'WTF'}"
+        # first-start settings, only the ones not set yet (clientcfg.FIRST_START_SETTINGS: no intro movie, no
+        # EULA/TOS screens before the login, no hardware detection replacing the video settings, the realm chosen)
+        if first_start:
+            from . import clientcfg
+            want_settings, realm = clientcfg.first_start_settings()
+            cfg = tmp / "WTF" / "Config.wtf"
+            state["first_start_settings"] = clientcfg.add_missing_settings(cfg, want_settings) | {"realm": realm}
+        else:
+            state["first_start_settings"] = {"skipped": "first_start=False (test counterexample)"}
         stamp = {"inputs": want, "outputs": outputs, "applied": applied, "state": state,
                  "built_at": time.strftime("%Y-%m-%dT%H:%M:%S%z")}
         (tmp / STAMP).write_text(json.dumps(stamp, indent=2) + "\n")

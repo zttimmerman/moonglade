@@ -155,6 +155,34 @@ def load_manifest(path: Path = P.CLIENT_MANIFEST) -> dict | None:
         return None
 
 
+def manifest_client_dir(client: Path) -> str:
+    """The manifest's `client_dir`: relative to the repo when the install is inside it (normally "client"), so a
+    moved or renamed repo folder doesn't leave a stale absolute path (B32: the field still named the
+    pre-rename project folder); absolute only for an install outside the repo."""
+    c = Path(os.path.abspath(client))
+    try:
+        return str(c.relative_to(Path(os.path.abspath(P.ROOT))))
+    except ValueError:
+        return str(c)
+
+
+def heal_manifest_client_dir(manifest_path: Path = P.CLIENT_MANIFEST, client: Path = P.CLIENT) -> dict:
+    """Rewrite only the manifest's `client_dir` field when it isn't manifest_client_dir(client) (an older absolute
+    path). Reads and writes the manifest file only (env/), never anything in the install folder."""
+    m = load_manifest(Path(manifest_path))
+    if m is None:
+        return {"healed": False, "reason": "no manifest"}
+    want = manifest_client_dir(client)
+    if m.get("client_dir") == want:
+        return {"healed": False, "client_dir": want}
+    old = m.get("client_dir")
+    m["client_dir"] = want
+    tmp = Path(manifest_path).with_name(Path(manifest_path).name + ".tmp")
+    tmp.write_text(json.dumps(m, indent=2))
+    os.replace(tmp, manifest_path)
+    return {"healed": True, "from": old, "to": want}
+
+
 def mismatches(client: Path, manifest: dict, hash_binaries: bool = True) -> list[dict]:
     """Differences between client/ and the manifest (missing files, wrong sizes, wrong hashes).
     Config-managed files (realmlist.wtf) are skipped; client-config rewrites them by design."""
@@ -247,6 +275,7 @@ def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> 
             if not bad:
                 log("client/ already matches env/client-manifest.json; skipping extraction")
                 result = {"action": "skipped (client/ matches manifest)", "client_dir": str(client),
+                          "manifest_client_dir": heal_manifest_client_dir(manifest_path, client),
                           "manifest": str(manifest_path), "source_now": before,
                           "wow_exe_version": manifest.get("wow_exe_version")}
                 if run_config:
@@ -344,7 +373,7 @@ def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> 
     manifest = {
         "schema": 1,
         "installed_at": _now(),
-        "client_dir": str(client),
+        "client_dir": manifest_client_dir(client),
         "source": {**src_info, "before": before, "after": after},
         "wow_exe_version": {"file_version": ver["file_version"], "product_version": ver["product_version"],
                             "strings": ver["strings"]},

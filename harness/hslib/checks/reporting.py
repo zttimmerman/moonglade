@@ -353,7 +353,9 @@ def timing_problems(doc: dict, extra: list, wall_s: float, baseline: dict | None
         if t.get(k) != want.get(k):
             probs.append(f"the timing summary's {k} ({t.get(k)}) doesn't match the records ({want.get(k)})")
     ev = {"timing_summary_checks": len(per), "records": len(recs), "top10": top, "wall_s_now": round(wall_s, 1),
-          "backups_tier_s": bk_s, "build_s": want["build_s"], "build_by_check_s": want["build_by_check_s"],
+          # the run's total build time, under a name that isn't `build_s` (B32: report.timing's own record would
+          # otherwise read as a check claiming build time, runner.build_claim_warnings)
+          "backups_tier_s": bk_s, "run_build_s": want["build_s"], "build_by_check_s": want["build_by_check_s"],
           "new_checks_s": want.get("new_checks_s"), "warnings": want.get("warnings"),
           "full_tier_unfiltered": m.get("full_run") is True and m.get("tier") == "full"}
     if not ev["full_tier_unfiltered"]:
@@ -403,7 +405,8 @@ def synthetic_timing_cases() -> dict:
     checks; (c) unchanged + a from-empty build adding 400 s (build.clean, and the allowlisted race baseline's own
     rebuild via evidence build_s); (d) one new check of 200 s; (e) the non-allowlisted t.a 600 s slower, claiming
     600 s of build_s; (f) the race baseline claiming its real rebuild time (its record in harness/timing-baseline.json:
-    duration and build_s). Each case's verdict is computed by the guard's own code (runner.timing_summary +
+    duration and build_s); (g) report.timing's own record over case (c) raises no claim warning (its run total is
+    `run_build_s`, not a claim). Each case's verdict is computed by the guard's own code (runner.timing_summary +
     timing_problems)."""
     from .. import runner
     from ..registry import Check
@@ -429,8 +432,8 @@ def synthetic_timing_cases() -> dict:
         meta["timing"] = runner.timing_summary(recs, wall, reg, b)
         probs, ev = timing_problems({"meta": meta, "checks": recs}, [], wall, b, reg)
         return {"problems": probs, "now_sum_s": ev.get("now_sum_s"), "limit_s": ev.get("limit_s"),
-                "build_s": ev.get("build_s"), "build_by_check_s": ev.get("build_by_check_s"),
-                "new_checks_s": ev.get("new_checks_s"), "warnings": ev.get("warnings")}
+                "build_s": ev.get("run_build_s"), "build_by_check_s": ev.get("build_by_check_s"),
+                "new_checks_s": ev.get("new_checks_s"), "warnings": ev.get("warnings"), "_ev": ev}
     cases = {
         "a_baseline_15pct_slower": run([r("t.a", 690.0), r(RACE_BASELINE, 460.0), r("build.clean", 20.0)]),
         "b_new_checks_300s": run([r("t.a", 600.0), r(RACE_BASELINE, 400.0), r("build.clean", 20.0),
@@ -448,6 +451,14 @@ def synthetic_timing_cases() -> dict:
                                                      r("build.clean", 20.0)], base_f) | {"real_record": real}
     else:
         cases["f_race_baseline_real_rebuild"] = {"problems": [real["error"]], "real_record": real}
+    # (g) report.timing's own record (its evidence over case c, a run with 420 s of build time) next to the other
+    # records: the guard's summary of the run's build time is not a claim, so no warning names report.timing
+    g_recs = [r("t.a", 600.0), r(RACE_BASELINE, 550.0, build=150.0), r("build.clean", 270.0)]
+    g_self = {"id": runner.TIMING_SELF, "status": "pass", "duration_s": 0.5, "evidence": cases["c_from_empty_build_400s"]["_ev"]}
+    cases["g_timing_self_record"] = {"warnings": runner.build_claim_warnings(g_recs + [g_self]),
+                                     "self_run_build_s": g_self["evidence"].get("run_build_s")}
+    for v in cases.values():
+        v.pop("_ev", None)
     a, b_, c, d, e, f = (cases[k] for k in ("a_baseline_15pct_slower", "b_new_checks_300s", "c_from_empty_build_400s",
                                             "d_new_check_200s", "e_unallowlisted_claim_600s",
                                             "f_race_baseline_real_rebuild"))
@@ -461,6 +472,8 @@ def synthetic_timing_cases() -> dict:
                                  and any("t.big" in w for w in d["warnings"] or []),
         "e_fails_and_warns_about_the_claim": bool(e["problems"]) and claim(e, "t.a")
                                              and not (e["build_by_check_s"] or {}).get("t.a"),
+        "g_own_record_is_not_a_claim": cases["g_timing_self_record"]["self_run_build_s"] == 420.0
+                                        and not cases["g_timing_self_record"]["warnings"],
         "f_passes_reporting_the_build_time": not f["problems"] and "error" not in real
                                              and (f.get("build_by_check_s") or {}).get(RACE_BASELINE) == real.get("build_s")
                                              and not claim(f, RACE_BASELINE),

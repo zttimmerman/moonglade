@@ -27,11 +27,17 @@ CLONE = SCRATCH_ROOT / "clone"           # fixed path: a later run's server buil
 # harness env vars a scratch repo's commands must not inherit (they'd point at the main checkout's test setup)
 SCRUB_ENV = ("PYTHONPATH", "HS_SETTINGS", "HS_PROFILE", "HS_PLAY_CLIENT_DIR", "HS_CLIENT_DIR", "HS_TEST_OWN_CLIENT",
              "HS_GLUE_TEST", "HS_PLAY_SKIP_PATCHES", "HS_PLAYER_FILE", "HS_PLAYER_DEFAULT_NAME", "HS_BACKUP_DIR",
-             "HS_DOWNLOAD_CACHE", "HS_BOOTSTRAP_TEST", "HS_WINE", "HS_RE_DIR")
+             "HS_DOWNLOAD_CACHE", "HS_BOOTSTRAP_TEST", "HS_WINE", "HS_RE_DIR",
+             "HS_TEST_PRISTINE_CLIENT", "HS_TEST_PRISTINE_MUTATE")
+# and every test switch by prefix (B32: report.client_pristine's self-test runs nested `hs run`s with
+# $HS_TEST_PRISTINE_CLIENT set, and a scratch clone's commands must never see it or any later HS_TEST_* switch)
+SCRUB_PREFIXES = ("HS_TEST_", "HSDOCK_TEST")
 
 
 def scratch_env(**extra) -> dict:
-    env = {k: v for k, v in os.environ.items() if k not in SCRUB_ENV and not k.startswith("HSDOCK_TEST")}
+    """The environment for a scratch repo's commands: the harness's switches removed (SCRUB_ENV, SCRUB_PREFIXES),
+    then `extra` added."""
+    env = {k: v for k, v in os.environ.items() if k not in SCRUB_ENV and not k.startswith(SCRUB_PREFIXES)}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     return env | {k: str(v) for k, v in extra.items()}
 

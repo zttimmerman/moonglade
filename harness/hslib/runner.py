@@ -460,6 +460,20 @@ def select(reg: dict, tier: str, only: list[str] | None, gui_skip_ids: set | fro
     )
 
 
+def gui_preflight(tier: str, only: list[str] | None, ignore: bool, probe) -> str | None:
+    """`hs run`'s start-up refusal (B32): an unfiltered full/slow/gui run whose GUI preconditions already fail (screen
+    locked, display asleep, low battery on battery power; guienv.preflight_problem over `probe()`) doesn't start.
+    Returns the one-line reason, or None to go ahead (filtered or quick/backups runs, or `ignore`)."""
+    if ignore or only or tier not in ("full", "slow", "gui"):
+        return None
+    from .guienv import preflight_problem
+    why = preflight_problem(probe())
+    if not why:
+        return None
+    return (f"[hs] refusing to start an unfiltered {tier} run: {why}; its GUI checks would fail. Fix that and "
+            "rerun, or pass --ignore-gui-preflight to run anyway.")
+
+
 def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full",
         force_clean: bool = False) -> int:
     # F12: a mysqld stall ("Semaphore wait > 600 s") happened while the display slept; hold a no-sleep assertion

@@ -53,19 +53,7 @@ PLAY_LINES_RENAMES = ((OLD_NAME, NEW_NAME),)
 
 # ---------------------------------------------------------------- environment probes
 
-def screen_locked() -> bool:
-    out = subprocess.run(["/usr/sbin/ioreg", "-n", "Root", "-d1", "-a"], capture_output=True, text=True).stdout
-    m = re.search(r"<key>CGSSessionScreenIsLocked</key>\s*<(true|false)/>", out)
-    c = re.search(r"<key>IOConsoleLocked</key>\s*<(true|false)/>", out)
-    return bool((m and m.group(1) == "true") or (c and c.group(1) == "true"))
-
-
-def display_asleep() -> bool | None:
-    r = subprocess.run(["osascript", "-l", "JavaScript", "-e",
-                        'ObjC.import("CoreGraphics"); $.CGDisplayIsAsleep($.CGMainDisplayID())'],
-                       capture_output=True, text=True, timeout=20)
-    v = r.stdout.strip()
-    return None if v not in ("0", "1", "true", "false") else v in ("1", "true")
+from ..guienv import display_asleep, screen_locked  # noqa: E402  (moved to guienv, B32)
 
 
 def display_state() -> dict:

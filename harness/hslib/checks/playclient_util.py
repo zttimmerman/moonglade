@@ -49,7 +49,9 @@ def fresh_scratch(tag: str) -> Path:
 # client.resolution_default's back buffer stayed 1024x768 despite the gxResolution the launch wrote; with hwDetect "0" it
 # took it). Plus realmName (the realm's name, realm_name()): without it the client shows the realm list after the
 # login instead of character select (measured B31: login.friendly_errors' Try again sat in COP_GET_REALMS polling).
-SEED_SETTINGS = {"movie": "0", "readEULA": "1", "readTOS": "1", "hwDetect": "0"}
+# Since B32 the play-client build itself adds them where absent (clientcfg.FIRST_START_SETTINGS, the same values);
+# seed_settings(fresh=True) still drops the carried-over WTF and seeds them, so a check never depends on client/WTF.
+from ..clientcfg import FIRST_START_SETTINGS as SEED_SETTINGS  # noqa: E402
 
 
 def _is_scratch(d: Path) -> bool:
@@ -89,24 +91,12 @@ def seed_settings(client_dir: Path, fresh: bool = False) -> dict:
                   "saved_variables_created": sv, "realm": realm}
 
 
-REALM_SQL = P.CORE_SRC / "data" / "sql" / "base" / "db_auth" / "realmlist.sql"
-
-
 def realm_name() -> dict:
-    """Realm 1's name (the client's WTF/Account/<account>/<realm>/ folder): from the auth database when it's up,
-    else from AzerothCore's base SQL that created it (the harness never renames the realm)."""
-    import re
-    from .. import db, stack
-    try:
-        if stack.port_open(P.MYSQL_PORT):
-            rows = db.query("SELECT name FROM realmlist WHERE id=1", "auth")
-            if rows and rows[0] and rows[0][0]:
-                return {"name": rows[0][0], "source": "auth.realmlist"}
-    except Exception:  # noqa: BLE001  (fall back to the base SQL)
-        pass
-    m = re.search(r"\(1,'([^']+)'", REALM_SQL.read_text(errors="replace"))
-    require(m, "can't find realm 1's name", file=str(REALM_SQL))
-    return {"name": m.group(1), "source": str(REALM_SQL.relative_to(P.ROOT))}
+    """Realm 1's name (clientcfg.realm_name: the auth database when it's up, else AzerothCore's base SQL)."""
+    from ..clientcfg import realm_name as _rn
+    r = _rn()
+    require(r.get("name"), "can't find realm 1's name", realm=r)
+    return r
 
 
 def build_scratch(dest: Path, **kw) -> dict:
@@ -144,8 +134,9 @@ def require_seeded(client_dir: Path, ev: dict | None = None) -> dict:
 
 class PlayRun:
     def __init__(self, tag: str, mode: str = "patched", glue_test: dict | None = None, scratch: Path | None = None,
-                 extra_env: dict | None = None):
+                 extra_env: dict | None = None, seed: bool = True):
         self.tag = tag
+        self.seed = seed      # False: the scratch keeps the settings its build wrote (client.first_start_settings)
         self.tmp = Path(tempfile.mkdtemp(prefix=f"hs-pc-{tag}-")).resolve()
         self.settings = self.tmp / "settings.json"
         self.settings.write_text(json.dumps({"client": mode}))
@@ -168,7 +159,11 @@ class PlayRun:
             # An unbuilt scratch is built here (the play loop then finds it current); a built one gets the settings
             # (idempotent: the same lines are set again).
             from .. import clientbuild
-            if clientbuild.read_stamp(self.scratch) is None:
+            if not self.seed:
+                require(clientbuild.read_stamp(self.scratch) is not None, "PlayRun(seed=False) needs a built scratch",
+                        scratch=str(self.scratch))
+                self.seeded = {"skipped": "seed=False: the settings come from the play-client build"}
+            elif clientbuild.read_stamp(self.scratch) is None:
                 self.seeded = build_scratch(self.scratch)["seeded"]
             else:
                 self.seeded = seed_settings(self.scratch)

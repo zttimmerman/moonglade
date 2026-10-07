@@ -26,6 +26,59 @@ CONFIG_KEYS = {"realmlist": LOCALHOST, "patchlist": LOCALHOST}
 WINE_DEFAULTS = {"gxWindow": "1", "gxApi": "d3d9"}
 
 
+# First-start settings (easy-setup, B32): a play client built from a client/ with no saved settings (a friend's first
+# bootstrap: client/WTF is empty or holds only the stock-mode lines above) otherwise starts with the intro movie, then
+# the EULA and Terms of Use screens before the login screen (GlueXML AccountLogin_ShowUserAgreements:
+# `not EULAAccepted()` / `not TOSAccepted()`; measured B30/B31 on scratch play clients), runs the client's first-start
+# hardware detection, which replaces the video settings (measured B31: the written gxResolution was ignored), and
+# after the login shows the realm list instead of character select when realmName is unset (measured B31). The
+# play-client build adds them only when absent (never overriding a setting the player or the game wrote).
+FIRST_START_SETTINGS = {"movie": "0", "readEULA": "1", "readTOS": "1", "hwDetect": "0"}
+
+
+def realm_name() -> dict:
+    """Realm 1's name (what the client's realmName and WTF/Account/<account>/<realm>/ use): from the auth database
+    when MySQL is up, else from AzerothCore's base SQL that created it (the harness never renames the realm).
+    {"name": None, ...} when neither is readable."""
+    from . import paths as P
+    try:
+        from . import db, stack
+        if stack.port_open(P.MYSQL_PORT):
+            rows = db.query("SELECT name FROM realmlist WHERE id=1", "auth")
+            if rows and rows[0] and rows[0][0]:
+                return {"name": rows[0][0], "source": "auth.realmlist"}
+    except Exception:  # noqa: BLE001  (fall back to the base SQL)
+        pass
+    sql = P.CORE_SRC / "data" / "sql" / "base" / "db_auth" / "realmlist.sql"
+    try:
+        m = re.search(r"\(1,'([^']+)'", sql.read_text(errors="replace"))
+    except OSError as e:
+        return {"name": None, "source": None, "error": f"{type(e).__name__}: {e}"}
+    return {"name": m.group(1) if m else None, "source": str(sql.relative_to(P.ROOT))}
+
+
+def first_start_settings() -> tuple[dict, dict]:
+    """(FIRST_START_SETTINGS + realmName, the realm lookup's evidence)."""
+    realm = realm_name()
+    return {**FIRST_START_SETTINGS, **({"realmName": realm["name"]} if realm.get("name") else {})}, realm
+
+
+def add_missing_settings(config: Path, settings: dict) -> dict:
+    """Append `SET <key> "<value>"` to a play client's WTF/Config.wtf for each key it doesn't set yet (creating the
+    file when missing); existing lines and values are never changed. Not for client/ (_guard)."""
+    config = Path(config)
+    from .pristine import protected_root_of
+    if protected_root_of(config) is not None:
+        raise ClientConfigError(f"refusing to add settings to {config}: inside the pristine client")
+    _guard(config)
+    old = config.read_bytes() if config.exists() else b""
+    new, added = _add_defaults(old, settings)
+    if new != old:
+        config.parent.mkdir(parents=True, exist_ok=True)
+        config.write_bytes(new)
+    return {"added": added, "already_set": sorted(k for k in settings if k not in added)}
+
+
 class ClientConfigError(Exception):
     """The directory isn't a usable 3.3.5a client, or a write was refused."""
 

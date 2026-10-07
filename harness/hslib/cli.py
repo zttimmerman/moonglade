@@ -49,6 +49,9 @@ def main(argv=None) -> int:
                         "a GUI path changed); backups: only the save-backups end-to-end checks (full runs include "
                         "them only when a backup path changed)")
     r.add_argument("--force-clean", action="store_true", help="build.clean always does a from-empty build")
+    r.add_argument("--ignore-gui-preflight", action="store_true",
+                   help="start an unfiltered full/slow/gui run although the screen is locked, the display asleep or "
+                        "the battery low (GUI checks will then fail; for runs that knowingly accept that)")
     r.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)   # nested runs (report.tiers) write here
     ps_ = sub.add_parser("pop-session", help="one M2 population session (cold start with the population profile, "
                                             "warm-up, 10 min of samples); tuning runs for the budget record")
@@ -211,6 +214,12 @@ def main(argv=None) -> int:
         if a.results_dir:
             a.results_dir.mkdir(parents=True, exist_ok=True)
             P.RESULTS, P.SUMMARY = a.results_dir.resolve() / "results.json", a.results_dir.resolve() / "summary.md"
+        from . import guienv
+        from .runner import gui_preflight
+        msg = gui_preflight(a.tier, a.only, a.ignore_gui_preflight, guienv.probe)
+        if msg:
+            print(msg)
+            return 2
         return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean)
 
     if a.cmd == "pop-session":
