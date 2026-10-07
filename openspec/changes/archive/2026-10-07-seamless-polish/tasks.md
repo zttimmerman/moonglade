@@ -3,5 +3,5 @@
 - [x] 1.2 Character list moved up when the realm controls are hidden — verify: `login.charselect_layout`
 
 ## 2. Verify
-- [ ] 2.1 Verifier pass + full harness
+- [x] 2.1 Verifier pass + full harness
 - [ ] 2.2 (pending: Zach) Human: Zach checks the bar and the character list in a normal play session
