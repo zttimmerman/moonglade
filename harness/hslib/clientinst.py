@@ -206,6 +206,20 @@ def _stream(srcobj, rel: str, dest: Path, want_hash: bool) -> str | None:
 
 def install(src: Path, client: Path = P.CLIENT, manifest_path: Path = P.CLIENT_MANIFEST,
             run_config: bool = True) -> dict:
+    """Install (or repair) the client. The install folder is write-protected at the file-system level (pristine.py):
+    the protection is lifted for the install only and restored on the way out, also when the install fails; a killed
+    install leaves it lifted, and the next install (or bootstrap) restores it."""
+    from . import pristine
+    client_p = Path(client)
+    if client_p.is_symlink():
+        raise ClientInstallError(f"the install folder {client_p} is a symlink; refusing (install into a real folder)")
+    with pristine.unlocked(client_p):
+        res = _install(src, client_p, Path(manifest_path), run_config)
+    res["write_protection"] = {k: v for k, v in pristine.status(client_p).items() if k != "paths"}
+    return res
+
+
+def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> dict:
     src = Path(src).expanduser().resolve()
     client = Path(client).resolve()
     if not src.exists():

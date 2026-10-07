@@ -11,7 +11,8 @@ from ..registry import REGISTRY, TIERS, check, require, tiers_for
 SCENARIO_RE = re.compile(r"^#### Scenario:\s*(.+)$", re.M)
 CHECK_RE = re.compile(r"Check:\s*`([^`]+)`")
 HUMAN_RE = re.compile(r"\[human-verify\]\s*(\S.{10,})")
-POST_IDS = ("report.coverage", "report.schema", "report.full_run", "report.tiers", "report.timing")
+POST_IDS = ("report.coverage", "report.schema", "report.full_run", "report.tiers", "report.client_pristine",
+            "report.timing")
 QUICK_BUDGET_S = 180          # spec: the quick tier finishes in under 3 minutes on the target Mac
 NOT_QUICK = ("build.clean", "client.launch_smoke", "lifecycle.persist")   # named by the spec
 QUICK_DIR = P.OUT / "quick-tier"   # where report.tiers' nested quick run writes its results
@@ -263,7 +264,7 @@ def full_run_record(doc: dict, referenced: set, extra: list, reg: dict | None = 
                                           "not a clean full run: " + ", ".join(not_run + failing))[:300]})}
 
 
-def post_run(doc, selected_ids, t_start=None, leave_up=False):
+def post_run(doc, selected_ids, t_start=None, leave_up=False, pristine_start=None):
     out = []
     t0 = time.time()
     ok, ev = coverage()
@@ -291,6 +292,15 @@ def post_run(doc, selected_ids, t_start=None, leave_up=False):
                 "evidence": {"schema": "harness/results.schema.json", "errors": errs[:50], "empty_evidence": empty,
                              "records_validated": len(doc["checks"]) + 1},
                 "duration_s": round(time.time() - t0, 2), **({} if ok else {"message": "results.json fails schema"})})
+
+    # report.client_pristine (easy-setup, play-client): the pristine client unchanged since the run started; its
+    # self-test (nested runs on a scratch stand-in) runs on unfiltered runs and when the filter names it, never nested
+    from . import pristine_checks
+    from .. import pristine as _pristine
+    import os as _os
+    selftest = (not _os.environ.get(_pristine.TEST_ENV)
+                and (not m.get("filter") or any(fnmatch.fnmatch("report.client_pristine", g) for g in m.get("filter") or [])))
+    out.append(pristine_checks.post_run_record(pristine_start, selftest))
 
     out.append(full_run_record(doc, set(ev["referenced_ids"]), out))
     if self_mode:

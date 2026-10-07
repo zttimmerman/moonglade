@@ -74,6 +74,10 @@ def main(argv=None) -> int:
                         help="install a 3.3.5a client (zip or folder, read-only) into client/ + manifest")
     ci.add_argument("source", type=Path)
 
+    cl = sub.add_parser("client-lock", help="write-protect the installed client/ (chmod a-w + chflags uchg; "
+                                            "client-install does this itself); --status only reports")
+    cl.add_argument("--status", action="store_true", help="report the protection, change nothing")
+
     wi = sub.add_parser("wine-install", help="fetch + SHA-256-verify the pinned Wine runtime (fork.lock) into env/")
     wi.add_argument("--force", action="store_true", help="re-download even if the pinned runtime is present")
 
@@ -145,6 +149,12 @@ def main(argv=None) -> int:
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
 
     a = ap.parse_args(argv)
+
+    import os as _os
+    for _var in ("HS_TEST_PRISTINE_CLIENT", "HS_TEST_PRISTINE_MUTATE"):   # report.client_pristine's self-test only
+        if _os.environ.get(_var) and (a.cmd != "run" or _os.environ.get("HS_HARNESS_RUN") != "1"):
+            log(f"${_var} is a test switch of report.client_pristine's self-test (nested `hs run` only); unset it")
+            return 2
 
     if a.cmd == "build":
         from .build import build, BuildError
@@ -274,6 +284,16 @@ def main(argv=None) -> int:
             return 1
         _print(res)
         return 0 if res.get("version_ok", True) else 1
+
+    if a.cmd == "client-lock":
+        from . import pristine, paths as Pc
+        if not Pc.CLIENT.is_dir():
+            log("no client/ installed; run `harness/hs client-install <zip-or-folder>`")
+            return 1
+        res = {} if a.status else {"lock": pristine.lock(Pc.CLIENT)}
+        st = pristine.status(Pc.CLIENT)
+        _print(res | {"client": str(Pc.CLIENT), "status": st})
+        return 0 if st["locked"] else 1
 
     if a.cmd == "wine-install":
         from .wineinst import install as wine_install, WineInstallError

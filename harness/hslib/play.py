@@ -616,6 +616,13 @@ def main(argv=None) -> int:
             say(f"{var} is set: that's a test switch for the harness, not for playing. "
                 f"Unset it (`unset {var}`) and run ./play again.")
             return EXIT_FAIL
+    # report.client_pristine's self-test switches belong to `harness/hs run` only; ./play refuses them even in tests
+    from .pristine import TEST_ENV as PRISTINE_TEST_ENV
+    for var in (PRISTINE_TEST_ENV, "HS_TEST_PRISTINE_MUTATE"):
+        if os.environ.get(var):
+            say(f"{var} is set: that's a test switch for the harness, not for playing. "
+                f"Unset it (`unset {var}`) and run ./play again.")
+            return EXIT_FAIL
     # the Wine host shim's test-only knobs (ADR-0010) only ever reach a --client-cmd stand-in, never the game
     for var in sorted(k for k in os.environ if k == "HSDOCK_TEST" or k.startswith("HSDOCK_TEST_")):
         if not args.client_cmd:

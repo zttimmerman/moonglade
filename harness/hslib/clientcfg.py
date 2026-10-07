@@ -50,10 +50,21 @@ def _child_ci(parent: Path, name: str) -> Path | None:
 
 
 def _guard(target: Path) -> None:
-    """Refuse any write whose path (or symlink target) is a binary/archive."""
+    """Refuse any write whose path (or symlink target) is a binary/archive. Inside the pristine client (stock mode
+    configures client/ itself) only the settings file under WTF/ and realmlist.wtf may be written (pristine.py); the
+    rest of client/ is also write-protected by the OS."""
     for p in (target, target.resolve()):
         if p.suffix.lower() in FORBIDDEN_SUFFIXES:
             raise ClientConfigError(f"refusing to write client binary/archive: {p}")
+    from .pristine import protected_root_of
+    root = protected_root_of(target)
+    if root is not None:
+        rel = Path(os.path.relpath(os.path.realpath(target), os.path.realpath(root)))
+        name = rel.name.lower()
+        if not ((rel.parts[0].upper() == "WTF" and name.startswith("config.wtf"))
+                or (name.startswith("realmlist.wtf") and len(rel.parts) == 3 and rel.parts[0].lower() == "data")):
+            raise ClientConfigError(f"refusing to write {target}: inside the pristine client {root} only "
+                                    "WTF/Config.wtf and Data/<locale>/realmlist.wtf are configuration")
 
 
 def _eol_of(data: bytes) -> bytes:

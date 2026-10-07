@@ -505,6 +505,10 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
         ctx["player_play_client_current_start"] = clientbuild.up_to_date(clientbuild.PLAY)
     except Exception as e:  # noqa: BLE001  (the check fails on a missing/erroneous start record)
         ctx["player_play_client_fingerprint_start"] = {"error": f"{type(e).__name__}: {e}"}
+    # easy-setup (pristine-client protection): the pristine client (or the test stand-in) at the start;
+    # report.client_pristine compares at the end
+    from .checks.pristine_checks import start_record
+    pristine_start = start_record()
     if rule is not None:
         log(f"GUI rule: {'GUI checks run' if gui_changed(rule) else 'GUI checks skipped by design'} "
             f"(changed GUI paths: {rule['changed_gui_paths']}{'; ' + rule['error'] if rule['error'] else ''})")
@@ -521,7 +525,7 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
     # post-run meta-checks (report.*) — computed over the document itself
     from .checks import reporting
     for rec in reporting.post_run(doc, selected_ids=[c.id for c in selected], t_start=t_start,
-                                  leave_up=leave_up):
+                                  leave_up=leave_up, pristine_start=pristine_start):
         doc["checks"].append(rec)
     doc["meta"]["finished"] = _now()      # after the post-run checks (report.tiers may run a nested quick tier)
     doc["meta"]["wall_s"] = round(time.time() - t_start, 1)

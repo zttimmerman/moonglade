@@ -13,7 +13,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from .. import clientbuild, launch, paths as P
+from .. import clientbuild, launch, paths as P, pristine
 from ..clientinst import load_manifest, mismatches, sha256_file
 from ..registry import check, require
 from .play_checks import is_clear, remaining, require_given_clear
@@ -88,8 +88,9 @@ def patch0001_recorded(ctx):
 def _flip_copy(base: Path, dest: Path, how: str) -> None:
     """A scratch base: APFS clone of client/ with Wow.exe changed (`how`: "byte" = one byte elsewhere, "patched" =
     patch 0001 already applied)."""
-    shutil.rmtree(dest, ignore_errors=True)
-    subprocess.run(["cp", "-cR", str(base), str(dest)], check=True)
+    pristine.remove_tree(dest)
+    subprocess.run(["cp", "-cR", os.path.realpath(base), str(dest)], check=True)
+    pristine.unlock(dest)                       # the clone inherits client/'s write protection (pristine.py)
     wow = dest / "Wow.exe"
     data = bytearray(wow.read_bytes())
     wow.unlink()                                # new inode: never write through the clone's shared blocks

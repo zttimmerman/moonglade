@@ -18,7 +18,7 @@ import time
 import zipfile
 from pathlib import Path
 
-from .. import clientbuild, paths as P
+from .. import clientbuild, paths as P, pristine
 from ..registry import check, require
 
 SCRATCH_ROOT = P.OUT / "setup-scratch"
@@ -56,7 +56,7 @@ def light_copy(tag: str) -> Path:
 
 def drop(d: Path | None) -> None:
     if d and SCRATCH_ROOT in Path(d).resolve().parents:
-        shutil.rmtree(d, ignore_errors=True)
+        pristine.remove_tree(d)               # a scratch install inside is write-protected (pristine.py)
 
 
 def tree_fingerprint(root: Path) -> dict:
@@ -856,7 +856,7 @@ def fresh_clone(ctx):
                   for d in ("env", "data", "server", "dist", "client")}
     main_client_fp = {"Wow.exe": (P.CLIENT / "Wow.exe").stat().st_mtime_ns, "manifest": P.CLIENT_MANIFEST.read_bytes()}
     _stop_clone(CLONE)
-    shutil.rmtree(CLONE, ignore_errors=True)
+    pristine.remove_tree(CLONE)               # its client/ is write-protected by its own install
     head = subprocess.run(["git", "-C", str(P.ROOT), "rev-parse", "HEAD"], capture_output=True, text=True).stdout.strip()
     ev["head"] = head
     try:
@@ -914,7 +914,7 @@ def fresh_clone(ctx):
         require(dt < 120, f"the re-run took {dt} s (limit 120 s)", **ev)
         # ---- WHEN: killed during the client install, then resumed
         for d in ("client", "env/client-play"):
-            shutil.rmtree(CLONE / d, ignore_errors=True)
+            pristine.remove_tree(CLONE / d)   # the clone's client/ is write-protected
         (CLONE / "env/client-manifest.json").unlink(missing_ok=True)
         before_kill = {k: x for k, x in _outputs_snapshot(CLONE).items()
                        if k.startswith(("server/", "build", "data/", "env/wowsilicon", "vendor/"))}
@@ -951,7 +951,7 @@ def fresh_clone(ctx):
                 "./play after the resumed bootstrap didn't reach ready and stop cleanly", **ev)
     finally:
         ev["cleanup"] = _stop_clone(CLONE)
-        shutil.rmtree(CLONE, ignore_errors=True)
+        pristine.remove_tree(CLONE)
         ev["cleanup"]["clone_removed"] = not CLONE.exists()
         for f in SCRATCH_ROOT.glob("*.out"):
             ev.setdefault("logs_kept", []).append(str(f.relative_to(P.ROOT)))

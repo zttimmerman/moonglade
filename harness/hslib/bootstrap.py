@@ -377,7 +377,12 @@ class Client(Step):
         bad = mismatches(P.CLIENT, man)
         if bad:
             return False, f"{len(bad)} file(s) differ from the install record"
-        return True, f"installed and intact (Wow.exe {(man.get('wow_exe_version') or {}).get('file_version')})"
+        from .pristine import status
+        lk = status(P.CLIENT)
+        if not lk["locked"]:          # e.g. an install killed mid-way; client-install restores the protection
+            return False, (f"installed, but not write-protected ({lk['writable_count']} path(s) writable, e.g. "
+                           f"{lk['writable'][:2]})")
+        return True, f"installed, intact and write-protected (Wow.exe {(man.get('wow_exe_version') or {}).get('file_version')})"
 
     def run(self, ctx):
         r = _hs("client-install", str(Path(ctx.client).expanduser().resolve()))
