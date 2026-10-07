@@ -430,6 +430,11 @@ function HSFrontMenu_OnEvent(self, event)
 		-- HS_TEST.charselect = { {t = seconds after the character list, act = ...}, ... } (seamless-experience)
 		if ( HS_TEST.charselect and n > 0 and not state.csAt and loggedIn ) then
 			state.csAt = state.testClock;
+		-- HS_TEST.charselect_again: steps timed from the character list that follows a "mainmenu" + "continue" from the
+		-- first round (seamless-polish: a quick second load)
+		elseif ( HS_TEST.charselect_again and n > 0 and state.csAgain and loggedIn ) then
+			state.csAgain = nil;
+			state.cs2At = state.testClock;
 		end
 	end
 end
@@ -502,14 +507,7 @@ function HSFrontMenu_TestUpdate(self, elapsed)
 				state.testDone[i] = true;
 				local act = step.act;
 				if ( act == "continue" ) then
-					-- only on the login screen (back from the world, the glue screens restart at character select)
-					if ( CURRENT_GLUE_SCREEN == "login" ) then
-						HSFrontMenu_Mark("press:continue");
-						HSFrontMenu_Open("main", 1);
-						HSMenuSlot1:Click();
-					else
-						HSFrontMenu_Mark("skip:continue:" .. tostring(CURRENT_GLUE_SCREEN));
-					end
+					HSFrontMenu_TestContinue();
 				elseif ( strsub(act, 1, 5) == "menu:" ) then
 					HSFrontMenu_Open(strsub(act, 6));
 				elseif ( strsub(act, 1, 4) == "key:" ) then
@@ -541,6 +539,15 @@ function HSFrontMenu_TestUpdate(self, elapsed)
 			end
 		end
 	end
+	if ( HS_TEST.charselect_again and state.cs2At ) then
+		state.cs2Done = state.cs2Done or {};
+		for i, step in ipairs(HS_TEST.charselect_again) do
+			if ( not state.cs2Done[i] and state.testClock >= state.cs2At + step.t ) then
+				state.cs2Done[i] = true;
+				HSFrontMenu_TestAct(step.act);
+			end
+		end
+	end
 	-- repaint after this frame's actions too, so a screenshot taken by one of them shows the state they produced
 	if ( HS_TEST.marker ) then HSFrontMenu_UpdateMarker(); end
 	if ( state.enterAt and state.testClock >= state.enterAt ) then
@@ -555,9 +562,23 @@ function HSFrontMenu_TestUpdate(self, elapsed)
 	end
 end
 
+-- "continue": click Continue once (the same handler a mouse click runs), only on the login screen (back from the
+-- world, the glue screens restart at character select).
+function HSFrontMenu_TestContinue()
+	if ( CURRENT_GLUE_SCREEN == "login" ) then
+		HSFrontMenu_Mark("press:continue");
+		HSFrontMenu_Open("main", 1);
+		HSMenuSlot1:Click();
+	else
+		HSFrontMenu_Mark("skip:continue:" .. tostring(CURRENT_GLUE_SCREEN));
+	end
+end
+
 -- seamless-experience test actions: "details" / "retry" / "back" (the friendly error's controls, clicked),
 -- "csinspect" (record character select's wording), "play" (click Play on character select), "shot", "quit",
--- "showlog" (debugging aid: the end of the in-memory test log as text on screen, for a following "shot").
+-- "showlog" (debugging aid: the end of the in-memory test log as text on screen, for a following "shot");
+-- seamless-polish: "mainmenu" (click Main Menu on character select; the next character list runs
+-- HS_TEST.charselect_again), "continue" (as in HS_TEST.script).
 function HSFrontMenu_TestAct(act)
 	if ( act == "details" ) then
 		HSFrontMenu_Mark("press:details");
@@ -579,6 +600,12 @@ function HSFrontMenu_TestAct(act)
 		HSTestLogText:Show();
 	elseif ( act == "csinspect" ) then
 		HSSeamless_InspectCharSelect();
+	elseif ( act == "mainmenu" ) then
+		HSFrontMenu_Mark("press:mainmenu");
+		state.csAgain = true;
+		CharacterSelectBackButton:Click();
+	elseif ( act == "continue" ) then
+		HSFrontMenu_TestContinue();
 	elseif ( act == "play" ) then
 		HSFrontMenu_Mark("press:play:" .. tostring(CharSelectEnterWorldButton:GetText()));
 		CharSelectEnterWorldButton:Click();
