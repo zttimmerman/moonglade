@@ -101,7 +101,7 @@ def tagged(ids: set[str]) -> list[dict]:
             continue
         env = dict(e.split("=", 1) for e in ae[1] if "=" in e)
         if env.get("HS_HARNESS_RUN") == "1" and env.get(ENV_ID) in ids:
-            out.append({"pid": pid, "run": env[ENV_ID], "cmd": " ".join(ae[0])[:1000]})
+            out.append({"pid": pid, "run": env.get(ENV_ID), "cmd": " ".join(ae[0])[:1000]})
     return out
 
 

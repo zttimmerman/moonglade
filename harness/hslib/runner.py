@@ -517,7 +517,13 @@ def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full
     from . import runreg
     rec = runreg.start()
     try:
-        orphans = runreg.heal()
+        try:
+            orphans = runreg.heal()
+        except Exception as e:  # noqa: BLE001  (a healing bug mustn't stop every run; recorded, and the checks'
+            import traceback as _tb   # GIVENs still refuse whatever is left running)
+            orphans = {"dead_runs": [], "orphans": [], "actions": [], "remaining": [],
+                       "error": f"{type(e).__name__}: {e}", "traceback": _tb.format_exc()[-2000:]}
+            log(f"orphan healing failed: {orphans['error']}")
         if orphans["dead_runs"]:
             log(f"healed {len(orphans['orphans'])} orphan process(es) of {len(orphans['dead_runs'])} killed harness "
                 f"run(s); remaining: {len(orphans['remaining'])}")

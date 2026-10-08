@@ -539,6 +539,14 @@ def _victim_ready(rid: str) -> dict:
             "worldserver": st["worldserver"], "tagged_n": len(tg)}
 
 
+def _results(rd: Path) -> dict:
+    """A nested run's results.json, or an empty document when it wrote none (the evaluation then fails)."""
+    try:
+        return json.loads((rd / "results.json").read_text())
+    except (OSError, ValueError):
+        return {"meta": {"no_results": str(rd)}, "checks": []}
+
+
 def _force_clean(pids_play: list[int]) -> dict:
     """Last resort after a failed check: stop what's left (our own processes only)."""
     from .. import launch, stack
@@ -604,7 +612,7 @@ def orphans_healed(ctx):
         t1 = time.time()
         r = subprocess.run([HS, "run", "--only", "report.tiers_declared", "--results-dir", str(d / "healer")],
                            capture_output=True, text=True, timeout=900, env=_env())
-        doc = json.loads((d / "healer" / "results.json").read_text())
+        doc = _results(d / "healer")
         heal = doc["meta"].get("orphans") or {}
         ev["healer"] = {"rc": r.returncode, "seconds": round(time.time() - t1, 1), "orphans": heal,
                         "checks": {c["id"]: c["status"] for c in doc["checks"]}}
@@ -654,15 +662,15 @@ def orphans_healed(ctx):
         before = remaining(s)
         r2 = subprocess.run([HS, "run", "--only", "report.tiers_declared", "--results-dir", str(d / "healer2"),
                              "--leave-up"], capture_output=True, text=True, timeout=600, env=_env())
-        doc2 = json.loads((d / "healer2" / "results.json").read_text())
+        doc2 = _results(d / "healer2")
         h2 = doc2["meta"].get("orphans") or {}
         after = remaining(s)
-        ev["healer2"] = {"rc": r2.returncode, "orphans": h2}
+        ev["healer2"] = {"rc": r2.returncode, "orphans": h2, "output_tail": (r2.stdout + r2.stderr)[-1500:]}
         ev["outside_before"], ev["outside_after"] = before, after
-        require(rid2 in [x["id"] for x in h2.get("dead_runs", [])], "the healing run didn't see the killed run", **ev)
         require(s.proc.poll() is None and after["stand_in_processes"] and after["stack"].get("worldserver")
                 and not any(o["pid"] == s.proc.pid for o in h2.get("orphans", [])),
                 "the outside ./play, its client or its stack was touched", **ev)
+        require(rid2 in [x["id"] for x in h2.get("dead_runs", [])], "the healing run didn't see the killed run", **ev)
         refused = None
         try:
             require_given_clear({})
