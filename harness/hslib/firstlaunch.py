@@ -565,8 +565,16 @@ class _LogWatch(threading.Thread):
         self.join(timeout=5)
 
 
+# The AI players' own characters: playerbots creates random-bot accounts and characters during the first start
+# (population.RNDBOT_ACCOUNTS: playerbots_account_type 1), so an interrupted first start already has some. Only other
+# characters (a player's) protect a datadir from the reset; an account missing from that table counts as a player's.
+PLAYER_CHARACTERS = ("SELECT COUNT(*) FROM characters WHERE account NOT IN (SELECT account_id FROM "
+                     f"{P.DB_NAMES['playerbots']}.playerbots_account_type WHERE account_type = 1)")
+
+
 def _characters_in_datadir() -> tuple[int | None, str]:
-    """(number of characters, how it was found) in the existing HOME/mysql; None when it can't be told."""
+    """(number of player characters, how it was found) in the existing HOME/mysql; None when it can't be told
+    (fail-closed: the caller then keeps the datadir)."""
     from . import db, stack
     if not (P.MYSQL_DATA / "acore_characters").exists():
         return 0, "no acore_characters database folder"
@@ -575,11 +583,18 @@ def _characters_in_datadir() -> tuple[int | None, str]:
     except Exception as e:  # noqa: BLE001
         return None, f"mysqld didn't start on it: {type(e).__name__}: {str(e)[:300]}"
     try:
-        n = db.scalar("SELECT COUNT(*) FROM characters", "characters")
-        return (int(n) if n is not None and n.isdigit() else None), f"SELECT COUNT(*) -> {n!r}"
+        try:
+            total = db.scalar("SELECT COUNT(*) FROM characters", "characters")
+        except Exception as e:  # noqa: BLE001
+            if "doesn't exist" in str(e):
+                return 0, "no characters table yet"
+            raise
+        if total == "0":
+            return 0, "SELECT COUNT(*) FROM characters -> 0"
+        n = db.scalar(PLAYER_CHARACTERS, "characters")
+        return (int(n) if n is not None and n.isdigit() else None), \
+            f"{total} character(s), {n!r} not the AI players' (playerbots_account_type 1)"
     except Exception as e:  # noqa: BLE001  (fail-closed: unknown counts as "can't tell")
-        if "doesn't exist" in str(e):
-            return 0, "no characters table yet"
         return None, f"{type(e).__name__}: {str(e)[:300]}"
     finally:
         try:
@@ -605,7 +620,8 @@ class DatabaseStep(Step):
 
     def _reset_unfinished(self) -> dict:
         """An existing, unfinished datadir: moved aside (never deleted) only when this setup created it (the attempt
-        record in home.json) and it holds no characters; anything else stops with database_kept."""
+        record in home.json) and it holds no player characters (the AI players' own, made by every first start, don't
+        count); anything else, including "can't tell", stops with database_kept."""
         rec = (read_home().get("database") or {})
         path = str(P.MYSQL_DATA)
         if rec.get("created_by") != "first-launch":
