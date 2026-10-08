@@ -8,7 +8,7 @@ A single-player, fully offline World of Warcraft experience on macOS (Apple Sili
 
 **Target:** the target game is WotLK 3.3.5a (build 12340): all of its content and systems through level 80, including Outland, Northrend, and Death Knights. This is not a vanilla project. The era profile only adjusts 1–60 pacing and difficulty; it never removes or replaces WotLK content or systems.
 
-This is a **personal project**. Its source is public under GPL-2.0-or-later; no client or game files (client binaries, patched files, repacks) are distributed.
+This is a **personal project**. Its source is public under GPL-2.0-or-later; no client or game files (client binaries, patched files, repacks) are distributed (ADR-0012).
 
 ## 2. Fixed decisions (do not relitigate without a human gate)
 

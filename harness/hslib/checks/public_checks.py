@@ -129,12 +129,13 @@ def _home_plant() -> str:
     return "/" + "Users" + "/someone/notes.txt"       # spelled in pieces: this file must not match itself
 
 
-def scrub_selftest(denylist: Path | None) -> dict:
+def scrub_selftest(denylist: Path | None, marker: Path | None = None) -> dict:
     """Plant one denylist entry and one home path in a scratch file staged in a TEMPORARY index (and a temporary
     object directory, so the repo's own object store and index are untouched; nothing is committed), scan that
     index, and require exactly those two hits on their lines on top of the real scan's. Then require a missing and
-    an empty denylist to raise DenylistError."""
-    entries = S.load_denylist(denylist)
+    an empty denylist to raise DenylistError when the required-marker exists, and to skip the denylist part (built-in
+    patterns still run) when it doesn't. Without a usable denylist (a friend's clone) only the home path is planted."""
+    entries, _note = S.denylist_entries(denylist, marker)
     tmp = Path(tempfile.mkdtemp(prefix="hs-public-scrub-")).resolve()
     out: dict = {"dir": str(tmp)}
     try:
@@ -153,53 +154,62 @@ def scrub_selftest(denylist: Path | None) -> dict:
         pats = S.builtin_patterns() + S.denylist_patterns(entries)
         pick = next((i for i, x in enumerate(entries, 1)
                      if S.find_hits(x.encode(), pats) == [(f"denylist #{i}", 1)]), None)
-        if pick is None:
+        if entries and pick is None:
             return out | {"ok": False, "error": "no denylist entry can be planted on its own (each also matches "
                                                 "another pattern)"}
-        content = f"planted by public.tree_scrub's self-test\n{entries[pick - 1]}\nsee {_home_plant()}\n".encode()
+        line2 = entries[pick - 1] if entries else "no denylist entry to plant"
+        content = f"planted by public.tree_scrub's self-test\n{line2}\nsee {_home_plant()}\n".encode()
         e = {**os.environ, **env}
         sha = subprocess.run(["git", "-C", str(P.ROOT), "hash-object", "-w", "--stdin"], input=content,
                              capture_output=True, env=e, check=True).stdout.decode().strip()
         subprocess.run(["git", "-C", str(P.ROOT), "update-index", "--add", "--cacheinfo", f"100644,{sha},{rel}"],
                        capture_output=True, env=e, check=True)
-        planted = S.scan_tree(P.ROOT, denylist, env=env)
+        planted = S.scan_tree(P.ROOT, denylist, env=env, marker=marker)
         got = sorted((h["line"], h["pattern"]) for h in planted["hits"] if h["file"] == rel)
-        want = [(2, f"denylist #{pick}"), (3, "home path")]
-        real = S.scan_tree(P.ROOT, denylist)
+        want = ([(2, f"denylist #{pick}")] if entries else []) + [(3, "home path")]
+        real = S.scan_tree(P.ROOT, denylist, marker=marker)
         others_same = [h for h in planted["hits"] if h["file"] != rel] == real["hits"]
         out |= {"planted_file": rel, "planted_hits": got, "expected": want, "other_hits_unchanged": others_same,
                 "real_index_unchanged": hashlib.sha256(real_index.read_bytes()).hexdigest() == index_before,
                 "plant_object_in_repo": (common / "objects" / sha[:2] / sha[2:]).exists()}
         errors = {}
-        for name, path in (("missing", tmp / "no-such-denylist.txt"), ("empty", tmp / "empty-denylist.txt")):
-            if name == "empty":
-                path.write_text("\n# only a comment\n")
+        on, off = tmp / "marker-present", tmp / "marker-absent"
+        on.write_text("")
+        (tmp / "empty-denylist.txt").write_text("\n# only a comment\n")
+        for name, path, mk in (("missing, marker present", tmp / "no-such-denylist.txt", on),
+                               ("empty, marker present", tmp / "empty-denylist.txt", on),
+                               ("missing, marker absent", tmp / "no-such-denylist.txt", off)):
             try:
-                S.scan_tree(P.ROOT, path)
-                errors[name] = "no error (scan ran)"
+                r = S.scan_tree(P.ROOT, path, marker=mk)
+                errors[name] = f"scan ran: {r['denylist_note']}"
             except S.DenylistError as ex:
                 errors[name] = f"DenylistError: {str(ex).replace(str(tmp), '<tmp>')}"
         out["denylist_errors"] = errors
         out["ok"] = (got == want and others_same and out["real_index_unchanged"] and not out["plant_object_in_repo"]
-                     and all(v.startswith("DenylistError") for v in errors.values()))
+                     and errors["missing, marker present"].startswith("DenylistError")
+                     and errors["empty, marker present"].startswith("DenylistError")
+                     and errors["missing, marker absent"] == f"scan ran: {S.SKIP_NOTE}")
         return out
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
 @check("public.tree_scrub", order=7, capability=CAP, stack="any", tier="quick")
-def public_tree_scrub(ctx, denylist: Path | None = None):
+def public_tree_scrub(ctx, denylist: Path | None = None, marker: Path | None = None):
     """Every tracked file (staged blob and path) is free of the built-in patterns (non-noreply emails, home paths,
     Claude Code session URLs, claims that the repo is private or never shared) and of every local denylist line; a
-    planted denylist entry and home path in a temporary index are both reported with file and line; a missing or
-    empty denylist is an error, never a pass."""
-    res = S.scan_tree(P.ROOT, denylist)            # DenylistError -> the check errors (fail-closed)
+    planted denylist entry and home path in a temporary index are both reported with file and line. With the
+    env/public-denylist.required marker, a missing or empty denylist is an error, never a pass; without it the
+    denylist part is skipped (built-in patterns only) and the evidence says so."""
+    res = S.scan_tree(P.ROOT, denylist, marker=marker)   # DenylistError -> the check errors (fail-closed)
     ev = {"denylist": "env/public-denylist.txt" if denylist is None else "(test path)",
+          "denylist_required": Path(marker if marker is not None else S.REQUIRED_MARKER).exists(),
+          "denylist_note": res["denylist_note"],
           "tracked_files": res["files"], "patterns_used": res["patterns"], "denylist_entries": res["denylist_entries"],
           "hit_count": len(res["hits"]), "hits": res["hits"][:100], "wording_allowed": res["allowed"],
           "wording_allowlist": [g for g, _ in S.WORDING_ALLOW]}
     require(res["files"] > 100, "the index listed too few files to trust the scan", **ev)
-    ev["selftest"] = scrub_selftest(denylist)
+    ev["selftest"] = scrub_selftest(denylist, marker)
     require(ev["selftest"]["ok"], "self-test: the planted hits weren't reported exactly (or a bad denylist passed)",
             **ev)
     require(not res["hits"], f"{len(res['hits'])} hit(s) in tracked files", **ev)
@@ -376,7 +386,7 @@ def public_history_dryrun(ctx, denylist: Path | None = None, rewrite_cmd: list |
 
         # the scan must see the personal data before the rewrite (it can fail on this run's data)
         pre = S.scan_history(mirror, denylist)
-        ev["before"] = {k: pre[k] for k in ("refs", "commits", "tags", "blobs", "paths", "hit_count", "by_pattern",
+        ev["before"] = {k: pre[k] for k in ("refs", "commits", "tags", "blobs", "paths", "hit_count", "denylist_note", "by_pattern",
                                             "by_kind")}
         require(pre["hit_count"] > 0 and pre["by_pattern"].get("email address")
                 and pre["by_pattern"].get("claude session link"),
@@ -390,7 +400,7 @@ def public_history_dryrun(ctx, denylist: Path | None = None, rewrite_cmd: list |
         require(r["rc"] == 0, "rewrite.sh failed", **ev)
 
         post = S.scan_history(mirror, denylist)
-        ev["after"] = {k: post[k] for k in ("refs", "commits", "tags", "blobs", "paths", "hit_count", "by_pattern",
+        ev["after"] = {k: post[k] for k in ("refs", "commits", "tags", "blobs", "paths", "hit_count", "denylist_note", "by_pattern",
                                             "by_kind")}
         ev["after_hits"] = post["hits"][:40]
         msgs = _g(mirror, "log", "--all", "--format=%H%x00%B%x1e")

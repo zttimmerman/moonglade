@@ -10,7 +10,7 @@ The repo SHALL carry the GPL-2.0-or-later licence text in `LICENSE`, a `NOTICE` 
 - Check: `public.license`
 
 ### Requirement: Tracked tree is free of personal data
-No tracked file SHALL match the built-in patterns (an email address other than noreply/example addresses, `/Users/<name>/` home paths, Claude Code session URLs, "private repo" / "never redistributed" claims) or any line of the local denylist `env/public-denylist.txt` (untracked, 0600, written by the builder from the audit's §2/§7 findings and Zach's details). The check SHALL fail closed if the denylist is missing or empty.
+No tracked file SHALL match the built-in patterns (an email address other than noreply/example addresses, `/Users/<name>/` home paths, Claude Code session URLs, "private repo" / "never redistributed" claims) or any line of the local denylist `env/public-denylist.txt` (untracked, 0600, written by the builder from the audit's §2/§7 findings and Zach's details). The built-in patterns SHALL always run. The denylist part SHALL be required only when the untracked marker `env/public-denylist.required` exists: then a missing or empty denylist SHALL be an error (fail closed). Without the marker and without a denylist (a friend's clone), the denylist part SHALL be skipped and the evidence SHALL say so.
 
 #### Scenario: Clean tree passes
 - **GIVEN** the tracked tree after the scrub and the local denylist
@@ -21,7 +21,7 @@ No tracked file SHALL match the built-in patterns (an email address other than n
 #### Scenario: A planted hit fails
 - **GIVEN** a scratch file (staged in a temporary index, never committed) containing one denylist entry and one home path
 - **WHEN** the scrub check's self-test runs
-- **THEN** it reports both hits with file and line, and a missing denylist is an error
+- **THEN** it reports both hits with file and line; with the `env/public-denylist.required` marker present, a missing or empty denylist is an error; with the marker absent and no denylist, the check passes on the built-in patterns and its evidence says the denylist part was skipped
 - Check: `public.tree_scrub`
 
 ### Requirement: No third-party game content tracked

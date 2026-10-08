@@ -108,7 +108,9 @@ def run(target: Path, denylist: Path | None = None) -> None:
     why = refusal(target)
     if why:
         raise Refused(why)
-    entries = S.load_denylist(denylist)
+    entries, note = S.denylist_entries(denylist)        # required when env/public-denylist.required exists
+    if note:
+        print(f"note: {note}", file=sys.stderr)
     deny = [re.compile(re.escape(e.encode()), re.I) for e in entries]
     import git_filter_repo as fr
 

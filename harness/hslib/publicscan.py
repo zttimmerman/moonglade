@@ -9,8 +9,9 @@ Two scans share one pattern set:
 
 The denylist (`env/public-denylist.txt`, untracked, 0600) holds one literal string per line, matched
 case-insensitively. Its strings are personal by definition, so nothing here ever prints one: a hit names the file,
-the line and the pattern label ("denylist #3"), never the matched text. A missing or empty denylist is an error
-(DenylistError), never "no hits".
+the line and the pattern label ("denylist #3"), never the matched text. When the untracked marker
+`env/public-denylist.required` exists, a missing or empty denylist is an error (DenylistError), never "no hits"; without
+the marker (a friend's clone) the denylist part is skipped and the result says so.
 
 Command line (used by tools/go-public and the runbook):
     PYTHONPATH=harness python3 -m hslib.publicscan tree
@@ -29,6 +30,12 @@ from pathlib import Path
 from . import paths as P
 
 DENYLIST = P.ENV / "public-denylist.txt"
+# Untracked marker (empty, 0600) on the maintainer's Mac: when it exists, the denylist is required (missing or empty
+# -> DenylistError, fail-closed). Without it (a friend's clone) the denylist part is skipped when there is no
+# denylist, and the built-in patterns still run.
+REQUIRED_MARKER = P.ENV / "public-denylist.required"
+SKIP_NOTE = ("denylist part skipped: no denylist and no env/public-denylist.required marker "
+             "(built-in patterns only)")
 REDACTED = b"[redacted]"
 
 
@@ -91,6 +98,17 @@ def _wording_allowed(rel: str) -> str | None:
     return None
 
 
+def denylist_entries(denylist: Path | None = None, marker: Path | None = None) -> tuple[list[str], str | None]:
+    """(entries, note). The denylist's entries when it loads. When it doesn't: DenylistError if the marker exists
+    (fail-closed on the maintainer's machine), else ([], SKIP_NOTE)."""
+    try:
+        return load_denylist(denylist), None
+    except DenylistError:
+        if Path(marker if marker is not None else REQUIRED_MARKER).exists():
+            raise
+        return [], SKIP_NOTE
+
+
 def denylist_patterns(entries: list[str]) -> list[tuple[str, str, re.Pattern]]:
     return [(f"denylist #{i}", "personal", re.compile(re.escape(e.encode()), re.I)) for i, e in enumerate(entries, 1)]
 
@@ -147,11 +165,13 @@ def _cat_batch(root: Path, shas: list[str], env: dict | None = None):
 
 # ----------------------------------------------------------------------------- tree scan
 
-def scan_tree(root: Path | None = None, denylist: Path | None = None, *, env: dict | None = None) -> dict:
+def scan_tree(root: Path | None = None, denylist: Path | None = None, *, env: dict | None = None,
+              marker: Path | None = None) -> dict:
     """Scan every entry of the index (`env` may point GIT_INDEX_FILE at a temporary index) and its path: the file's
     working-tree bytes when it exists there, else its staged blob. {"files", "patterns", "hits": [{file, line, pattern}], "allowed": {reason: n}}. Raises DenylistError."""
     root = Path(root or P.ROOT)
-    pats = builtin_patterns() + denylist_patterns(load_denylist(denylist))
+    deny, note = denylist_entries(denylist, marker)
+    pats = builtin_patterns() + denylist_patterns(deny)
     entries = []
     for rec in _git(root, "ls-files", "-s", "-z", env=env).split(b"\0"):
         if not rec:
@@ -184,19 +204,20 @@ def scan_tree(root: Path | None = None, denylist: Path | None = None, *, env: di
                         continue
                 hits.append({"file": rel, "line": line, "pattern": label})
     hits.sort(key=lambda h: (h["file"], h["line"], h["pattern"]))
-    return {"files": len(entries), "patterns": len(pats) + 1, "denylist_entries": len(pats) - len(builtin_patterns()),
+    return {"files": len(entries), "patterns": len(pats) + 1, "denylist_entries": len(deny), "denylist_note": note,
             "hits": hits, "allowed": allowed}
 
 
 # ----------------------------------------------------------------------------- history scan
 
-def scan_history(repo: Path, denylist: Path | None = None) -> dict:
+def scan_history(repo: Path, denylist: Path | None = None, marker: Path | None = None) -> dict:
     """Scan everything reachable from every ref of `repo` (a checkout or a bare mirror): each commit and tag object
     whole (message, author, committer), each blob, and each path name. Personal patterns and the denylist only.
     {"refs", "commits", "tags", "blobs", "paths", "hits": [{object, kind, pattern, line, path?}], "hit_count",
     "by_pattern", "by_kind"}. Raises DenylistError."""
     repo = Path(repo)
-    pats = builtin_patterns() + denylist_patterns(load_denylist(denylist))
+    deny, note = denylist_entries(denylist, marker)
+    pats = builtin_patterns() + denylist_patterns(deny)
     refs = [ln for ln in _git(repo, "for-each-ref", "--format=%(refname)").decode().splitlines() if ln]
     objs = _git(repo, "rev-list", "--all", "--objects").decode().splitlines()
     first_path: dict[str, str] = {}
@@ -229,17 +250,19 @@ def scan_history(repo: Path, denylist: Path | None = None) -> dict:
         by_pattern[h["pattern"]] = by_pattern.get(h["pattern"], 0) + 1
         by_kind[h["kind"]] = by_kind.get(h["kind"], 0) + 1
     return {"refs": len(refs), "commits": counts["commit"], "tags": counts["tag"], "blobs": counts["blob"],
-            "paths": len(paths), "patterns": len(pats) + 1, "hit_count": len(hits), "hits": hits[:200],
+            "paths": len(paths), "patterns": len(pats) + 1, "denylist_note": note, "hit_count": len(hits),
+            "hits": hits[:200],
             "by_pattern": by_pattern, "by_kind": by_kind}
 
 
-def scan_files(files: list[Path], denylist: Path | None = None) -> dict:
+def scan_files(files: list[Path], denylist: Path | None = None, marker: Path | None = None) -> dict:
     """Personal patterns + denylist over loose files (e.g. saved PR bodies). {"files", "hits": [{file, line,
     pattern}]}. Raises DenylistError."""
-    pats = builtin_patterns() + denylist_patterns(load_denylist(denylist))
+    deny, note = denylist_entries(denylist, marker)
+    pats = builtin_patterns() + denylist_patterns(deny)
     hits = [{"file": str(f), "line": line, "pattern": label}
             for f in files for label, line in find_hits(Path(f).read_bytes(), pats, wording=False)]
-    return {"files": len(files), "patterns": len(pats) + 1, "hits": hits}
+    return {"files": len(files), "patterns": len(pats) + 1, "denylist_note": note, "hits": hits}
 
 
 def main(argv: list[str]) -> int:
