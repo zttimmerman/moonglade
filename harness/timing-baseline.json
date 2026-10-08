@@ -960,6 +960,1037 @@
    "status_in_run": "pass"
   }
  },
+ "checks_lanes2": {
+  "app.backups_window": {
+   "build_s": 0.0,
+   "duration_s": 145.89,
+   "run": "second-stack",
+   "s": 145.89,
+   "status_in_run": "pass"
+  },
+  "app.bundle_valid": {
+   "build_s": 0.0,
+   "duration_s": 6.02,
+   "run": "second-stack",
+   "s": 6.02,
+   "status_in_run": "pass"
+  },
+  "app.handoff_focus": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "app.icon": {
+   "build_s": 0.0,
+   "duration_s": 2.64,
+   "run": "second-stack",
+   "s": 2.64,
+   "status_in_run": "pass"
+  },
+  "app.launch_lifecycle": {
+   "build_s": 0.0,
+   "duration_s": 38.32,
+   "run": "second-stack",
+   "s": 38.32,
+   "status_in_run": "pass"
+  },
+  "app.loading_stages": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "app.loading_stages_warm": {
+   "build_s": 0.0,
+   "duration_s": 34.77,
+   "run": "second-stack",
+   "s": 34.77,
+   "status_in_run": "pass"
+  },
+  "app.names_running": {
+   "build_s": 0.0,
+   "duration_s": 38.97,
+   "run": "second-stack",
+   "s": 38.97,
+   "status_in_run": "pass"
+  },
+  "app.relocatable": {
+   "build_s": 0.0,
+   "duration_s": 38.6,
+   "run": "second-stack",
+   "s": 38.6,
+   "status_in_run": "pass"
+  },
+  "app.reopen_during_loading": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "app.reopen_focuses_game": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "app.reopen_unminimizes": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "app.shim_scope": {
+   "build_s": 0.0,
+   "duration_s": 0.05,
+   "run": "second-stack",
+   "s": 0.05,
+   "status_in_run": "pass"
+  },
+  "app.shutdown_window": {
+   "build_s": 0.0,
+   "duration_s": 45.46,
+   "run": "second-stack",
+   "s": 45.46,
+   "status_in_run": "pass"
+  },
+  "app.single_dock_icon": {
+   "build_s": 0.0,
+   "duration_s": 47.15,
+   "run": "second-stack",
+   "s": 47.15,
+   "status_in_run": "pass"
+  },
+  "app.single_instance": {
+   "build_s": 0.0,
+   "duration_s": 79.56,
+   "run": "second-stack",
+   "s": 79.56,
+   "status_in_run": "pass"
+  },
+  "app.startup_failure": {
+   "build_s": 0.0,
+   "duration_s": 10.72,
+   "run": "second-stack",
+   "s": 10.72,
+   "status_in_run": "pass"
+  },
+  "backups.failure_nonblocking": {
+   "build_s": 0.0,
+   "duration_s": 78.77,
+   "run": "second-stack",
+   "s": 78.77,
+   "status_in_run": "pass"
+  },
+  "backups.kill_safe": {
+   "build_s": 0.0,
+   "duration_s": 157.72,
+   "run": "second-stack",
+   "s": 157.72,
+   "status_in_run": "pass"
+  },
+  "backups.on_quit": {
+   "build_s": 0.0,
+   "duration_s": 69.36,
+   "run": "second-stack",
+   "s": 69.36,
+   "status_in_run": "pass"
+  },
+  "backups.player_untouched": {
+   "build_s": 0.0,
+   "duration_s": 0.74,
+   "run": "second-stack",
+   "s": 0.74,
+   "status_in_run": "pass"
+  },
+  "backups.restore_refusals": {
+   "build_s": 0.0,
+   "duration_s": 86.09,
+   "run": "second-stack",
+   "s": 86.09,
+   "status_in_run": "pass"
+  },
+  "backups.restore_roundtrip": {
+   "build_s": 0.0,
+   "duration_s": 105.4,
+   "run": "second-stack",
+   "s": 105.4,
+   "status_in_run": "pass"
+  },
+  "backups.rotation": {
+   "build_s": 0.0,
+   "duration_s": 42.71,
+   "run": "second-stack",
+   "s": 42.71,
+   "status_in_run": "pass"
+  },
+  "build.clean": {
+   "build_s": 16.2,
+   "duration_s": 16.2,
+   "run": "second-stack",
+   "s": 0.0,
+   "status_in_run": "pass"
+  },
+  "build.clean_smart": {
+   "build_s": 0.0,
+   "duration_s": 0.2,
+   "run": "second-stack",
+   "s": 0.2,
+   "status_in_run": "pass"
+  },
+  "build.downloads_pinned": {
+   "build_s": 0.0,
+   "duration_s": 0.83,
+   "run": "second-stack",
+   "s": 0.83,
+   "status_in_run": "pass"
+  },
+  "build.moved_repo": {
+   "build_s": 0.0,
+   "duration_s": 4.97,
+   "run": "second-stack",
+   "s": 4.97,
+   "status_in_run": "pass"
+  },
+  "build.pin_enforced": {
+   "build_s": 0.0,
+   "duration_s": 17.25,
+   "run": "second-stack",
+   "s": 17.25,
+   "status_in_run": "pass"
+  },
+  "build.playerbots_active": {
+   "build_s": 0.0,
+   "duration_s": 0.1,
+   "run": "second-stack",
+   "s": 0.1,
+   "status_in_run": "pass"
+  },
+  "client.build_refuses_pristine": {
+   "build_s": 0.0,
+   "duration_s": 1.67,
+   "run": "second-stack",
+   "s": 1.67,
+   "status_in_run": "pass"
+  },
+  "client.config_gate": {
+   "build_s": 0.0,
+   "duration_s": 65.35,
+   "run": "second-stack",
+   "s": 65.35,
+   "status_in_run": "pass"
+  },
+  "client.config_gen": {
+   "build_s": 0.0,
+   "duration_s": 0.23,
+   "run": "second-stack",
+   "s": 0.23,
+   "status_in_run": "pass"
+  },
+  "client.first_start_settings": {
+   "build_s": 0.0,
+   "duration_s": 72.5,
+   "run": "second-stack",
+   "s": 72.5,
+   "status_in_run": "pass"
+  },
+  "client.inspect": {
+   "build_s": 0.0,
+   "duration_s": 0.05,
+   "run": "second-stack",
+   "s": 0.05,
+   "status_in_run": "pass"
+  },
+  "client.launch_smoke": {
+   "build_s": 0.0,
+   "duration_s": 37.59,
+   "run": "second-stack",
+   "s": 37.59,
+   "status_in_run": "pass"
+  },
+  "client.login_text_clean": {
+   "build_s": 0.0,
+   "duration_s": 31.75,
+   "run": "second-stack",
+   "s": 31.75,
+   "status_in_run": "pass"
+  },
+  "client.patch0001_recorded": {
+   "build_s": 0.0,
+   "duration_s": 0.05,
+   "run": "second-stack",
+   "s": 0.05,
+   "status_in_run": "pass"
+  },
+  "client.play_build": {
+   "build_s": 0.0,
+   "duration_s": 2.24,
+   "run": "second-stack",
+   "s": 2.24,
+   "status_in_run": "pass"
+  },
+  "client.play_revert": {
+   "build_s": 0.0,
+   "duration_s": 6.35,
+   "run": "second-stack",
+   "s": 6.35,
+   "status_in_run": "pass"
+  },
+  "client.player_client_not_rebuilt": {
+   "build_s": 0.0,
+   "duration_s": 38.05,
+   "run": "second-stack",
+   "s": 38.05,
+   "status_in_run": "pass"
+  },
+  "client.player_config_untouched": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "client.pristine_locked": {
+   "build_s": 0.0,
+   "duration_s": 2.09,
+   "run": "second-stack",
+   "s": 2.09,
+   "status_in_run": "pass"
+  },
+  "client.protocol_badpass": {
+   "build_s": 0.0,
+   "duration_s": 5.31,
+   "run": "second-stack",
+   "s": 5.31,
+   "status_in_run": "pass"
+  },
+  "client.protocol_probe": {
+   "build_s": 0.0,
+   "duration_s": 0.61,
+   "run": "second-stack",
+   "s": 0.61,
+   "status_in_run": "pass"
+  },
+  "client.real_client_refused": {
+   "build_s": 0.0,
+   "duration_s": 2.9,
+   "run": "second-stack",
+   "s": 2.9,
+   "status_in_run": "pass"
+  },
+  "client.realmlist": {
+   "build_s": 0.0,
+   "duration_s": 0.09,
+   "run": "second-stack",
+   "s": 0.09,
+   "status_in_run": "pass"
+  },
+  "client.resolution_default": {
+   "build_s": 0.0,
+   "duration_s": 71.58,
+   "run": "second-stack",
+   "s": 71.58,
+   "status_in_run": "pass"
+  },
+  "client.resolution_gate": {
+   "build_s": 0.0,
+   "duration_s": 1.52,
+   "run": "second-stack",
+   "s": 1.52,
+   "status_in_run": "pass"
+  },
+  "client.stock_mode": {
+   "build_s": 0.0,
+   "duration_s": 105.08,
+   "run": "second-stack",
+   "s": 105.08,
+   "status_in_run": "pass"
+  },
+  "client.wording_addon": {
+   "build_s": 0.0,
+   "duration_s": 0.06,
+   "run": "second-stack",
+   "s": 0.06,
+   "status_in_run": "pass"
+  },
+  "comp.add_remove": {
+   "build_s": 0.0,
+   "duration_s": 6.01,
+   "run": "second-stack",
+   "s": 6.01,
+   "status_in_run": "pass"
+  },
+  "comp.assists": {
+   "build_s": 0.0,
+   "duration_s": 55.24,
+   "run": "second-stack",
+   "s": 55.24,
+   "status_in_run": "pass"
+  },
+  "comp.follows": {
+   "build_s": 0.0,
+   "duration_s": 33.35,
+   "run": "second-stack",
+   "s": 33.35,
+   "status_in_run": "pass"
+  },
+  "comp.quest_shared": {
+   "build_s": 0.0,
+   "duration_s": 6.55,
+   "run": "second-stack",
+   "s": 6.55,
+   "status_in_run": "pass"
+  },
+  "core.login_logout_race": {
+   "build_s": 0.0,
+   "duration_s": 5.76,
+   "run": "second-stack",
+   "s": 5.76,
+   "status_in_run": "pass"
+  },
+  "core.login_logout_race_baseline": {
+   "build_s": 17.7,
+   "duration_s": 63.62,
+   "run": "second-stack",
+   "s": 45.92,
+   "status_in_run": "pass"
+  },
+  "core.patch_applied": {
+   "build_s": 0.0,
+   "duration_s": 0.19,
+   "run": "second-stack",
+   "s": 0.19,
+   "status_in_run": "pass"
+  },
+  "core.playerbots_patches_applied": {
+   "build_s": 0.0,
+   "duration_s": 0.69,
+   "run": "second-stack",
+   "s": 0.69,
+   "status_in_run": "pass"
+  },
+  "era.default_on": {
+   "build_s": 0.0,
+   "duration_s": 0.93,
+   "run": "second-stack",
+   "s": 0.93,
+   "status_in_run": "pass"
+  },
+  "era.elites": {
+   "build_s": 0.0,
+   "duration_s": 10.18,
+   "run": "second-stack",
+   "s": 10.18,
+   "status_in_run": "pass"
+  },
+  "era.mounts": {
+   "build_s": 0.0,
+   "duration_s": 5.22,
+   "run": "second-stack",
+   "s": 5.22,
+   "status_in_run": "pass"
+  },
+  "era.quest_xp": {
+   "build_s": 0.0,
+   "duration_s": 1.37,
+   "run": "second-stack",
+   "s": 1.37,
+   "status_in_run": "pass"
+  },
+  "era.scope_guard": {
+   "build_s": 0.0,
+   "duration_s": 46.38,
+   "run": "second-stack",
+   "s": 46.38,
+   "status_in_run": "pass"
+  },
+  "era.sql_deterministic": {
+   "build_s": 0.0,
+   "duration_s": 22.43,
+   "run": "second-stack",
+   "s": 22.43,
+   "status_in_run": "pass"
+  },
+  "era.toggle_roundtrip": {
+   "build_s": 0.0,
+   "duration_s": 48.35,
+   "run": "second-stack",
+   "s": 48.35,
+   "status_in_run": "pass"
+  },
+  "era.xp_curve": {
+   "build_s": 0.0,
+   "duration_s": 0.91,
+   "run": "second-stack",
+   "s": 0.91,
+   "status_in_run": "pass"
+  },
+  "fixture.account_character": {
+   "build_s": 0.0,
+   "duration_s": 0.58,
+   "run": "second-stack",
+   "s": 0.58,
+   "status_in_run": "pass"
+  },
+  "fixture.add_item": {
+   "build_s": 0.0,
+   "duration_s": 0.37,
+   "run": "second-stack",
+   "s": 0.37,
+   "status_in_run": "pass"
+  },
+  "fixture.instant_logout": {
+   "build_s": 0.0,
+   "duration_s": 1.15,
+   "run": "second-stack",
+   "s": 1.15,
+   "status_in_run": "pass"
+  },
+  "fixture.level": {
+   "build_s": 0.0,
+   "duration_s": 0.37,
+   "run": "second-stack",
+   "s": 0.37,
+   "status_in_run": "pass"
+  },
+  "fixture.start_quest": {
+   "build_s": 0.0,
+   "duration_s": 0.84,
+   "run": "second-stack",
+   "s": 0.84,
+   "status_in_run": "pass"
+  },
+  "fixture.teleport": {
+   "build_s": 0.0,
+   "duration_s": 0.35,
+   "run": "second-stack",
+   "s": 0.35,
+   "status_in_run": "pass"
+  },
+  "gm.invalid": {
+   "build_s": 0.0,
+   "duration_s": 0.17,
+   "run": "second-stack",
+   "s": 0.17,
+   "status_in_run": "pass"
+  },
+  "gm.server_info": {
+   "build_s": 0.0,
+   "duration_s": 0.17,
+   "run": "second-stack",
+   "s": 0.17,
+   "status_in_run": "pass"
+  },
+  "harness.prefix_scope": {
+   "build_s": 0.0,
+   "duration_s": 4.45,
+   "run": "second-stack",
+   "s": 4.45,
+   "status_in_run": "pass"
+  },
+  "lane.independent_down": {
+   "build_s": 0.0,
+   "duration_s": 68.79,
+   "run": "second-stack",
+   "s": 68.79,
+   "status_in_run": "pass"
+  },
+  "lane.isolation": {
+   "build_s": 0.0,
+   "duration_s": 28.67,
+   "run": "second-stack",
+   "s": 28.67,
+   "status_in_run": "pass"
+  },
+  "lane.merge": {
+   "build_s": 0.0,
+   "duration_s": 60.87,
+   "run": "second-stack",
+   "s": 60.87,
+   "status_in_run": "pass"
+  },
+  "lane.orphans": {
+   "build_s": 0.0,
+   "duration_s": 43.09,
+   "run": "second-stack",
+   "s": 43.09,
+   "status_in_run": "pass"
+  },
+  "lane.paths": {
+   "build_s": 0.0,
+   "duration_s": 0.24,
+   "run": "second-stack",
+   "s": 0.24,
+   "status_in_run": "pass"
+  },
+  "lane.preflight": {
+   "build_s": 0.0,
+   "duration_s": 11.3,
+   "run": "second-stack",
+   "s": 11.3,
+   "status_in_run": "pass"
+  },
+  "lane.refusal": {
+   "build_s": 0.0,
+   "duration_s": 3.41,
+   "run": "second-stack",
+   "s": 3.41,
+   "status_in_run": "pass"
+  },
+  "lane.table": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "lifecycle.down": {
+   "build_s": 0.0,
+   "duration_s": 5.85,
+   "run": "second-stack",
+   "s": 5.85,
+   "status_in_run": "pass"
+  },
+  "lifecycle.failfast": {
+   "build_s": 0.0,
+   "duration_s": 6.57,
+   "run": "second-stack",
+   "s": 6.57,
+   "status_in_run": "pass"
+  },
+  "lifecycle.idempotent": {
+   "build_s": 0.0,
+   "duration_s": 0.7,
+   "run": "second-stack",
+   "s": 0.7,
+   "status_in_run": "pass"
+  },
+  "lifecycle.isolated": {
+   "build_s": 0.0,
+   "duration_s": 0.15,
+   "run": "second-stack",
+   "s": 0.15,
+   "status_in_run": "pass"
+  },
+  "lifecycle.persist": {
+   "build_s": 0.0,
+   "duration_s": 24.95,
+   "run": "second-stack",
+   "s": 24.95,
+   "status_in_run": "pass"
+  },
+  "lifecycle.up": {
+   "build_s": 0.0,
+   "duration_s": 24.21,
+   "run": "second-stack",
+   "s": 24.21,
+   "status_in_run": "pass"
+  },
+  "login.auto_login": {
+   "build_s": 0.0,
+   "duration_s": 78.24,
+   "run": "second-stack",
+   "s": 78.24,
+   "status_in_run": "pass"
+  },
+  "login.backdrop_choice": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "login.cancel_shows_list": {
+   "build_s": 0.0,
+   "duration_s": 147.48,
+   "run": "second-stack",
+   "s": 147.48,
+   "status_in_run": "pass"
+  },
+  "login.charselect_layout": {
+   "build_s": 0.0,
+   "duration_s": 0.04,
+   "run": "second-stack",
+   "s": 0.04,
+   "status_in_run": "pass"
+  },
+  "login.charselect_wording": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "login.continue_context": {
+   "build_s": 0.0,
+   "duration_s": 1.17,
+   "run": "second-stack",
+   "s": 1.17,
+   "status_in_run": "pass"
+  },
+  "login.fresh_menu_waits": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "login.friendly_errors": {
+   "build_s": 0.0,
+   "duration_s": 120.97,
+   "run": "second-stack",
+   "s": 120.97,
+   "status_in_run": "pass"
+  },
+  "login.loading_overlay": {
+   "build_s": 0.0,
+   "duration_s": 72.54,
+   "run": "second-stack",
+   "s": 72.54,
+   "status_in_run": "pass"
+  },
+  "login.no_glue_errors": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "login.overlay_progress": {
+   "build_s": 0.0,
+   "duration_s": 0.04,
+   "run": "second-stack",
+   "s": 0.04,
+   "status_in_run": "pass"
+  },
+  "login.overlay_progress_reload": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "play.client_crash_cleanup": {
+   "build_s": 0.0,
+   "duration_s": 34.62,
+   "run": "second-stack",
+   "s": 34.62,
+   "status_in_run": "pass"
+  },
+  "play.dock_identity": {
+   "build_s": 0.0,
+   "duration_s": 37.36,
+   "run": "second-stack",
+   "s": 37.36,
+   "status_in_run": "pass"
+  },
+  "play.interrupt_clean_exit": {
+   "build_s": 0.0,
+   "duration_s": 61.42,
+   "run": "second-stack",
+   "s": 61.42,
+   "status_in_run": "pass"
+  },
+  "play.loop_clean_exit": {
+   "build_s": 0.0,
+   "duration_s": 44.14,
+   "run": "second-stack",
+   "s": 44.14,
+   "status_in_run": "pass"
+  },
+  "play.offline": {
+   "build_s": 0.0,
+   "duration_s": 56.33,
+   "run": "second-stack",
+   "s": 56.33,
+   "status_in_run": "pass"
+  },
+  "play.player_account": {
+   "build_s": 0.0,
+   "duration_s": 92.66,
+   "run": "second-stack",
+   "s": 92.66,
+   "status_in_run": "pass"
+  },
+  "play.player_account_untouched": {
+   "build_s": 0.0,
+   "duration_s": 1.2,
+   "run": "second-stack",
+   "s": 1.2,
+   "status_in_run": "pass"
+  },
+  "play.single_instance": {
+   "build_s": 0.0,
+   "duration_s": 34.89,
+   "run": "second-stack",
+   "s": 34.89,
+   "status_in_run": "pass"
+  },
+  "play.stage_lines": {
+   "build_s": 0.0,
+   "duration_s": 0.08,
+   "run": "second-stack",
+   "s": 0.08,
+   "status_in_run": "pass"
+  },
+  "play.startup_failure": {
+   "build_s": 0.0,
+   "duration_s": 7.88,
+   "run": "second-stack",
+   "s": 7.88,
+   "status_in_run": "pass"
+  },
+  "play.world_progress": {
+   "build_s": 0.0,
+   "duration_s": 0.03,
+   "run": "second-stack",
+   "s": 0.03,
+   "status_in_run": "pass"
+  },
+  "power.bootstrap_resume": {
+   "build_s": 0.0,
+   "duration_s": 0.29,
+   "run": "second-stack",
+   "s": 0.29,
+   "status_in_run": "pass"
+  },
+  "power.jobs_default": {
+   "build_s": 0.0,
+   "duration_s": 0.25,
+   "run": "second-stack",
+   "s": 0.25,
+   "status_in_run": "pass"
+  },
+  "power.jobs_override": {
+   "build_s": 0.0,
+   "duration_s": 0.46,
+   "run": "second-stack",
+   "s": 0.46,
+   "status_in_run": "pass"
+  },
+  "power.pause_resume": {
+   "build_s": 0.0,
+   "duration_s": 0.23,
+   "run": "second-stack",
+   "s": 0.23,
+   "status_in_run": "pass"
+  },
+  "power.run_pause": {
+   "build_s": 0.0,
+   "duration_s": 3.89,
+   "run": "second-stack",
+   "s": 3.89,
+   "status_in_run": "pass"
+  },
+  "power.stop_low": {
+   "build_s": 0.0,
+   "duration_s": 1.06,
+   "run": "second-stack",
+   "s": 1.06,
+   "status_in_run": "pass"
+  },
+  "power.switch_refusal": {
+   "build_s": 0.0,
+   "duration_s": 0.98,
+   "run": "second-stack",
+   "s": 0.98,
+   "status_in_run": "pass"
+  },
+  "re.ghidra_installed": {
+   "build_s": 0.0,
+   "duration_s": 0.26,
+   "run": "second-stack",
+   "s": 0.26,
+   "status_in_run": "pass"
+  },
+  "re.ghidra_readonly": {
+   "build_s": 0.0,
+   "duration_s": 12.94,
+   "run": "second-stack",
+   "s": 12.94,
+   "status_in_run": "pass"
+  },
+  "re.ghidra_refuses_mismatch": {
+   "build_s": 0.0,
+   "duration_s": 0.11,
+   "run": "second-stack",
+   "s": 0.11,
+   "status_in_run": "pass"
+  },
+  "re.mpq_readonly": {
+   "build_s": 0.0,
+   "duration_s": 4.6,
+   "run": "second-stack",
+   "s": 4.6,
+   "status_in_run": "pass"
+  },
+  "re.mpq_write_roundtrip": {
+   "build_s": 0.0,
+   "duration_s": 0.86,
+   "run": "second-stack",
+   "s": 0.86,
+   "status_in_run": "pass"
+  },
+  "repo.agent_guard_hook": {
+   "build_s": 0.0,
+   "duration_s": 2.25,
+   "run": "second-stack",
+   "s": 2.25,
+   "status_in_run": "pass"
+  },
+  "repo.naming": {
+   "build_s": 0.0,
+   "duration_s": 0.13,
+   "run": "second-stack",
+   "s": 0.13,
+   "status_in_run": "pass"
+  },
+  "repo.portable": {
+   "build_s": 0.0,
+   "duration_s": 0.56,
+   "run": "second-stack",
+   "s": 0.56,
+   "status_in_run": "pass"
+  },
+  "repo.rename_script": {
+   "build_s": 0.0,
+   "duration_s": 4.29,
+   "run": "second-stack",
+   "s": 4.29,
+   "status_in_run": "pass"
+  },
+  "report.backups_tier_rule": {
+   "build_s": 0.0,
+   "duration_s": 0.53,
+   "run": "second-stack",
+   "s": 0.53,
+   "status_in_run": "pass"
+  },
+  "report.client_pristine": {
+   "build_s": 0.0,
+   "duration_s": 0.75,
+   "run": "second-stack",
+   "s": 0.75,
+   "status_in_run": "pass"
+  },
+  "report.coverage": {
+   "build_s": 0.0,
+   "duration_s": 0.01,
+   "run": "second-stack",
+   "s": 0.01,
+   "status_in_run": "pass"
+  },
+  "report.full_run": {
+   "build_s": 0.0,
+   "duration_s": 0.0,
+   "run": "second-stack",
+   "s": 0.0,
+   "status_in_run": "pass"
+  },
+  "report.gui_preflight": {
+   "build_s": 0.0,
+   "duration_s": 0.43,
+   "run": "second-stack",
+   "s": 0.43,
+   "status_in_run": "pass"
+  },
+  "report.gui_tier_rule": {
+   "build_s": 0.0,
+   "duration_s": 10.04,
+   "run": "second-stack",
+   "s": 10.04,
+   "status_in_run": "pass"
+  },
+  "report.keep_awake": {
+   "build_s": 0.0,
+   "duration_s": 11.36,
+   "run": "second-stack",
+   "s": 11.36,
+   "status_in_run": "pass"
+  },
+  "report.lanes": {
+   "build_s": 0.0,
+   "duration_s": 0.01,
+   "run": "second-stack",
+   "s": 0.01,
+   "status_in_run": "pass"
+  },
+  "report.last_full_run": {
+   "build_s": 0.0,
+   "duration_s": 0.15,
+   "run": "second-stack",
+   "s": 0.15,
+   "status_in_run": "pass"
+  },
+  "report.nightly": {
+   "build_s": 0.0,
+   "duration_s": 1.29,
+   "run": "second-stack",
+   "s": 1.29,
+   "status_in_run": "pass"
+  },
+  "report.orphans_healed": {
+   "build_s": 0.0,
+   "duration_s": 51.79,
+   "run": "second-stack",
+   "s": 51.79,
+   "status_in_run": "pass"
+  },
+  "report.schema": {
+   "build_s": 0.0,
+   "duration_s": 0.01,
+   "run": "second-stack",
+   "s": 0.01,
+   "status_in_run": "pass"
+  },
+  "report.slow_tier_rule": {
+   "build_s": 0.0,
+   "duration_s": 0.04,
+   "run": "second-stack",
+   "s": 0.04,
+   "status_in_run": "pass"
+  },
+  "report.tiers": {
+   "build_s": 0.0,
+   "duration_s": 139.78,
+   "run": "second-stack",
+   "s": 139.78,
+   "status_in_run": "pass"
+  },
+  "report.tiers_declared": {
+   "build_s": 0.0,
+   "duration_s": 0.14,
+   "run": "second-stack",
+   "s": 0.14,
+   "status_in_run": "pass"
+  },
+  "setup.preflight": {
+   "build_s": 0.0,
+   "duration_s": 4.16,
+   "run": "second-stack",
+   "s": 4.16,
+   "status_in_run": "pass"
+  },
+  "sql.assert_selftest": {
+   "build_s": 0.0,
+   "duration_s": 0.09,
+   "run": "second-stack",
+   "s": 0.09,
+   "status_in_run": "pass"
+  },
+  "sql.world_populated": {
+   "build_s": 0.0,
+   "duration_s": 0.13,
+   "run": "second-stack",
+   "s": 0.13,
+   "status_in_run": "pass"
+  }
+ },
  "host": {
   "disk_free_gb": 65.9,
   "machine": "arm64",
@@ -1023,6 +2054,165 @@
    ],
    "wall_s": 3093.1,
    "why": "these GUI focus checks failed instantly on a locked screen in save-backups-verifier2"
+  },
+  "second-stack": {
+   "finished": "2026-10-08T15:46:41+00:00",
+   "lanes": 2,
+   "machine": "arm64",
+   "repo_sha": "bf778b0a885fefc2e0af659c75320cb75c388354",
+   "source": "harness/out/last-full-run/results.json",
+   "started": "2026-10-08T15:02:02+00:00",
+   "used_for": [
+    "app.backups_window",
+    "app.bundle_valid",
+    "app.handoff_focus",
+    "app.icon",
+    "app.launch_lifecycle",
+    "app.loading_stages",
+    "app.loading_stages_warm",
+    "app.names_running",
+    "app.relocatable",
+    "app.reopen_during_loading",
+    "app.reopen_focuses_game",
+    "app.reopen_unminimizes",
+    "app.shim_scope",
+    "app.shutdown_window",
+    "app.single_dock_icon",
+    "app.single_instance",
+    "app.startup_failure",
+    "backups.failure_nonblocking",
+    "backups.kill_safe",
+    "backups.on_quit",
+    "backups.player_untouched",
+    "backups.restore_refusals",
+    "backups.restore_roundtrip",
+    "backups.rotation",
+    "build.clean",
+    "build.clean_smart",
+    "build.downloads_pinned",
+    "build.moved_repo",
+    "build.pin_enforced",
+    "build.playerbots_active",
+    "client.build_refuses_pristine",
+    "client.config_gate",
+    "client.config_gen",
+    "client.first_start_settings",
+    "client.inspect",
+    "client.launch_smoke",
+    "client.login_text_clean",
+    "client.patch0001_recorded",
+    "client.play_build",
+    "client.play_revert",
+    "client.player_client_not_rebuilt",
+    "client.player_config_untouched",
+    "client.pristine_locked",
+    "client.protocol_badpass",
+    "client.protocol_probe",
+    "client.real_client_refused",
+    "client.realmlist",
+    "client.resolution_default",
+    "client.resolution_gate",
+    "client.stock_mode",
+    "client.wording_addon",
+    "comp.add_remove",
+    "comp.assists",
+    "comp.follows",
+    "comp.quest_shared",
+    "core.login_logout_race",
+    "core.login_logout_race_baseline",
+    "core.patch_applied",
+    "core.playerbots_patches_applied",
+    "era.default_on",
+    "era.elites",
+    "era.mounts",
+    "era.quest_xp",
+    "era.scope_guard",
+    "era.sql_deterministic",
+    "era.toggle_roundtrip",
+    "era.xp_curve",
+    "fixture.account_character",
+    "fixture.add_item",
+    "fixture.instant_logout",
+    "fixture.level",
+    "fixture.start_quest",
+    "fixture.teleport",
+    "gm.invalid",
+    "gm.server_info",
+    "harness.prefix_scope",
+    "lane.independent_down",
+    "lane.isolation",
+    "lane.merge",
+    "lane.orphans",
+    "lane.paths",
+    "lane.preflight",
+    "lane.refusal",
+    "lane.table",
+    "lifecycle.down",
+    "lifecycle.failfast",
+    "lifecycle.idempotent",
+    "lifecycle.isolated",
+    "lifecycle.persist",
+    "lifecycle.up",
+    "login.auto_login",
+    "login.backdrop_choice",
+    "login.cancel_shows_list",
+    "login.charselect_layout",
+    "login.charselect_wording",
+    "login.continue_context",
+    "login.fresh_menu_waits",
+    "login.friendly_errors",
+    "login.loading_overlay",
+    "login.no_glue_errors",
+    "login.overlay_progress",
+    "login.overlay_progress_reload",
+    "play.client_crash_cleanup",
+    "play.dock_identity",
+    "play.interrupt_clean_exit",
+    "play.loop_clean_exit",
+    "play.offline",
+    "play.player_account",
+    "play.player_account_untouched",
+    "play.single_instance",
+    "play.stage_lines",
+    "play.startup_failure",
+    "play.world_progress",
+    "power.bootstrap_resume",
+    "power.jobs_default",
+    "power.jobs_override",
+    "power.pause_resume",
+    "power.run_pause",
+    "power.stop_low",
+    "power.switch_refusal",
+    "re.ghidra_installed",
+    "re.ghidra_readonly",
+    "re.ghidra_refuses_mismatch",
+    "re.mpq_readonly",
+    "re.mpq_write_roundtrip",
+    "repo.agent_guard_hook",
+    "repo.naming",
+    "repo.portable",
+    "repo.rename_script",
+    "report.backups_tier_rule",
+    "report.client_pristine",
+    "report.coverage",
+    "report.full_run",
+    "report.gui_preflight",
+    "report.gui_tier_rule",
+    "report.keep_awake",
+    "report.lanes",
+    "report.last_full_run",
+    "report.nightly",
+    "report.orphans_healed",
+    "report.schema",
+    "report.slow_tier_rule",
+    "report.tiers",
+    "report.tiers_declared",
+    "setup.preflight",
+    "sql.assert_selftest",
+    "sql.world_populated"
+   ],
+   "wall_s": 2679.6,
+   "why": "first 2-lane full run (baseline checks_lanes2)"
   },
   "test-loop-speedups": {
    "finished": "2026-10-08T03:17:06+00:00",

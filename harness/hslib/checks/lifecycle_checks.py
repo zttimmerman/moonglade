@@ -41,7 +41,7 @@ def up(ctx):
     info = soap.gm("server info")
     ev |= {"server_info": info.evidence(), "auth_port_open": stack.port_open(P.AUTH_PORT)}
     require(info.ok, "SOAP server info failed right after up", **ev)
-    require(ev["auth_port_open"], "auth port 3724 not accepting", **ev)
+    require(ev["auth_port_open"], f"auth port {P.AUTH_PORT} not accepting", **ev)
     return ev
 
 
@@ -68,7 +68,7 @@ def isolated(ctx):
     bad = [s for s in socks if not s.split()[-1].startswith("127.0.0.1:")]
     ev = {"datadir": datadir, "port": port, "listeners": socks, "non_localhost": bad, "repo": str(P.ROOT)}
     require(datadir and datadir.rstrip("/").startswith(str(P.ROOT)), "datadir outside repo", **ev)
-    require(port == str(P.MYSQL_PORT), "mysql port != 3307", **ev)
+    require(port == str(P.MYSQL_PORT), f"mysql port != {P.MYSQL_PORT}", **ev)
     require(socks, "no listening sockets found (lsof failed?)", **ev)
     require(not bad, "listener not bound to 127.0.0.1", **ev)
     return ev

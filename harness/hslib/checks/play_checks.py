@@ -107,10 +107,20 @@ class StandIn:
         shutil.rmtree(self.dir, ignore_errors=True)
 
 
-def play_processes(exclude=()) -> list[dict]:
+def process_lane(pid: int) -> str:
+    """The lane a process runs in: its environment's HS_LANE (unset or unreadable = lane A, the player's)."""
+    ae = procs.args_env(pid)
+    env = dict(e.split("=", 1) for e in (ae[1] if ae else []) if "=" in e)
+    return (env.get(P.LANE_ENV) or "").strip().lower() or "a"
+
+
+def play_processes(exclude=(), lane: str | None = None) -> list[dict]:
+    """./play processes of `lane` (default: this process's lane; "*" = every lane)."""
     me = os.getpid()
+    lane = lane or P.LANE
     return [{"pid": pid, "cmd": cmd[:200]} for pid, cmd in procs.table()
-            if "hslib.play" in cmd and pid != me and pid not in exclude]
+            if "hslib.play" in cmd and pid != me and pid not in exclude
+            and (lane == "*" or process_lane(pid) == lane)]
 
 
 def remaining(stand_in: StandIn | None = None) -> dict:
