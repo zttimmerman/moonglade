@@ -9,5 +9,5 @@
 - [x] 2.1 Measured: safe concurrency can't reach 25 min (requirement withdrawn, see the spec-change log); side lane reverted
 
 ## 3. Verify
-- [ ] 3.1 Verifier pass + full harness; `hs timing-baseline join` on the new full run
+- [x] 3.1 Verifier pass + full harness; `hs timing-baseline join` on the new full run
 - [ ] 3.2 (pending: Zach) Decide whether to install the nightly LaunchAgent
