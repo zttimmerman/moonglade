@@ -77,7 +77,7 @@ def rendered_option(conf, key: str) -> str | None:
 
 def quest_rate() -> float:
     """Rate.XP.Quest of the running config (Player::GetQuestRate; quests here are not Dungeon Finder quests)."""
-    v = rendered_option(P.SERVER_ETC / "worldserver.conf", "Rate.XP.Quest")
+    v = rendered_option(P.LANE_ETC / "worldserver.conf", "Rate.XP.Quest")
     if v is None:
         raise EraError("Rate.XP.Quest not found in the rendered worldserver.conf")
     return float(v)
@@ -539,7 +539,7 @@ def hp_rate(rank: int) -> float:
     for the rank (WorldConfig.cpp defaults 1.0)."""
     key = {0: "Rate.Creature.Normal.HP", 1: "Rate.Creature.Elite.Elite.HP", 2: "Rate.Creature.Elite.RAREELITE.HP",
            3: "Rate.Creature.Elite.WORLDBOSS.HP", 4: "Rate.Creature.Elite.RARE.HP"}.get(rank, "Rate.Creature.Elite.Elite.HP")
-    v = rendered_option(P.SERVER_ETC / "worldserver.conf", key)
+    v = rendered_option(P.LANE_ETC / "worldserver.conf", key)
     return f32(float(v) if v is not None else 1.0)
 
 

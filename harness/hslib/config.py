@@ -116,6 +116,8 @@ def _dbinfo(db: str) -> str:
 
 
 def render(dist: Path, out: Path, overrides: dict[str, str]) -> None:
+    """Write `out` from `dist` with `overrides`, atomically (a temp file renamed over it): a worldserver starting in
+    another lane while this lane renders never reads a half-written file (second-stack)."""
     text = dist.read_text()
     seen = set()
     for key, val in overrides.items():
@@ -126,10 +128,87 @@ def render(dist: Path, out: Path, overrides: dict[str, str]) -> None:
     missing = [k for k in overrides if k not in seen]
     if missing:
         text += "\n# --- harness additions ---\n" + "".join(f"{k} = {overrides[k]}\n" for k in missing)
-    out.write_text(text)
+    tmp = out.with_name(f".{out.name}.{os.getpid()}.tmp")
+    tmp.write_text(text)
+    os.replace(tmp, out)
 
 
-def common(logs: Path = P.LOGS, tmp: Path = P.ENV / "tmp", source: Path = P.CORE_SRC) -> dict:
+# ------------------------------------------------------------------------------- lane B: module keys as AC_* env
+# worldserver reads module confs only from the compiled-in _CONF_DIR/modules (server/etc/modules, lane A's), so lane B
+# can't render its own. AzerothCore lets every key be overridden by an AC_<UPPER_SNAKE> environment variable
+# (vendor/azerothcore-wotlk/src/common/Configuration/Config.cpp:370-447; GetValueDefault checks the env first), so
+# lane B passes every module key any profile sets (union over PROFILES, so lane A's rendering can't leak in), its DB
+# info and the command-server port as AC_* variables (stack._spawn). ADR-0011 decision 4.
+
+def env_var_name(key: str) -> str:
+    """Config.cpp IniKeyToEnvVarKey + GetEnvVarName, ported exactly."""
+    out, n = [], len(key)
+    for i, c in enumerate(key):
+        if c in " .-":
+            out.append("_")
+            continue
+        if i != n - 1:
+            nxt = key[i + 1]
+            if not c.isupper() and nxt.isupper():
+                out.append(c.upper() + "_")
+                continue
+            if not c.isdigit() and nxt.isdigit():
+                out.append(c.upper() + "_")
+                continue
+            if c.isdigit() and not nxt.isdigit():
+                out.append(c.upper() + "_")
+                continue
+        out.append(c.upper())
+    return "AC_" + "".join(out)
+
+
+def _dist_value(dist: Path, key: str) -> str | None:
+    m = re.search(rf"^{re.escape(key)}\s*=\s*(.*?)\s*$", dist.read_text(), re.M) if dist.exists() else None
+    return m.group(1) if m else None
+
+
+def _unquote(v: str) -> str:
+    return v[1:-1] if len(v) >= 2 and v[0] == v[-1] == '"' else v
+
+
+MODULE_SECTIONS = {"playerbots": "playerbots.conf.dist", "era": ERA_CONF + ".dist"}
+
+
+def module_overrides(prof: dict) -> dict[str, dict[str, str]]:
+    """{module .conf.dist name: overrides} for a profile's overrides (what write_all renders into module confs)."""
+    return {"playerbots.conf.dist": {"PlayerbotsDatabaseInfo": _dbinfo("playerbots"), **prof.get("playerbots", {}),
+                                     # command server binds 0.0.0.0 with no address option
+                                     # (PlayerbotCommandServer.cpp:62); off in every profile.
+                                     "AiPlayerbot.CommandServerPort": "0"},
+            ERA_CONF + ".dist": dict(prof.get("era", {}))}
+
+
+def module_env(prof: dict, mods: Path) -> dict[str, str]:
+    """AC_* variables that make a worldserver's module settings exactly `prof`'s, whatever server/etc/modules holds:
+    every key any profile sets gets the profile's value or else its .conf.dist default. Raises ConfigError (fail
+    closed) when a key has no value to give."""
+    ov = module_overrides(prof)
+    union: dict[str, set[str]] = {d: set(v) for d, v in ov.items()}
+    for name in PROFILES:
+        for d, v in module_overrides(overrides(name)).items():
+            union[d] |= set(v)
+    env = {}
+    for d, keys in union.items():
+        for k in sorted(keys):
+            val = ov[d].get(k)
+            if val is None:
+                val = _dist_value(mods / d, k)
+            if val is None:
+                raise ConfigError(f"lane B: {k} has no value (not in the profile, not in {mods / d})")
+            env[env_var_name(k)] = _unquote(val)
+    return env
+
+
+class ConfigError(RuntimeError):
+    pass
+
+
+def common(logs: Path = P.LOGS, tmp: Path = P.TMP, source: Path = P.CORE_SRC) -> dict:
     return {
         "LogsDir": f'"{logs}"',
         "TempDir": f'"{tmp}"',
@@ -140,19 +219,29 @@ def common(logs: Path = P.LOGS, tmp: Path = P.ENV / "tmp", source: Path = P.CORE
     }
 
 
-def write_all(world_datadir: Path | None = None, extra_world: dict | None = None, *, etc: Path = P.SERVER_ETC,
-              logs: Path = P.LOGS, run: Path = P.RUN, tmp: Path = P.ENV / "tmp", source: Path = P.CORE_SRC,
-              profile: str | None = None, population_n: int | None = None) -> dict:
+LANE_ENV_FILE = "ac-env.json"      # lane B: the AC_* variables stack._spawn gives the worldserver (in P.LANE_ETC)
+
+
+def write_all(world_datadir: Path | None = None, extra_world: dict | None = None, *, etc: Path = P.LANE_ETC,
+              logs: Path = P.LOGS, run: Path = P.RUN, tmp: Path = P.TMP, source: Path = P.CORE_SRC,
+              profile: str | None = None, population_n: int | None = None, dist_dir: Path | None = None) -> dict:
     """Render authserver/worldserver/module confs into `etc` with the given profile (see PROFILES). The keyword
-    paths default to the real stack; the unpatched baseline worldserver (core.login_logout_race_baseline) renders
-    its own install's confs with them."""
+    paths default to this lane's stack; the unpatched baseline worldserver (core.login_logout_race_baseline) renders
+    its own install's confs with them. The .conf.dist files come from `dist_dir` (default: `etc` in lane A, the
+    install's server/etc in lane B).
+    Lane B (second-stack): auth/world confs go to the lane's etc; module confs are rendered there too (a mirror for
+    readers such as era.default_on) while the worldserver gets their values as AC_* env (etc/ac-env.json), because it
+    only reads module confs from server/etc/modules, which stays lane A's."""
     prof = overrides(profile_name(profile), population_n)
-    for d in (logs, tmp, run):
+    lane_b = P.LANE != "a" and etc == P.LANE_ETC
+    dist_dir = dist_dir or (P.SERVER_ETC if lane_b else etc)
+    for d in (logs, tmp, run, etc):
         d.mkdir(parents=True, exist_ok=True)
     auth = common(logs, tmp, source) | {
         "LoginDatabaseInfo": _dbinfo("auth"),
         "PidFile": f'"{run / "authserver.pid"}"',
         "Updates.EnableDatabases": "1",
+        "RealmServerPort": str(P.AUTH_PORT),
     }
     world = common(logs, tmp, source) | {
         "LoginDatabaseInfo": _dbinfo("auth"),
@@ -164,6 +253,7 @@ def write_all(world_datadir: Path | None = None, extra_world: dict | None = None
         "SOAP.Enabled": "1",
         "SOAP.IP": '"127.0.0.1"',
         "SOAP.Port": str(P.SOAP_PORT),
+        "WorldServerPort": str(P.WORLD_PORT),
         "Ra.Enable": "0",
         "Updates.EnableDatabases": "7",
         "RealmID": "1",
@@ -181,19 +271,37 @@ def write_all(world_datadir: Path | None = None, extra_world: dict | None = None
         "Logger.entities.player": "4,Players",
         "Logger.entities.player.auctionhouse": "2,Players",
     } | prof["world"] | (extra_world or {})
-    render(etc / "authserver.conf.dist", etc / "authserver.conf", auth)
-    render(etc / "worldserver.conf.dist", etc / "worldserver.conf", world)
-    mods = etc / "modules"
+    render(dist_dir / "authserver.conf.dist", etc / "authserver.conf", auth)
+    render(dist_dir / "worldserver.conf.dist", etc / "worldserver.conf", world)
+    mods = dist_dir / "modules"
     rendered = []
+    mod_ov = module_overrides(prof)
+    if lane_b:
+        (etc / "modules").mkdir(parents=True, exist_ok=True)
     for dist in sorted(mods.glob("*.conf.dist")) if mods.exists() else []:
-        ov = {}
-        if dist.name == "playerbots.conf.dist":
-            ov["PlayerbotsDatabaseInfo"] = _dbinfo("playerbots")
-            ov |= prof["playerbots"]
-            # command server binds 0.0.0.0 with no address option (PlayerbotCommandServer.cpp:62); off in every profile.
-            ov["AiPlayerbot.CommandServerPort"] = "0"
-        elif dist.name == ERA_CONF + ".dist":
-            ov |= prof.get("era", {})
-        render(dist, dist.with_suffix(""), ov)
+        out = (etc / "modules" / dist.name) if lane_b else dist
+        render(dist, out.with_suffix(""), mod_ov.get(dist.name, {}))
         rendered.append(dist.with_suffix("").name)
-    return {"authserver.conf": auth, "worldserver.conf": world, "modules": rendered, "profile": profile_name(profile)}
+    out = {"authserver.conf": auth, "worldserver.conf": world, "modules": rendered, "profile": profile_name(profile)}
+    if lane_b:
+        env = module_env(prof, mods)
+        f = etc / LANE_ENV_FILE
+        tmp_f = f.with_name(f".{f.name}.{os.getpid()}.tmp")
+        tmp_f.write_text(json.dumps(env, indent=1, sort_keys=True))
+        os.replace(tmp_f, f)
+        out["ac_env"] = sorted(env)
+    return out
+
+
+def lane_env(etc: Path = P.LANE_ETC) -> dict[str, str]:
+    """Lane B's AC_* variables as write_all wrote them (stack._spawn). Lane A: none. Fails closed (ConfigError)
+    when lane B's file is missing or unreadable."""
+    if P.LANE == "a":
+        return {}
+    try:
+        env = json.loads((etc / LANE_ENV_FILE).read_text())
+    except (OSError, ValueError) as e:
+        raise ConfigError(f"lane B: no readable {etc / LANE_ENV_FILE} ({e}); render the confs first") from e
+    if not isinstance(env, dict) or not env or not all(k.startswith("AC_") for k in env):
+        raise ConfigError(f"lane B: {etc / LANE_ENV_FILE} is not a map of AC_* variables")
+    return {str(k): str(v) for k, v in env.items()}

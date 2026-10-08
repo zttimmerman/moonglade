@@ -13,7 +13,7 @@ SCENARIO_RE = re.compile(r"^#### Scenario:\s*(.+)$", re.M)
 CHECK_RE = re.compile(r"Check:\s*`([^`]+)`")
 HUMAN_RE = re.compile(r"\[human-verify\]\s*(\S.{10,})")
 POST_IDS = ("report.coverage", "report.schema", "report.full_run", "report.tiers", "report.client_pristine",
-            "report.timing")
+            "report.timing", "report.lanes")
 QUICK_BUDGET_S = 180          # spec: the quick tier finishes in under 3 minutes on the target Mac
 NOT_QUICK = ("build.clean", "client.launch_smoke", "lifecycle.persist")   # named by the spec
 QUICK_DIR = P.OUT / "quick-tier"   # where report.tiers' nested quick run writes its results
@@ -311,6 +311,9 @@ def post_run(doc, selected_ids, t_start=None, leave_up=False, pristine_start=Non
                 and (not m.get("filter") or any(fnmatch.fnmatch("report.client_pristine", g) for g in m.get("filter") or [])))
     out.append(pristine_checks.post_run_record(pristine_start, selftest))
 
+    # report.lanes (second-stack): meta.lanes agrees with the records; a two-lane full run ran every LANE_B check in B
+    from .lane_checks import lanes_record
+    out.append(lanes_record(doc, time.time() - (t_start or time.time())))
     out.append(full_run_record(doc, set(ev["referenced_ids"]), out))
     if self_mode:
         t0 = time.time()
@@ -374,11 +377,21 @@ def timing_problems(doc: dict, extra: list, wall_s: float, baseline: dict | None
     if not baseline:
         probs.append(f"no readable baseline at {TIMING_BASELINE.relative_to(P.ROOT)}")
         return probs, ev
+    # second-stack: like with like. A two-lane run's per-check times include the other lane's load, so they're
+    # compared with a two-lane baseline (checks_lanes2), never with the serial one (checks), and the reverse.
+    mode = lane_mode(m)
+    ev["lane_mode"] = mode
+    base = baseline["checks"] if mode == 1 else baseline.get(LANES2_KEY)
+    if not base:
+        ev["speed_target"] = (f"not evaluated: no {mode}-lane per-check baseline yet ({LANES2_KEY} in "
+                              f"{TIMING_BASELINE.relative_to(P.ROOT)}); join this clean run with `harness/hs "
+                              "timing-baseline join --label <change>`. Per-check times of a two-lane run aren't "
+                              "compared with serial ones")
+        return probs, ev
     gui_skipped = sorted(r["id"] for r in doc["checks"] if is_gui_skip(r, m, reg))
     bk_skipped = sorted(r["id"] for r in doc["checks"] if is_backups_skip(r, m, reg))
     by_id = {r["id"]: r for r in recs}
     executed = {r["id"] for r in recs if r["status"] != "skip"}
-    base = baseline["checks"]
     need = set(base) - set(gui_skipped) - set(bk_skipped) - {TIMING_SELF}
     not_run = sorted(need - executed)
     compared = sorted(need & executed)
@@ -405,6 +418,12 @@ def timing_problems(doc: dict, extra: list, wall_s: float, baseline: dict | None
 
 
 RACE_BASELINE = "core.login_logout_race_baseline"     # on runner.BUILD_CLAIM_ALLOWLIST
+LANES2_KEY = "checks_lanes2"          # the two-lane per-check baseline (timingbase.join of a two-lane full run)
+
+
+def lane_mode(meta: dict) -> int:
+    """1 or 2: the lanes a run actually used (meta.lanes.mode; runs from before second-stack were serial)."""
+    return 2 if (meta.get("lanes") or {}).get("mode") == 2 else 1
 
 
 def synthetic_timing_cases() -> dict:
@@ -434,13 +453,14 @@ def synthetic_timing_cases() -> dict:
     def r(i, s, build=None):
         return {"id": i, "status": "pass", "duration_s": s, "evidence": {"x": 1, **({"build_s": build} if build else {})}}
 
-    def run(recs, b=base):
+    def run(recs, b=base, lanes=1):
         meta = {"full_run": True, "tier": "full", "filter": [], "host": {"machine": "arm64"},
-                "backups_tier_skipped": [], "backups_rule": {"changed_backup_paths": []}}
+                "backups_tier_skipped": [], "backups_rule": {"changed_backup_paths": []}, "lanes": {"mode": lanes}}
         wall = sum(x["duration_s"] for x in recs)
         meta["timing"] = runner.timing_summary(recs, wall, reg, b)
         probs, ev = timing_problems({"meta": meta, "checks": recs}, [], wall, b, reg)
         return {"problems": probs, "now_sum_s": ev.get("now_sum_s"), "limit_s": ev.get("limit_s"),
+                "lane_mode": ev.get("lane_mode"), "speed_target": ev.get("speed_target"),
                 "build_s": ev.get("run_build_s"), "build_by_check_s": ev.get("build_by_check_s"),
                 "new_checks_s": ev.get("new_checks_s"), "warnings": ev.get("warnings"), "_ev": ev}
     cases = {
@@ -460,6 +480,17 @@ def synthetic_timing_cases() -> dict:
                                                      r("build.clean", 20.0)], base_f) | {"real_record": real}
     else:
         cases["f_race_baseline_real_rebuild"] = {"problems": [real["error"]], "real_record": real}
+    # second-stack (h-j): like with like. (h) a two-lane run 15 % slower than the serial baseline, with no two-lane
+    # baseline: not compared (not evaluated, no problem); (i) a two-lane run 15 % slower than a two-lane baseline:
+    # fails; (j) a serial run equal to the serial baseline passes although the two-lane baseline is far faster
+    b2 = {**base, "checks_lanes2": {"t.a": {"s": 500.0, "run": "r"}, RACE_BASELINE: {"s": 300.0, "run": "r"},
+                                    "build.clean": {"s": 0.0, "run": "r", "build_s": 20.0}}}
+    cases["h_two_lane_no_lanes2_baseline"] = run([r("t.a", 690.0), r(RACE_BASELINE, 460.0), r("build.clean", 20.0)],
+                                                 base, lanes=2)
+    cases["i_two_lane_15pct_slower_than_lanes2"] = run([r("t.a", 575.0), r(RACE_BASELINE, 345.0),
+                                                        r("build.clean", 20.0)], b2, lanes=2)
+    cases["j_serial_vs_serial_with_lanes2_present"] = run([r("t.a", 600.0), r(RACE_BASELINE, 400.0),
+                                                           r("build.clean", 20.0)], b2, lanes=1)
     # (g) report.timing's own record (its evidence over case c, a run with 420 s of build time) next to the other
     # records: the guard's summary of the run's build time is not a claim, so no warning names report.timing
     g_recs = [r("t.a", 600.0), r(RACE_BASELINE, 550.0, build=150.0), r("build.clean", 270.0)]
@@ -472,8 +503,14 @@ def synthetic_timing_cases() -> dict:
                                             "d_new_check_200s", "e_unallowlisted_claim_600s",
                                             "f_race_baseline_real_rebuild"))
     claim = lambda case, cid: any(f"`{cid}` claims" in w for w in case.get("warnings") or [])
+    h, i_, j = (cases[k] for k in ("h_two_lane_no_lanes2_baseline", "i_two_lane_15pct_slower_than_lanes2",
+                                   "j_serial_vs_serial_with_lanes2_present"))
     verdict = {
         "a_fails": bool(a["problems"]),
+        "h_two_lane_not_compared_with_serial": not h["problems"] and h["lane_mode"] == 2
+                                               and "not evaluated" in (h["speed_target"] or "") and h["now_sum_s"] is None,
+        "i_two_lane_slowdown_fails": bool(i_["problems"]) and i_["lane_mode"] == 2 and i_["limit_s"] == 880.0,
+        "j_serial_compared_with_serial": not j["problems"] and j["lane_mode"] == 1 and j["limit_s"] == 1100.0,
         "b_passes_reporting_new_time": not b_["problems"] and b_["new_checks_s"] == {"t.new1": 150.0, "t.new2": 150.0}
                                        and not b_["warnings"],
         "c_passes_reporting_build_time": not c["problems"] and c["build_s"] == 420.0 and not c["new_checks_s"],
