@@ -306,54 +306,86 @@ def backups_tier_skips(reg: dict, tier: str, only: list[str] | None, changed: bo
                   key=lambda c: (c.order, c.id))
 
 
+def run_one(c, ctx: dict, ensure=None, say=log, lane: str = "main") -> dict:
+    """Execute one check: bring the stack to its state with `ensure` (None: don't touch the stack; the side lane's
+    checks are all stack="any"), call it, and turn the outcome into a record."""
+    rec = {"id": c.id, "capability": c.capability, "description": c.doc}
+    t0 = time.time()
+    try:
+        if ensure is not None:
+            ensure(c.stack, ctx, c.profile)
+        ev = c.fn(ctx) or {}
+        rec |= {"status": "pass", "evidence": ev}
+    except CheckFail as e:
+        rec |= {"status": "fail", "message": str(e), "evidence": e.evidence}
+    except CheckSkip as e:
+        rec |= {"status": "skip", "message": str(e), "evidence": {"skip_reason": str(e)}}
+    except Exception as e:  # noqa: BLE001
+        excerpt = getattr(e, "log_excerpt", "")
+        rec |= {"status": "error", "message": f"{type(e).__name__}: {e}",
+                "evidence": {"traceback": traceback.format_exc()[-3000:], **({"log_excerpt": excerpt} if excerpt else {})}}
+    rec["duration_s"] = round(time.time() - t0, 2)
+    say(f"{rec['status'].upper():5} {c.id} ({rec['duration_s']}s){'  ' + rec.get('message', '') if rec['status'] != 'pass' else ''}"
+        f"{'  [side lane]' if lane == 'side' else ''}")
+    return rec
+
+
 def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: bool = False,
-            gui_skips: list = (), backups_skips: list = ()) -> list[dict]:
+            gui_skips: list = (), backups_skips: list = (), serial: bool = True) -> list[dict]:
     """Run `checks` in (order, id) sequence, recording `slow_skips` as skip ("slow tier") and `gui_skips` as skip
     ("gui tier") in their place. `ensure(stack_want, ctx, profile)` brings the stack to each check's required state
-    (default _ensure_stack). `quiet` suppresses the per-check log lines (synthetic runs of the report.* rules)."""
+    (default _ensure_stack). `quiet` suppresses the per-check log lines (synthetic runs of the report.* rules).
+    test-loop-speedups (B36): unless `serial`, the side-lane checks (sidelane.SIDE_LANE) run in a worker process
+    alongside the main lane's early checks (sidelane.PRE_BARRIER); the main lane waits for the worker before any
+    other check. Records come back in (order, id) sequence either way. ctx["schedule"] records what happened."""
     ensure = ensure or _ensure_stack
     say = (lambda _m: None) if quiet else log
+    from . import sidelane
+    main_checks, side_checks = sidelane.split(checks, serial)
+    lane = None
+    sched = {"mode": "serial" if serial else "parallel", "side_lane": [c.id for c in side_checks]}
+    ctx["schedule"] = sched
+    if side_checks:
+        say(f"side lane: {len(side_checks)} check(s) in a worker alongside the early main-lane checks")
+        lane = sidelane.SideLane(side_checks, say).start()
+    side_recs: dict = {}
+
+    def barrier(before: str | None):
+        nonlocal side_recs
+        if lane is not None and lane.result is None:
+            side_recs = lane.wait()
+            sched["side_lane_info"] = lane.info | {"barrier_before": before}
     skip_ids = {c.id for c in slow_skips}
     gui_ids = {c.id for c in gui_skips}
     bk_ids = {c.id for c in backups_skips}
     results = []
-    for c in sorted([*checks, *slow_skips, *gui_skips, *backups_skips], key=lambda c: (c.order, c.id)):
-        rec = {"id": c.id, "capability": c.capability, "description": c.doc}
-        if c.id in skip_ids:
-            rec |= {"status": "skip", "message": SLOW_SKIP_MSG, "duration_s": 0.0,
-                    "evidence": {"skip_reason": SLOW_SKIP_MSG, "tier": c.tier, "slow_tier": True}}
-            say(f"SKIP  {c.id}  {SLOW_SKIP_MSG}")
-            results.append(rec)
-            continue
-        if c.id in gui_ids:
-            rec |= {"status": "skip", "message": GUI_SKIP_MSG, "duration_s": 0.0,
-                    "evidence": {"skip_reason": GUI_SKIP_MSG, "tier": c.tier, "gui_tier": True}}
-            say(f"SKIP  {c.id}  {GUI_SKIP_MSG}")
-            results.append(rec)
-            continue
-        if c.id in bk_ids:
-            rec |= {"status": "skip", "message": BACKUPS_SKIP_MSG, "duration_s": 0.0,
-                    "evidence": {"skip_reason": BACKUPS_SKIP_MSG, "tier": c.tier, "backups_tier": True}}
-            say(f"SKIP  {c.id}  {BACKUPS_SKIP_MSG}")
-            results.append(rec)
-            continue
-        t0 = time.time()
-        try:
-            ensure(c.stack, ctx, c.profile)
-            ev = c.fn(ctx) or {}
-            rec |= {"status": "pass", "evidence": ev}
-        except CheckFail as e:
-            rec |= {"status": "fail", "message": str(e), "evidence": e.evidence}
-        except CheckSkip as e:
-            rec |= {"status": "skip", "message": str(e), "evidence": {"skip_reason": str(e)}}
-        except Exception as e:  # noqa: BLE001
-            excerpt = getattr(e, "log_excerpt", "")
-            rec |= {"status": "error", "message": f"{type(e).__name__}: {e}",
-                    "evidence": {"traceback": traceback.format_exc()[-3000:], **({"log_excerpt": excerpt} if excerpt else {})}}
-        rec["duration_s"] = round(time.time() - t0, 2)
-        say(f"{rec['status'].upper():5} {c.id} ({rec['duration_s']}s){'  ' + rec.get('message', '') if rec['status'] != 'pass' else ''}")
-        results.append(rec)
+    try:
+        for c in sorted([*main_checks, *slow_skips, *gui_skips, *backups_skips], key=lambda c: (c.order, c.id)):
+            if c.id not in sidelane.PRE_BARRIER and c.id not in skip_ids | gui_ids | bk_ids:
+                barrier(c.id)
+            results.append(_record_one(c, ctx, ensure, say, skip_ids, gui_ids, bk_ids))
+        barrier(None)
+    finally:
+        if lane is not None:
+            lane.kill()                       # only does something if the main lane raised
+    for c in side_checks:
+        r = side_recs[c.id]
+        results.append({"id": c.id, "capability": c.capability, "description": c.doc}
+                       | {k: v for k, v in r.items() if k not in ("id", "capability", "description")})
+    order = {c.id: (c.order, c.id) for c in [*checks, *slow_skips, *gui_skips, *backups_skips]}
+    results.sort(key=lambda r: order[r["id"]])
     return results
+
+
+def _record_one(c, ctx, ensure, say, skip_ids, gui_ids, bk_ids) -> dict:
+    """The record of one main-lane entry: a by-design skip in its place, or the executed check."""
+    for ids, msg, flag in ((skip_ids, SLOW_SKIP_MSG, "slow_tier"), (gui_ids, GUI_SKIP_MSG, "gui_tier"),
+                           (bk_ids, BACKUPS_SKIP_MSG, "backups_tier")):
+        if c.id in ids:
+            say(f"SKIP  {c.id}  {msg}")
+            return {"id": c.id, "capability": c.capability, "description": c.doc, "status": "skip", "message": msg,
+                    "duration_s": 0.0, "evidence": {"skip_reason": msg, "tier": c.tier, flag: True}}
+    return run_one(c, ctx, ensure, say)
 
 
 def backups_tier_s(records: list[dict], reg: dict | None = None) -> float:
@@ -511,7 +543,7 @@ def gui_preflight(tier: str, only: list[str] | None, ignore: bool, probe, rule_f
 
 
 def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full",
-        force_clean: bool = False, preflight: dict | None = None) -> int:
+        force_clean: bool = False, preflight: dict | None = None, serial: bool = False) -> int:
     # test-loop-speedups: a run file (env/run/harness-runs/) tags this run's subprocesses, so a later run can heal
     # them if this one is killed; removed on every exit except a kill
     from . import runreg
@@ -530,12 +562,12 @@ def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full
         # F12: a mysqld stall ("Semaphore wait > 600 s") happened while the display slept; hold a no-sleep assertion
         # (test-loop-speedups "Runs keep the display awake": caffeinate -d ... -w <this pid>)
         with keep_awake() as awake:
-            return _run(only, leave_up, tier, force_clean, awake, preflight, orphans | {"run": rec})
+            return _run(only, leave_up, tier, force_clean, awake, preflight, orphans | {"run": rec}, serial)
     finally:
         runreg.finish(rec)
 
 
-def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None) -> int:
+def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None, serial=False) -> int:
     t_start = time.time()
     reg = load_all()
     rule = gui_rule() if tier in ("full", "slow") else None
@@ -553,6 +585,8 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None)
         "gui_tier_skipped": [c.id for c in gui_skips], "gui_rule": rule,
         "backups_tier_skipped": [c.id for c in bk_skips], "backups_rule": bk_rule,
         "keep_awake": awake, "gui_preflight": preflight, "orphans": orphans,
+        # test-loop-speedups (B36): "serial" (`--serial`, the reference schedule) or "parallel" (the side lane)
+        "schedule": {"mode": "serial" if serial else "parallel"},
         "filter": only or [], "host": {"platform": platform.platform(), "machine": platform.machine(),
                                       "python": platform.python_version(), "disk_free_gb": round(du.free / 2**30, 1)},
     }
@@ -584,7 +618,8 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None)
     if bk_rule is not None:
         log(f"Backups rule: {'backups checks run' if backups_changed(bk_rule) else 'backups checks skipped by design'} "
             f"(changed backup paths: {bk_rule['changed_backup_paths']}{'; ' + bk_rule['error'] if bk_rule['error'] else ''})")
-    results = execute(selected, ctx, slow_skips, gui_skips=gui_skips, backups_skips=bk_skips)
+    results = execute(selected, ctx, slow_skips, gui_skips=gui_skips, backups_skips=bk_skips, serial=serial)
+    meta["schedule"] = ctx.get("schedule") or meta["schedule"]
 
     if not leave_up and any(stack.stack_processes().values()):
         ctx.setdefault("stack_transitions", []).append({"down(final)": stack.down()})
@@ -598,6 +633,8 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None)
         doc["checks"].append(rec)
     doc["meta"]["finished"] = _now()      # after the post-run checks (report.tiers may run a nested quick tier)
     doc["meta"]["wall_s"] = round(time.time() - t_start, 1)
+    from . import fullwall
+    fullwall.finalize(doc, reg)           # report.full_run_wall re-judged with the final wall time
     doc["meta"]["timing"] = timing_summary(doc["checks"], doc["meta"]["wall_s"])
     doc["meta"]["counts"] = {s: sum(1 for r in doc["checks"] if r["status"] == s) for s in ("pass", "fail", "error", "skip")}
     doc["meta"]["ok"] = run_ok(doc)
@@ -618,23 +655,32 @@ def keeps_last_full_run(meta: dict) -> bool:
     return meta.get("full_run") is True and meta.get("tier") == "full" and not meta.get("filter")
 
 
-def write_outputs(doc: dict, results: Path, summary: Path, last_dir: Path | None = None) -> dict:
+def write_outputs(doc: dict, results: Path, summary: Path, last_dir: Path | None = None,
+                  serial_dir: Path | None = None) -> dict:
     """Write results.json + summary.md, and a copy of both to `last_dir` (default LAST_FULL_RUN) when the run
     keeps_last_full_run. Returns {"results", "summary", "last_full_run": dir or None}."""
     text, md = json.dumps(doc, indent=2, default=str), summary_md(doc)
     results.write_text(text)
     summary.write_text(md)
     log(f"wrote {results} and {summary}")
-    last = None
+    last = serial_copy = None
     if keeps_last_full_run(doc["meta"]):
         last = Path(last_dir or LAST_FULL_RUN)
-        last.mkdir(parents=True, exist_ok=True)
-        for name, body in (("results.json", text), ("summary.md", md)):
-            tmp = last / f".{name}.tmp"
-            tmp.write_text(body)
-            tmp.replace(last / name)
-        log(f"kept a copy in {last}")
-    return {"results": str(results), "summary": str(summary), "last_full_run": None if last is None else str(last)}
+        dirs = [last]
+        # test-loop-speedups (B36): a --serial full run is also kept as the status reference (report.full_run_wall)
+        if (doc["meta"].get("schedule") or {}).get("mode") == "serial":
+            from .fullwall import SERIAL_DIR
+            serial_copy = Path(serial_dir or SERIAL_DIR)
+            dirs.append(serial_copy)
+        for d in dirs:
+            d.mkdir(parents=True, exist_ok=True)
+            for name, body in (("results.json", text), ("summary.md", md)):
+                tmp = d / f".{name}.tmp"
+                tmp.write_text(body)
+                tmp.replace(d / name)
+            log(f"kept a copy in {d}")
+    return {"results": str(results), "summary": str(summary), "last_full_run": None if last is None else str(last),
+            "serial_reference": None if serial_copy is None else str(serial_copy)}
 
 
 def timing_lines(doc) -> list[str]:
@@ -658,7 +704,8 @@ def summary_md(doc) -> str:
         "",
         f"- Run: {m['started']} → {m['finished']}  (tier {m.get('tier', 'full')}, "
         f"{'full run' if m['full_run'] else 'not a full run' + (': filtered ' + ' '.join(m['filter']) if m['filter'] else '')}"
-        f"{', --force-clean' if m.get('force_clean') else ''}; wall {m.get('wall_s', '?')} s)",
+        f"{', --force-clean' if m.get('force_clean') else ''}; wall {m.get('wall_s', '?')} s"
+        f"{'; schedule ' + m['schedule']['mode'] if (m.get('schedule') or {}).get('mode') else ''})",
         f"- Repo: `{m['repo_sha']}`  core `{m['fork_lock'].get('core_sha', '')[:12]}`  playerbots `{m['fork_lock'].get('playerbots_sha', '')[:12]}`",
         f"- Counts: {c['pass']} pass, {c['fail']} fail, {c['error']} error, {c['skip']} skip. Disk free: {m['host']['disk_free_gb']} GB",
         "- Slowest: " + ", ".join(f"`{t['id']}` {t['s']}s" for t in (m.get("timing") or {}).get("top10", [])[:5]),

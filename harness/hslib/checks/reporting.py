@@ -13,7 +13,7 @@ SCENARIO_RE = re.compile(r"^#### Scenario:\s*(.+)$", re.M)
 CHECK_RE = re.compile(r"Check:\s*`([^`]+)`")
 HUMAN_RE = re.compile(r"\[human-verify\]\s*(\S.{10,})")
 POST_IDS = ("report.coverage", "report.schema", "report.full_run", "report.tiers", "report.client_pristine",
-            "report.timing")
+            "report.timing", "report.full_run_wall")
 QUICK_BUDGET_S = 180          # spec: the quick tier finishes in under 3 minutes on the target Mac
 NOT_QUICK = ("build.clean", "client.launch_smoke", "lifecycle.persist")   # named by the spec
 QUICK_DIR = P.OUT / "quick-tier"   # where report.tiers' nested quick run writes its results
@@ -192,10 +192,12 @@ def _tiers_record(probs, ev, t0):
             **({} if ok else {"message": "; ".join(probs)[:300]})}
 
 
-def tiers_nested(leave_up: bool) -> dict:
-    """Run `harness/hs run --tier quick` as a subprocess (results under harness/out/quick-tier/) and check it."""
+def tiers_nested(leave_up: bool, serial: bool = False) -> dict:
+    """Run `harness/hs run --tier quick` as a subprocess (results under harness/out/quick-tier/) and check it. A
+    `--serial` run's nested quick tier is serial too."""
     t0 = time.time()
-    cmd = [str(P.HARNESS / "hs"), "run", "--tier", "quick", "--results-dir", str(QUICK_DIR)] + (["--leave-up"] if leave_up else [])
+    cmd = ([str(P.HARNESS / "hs"), "run", "--tier", "quick", "--results-dir", str(QUICK_DIR)]
+           + (["--leave-up"] if leave_up else []) + (["--serial"] if serial else []))
     r = subprocess.run(cmd, capture_output=True, text=True, timeout=1800)
     wall = time.time() - t0
     (QUICK_DIR / "stderr.log").write_text(r.stderr)
@@ -289,7 +291,7 @@ def post_run(doc, selected_ids, t_start=None, leave_up=False, pristine_start=Non
     nested = not self_mode and ((not m.get("filter") and m.get("tier") not in ("gui", "backups"))
                                 or any(fnmatch.fnmatch("report.tiers", g) for g in m.get("filter") or []))
     if nested:
-        out.append(tiers_nested(leave_up))
+        out.append(tiers_nested(leave_up, serial=(m.get("schedule") or {}).get("mode") == "serial"))
 
     t0 = time.time()
     schema = json.loads((P.HARNESS / "results.schema.json").read_text())
@@ -311,6 +313,13 @@ def post_run(doc, selected_ids, t_start=None, leave_up=False, pristine_start=Non
                 and (not m.get("filter") or any(fnmatch.fnmatch("report.client_pristine", g) for g in m.get("filter") or [])))
     out.append(pristine_checks.post_run_record(pristine_start, selftest))
 
+    # test-loop-speedups (B36) report.full_run_wall: unfiltered full-tier runs (this run's wall time), or a filtered run
+    # that names it (judges the kept last full run); before report.full_run, which counts it
+    if (m.get("tier") == "full" and not m.get("filter")) or any(fnmatch.fnmatch("report.full_run_wall", g)
+                                                               for g in m.get("filter") or []):
+        from .. import fullwall
+        out.append(fullwall.record({"meta": m, "checks": doc["checks"] + out}, time.time() - (t_start or time.time()),
+                                   REGISTRY))
     out.append(full_run_record(doc, set(ev["referenced_ids"]), out))
     if self_mode:
         t0 = time.time()
