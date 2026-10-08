@@ -179,8 +179,9 @@ class Guard:
     into the stop message). `say` prints a line for the person; `sink` (optional) also writes it to a log file."""
 
     def __init__(self, what: str, resume: str, ignore: bool = False, say=None, sink=None,
+                 again: str = "it continues from where it stopped.",
                  battery: Battery | None = None, poll_s: float | None = None):
-        self.what, self.resume, self.ignore = what, resume, ignore
+        self.what, self.resume, self.ignore, self.again = what, resume, ignore, again
         self.say = say or (lambda m: print(m, flush=True))
         self.sink = sink
         self.battery = battery or Battery()
@@ -223,8 +224,7 @@ class Guard:
                 self.stopped = {"step": step, "percent": pct, "at": rec["end"]}
                 msg = (f"Stopped: {self.what} stopped before {step} because the battery fell to {pct} % while paused "
                        f"(Moonglade stops at {STOP_PCT} % so the Mac doesn't shut down). Plug in a stronger charger, "
-                       f"let the battery charge above {RESUME_PCT} %, then run {self.resume} again; it continues from "
-                       "where it stopped.")
+                       f"let the battery charge above {RESUME_PCT} %, then run {self.resume} again; {self.again}")
                 self._out(msg)
                 raise PowerStop(msg, rec)
             if pct is not None and pct >= RESUME_PCT:

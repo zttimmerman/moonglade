@@ -555,7 +555,8 @@ POWER_GUARDED_TIERS = ("full", "slow", "gui")
 def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None, ignore_power=False) -> int:
     t_start = time.time()
     from . import power
-    guard = (power.Guard(f"the harness run (tier {tier})", "the same `harness/hs run` command", ignore_power, say=log)
+    guard = (power.Guard(f"the harness run (tier {tier})", "the same `harness/hs run` command", ignore_power, say=log,
+                         again="it runs the checks again from the start.")
              if tier in POWER_GUARDED_TIERS else None)
     import os as _os
     for _v in power.TEST_ENV:            # read by the guard above; never inherited by the checks' own subprocesses
