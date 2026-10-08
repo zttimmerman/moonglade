@@ -28,6 +28,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tarfile
@@ -48,6 +49,7 @@ ALLOWLIST = TOOLS / "allowlist.json"
 FORBIDDEN = ("/opt/homebrew", "/usr/local", "/Users/")
 SYSTEM = ("/usr/lib/", "/System/")
 MAX_ZIP_BYTES = 200 * 1000 * 1000          # spec: "the download stays under 200 MB"
+REFUSAL_TIMEOUT_S = 180                   # a refusal takes ~1 s (hashing the earlier pins); 180 s is far beyond that
 PACKAGE_TIMEOUT = 3 * 3600                 # a from-empty portable build is ~30 min on the dev Mac; ccache makes reruns fast
 
 
@@ -274,8 +276,19 @@ def pin_refusals(cache_src: Path) -> dict:
                 else:
                     subprocess.run(["/bin/cp", "-c", str(cache_src / f), str(cache / f)], check=True)
             junk = cache / D.pin(name, lock)["file"]
-            r = subprocess.run([str(PACKAGE), "all", "--work", str(work), "--cache", str(cache)],
-                               capture_output=True, text=True, timeout=600, cwd=P.ROOT)
+            # a refused input stops packaging within seconds; one that isn't refused would go on to a full build, so
+            # it gets REFUSAL_TIMEOUT_S and then the whole process group is stopped (recorded as not refused)
+            proc = subprocess.Popen([str(PACKAGE), "all", "--work", str(work), "--cache", str(cache)],
+                                    stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, cwd=P.ROOT,
+                                    start_new_session=True)
+            try:
+                so, se = proc.communicate(timeout=REFUSAL_TIMEOUT_S)
+                rc = proc.returncode
+            except subprocess.TimeoutExpired:
+                os.killpg(proc.pid, signal.SIGKILL)
+                so, se = proc.communicate()
+                rc, se = "timeout", (se or "") + f"\n[still running after {REFUSAL_TIMEOUT_S} s: not refused]"
+            r = subprocess.CompletedProcess(proc.args, rc, so, se)
             text = r.stdout + r.stderr
             left = sorted(str(p.relative_to(work)) for p in work.rglob("*")
                           if p.relative_to(work).parts[0] in ("payload", "out", "payload.tmp", "build"))
@@ -306,7 +319,7 @@ def pins(ctx):
             "control: the real cached inputs didn't pass their pins", **ev)
     ev["refusals"] = pin_refusals(D.RELEASE_CACHE)
     for name, x in ev["refusals"].items():
-        require(x["rc"] != 0 and x["names_input"] and x["says_mismatch"],
+        require(x["rc"] not in (0, "timeout") and x["names_input"] and x["says_mismatch"],
                 f"{name}: a wrong-hash input wasn't refused by name", **ev)
         require(x["junk_removed"], f"{name}: the wrong-hash file was kept", **ev)
         require(not x["left_behind"], f"{name}: packaging left {x['left_behind']}", **ev)
