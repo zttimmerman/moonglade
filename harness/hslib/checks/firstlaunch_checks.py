@@ -307,7 +307,7 @@ def flow(ctx):
         fl = [e for e in evs if e.get("kind") == "firstlaunch"]
         steps = [(e.get("step"), e.get("state")) for e in fl if e.get("event") == "step"]
         prog = [e for e in fl if e.get("event") == "progress"]
-        bars = [e.get("bar") for e in fl] + [e.get("bar") for e in win]
+        bars = [e.get("bar") for e in evs if e.get("kind") in ("firstlaunch", "setup_window")]   # in order
         done_win = next((e for e in win if e.get("state") == "done"), {})
         ev["app"] = {"rc": r["rc"], "windows": [(e["state"], e["title"]) for e in win], "steps": steps,
                      "progress": {k: [(p["done"], p["total"]) for p in prog if p.get("name") == k][-3:]
