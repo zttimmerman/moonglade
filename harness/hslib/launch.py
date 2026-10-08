@@ -138,11 +138,11 @@ def _ps_env() -> list[tuple[int, str]]:
     return procs.table(with_env=True, own_only=True)
 
 
-def server_dir() -> Path | None:
+def server_dir(prefix: Path | None = None) -> Path | None:
     """Wine's per-prefix server directory: /tmp/.wine-<uid>/server-<st_dev hex>-<st_ino hex>
-    of the prefix dir. Every process attached to this prefix's wineserver maps a file in it."""
+    of the prefix dir (default: this lane's). Every process attached to this prefix's wineserver maps a file in it."""
     try:
-        st = P.WINEPREFIX.stat()
+        st = (prefix or P.WINEPREFIX).stat()
     except FileNotFoundError:
         return None
     return Path(f"/tmp/.wine-{os.getuid()}/server-{st.st_dev:x}-{st.st_ino:x}")
@@ -207,17 +207,22 @@ def process_scope(pid: int, roots: tuple[str, ...] | None = None, max_depth: int
     return None
 
 
-def prefix_processes(excluded: list | None = None) -> list[dict]:
+def prefix_processes(excluded: list | None = None, prefix: Path | None = None) -> list[dict]:
     """This user's Wine/Wow processes of this repo's prefix. A process is a candidate when any of these holds:
     1. it holds a file in this prefix's wineserver dir or under the prefix (lsof; covers all Windows processes),
     2. its environment contains exactly WINEPREFIX=<env/wineprefix> (covers wine64/wineserver),
     3. it is a process of the runtime whose command line runs Wow.exe (conservative: counted as ours);
     and a candidate counts only if process_scope() places it in the pinned runtime (F24: an unrelated process that
     merely has a file open under the prefix is not ours). Candidates left out are appended to `excluded` if given.
-    Processes of other prefixes ([redacted]) have a different server dir and WINEPREFIX."""
-    tag = f"WINEPREFIX={P.WINEPREFIX}"
-    sd = server_dir()
-    by_lsof = (_lsof_pids(sd) if sd else set()) | _pids_with_open_files_under(P.WINEPREFIX, *([sd] if sd else []))
+    Processes of other prefixes ([redacted]) have a different server dir and WINEPREFIX.
+    `prefix` defaults to this lane's (paths.WINEPREFIX); lane B's prefix is env/lanes/b/<name> (second-stack). Rule 3
+    needs a prefix match: the process's WINEPREFIX is this prefix, or it has none and this is lane A's prefix, so one
+    lane's Wow.exe never counts as the other lane's."""
+    prefix = prefix or P.WINEPREFIX
+    tag = f"WINEPREFIX={prefix}"
+    lane_a_prefix = prefix == P.layout("a")["wineprefix"]
+    sd = server_dir(prefix)
+    by_lsof = (_lsof_pids(sd) if sd else set()) | _pids_with_open_files_under(prefix, *([sd] if sd else []))
     roots = _runtime_roots()
     found = []
     for pid, rest in _ps_env():
@@ -227,7 +232,8 @@ def prefix_processes(excluded: list | None = None) -> list[dict]:
         is_wine = str(P.WINE_BIN.parent) in rest.split(" ")[0] or rest.startswith(str(P.WINE_BIN))
         idx = rest.find(tag)
         env_match = idx >= 0 and rest[idx + len(tag): idx + len(tag) + 1] in ("", " ")
-        wow_match = is_wine and "wow.exe" in rest.lower()
+        wow_match = (is_wine and "wow.exe" in rest.lower()
+                     and (env_match or (lane_a_prefix and " WINEPREFIX=" not in rest)))
         if pid in by_lsof or (env_match and is_wine) or wow_match:
             # Trim the environment block ps -E appends, keep the command.
             for marker in (" NVM_", " PATH=", " HOME=", " TMPDIR=", " SHELL=", " USER=", " __CF"):

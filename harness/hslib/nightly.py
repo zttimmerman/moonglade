@@ -45,11 +45,20 @@ def git_state(root: Path = P.ROOT) -> dict:
 
 
 def busy() -> dict:
-    """What of this repo is in use: stack processes, ./play, Wine of the prefix, other live harness runs."""
+    """What of this repo is in use, in any lane (second-stack): stack processes, ./play, Wine of the lanes' prefixes,
+    other live harness runs. Lane B's entries appear under "stack_b" / "prefix_b" only when something runs there."""
     from . import launch, runreg, stack
     from .checks.play_checks import play_processes
-    return {"stack": {k: v for k, v in stack.stack_processes().items() if v}, "play": play_processes(),
-            "prefix": launch.prefix_processes(), "harness_runs": runreg.active_runs()}
+    out = {"stack": {k: v for k, v in stack.stack_processes("a").items() if v}, "play": play_processes(lane="*"),
+           "prefix": launch.prefix_processes(prefix=P.layout("a")["wineprefix"]), "harness_runs": runreg.active_runs()}
+    for lane in P.LANES[1:]:
+        st = {k: v for k, v in stack.stack_processes(lane).items() if v}
+        pre = launch.prefix_processes(prefix=P.layout(lane)["wineprefix"])
+        if st:
+            out[f"stack_{lane}"] = st
+        if pre:
+            out[f"prefix_{lane}"] = pre
+    return out
 
 
 def skip_reason(git: dict, in_use: dict, battery: dict) -> str | None:

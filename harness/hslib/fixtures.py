@@ -196,7 +196,7 @@ def settle_login(ws, guid: int) -> dict:
     sends CMSG_UPDATE_ACCOUNT_DATA for a per-character type (data unchanged, a new timestamp); the server queues a
     REPLACE INTO character_account_data after the login SELECTs. When that row shows the new timestamp, the login
     queries have completed; a short margin lets the session's next update run their callbacks."""
-    conf = (P.SERVER_ETC / "worldserver.conf").read_text()
+    conf = (P.LANE_ETC / "worldserver.conf").read_text()
     m = re.search(r"^CharacterDatabase\.WorkerThreads\s*=\s*(\d+)", conf, re.M)
     workers = int(m.group(1)) if m else None
     if workers != 1:

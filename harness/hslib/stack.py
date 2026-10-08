@@ -1,4 +1,6 @@
-"""Isolated mysqld + authserver + worldserver lifecycle (ADR-0002). State lives in env/ and data/."""
+"""Isolated mysqld + authserver + worldserver lifecycle (ADR-0002). State lives in env/ and data/ (lane A) or
+env/lanes/b/ (lane B, ADR-0011): every path and port comes from paths.py's lane layer, and processes are matched by
+their lane's config path (my.cnf, the -c conf), so one lane's down never touches the other lane."""
 import json
 import os
 import signal
@@ -12,7 +14,7 @@ from .util import log, tail
 
 MYSQLD = P.BREW / "opt/mysql/bin/mysqld"
 MYSQLADMIN = P.BREW / "opt/mysql/bin/mysqladmin"
-MY_CNF = P.ENV / "my.cnf"
+MY_CNF = P.MY_CNF
 LOG = {
     "mysqld": P.LOGS / "mysqld.err",
     "authserver": P.LOGS / "authserver.out",
@@ -43,18 +45,42 @@ class StackError(RuntimeError):
 
 # ---------------------------------------------------------------- process discovery
 
-def stack_processes() -> dict[str, list[int]]:
-    """All processes belonging to *this repo's* stack, found by command line (not just pidfiles)."""
+def _conf_arg(argv: list[str]) -> str | None:
+    """The value of `-c <conf>` (or `-c<conf>`, `--config <conf>`, `--config=<conf>`) in an argv, else None."""
+    for i, a in enumerate(argv):
+        if a in ("-c", "--config") and i + 1 < len(argv):
+            return argv[i + 1]
+        if a.startswith("--config="):
+            return a.split("=", 1)[1]
+        if a.startswith("-c") and len(a) > 2:
+            return a[2:]
+    return None
+
+
+def stack_processes(lane: str | None = None) -> dict[str, list[int]]:
+    """All processes belonging to *this repo's* stack in `lane` (default: this process's lane), found by command line
+    (not just pidfiles): mysqld by its lane's --defaults-file, authserver/worldserver by the server binary plus their
+    lane's `-c` conf (no -c = the compiled-in default, server/etc = lane A's)."""
     # procs.table() reads the kernel's process table directly: /bin/ps (setuid) can't run under sandbox-exec.
+    L = P.layout(lane or P.LANE)
+    my_cnf = f"--defaults-file={L['my_cnf']}"
     found = {"mysqld": [], "authserver": [], "worldserver": []}
     for pid, cmd in procs.table():
-        if str(MY_CNF) in cmd and "mysqld" in cmd:
+        argv = cmd.split(" ")
+        if "mysqld" in cmd and my_cnf in argv:
             found["mysqld"].append(pid)
-        elif cmd.startswith(str(P.SERVER_BIN / "authserver")):
-            found["authserver"].append(pid)
-        elif cmd.startswith(str(P.SERVER_BIN / "worldserver")):
-            found["worldserver"].append(pid)
+            continue
+        for name in ("authserver", "worldserver"):
+            if argv and argv[0] == str(P.SERVER_BIN / name):
+                conf = _conf_arg(argv[1:]) or str(P.SERVER_ETC / f"{name}.conf")
+                if conf == str(L["etc"] / f"{name}.conf"):
+                    found[name].append(pid)
     return found
+
+
+def all_lanes_processes() -> dict[str, dict[str, list[int]]]:
+    """{lane: stack_processes(lane)} for every lane (nightly's "in use", the lane checks)."""
+    return {lane: stack_processes(lane) for lane in P.LANES}
 
 
 def alive(pid: int) -> bool:
@@ -102,6 +128,7 @@ def _wait(pred, timeout, interval=1.0, watch_pid=None, what=""):
 # ---------------------------------------------------------------- mysql
 
 def _write_my_cnf():
+    P.LANE_ROOT.mkdir(parents=True, exist_ok=True)
     P.RUN.mkdir(parents=True, exist_ok=True)
     P.LOGS.mkdir(parents=True, exist_ok=True)
     MY_CNF.write_text(
@@ -134,6 +161,11 @@ def mysql_ready() -> bool:
         return False
 
 
+# lane B: `hs lane init` (lanestack.init) is the only caller allowed to --initialize a fresh lane-B datadir; every
+# other lane-B start clones the template (lanestack.clone_datadir) or refuses.
+ALLOW_INITIALIZE_LANE_B = False
+
+
 def mysql_up(timeout=120):
     _write_my_cnf()
     procs = stack_processes()["mysqld"]
@@ -141,6 +173,14 @@ def mysql_up(timeout=120):
         if _wait(mysql_ready, 30):
             return {"mysqld": "already running", "pids": procs}
         raise StackError(f"mysqld running (pids {procs}) but not answering", tail(LOG["mysqld"]))
+    cloned = None
+    if P.LANE != "a" and not (P.MYSQL_DATA / "mysql").exists():
+        from . import lanestack
+        if lanestack.template_ready():
+            cloned = lanestack.clone_datadir()
+        elif not ALLOW_INITIALIZE_LANE_B:
+            raise StackError(f"lane {P.LANE.upper()} has no template datadir ({P.MYSQL_TEMPLATE}); "
+                             "run `harness/hs lane init` inside a harness run")
     if not (P.MYSQL_DATA / "mysql").exists():
         P.MYSQL_DATA.mkdir(parents=True, exist_ok=True)
         log("initializing repo-local MySQL datadir")
@@ -158,7 +198,7 @@ def mysql_up(timeout=120):
         f"GRANT ALL PRIVILEGES ON *.* TO '{P.DB_USER}'@'localhost' WITH GRANT OPTION;"
         f"GRANT ALL PRIVILEGES ON *.* TO '{P.DB_USER}'@'127.0.0.1' WITH GRANT OPTION;"
         "FLUSH PRIVILEGES;", root=True)
-    return {"mysqld": "started", "pid": proc.pid}
+    return {"mysqld": "started", "pid": proc.pid, **({"cloned_from_template": cloned} if cloned else {})}
 
 
 def mysql_down(timeout=60):
@@ -177,15 +217,28 @@ def mysql_down(timeout=60):
 
 # ---------------------------------------------------------------- servers
 
+def spawn_env(name: str) -> dict:
+    """The server's environment: ours without any AC_* variable, plus (lane B) the lane's AC_* module/DB keys
+    (config.lane_env; the worldserver reads module confs from lane A's server/etc/modules otherwise)."""
+    env = {k: v for k, v in os.environ.items() if not k.startswith("AC_")}
+    if P.LANE != "a":
+        try:
+            env |= config.lane_env()
+        except config.ConfigError as e:
+            raise StackError(str(e)) from e
+    return env
+
+
 def _spawn(name: str):
     LOG[name].parent.mkdir(parents=True, exist_ok=True)
+    env = spawn_env(name)
     # stdout is block-buffered when not a tty while stderr is not, so sharing one file makes the tail of the
     # log non-deterministic; keep them separate and always show both in failure excerpts.
     fh = open(LOG[name], "w")
     eh = open(ERRLOG[name], "w")
-    proc = subprocess.Popen([str(P.SERVER_BIN / name), "-c", str(P.SERVER_ETC / f"{name}.conf")],
+    proc = subprocess.Popen([str(P.SERVER_BIN / name), "-c", str(P.LANE_ETC / f"{name}.conf")],
                             cwd=P.SERVER_BIN, stdin=subprocess.DEVNULL, stdout=fh, stderr=eh,
-                            start_new_session=True)
+                            start_new_session=True, env=env)
     PIDFILE[name].write_text(str(proc.pid))
     return proc
 
@@ -224,8 +277,8 @@ def ensure_realmlist():
     which authserver treats as "no valid realms" and exits. Safe: worldserver re-sets it on its own start."""
     if not db_exists("auth"):
         return False
-    db.query("UPDATE realmlist SET address='127.0.0.1', localAddress='127.0.0.1', port=8085, gamebuild=12340, "
-             "flag = flag & ~1 WHERE id=1", "auth")
+    db.query(f"UPDATE realmlist SET address='127.0.0.1', localAddress='127.0.0.1', port={int(P.WORLD_PORT)}, "
+             "gamebuild=12340, flag = flag & ~1 WHERE id=1", "auth")
     return True
 
 
@@ -329,6 +382,10 @@ def up(world_datadir: Path | None = None, timeout: int | None = None, profile: s
     on_stage(stage, state, **kw), if given, hears the loading stages (stages.py): database/login/world start and
     done, and world "spawned" (with the log path) once the worldserver process exists."""
     stage = on_stage or (lambda *a, **k: None)
+    try:
+        P.require_lane_allowed("starting the stack")     # lane B only inside a harness run (second-stack)
+    except P.LaneRefused as e:
+        raise StackError(str(e)) from e
     if not (P.SERVER_BIN / "worldserver").exists():
         raise StackError("server not built; run `harness/hs build` first")
     from .build import moved_problem

@@ -63,8 +63,13 @@ DEFAULT_PLAYER = "PLAYER"
 
 
 def player_file() -> Path:
-    """env/player.json; HS_PLAYER_FILE overrides it (test-only: play.player_account uses a scratch file)."""
-    return Path(os.environ["HS_PLAYER_FILE"]) if os.environ.get("HS_PLAYER_FILE") else PLAYER_FILE
+    """env/player.json; HS_PLAYER_FILE overrides it (test-only: play.player_account uses a scratch file). Lane B
+    (second-stack) never uses the player's file: it needs HS_PLAYER_FILE."""
+    if os.environ.get("HS_PLAYER_FILE"):
+        return Path(os.environ["HS_PLAYER_FILE"])
+    if P.LANE != "a":
+        raise P.LaneRefused(f"lane {P.LANE.upper()} never uses the player's {PLAYER_FILE}; set HS_PLAYER_FILE")
+    return PLAYER_FILE
 
 
 def default_player() -> str:
@@ -253,7 +258,7 @@ def choose_world(say=say) -> dict:
 
 # Signs of a harness (or developer test) run rather than the player starting the game: test arguments, and the
 # environment switches the harness sets (HS_HARNESS_RUN is set by `hs run` for every check's subprocesses).
-HARNESS_ENV = ("HS_HARNESS_RUN", "HS_PLAYER_FILE", "HS_PLAYER_DEFAULT_NAME", "HS_SETTINGS", "HS_PROFILE",
+HARNESS_ENV = ("HS_HARNESS_RUN", "HS_LANE", "HS_PLAYER_FILE", "HS_PLAYER_DEFAULT_NAME", "HS_SETTINGS", "HS_PROFILE",
                "HS_CLIENT_DIR", "HS_GLUE_TEST", "HS_PLAY_SKIP_PATCHES", "HS_TEST_OWN_CLIENT",
                "HS_BACKUP_DIR", "HS_BACKUP_TEST_FAIL", "HS_BACKUP_TEST_FREE_BYTES", "HS_BACKUP_TEST_PAUSE_S")
 # test-only (client.config_gate): treat this scratch play client as the player's own, so the gate's "own client"
@@ -598,6 +603,10 @@ def _parse(argv):
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    lane_why = P.lane_refusal()             # second-stack: lane B only inside a harness run; refused before anything
+    if lane_why:
+        say(lane_why)
+        return EXIT_FAIL
     # power-guard's test switches are never for ./play or the app (which runs ./play): refused first, before anything
     from .power import TEST_ENV as POWER_TEST_ENV
     for var in POWER_TEST_ENV:

@@ -50,5 +50,6 @@ def realmlist(ctx):
     ev = {"rows": rows}
     require(len(rows) == 1, "expected exactly one realm", **ev)
     _, _, addr, port, build = rows[0]
-    require(addr == "127.0.0.1" and port == "8085" and build == "12340", "realm not localhost:8085/12340", **ev)
+    require(addr == P.HOST and port == str(P.WORLD_PORT) and build == "12340",
+            f"realm not {P.HOST}:{P.WORLD_PORT}/12340", **ev)
     return ev

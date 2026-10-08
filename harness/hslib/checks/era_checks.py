@@ -66,7 +66,7 @@ def default_on(ctx):
     log says vanilla mode is ACTIVE, every applied table verified, and the XP needed at level 20 on the running
     server is the VMaNGOS value."""
     dist_val = E.rendered_option(E.CONF_DIST, "EraProfile.Enable")
-    conf = P.SERVER_ETC / "modules" / config.ERA_CONF
+    conf = P.LANE_ETC / "modules" / config.ERA_CONF
     prof = config.overrides(config.DEFAULT_PROFILE)
     lines = E.module_log_lines()
     tables = E.table_lines(lines)

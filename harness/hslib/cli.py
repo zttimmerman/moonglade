@@ -169,12 +169,25 @@ def main(argv=None) -> int:
     ngx.add_argument("--install", action="store_true", help="write and load ~/Library/LaunchAgents/<label>.plist")
     ngx.add_argument("--uninstall", action="store_true", help="unload and remove that LaunchAgent")
     ng.add_argument("--runs", type=int, default=3, help=argparse.SUPPRESS)
+    ln = sub.add_parser("lane", help="the harness's second test stack, lane B (ADR-0011): init (template datadir + "
+                                      "Wine prefix clone) | status | down | reset (fresh datadir clone); init and "
+                                      "reset only inside a harness run")
+    ln.add_argument("action", choices=["init", "status", "down", "reset"])
+    ln.add_argument("--force", action="store_true", help="init: rebuild the template even if one exists")
     ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns from env/branding/logo-source.jpeg")
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
 
     a = ap.parse_args(argv)
 
     import os as _os
+    from . import paths as _P
+    # second-stack: lane B (HS_LANE=b) only inside a harness run, refused before anything starts. `hs lane status`
+    # and `hs lane down` only look at / stop lane B, so they're allowed anywhere (orphan healing, cleanup).
+    if not (a.cmd == "lane" and a.action in ("status", "down")):
+        _why = _P.lane_refusal()
+        if _why:
+            log(_why)
+            return 2
     for _var in ("HS_TEST_PRISTINE_CLIENT", "HS_TEST_PRISTINE_MUTATE"):   # report.client_pristine's self-test only
         if _os.environ.get(_var) and (a.cmd != "run" or _os.environ.get("HS_HARNESS_RUN") != "1"):
             log(f"${_var} is a test switch of report.client_pristine's self-test (nested `hs run` only); unset it")
@@ -468,6 +481,9 @@ def main(argv=None) -> int:
     if a.cmd == "timing-baseline":
         from . import timingbase
         return timingbase.cli(a)
+    if a.cmd == "lane":
+        from . import lanestack
+        return lanestack.cli(a.action, force=a.force)
     if a.cmd == "icon":
         from . import icon
         try:

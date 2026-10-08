@@ -51,8 +51,13 @@ class SettingsError(ValueError):
     pass
 
 
-def path() -> Path:
-    return Path(os.environ[ENV]) if os.environ.get(ENV) else FILE
+def path(write: bool = False) -> Path:
+    """env/settings.json, or $HS_SETTINGS. Lane B (second-stack) may read the player's file but never write it."""
+    if os.environ.get(ENV):
+        return Path(os.environ[ENV])
+    if write and P.LANE != "a":
+        raise SettingsError(f"lane {P.LANE.upper()} never writes the player's {FILE}; set {ENV}")
+    return FILE
 
 
 def load() -> dict:
@@ -93,7 +98,7 @@ def set_world_size(value) -> dict:
     data = load()
     data["world_size"] = value if isinstance(value, str) and not value.isdigit() else int(value)
     path().parent.mkdir(parents=True, exist_ok=True)
-    path().write_text(json.dumps(data, indent=2) + "\n")
+    path(write=True).write_text(json.dumps(data, indent=2) + "\n")
     return world_size()
 
 
@@ -126,7 +131,7 @@ def set_client_mode(value: str) -> dict:
     data = load()
     data["client"] = value
     path().parent.mkdir(parents=True, exist_ok=True)
-    path().write_text(json.dumps(data, indent=2) + "\n")
+    path(write=True).write_text(json.dumps(data, indent=2) + "\n")
     return client_mode()
 
 
@@ -154,7 +159,7 @@ def set_dock_policy(value: str) -> dict:
     data = load()
     data["dock_policy"] = value
     path().parent.mkdir(parents=True, exist_ok=True)
-    path().write_text(json.dumps(data, indent=2) + "\n")
+    path(write=True).write_text(json.dumps(data, indent=2) + "\n")
     return dock_policy()
 
 

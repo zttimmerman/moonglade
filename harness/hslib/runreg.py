@@ -23,7 +23,7 @@ from pathlib import Path
 
 from . import paths as P, procs
 
-RUN_DIR = P.RUN / "harness-runs"
+RUN_DIR = P.RUN_REGISTRY          # global (env/run/harness-runs): every lane sees every run (second-stack)
 ENV_ID = "HS_HARNESS_RUN_ID"
 PLAY_TERM_WAIT_S = 150        # ./play's cleanup (client stop + graceful stack down) normally takes 10-60 s
 OTHER_TERM_WAIT_S = 10
@@ -101,7 +101,8 @@ def tagged(ids: set[str]) -> list[dict]:
             continue
         env = dict(e.split("=", 1) for e in ae[1] if "=" in e)
         if env.get("HS_HARNESS_RUN") == "1" and env.get(ENV_ID) in ids:
-            out.append({"pid": pid, "run": env.get(ENV_ID), "cmd": " ".join(ae[0])[:1000]})
+            out.append({"pid": pid, "run": env.get(ENV_ID), "cmd": " ".join(ae[0])[:1000],
+                        "lane": (env.get(P.LANE_ENV) or "").strip().lower() or "a"})
     return out
 
 
@@ -124,15 +125,40 @@ def _alive_pid(pid: int) -> bool:
     return not procs.is_zombie(pid)
 
 
-def heal(run_dir: Path = RUN_DIR, stop_prefix=None, stack_down=None, prefix_pids=None, stack_pids=None) -> dict:
+def _lane_pids(lane: str) -> set[int]:
+    """Stack + Wine-prefix processes of `lane`."""
+    from . import launch, stack
+    return ({p for v in stack.stack_processes(lane).values() for p in v}
+            | {p["pid"] for p in launch.prefix_processes(prefix=P.layout(lane)["wineprefix"])})
+
+
+def lane_down(lane: str, timeout: float = 600) -> dict:
+    """Stop `lane`'s Wine prefix and stack from a process of another lane: `hs lane down` with HS_LANE=<lane>
+    (lane down is the one lane-B command allowed outside a harness run; it only stops things)."""
+    from .lanestack import run_in_lane
+    r = run_in_lane(lane, ["lane", "down"], timeout=timeout)
+    out = {"lane": lane, "rc": r.returncode, "tail": (r.stdout + r.stderr)[-1500:]}
+    try:
+        out["result"] = json.loads(r.stdout)
+    except ValueError:
+        pass
+    return out
+
+
+def heal(run_dir: Path = RUN_DIR, stop_prefix=None, stack_down=None, prefix_pids=None, stack_pids=None,
+         other_lanes=None, other_lane_pids=None, other_lane_down=None) -> dict:
     """Stop the orphans of every dead run recorded in `run_dir`. Returns evidence:
     {"dead_runs", "orphans" (found at the start), "actions", "remaining"}. The stop functions and process listers
-    default to launch.stop_prefix / stack.down / launch.prefix_processes / stack.stack_processes."""
+    default to launch.stop_prefix / stack.down / launch.prefix_processes / stack.stack_processes (this lane), and for
+    the other lanes (second-stack: per-lane healing) to _lane_pids / lane_down over every lane but this one."""
     from . import launch, stack
     stop_prefix = stop_prefix or launch.stop_prefix
     stack_down = stack_down or stack.down
     prefix_pids = prefix_pids or (lambda: {p["pid"] for p in launch.prefix_processes()})
     stack_pids = stack_pids or (lambda: {p for v in stack.stack_processes().values() for p in v})
+    other_lanes = [l for l in P.LANES if l != P.LANE] if other_lanes is None else other_lanes
+    other_lane_pids = other_lane_pids or _lane_pids
+    other_lane_down = other_lane_down or lane_down
     dead = dead_runs(run_dir)
     ids = {r["id"] for r in dead if r.get("id")}
     ev = {"dead_runs": [{k: r.get(k) for k in ("id", "pid", "started")} for r in dead], "orphans": [],
@@ -141,6 +167,20 @@ def heal(run_dir: Path = RUN_DIR, stop_prefix=None, stack_down=None, prefix_pids
         return ev
     found = tagged(ids)
     ev["orphans"] = found
+    # 0. lane workers (second-stack: `python -m hslib.lane`): stopped first, so they start nothing while we heal
+    workers = [o["pid"] for o in found if "hslib.lane" in o["cmd"].split(" ")]
+    for pid in workers:
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+    for pid in _wait_gone(workers, OTHER_TERM_WAIT_S):
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    if workers:
+        ev["actions"].append({"stop_lane_workers": workers})
     # 1. ./play: SIGTERM, its own handler stops the client and the stack gracefully
     plays = [o["pid"] for o in found if "hslib.play" in o["cmd"]]
     for pid in plays:
@@ -168,8 +208,20 @@ def heal(run_dir: Path = RUN_DIR, stop_prefix=None, stack_down=None, prefix_pids
     elif sp & orph:
         ev["actions"].append({"stack_left": "stack processes not started by the dead run are running",
                               "untagged": sorted(sp - orph)})
+    # 3b. every other lane's prefix + stack (lane_down), only if every one of its processes is an orphan
+    others: set[int] = set()
+    for lane in other_lanes:
+        orph = {o["pid"] for o in tagged(ids)}
+        lp = other_lane_pids(lane)
+        if lp and lp <= orph:
+            ev["actions"].append({"lane_down": other_lane_down(lane)})
+        elif lp & orph:
+            ev["actions"].append({"lane_left": lane, "why": "processes of that lane not started by the dead run are "
+                                  "running", "untagged": sorted(lp - orph)})
+        others |= other_lane_pids(lane)
     # 4. anything else the dead run started (a nested hs run, a helper): SIGTERM, then SIGKILL
-    rest = [o["pid"] for o in tagged(ids) if o["pid"] not in prefix_pids() and o["pid"] not in stack_pids()]
+    rest = [o["pid"] for o in tagged(ids) if o["pid"] not in prefix_pids() and o["pid"] not in stack_pids()
+            and o["pid"] not in others]
     for pid in rest:
         try:
             os.kill(pid, signal.SIGTERM)

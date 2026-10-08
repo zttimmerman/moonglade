@@ -7,8 +7,9 @@ MYSQL = P.BREW / "opt/mysql/bin/mysql"
 
 
 def client_cnf(root=False):
-    P.ENV.mkdir(exist_ok=True)
-    f = P.ENV / ("client-root.cnf" if root else "client.cnf")
+    """This lane's client defaults file (lane A env/client*.cnf, lane B env/lanes/b/client*.cnf)."""
+    P.LANE_ROOT.mkdir(parents=True, exist_ok=True)
+    f = P.LANE_ROOT / ("client-root.cnf" if root else "client.cnf")
     if root:
         body = f"[client]\nuser=root\nsocket={P.RUN / 'mysql.sock'}\n"
     else:
