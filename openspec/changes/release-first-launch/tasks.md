@@ -22,3 +22,10 @@
 - [ ] 4.2 Checks `release.mode_resolution`, `release.test_switches_refused`, `release.stack_from_payload`, `release.app_readonly`, `release.app_moved`, `release.play_standin`, `release.client_smoke`, `release.player_data_untouched` (each with a counterexample)
 - [ ] 4.3 Checks `firstlaunch.flow`, `firstlaunch.second_open_plays`, `firstlaunch.source_untouched`, `firstlaunch.client_refusals`, `firstlaunch.preflight`, `firstlaunch.downloads`, `firstlaunch.kill_resume` (each with a counterexample; shared fixture per run)
 - [ ] 4.4 `docs/setup.md`: "Using a release" (what goes where, how to remove everything); design.md "As built"
+
+## 5. Follow-ups from the release-build verifier (2026-10-08)
+- [ ] 5.1 Narrow `tools/release/allowlist.json`: the `/.+/vendor/azerothcore-wotlk` and `/.+/env/release/build/cmake` entries accept any prefix. Anchor them to the build root the packaging run used (passed in by release.py), and add a counterexample: a different prefix fails `release.no_abs_paths`
+- [ ] 5.2 Release mode sets SourceDirectory and MySQLExecutable to payload paths and OPENSSL_CONF to a payload file, so a friend's Homebrew `/opt/homebrew/etc/openssl@3/openssl.cnf` is never read (check: `release.stack_from_payload` asserts the env)
+- [ ] 5.3 `bin/Moonglade` uses the payload Python in release mode and never searches `/opt/homebrew/bin` first
+- [ ] 5.4 Locally built zips carry this Mac's repo path (username) in the server binaries: `package.sh` labels local zips "local test build, not for publishing" (VERSION + file name); only CI-built zips are published
+- [ ] 5.5 readline stub: two lines arriving in one read leave the second waiting (poll sees an empty fd while stdio buffered it); drain stdio's buffer before polling, with a piped two-line test
