@@ -326,8 +326,9 @@ def _ls_tree(repo: Path, ref: str) -> dict:
 def _run(cmd: list, timeout=900) -> dict:
     t = time.time()
     r = subprocess.run([str(c) for c in cmd], capture_output=True, text=True, timeout=timeout)
-    return {"cmd": [str(c).replace(str(P.ROOT) + "/", "") for c in cmd], "rc": r.returncode,
-            "stdout_tail": r.stdout[-600:], "stderr_tail": r.stderr[-600:], "s": round(time.time() - t, 1)}
+    mask = lambda s: s.replace(str(P.ROOT), "<repo>")      # evidence names no home folder
+    return {"cmd": [mask(str(c)) for c in cmd], "rc": r.returncode,
+            "stdout_tail": mask(r.stdout[-600:]), "stderr_tail": mask(r.stderr[-600:]), "s": round(time.time() - t, 1)}
 
 
 @check("public.history_dryrun", order=9, capability=CAP, stack="any", tier="slow")
