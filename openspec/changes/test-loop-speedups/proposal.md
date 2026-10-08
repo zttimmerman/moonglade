@@ -14,7 +14,7 @@ A clean full run takes 35–46 minutes, and its results.json was overwritten twi
 3. **The last full run is kept.** Every unfiltered full run also writes `harness/out/last-full-run/` (results.json and summary.md), which later filtered runs never overwrite. `hs timing-baseline join` defaults to it.
 4. **Orphans after a kill are healed.** If a harness run is SIGKILLed, the `./play`, Wine and server processes it started no longer block the next run with "something from this repo is already running". The next run identifies them as orphans of a dead harness run, stops them cleanly, and proceeds.
 5. **A nightly flake hunt.** `hs nightly` runs the unfiltered full run 3 times on `main`. It writes `harness/out/nightly/<date>/` with a flake table listing every check whose status differed between the runs. It skips with a reason if the main checkout isn't on a clean `main`, if the stack is in use, or if the battery is low. `hs nightly --install` and `--uninstall` manage a user LaunchAgent; installing it is Zach's call, and agents never install it.
-6. **A faster full run.** The target is under 25 minutes for an unfiltered full run with the GUI tier skipped; today it takes about 34.5 minutes. Checks that are safe to run alongside others do so, with no change to what each check proves. The timing guard's baseline is re-joined afterwards.
+6. **(Withdrawn 2026-10-07, see the log) A faster full run.** The target is under 25 minutes for an unfiltered full run with the GUI tier skipped; today it takes about 34.5 minutes. Checks that are safe to run alongside others do so, with no change to what each check proves. The timing guard's baseline is re-joined afterwards.
 
 ## Impact
 - Code: `harness/hslib/runner.py`, `guienv.py`, `reporting.py`, `timingbase.py`, `__main__.py`, a new `nightly.py`, and check scheduling.
@@ -22,4 +22,11 @@ A clean full run takes 35–46 minutes, and its results.json was overwritten twi
 - Capability: harness-reporting.
 
 ## Spec-change log
-(none yet)
+- 2026-10-07 22:40 (withdrawal of a requirement this change had added and never shipped): "Full run under 25 minutes" is removed.
+  - B36 measured a serial full run at 2077 s and a parallel one at 2087 s.
+  - About 88% of the run is exclusive by the requirement's own rule (stack, client/Wine, screen): ./play and real-client checks take 1420 s, and the stack-up phase takes 394 s.
+  - The only safe overlap was 16 file-only checks. That saved about 20 s on the quick tier and was lost in the noise of a full run, so the side lane (c81013e) was reverted rather than kept as complexity with no gain.
+  - Real options, each needing its own change and Zach's call:
+    - a second isolated stack and Wine prefix, so ./play checks can run in parallel (needs an ADR);
+    - tighter readiness polling in stack.py and play.py (about 100 s);
+    - sharing one ./play session between checks (a spec change).

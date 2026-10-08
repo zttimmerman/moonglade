@@ -14,3 +14,22 @@
 - **Last full run (1.3):** `runner.write_outputs` writes results.json and summary.md. When `keeps_last_full_run(meta)` holds (`full_run` true, tier `full`, no filter), it also writes them atomically to `runner.LAST_FULL_RUN` = `harness/out/last-full-run/`. Slow runs don't count: the timing baseline only accepts full-tier runs. `hs timing-baseline join [results] --label X` defaults to `last-full-run/results.json` (`timingbase.default_results`). It exits 1 with a message naming that path when the file is missing, and the hidden `--baseline` lets the check join into a scratch copy. Check: `report.last_full_run` (quick) runs a sequence of stub documents through `write_outputs` into a scratch last-full-run dir, joins the kept copy into a scratch baseline, runs `hs timing-baseline join` without a path, and validates the live copy if one exists.
 - **Orphans (1.4):** `runreg.py`. `hs run` writes `env/run/harness-runs/<pid>-<start time>.json` (the process start time, from the new `procs.start_time`, guards against pid reuse) and exports `HS_HARNESS_RUN_ID` to its subprocesses. The file is removed in a `finally`, so only a kill leaves it behind. At the start of every run, `runreg.heal()` looks for dead runs and the processes still carrying their id: `HS_HARNESS_RUN=1` plus that id in the process's initial environment, read from KERN_PROCARGS2; the healer itself and its ancestors are excluded. It stops them in this order: SIGTERM to ./play, whose handler cleans up (waits up to 150 s); `launch.stop_prefix()`, only if every prefix process is an orphan; `stack.down()`, only if every stack process is an orphan; then SIGTERM and, after 10 s, SIGKILL for anything else the dead run left. The record goes to `meta.orphans`. A healing error is recorded there and doesn't stop the run. Processes without the id (the player's ./play, the app, other agents' tools) are never touched. Known limit: ./play launched by a GUI check through `open dist/Moonglade.app` doesn't inherit the id (LaunchServices), so it isn't healed and the GIVENs still refuse as before. Check: `report.orphans_healed` (full, stack down, about 45 s). (A) It SIGKILLs a nested `hs run --only play.loop_clean_exit` (test account, stand-in client) once its ./play, stand-in and worldserver are up; the run is SIGSTOPped first so its check can't stop the stand-in. The next nested run must record and stop them, its check passes, and nothing is left. (B) An untagged ./play (test account, stand-in) survives a run that heals another SIGKILLed run, and `play_checks.require_given_clear` still refuses while it runs.
 - **Nightly (1.5):** `nightly.py`. Runs only on a clean `main` (fails closed on git errors), with no stack, ./play, Wine prefix process or other live harness run (from runreg), and not on battery below 35 %. If those hold, it does 3× `harness/hs run --tier full` and writes `harness/out/nightly/<date>/run<n>.json`, `nightly.json` and `flakes.md`: the runs, a summary line naming the flaky checks, and a table of their statuses. A skip writes the reason to both files and starts no run (exit 3). `--install` writes `~/Library/LaunchAgents/local.moonglade.nightly.plist` (03:00 daily, `harness/hs nightly`, log in env/logs/nightly.log) and bootstraps it into `gui/<uid>`; `--uninstall` boots it out and removes it. Not installed (task 3.2, Zach's call). Check: `report.nightly` (quick) uses stubbed runs and real scratch git repos. Its active-run case uses a real run file of a live `sleep`. Install and uninstall go to a scratch dir with launchctl stubbed, and the check asserts the real plist path is unchanged.
+
+## As built: B36 (measurement; code reverted)
+| Run | Schedule | Wall |
+|---|---|---|
+| d444ef9 | serial | 2077.1 s |
+| c81013e | file-only side lane | 2087.3 s |
+
+The quick tier went from 127.8 s to 105.2 s.
+
+Time split of the serial run:
+| Part | Seconds |
+|---|---|
+| ./play, Wine and real-client checks | 1420 |
+| Stack-up phase | 394 |
+| Nested quick tier | 129 |
+| File-only checks | 73 |
+| Build and lifecycle | 61 |
+
+The side lane, `--serial` and `report.full_run_wall` were reverted, since they gave no measurable gain. The withdrawal is recorded in the proposal's spec-change log. The evidence is in harness/out/b36-run1 and harness/out/b36-run2.

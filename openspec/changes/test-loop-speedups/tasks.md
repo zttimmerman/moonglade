@@ -6,7 +6,7 @@
 - [x] 1.5 `hs nightly` (+ --install/--uninstall, not installed by agents) — verify: `report.nightly`
 
 ## 2. Build (B36)
-- [ ] 2.1 Full run under 25 minutes (safe concurrency) — verify: `report.full_run_wall`
+- [x] 2.1 Measured: safe concurrency can't reach 25 min (requirement withdrawn, see the spec-change log); side lane reverted
 
 ## 3. Verify
 - [ ] 3.1 Verifier pass + full harness; `hs timing-baseline join` on the new full run
