@@ -307,10 +307,12 @@ def backups_tier_skips(reg: dict, tier: str, only: list[str] | None, changed: bo
 
 
 def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: bool = False,
-            gui_skips: list = (), backups_skips: list = ()) -> list[dict]:
+            gui_skips: list = (), backups_skips: list = (), guard=None) -> list[dict]:
     """Run `checks` in (order, id) sequence, recording `slow_skips` as skip ("slow tier") and `gui_skips` as skip
     ("gui tier") in their place. `ensure(stack_want, ctx, profile)` brings the stack to each check's required state
-    (default _ensure_stack). `quiet` suppresses the per-check log lines (synthetic runs of the report.* rules)."""
+    (default _ensure_stack). `quiet` suppresses the per-check log lines (synthetic runs of the report.* rules).
+    `guard` (power.Guard; power-guard) is checked before each executed check, outside its timed duration; a power stop
+    ends the loop with ctx["power_stop"] set and the checks so far returned."""
     ensure = ensure or _ensure_stack
     say = (lambda _m: None) if quiet else log
     skip_ids = {c.id for c in slow_skips}
@@ -337,6 +339,13 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
             say(f"SKIP  {c.id}  {BACKUPS_SKIP_MSG}")
             results.append(rec)
             continue
+        if guard is not None:
+            from .power import PowerStop
+            try:
+                guard.check(f"check {c.id}")
+            except PowerStop as e:
+                ctx["power_stop"] = {"message": str(e), "before_check": c.id, "pause": e.record}
+                break
         t0 = time.time()
         try:
             ensure(c.stack, ctx, c.profile)
@@ -418,7 +427,7 @@ def load_timing_baseline(path: Path | None = None) -> dict:
 
 
 def timing_summary(records: list[dict], wall_s: float | None, reg: dict | None = None,
-                   baseline: dict | None | str = "file") -> dict:
+                   baseline: dict | None | str = "file", paused_s: float = 0.0) -> dict:
     """harness-reporting "Full-run timing": per-check wall time, their sum, the run's wall time, the 10 slowest, the
     backups tier's total, the time spent building server binaries (per check and total), and the executed checks that
     aren't in the per-check baseline with their times, plus a warning for each one over NEW_CHECK_WARN_S."""
@@ -434,7 +443,11 @@ def timing_summary(records: list[dict], wall_s: float | None, reg: dict | None =
            "backups_tier_s": backups_tier_s(records, reg),
            "total_wall_s": None if wall_s is None else round(wall_s, 1),
            "top10": [{"id": i, "s": v} for i, v in top],
-           "build_s": round(sum(build.values()), 1), "build_by_check_s": build}
+           "build_s": round(sum(build.values()), 1), "build_by_check_s": build,
+           # power-guard: seconds paused for low battery (between checks, so outside every check's duration_s, which
+           # is what the guard compares); the run's wall time minus them is its active time
+           "paused_s": round(paused_s, 1),
+           "active_wall_s": None if wall_s is None else round(wall_s - paused_s, 1)}
     claims = build_claim_warnings(records)
     if baseline is None:
         out |= {"new_checks_s": None, "warnings": ["no readable per-check timing baseline"] + claims}
@@ -511,7 +524,7 @@ def gui_preflight(tier: str, only: list[str] | None, ignore: bool, probe, rule_f
 
 
 def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full",
-        force_clean: bool = False, preflight: dict | None = None) -> int:
+        force_clean: bool = False, preflight: dict | None = None, ignore_power: bool = False) -> int:
     # test-loop-speedups: a run file (env/run/harness-runs/) tags this run's subprocesses, so a later run can heal
     # them if this one is killed; removed on every exit except a kill
     from . import runreg
@@ -530,13 +543,23 @@ def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full
         # F12: a mysqld stall ("Semaphore wait > 600 s") happened while the display slept; hold a no-sleep assertion
         # (test-loop-speedups "Runs keep the display awake": caffeinate -d ... -w <this pid>)
         with keep_awake() as awake:
-            return _run(only, leave_up, tier, force_clean, awake, preflight, orphans | {"run": rec})
+            return _run(only, leave_up, tier, force_clean, awake, preflight, orphans | {"run": rec}, ignore_power)
     finally:
         runreg.finish(rec)
 
 
-def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None) -> int:
+# power-guard: the run tiers whose checks are guarded (quick is short and runs on builders' laps)
+POWER_GUARDED_TIERS = ("full", "slow", "gui")
+
+
+def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None, ignore_power=False) -> int:
     t_start = time.time()
+    from . import power
+    guard = (power.Guard(f"the harness run (tier {tier})", "the same `harness/hs run` command", ignore_power, say=log)
+             if tier in POWER_GUARDED_TIERS else None)
+    import os as _os
+    for _v in power.TEST_ENV:            # read by the guard above; never inherited by the checks' own subprocesses
+        _os.environ.pop(_v, None)
     reg = load_all()
     rule = gui_rule() if tier in ("full", "slow") else None
     gui_skips = gui_tier_skips(reg, tier, only, gui_changed(rule)) if rule is not None else []
@@ -584,13 +607,30 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None)
     if bk_rule is not None:
         log(f"Backups rule: {'backups checks run' if backups_changed(bk_rule) else 'backups checks skipped by design'} "
             f"(changed backup paths: {bk_rule['changed_backup_paths']}{'; ' + bk_rule['error'] if bk_rule['error'] else ''})")
-    results = execute(selected, ctx, slow_skips, gui_skips=gui_skips, backups_skips=bk_skips)
+    results = execute(selected, ctx, slow_skips, gui_skips=gui_skips, backups_skips=bk_skips, guard=guard)
+    meta["power"] = {"guarded": guard is not None, **(guard.record() if guard is not None else {})}
+    paused = guard.paused_s() if guard is not None else 0.0
+    if ctx.get("power_stop"):
+        # power-guard "Stop cleanly": no later check runs; the results so far are written and the run fails
+        meta["power"]["stop"] = ctx["power_stop"]
+        log(ctx["power_stop"]["message"])
+        if not leave_up and any(stack.stack_processes().values()):
+            ctx.setdefault("stack_transitions", []).append({"down(final)": stack.down()})
+        doc = {"meta": meta | {"finished": _now()}, "checks": results}
+        doc["meta"]["wall_s"] = round(time.time() - t_start, 1)
+        doc["meta"]["timing"] = timing_summary(results, doc["meta"]["wall_s"], paused_s=paused)
+        doc["meta"]["counts"] = {s: sum(1 for r in results if r["status"] == s) for s in ("pass", "fail", "error", "skip")}
+        doc["meta"]["ok"] = False
+        from .util import redact
+        write_outputs(redact(doc), P.RESULTS, P.SUMMARY)
+        print(P.SUMMARY.read_text())
+        return power.STOP_EXIT
 
     if not leave_up and any(stack.stack_processes().values()):
         ctx.setdefault("stack_transitions", []).append({"down(final)": stack.down()})
 
     doc = {"meta": meta | {"finished": _now()}, "checks": results}
-    doc["meta"]["timing"] = timing_summary(results, time.time() - t_start)   # report.timing reads it; final below
+    doc["meta"]["timing"] = timing_summary(results, time.time() - t_start, paused_s=paused)   # report.timing reads it
     # post-run meta-checks (report.*) — computed over the document itself
     from .checks import reporting
     for rec in reporting.post_run(doc, selected_ids=[c.id for c in selected], t_start=t_start,
@@ -598,7 +638,7 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None)
         doc["checks"].append(rec)
     doc["meta"]["finished"] = _now()      # after the post-run checks (report.tiers may run a nested quick tier)
     doc["meta"]["wall_s"] = round(time.time() - t_start, 1)
-    doc["meta"]["timing"] = timing_summary(doc["checks"], doc["meta"]["wall_s"])
+    doc["meta"]["timing"] = timing_summary(doc["checks"], doc["meta"]["wall_s"], paused_s=paused)
     doc["meta"]["counts"] = {s: sum(1 for r in doc["checks"] if r["status"] == s) for s in ("pass", "fail", "error", "skip")}
     doc["meta"]["ok"] = run_ok(doc)
     from .util import redact
@@ -650,6 +690,16 @@ def timing_lines(doc) -> list[str]:
     return out
 
 
+def power_lines(doc) -> list[str]:
+    """summary.md: the power guard's pauses and stop (power-guard), if any."""
+    pw = doc["meta"].get("power") or {}
+    out = [f"- Power: paused {len(pw.get('pauses') or [])} time(s), {pw.get('paused_s', 0)} s"
+           + (" (guard skipped: --ignore-power)" if pw.get("ignored") else "")] if pw.get("guarded") else []
+    if pw.get("stop"):
+        out.append(f"- STOPPED (power): {pw['stop']['message']}")
+    return out
+
+
 def summary_md(doc) -> str:
     m = doc["meta"]
     c = m["counts"]
@@ -663,6 +713,7 @@ def summary_md(doc) -> str:
         f"- Counts: {c['pass']} pass, {c['fail']} fail, {c['error']} error, {c['skip']} skip. Disk free: {m['host']['disk_free_gb']} GB",
         "- Slowest: " + ", ".join(f"`{t['id']}` {t['s']}s" for t in (m.get("timing") or {}).get("top10", [])[:5]),
         *timing_lines(doc),
+        *power_lines(doc),
         "",
         "| Check | Status | Time | Note |",
         "|---|---|---|---|",

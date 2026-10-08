@@ -443,8 +443,12 @@ def moved_problem() -> dict | None:
     return found
 
 
-def build(clean=False, jobs=8, force_clean=False) -> dict:
-    info = {}
+def build(clean=False, jobs=None, force_clean=False, ignore_power=False, resume="harness/hs build") -> dict:
+    """`jobs` None = this Mac's performance cores (power.default_jobs; power-guard). The battery guard runs before
+    each cmake step unless `ignore_power`; a power stop raises power.PowerStop (stamps handled like a failed step)."""
+    from . import power
+    jobs, jobs_why = power.resolve_jobs(jobs)
+    info = {"jobs": {"n": jobs, "why": jobs_why}}
     moved = moved_problem()
     if moved:
         # F30: a build tree or install made in another folder can't be reused; wipe it before anything else
@@ -486,10 +490,10 @@ def build(clean=False, jobs=8, force_clean=False) -> dict:
     P.OUT.mkdir(parents=True, exist_ok=True)
     blog = P.OUT / "build.log"
     try:
-        _run_steps(blog, jobs)
-    except BuildError:
+        info["power"] = _run_steps(blog, jobs, jobs_why, ignore_power, resume=resume)
+    except (BuildError, power.PowerStop):
         if mode == "verified-current":
-            _drop_stamps()     # a failed rebuild may have replaced installed files
+            _drop_stamps()     # a failed (or stopped) rebuild may have replaced installed files
         raise
     bins = {n: (P.SERVER_BIN / n) for n in ("authserver", "worldserver")}
     info["binaries"] = {n: str(p) for n, p in bins.items()}
@@ -519,17 +523,69 @@ def build(clean=False, jobs=8, force_clean=False) -> dict:
     return info
 
 
-def _run_steps(blog, jobs):
-    with open(blog, "w") as fh:
-        for step in (
-            ["cmake", "-S", P.CORE_SRC, "-B", P.BUILD, *cmake_args()],
-            ["cmake", "--build", P.BUILD, "-j", str(jobs)],
-            ["cmake", "--install", P.BUILD],
-        ):
-            step = [str(s) for s in step]
-            log("$ " + " ".join(step) + f"   (log: {blog})")
-            fh.write("\n$ " + " ".join(step) + "\n"); fh.flush()
-            r = subprocess.run(step, stdout=fh, stderr=subprocess.STDOUT)
-            if r.returncode != 0:
-                raise BuildError(f"build step failed (exit {r.returncode}): {' '.join(step)}; see {blog}")
+def build_steps(jobs: int) -> list[tuple[str, list[str]]]:
+    """(guard step name, command) of a server build, in order."""
+    return [
+        ("the configure step (cmake)", [str(s) for s in ["cmake", "-S", P.CORE_SRC, "-B", P.BUILD, *cmake_args()]]),
+        ("the compile step (cmake --build)", [str(s) for s in ["cmake", "--build", P.BUILD, "-j", str(jobs)]]),
+        ("the install step (cmake --install)", [str(s) for s in ["cmake", "--install", P.BUILD]]),
+    ]
 
+
+def _exec_step(step, fh) -> int:
+    return subprocess.run(step, stdout=fh, stderr=subprocess.STDOUT).returncode
+
+
+def run_guarded_steps(blog, steps, jobs: int, jobs_why: str, ignore_power: bool, what: str, resume: str,
+                      execute=_exec_step) -> dict:
+    """Write the job count and why to `blog`, then for each (name, command): the battery guard (power.Guard), then
+    `execute(command, fh)`. Returns the guard's record (pauses with start, end, percents); a power stop raises
+    power.PowerStop with that record as `.guard`; a failing step raises BuildError."""
+    from . import power
+    with open(blog, "w") as fh:
+        def sink(m):
+            fh.write(m + "\n")
+            fh.flush()
+        line = power.jobs_line(jobs, jobs_why)
+        log(line)
+        sink(line)
+        guard = power.Guard(what, resume, ignore_power, say=log, sink=sink)
+        try:
+            for name, step in steps:
+                guard.check(name)
+                log("$ " + " ".join(step) + f"   (log: {blog})")
+                fh.write("\n$ " + " ".join(step) + "\n"); fh.flush()
+                rc = execute(step, fh)
+                if rc != 0:
+                    raise BuildError(f"build step failed (exit {rc}): {' '.join(step)}; see {blog}")
+        except power.PowerStop as e:
+            e.guard = guard.record()
+            raise
+        return guard.record()
+
+
+def _run_steps(blog, jobs, jobs_why="", ignore_power=False, resume="harness/hs build"):
+    return run_guarded_steps(blog, build_steps(jobs), jobs, jobs_why, ignore_power, "the server build", resume)
+
+
+def _plan_exec(step, fh) -> int:
+    fh.write("(plan only: not run)\n")
+    fh.flush()
+    return 0
+
+
+def plan_only(jobs, ignore_power: bool, out_dir, resume="harness/hs build") -> dict:
+    """power-guard test switch $HS_TEST_POWER_PLAN_ONLY: the build plan (job count, steps, guard) logged to
+    <out_dir>/build.log, with nothing synced, configured, built or installed."""
+    from . import power
+    jobs, jobs_why = power.resolve_jobs(jobs)
+    blog = os.path.join(out_dir, "build.log")
+    steps = build_steps(jobs)
+    out = {"plan_only": True, "jobs": {"n": jobs, "why": jobs_why}, "steps": [c for _n, c in steps], "log": blog}
+    try:
+        out["power"] = run_guarded_steps(blog, steps, jobs, jobs_why, ignore_power, "the server build", resume,
+                                         execute=_plan_exec)
+    except power.PowerStop as e:
+        e.info = out | {"power": e.guard}
+        raise
+    return out

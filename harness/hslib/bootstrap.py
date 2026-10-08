@@ -24,6 +24,14 @@ reads those; the person can ignore them).
 Test switch (setup.preflight only): $HS_BOOTSTRAP_TEST, a JSON object that replaces what preflight observes (arch,
 macos, rosetta, clt, brew, brew_missing, free_bytes, answer). It's refused unless `--allow-test-inject` is given
 AND $HS_HARNESS_RUN is set (a harness run), so it can't reach a normal ./bootstrap.
+
+Power guard (openspec/changes/power-guard, F34): `--jobs N` sets the server build's job count (default: this Mac's
+performance cores, power.default_jobs), and before each step that runs, the battery guard (power.Guard) pauses below
+35 % (plugged in or not) until 50 %, and stops the setup at 15 % with what to do; the stopped step isn't done, so the
+next ./bootstrap starts there. `--ignore-power` skips the guard. Its test switches (power.TEST_ENV) need the same
+flag + harness run; with $HS_TEST_POWER_PLAN_ONLY (a scratch dir) the run is a plan: no preflight, each step's
+done/run is a record in <dir>/bootstrap-state.json, except that the build step really runs `hs build --clean` (itself
+plan-only, so nothing is built) to show the job count it passes on.
 """
 from __future__ import annotations
 
@@ -63,6 +71,14 @@ class StepFailed(RuntimeError):
         self.evidence = evidence or {}
 
 
+class PowerStopped(StepFailed):
+    """The power guard stopped this step (power-guard): exit power.STOP_EXIT; the step stays not done."""
+
+
+POWER_HINT = ("Plug in (a stronger charger if you have one), let the battery charge above 50 %, then run ./bootstrap "
+              "again; it continues from this step.")
+
+
 def emit(**kw) -> None:
     print("[bootstrap] " + json.dumps(kw, default=str), flush=True)
 
@@ -71,11 +87,13 @@ def say(msg: str) -> None:
     print(msg, flush=True)
 
 
-def _hs(*args: str, timeout: float | None = None) -> subprocess.CompletedProcess:
-    """Run one existing `harness/hs` subcommand: its progress (stderr) shows live, its JSON result (stdout) is kept."""
-    P.LOGS.mkdir(parents=True, exist_ok=True)
+def _hs(*args: str, timeout: float | None = None, out_dir: Path | None = None) -> subprocess.CompletedProcess:
+    """Run one existing `harness/hs` subcommand: its progress (stderr) shows live, its JSON result (stdout) is kept
+    (in env/logs/, or `out_dir` for a plan-only run)."""
+    d = out_dir or P.LOGS
+    d.mkdir(parents=True, exist_ok=True)
     r = subprocess.run([str(HS), *args], stdout=subprocess.PIPE, stderr=None, text=True, timeout=timeout)
-    (P.LOGS / f"bootstrap-{args[0]}.out").write_text(r.stdout or "")
+    (d / f"bootstrap-{args[0]}.out").write_text(r.stdout or "")
     return r
 
 
@@ -193,8 +211,10 @@ def check_client_source(src: str | None) -> dict:
 # ---------------------------------------------------------------- steps
 
 class Ctx:
-    def __init__(self, client: str | None, yes: bool, probe: Probe):
+    def __init__(self, client: str | None, yes: bool, probe: Probe, jobs: int | None = None,
+                 ignore_power: bool = False, plan_dir: Path | None = None):
         self.client, self.yes, self.probe = client, yes, probe
+        self.jobs, self.ignore_power, self.plan_dir = jobs, ignore_power, plan_dir
         self.client_info: dict | None = None
 
 
@@ -263,14 +283,26 @@ class Build(Step):
                 return False, f"{repo.name} isn't at its pinned commit"
         return True, f"built from the current inputs ({h[:12]})"
 
-    def run(self, ctx):
-        r = _hs("build", "--clean")
+    @staticmethod
+    def args(ctx) -> list[str]:
+        return (["build", "--clean"] + (["--jobs", str(ctx.jobs)] if ctx.jobs is not None else [])
+                + (["--ignore-power"] if ctx.ignore_power else []))
+
+    def run_build(self, ctx) -> None:
+        from . import power
+        r = _hs(*self.args(ctx), out_dir=ctx.plan_dir)
+        if r.returncode == power.STOP_EXIT:
+            raise PowerStopped("the server build stopped because the battery got too low", POWER_HINT,
+                               {"cmd": "harness/hs " + " ".join(self.args(ctx))})
         if r.returncode != 0:
-            raise StepFailed(f"`harness/hs build --clean` failed (exit {r.returncode})", self.hint)
+            raise StepFailed(f"`harness/hs {' '.join(self.args(ctx))}` failed (exit {r.returncode})", self.hint)
+
+    def run(self, ctx):
+        self.run_build(ctx)
         ok, why = self.done(ctx)
         if not ok:
             raise StepFailed(f"the build finished but isn't complete: {why}", self.hint)
-        return {"cmd": "harness/hs build --clean"}
+        return {"cmd": "harness/hs " + " ".join(self.args(ctx))}
 
 
 class Data(Step):
@@ -450,6 +482,32 @@ class Defaults(Step):
 STEPS = [Brew(), Build(), Data(), Database(), Wine(), Client(), PlayClient(), App(), Defaults()]
 
 
+class PlanStep(Step):
+    """A step of a plan-only run ($HS_TEST_POWER_PLAN_ONLY): done() and run() are a record in
+    <plan dir>/bootstrap-state.json; the build step runs the real `hs build` (plan-only there too)."""
+
+    def __init__(self, real: Step, state: Path):
+        self.real, self.state = real, state
+        self.id, self.label, self.hint = real.id, real.label, real.hint
+
+    def _done_ids(self) -> list[str]:
+        try:
+            return list(json.loads(self.state.read_text()).get("done", []))
+        except (OSError, ValueError):
+            return []
+
+    def done(self, ctx):
+        return (self.id in self._done_ids(), "plan only: recorded as done")
+
+    def run(self, ctx):
+        res = {"plan_only": True}
+        if isinstance(self.real, Build):
+            self.real.run_build(ctx)
+            res["cmd"] = "harness/hs " + " ".join(Build.args(ctx))
+        self.state.write_text(json.dumps({"done": self._done_ids() + [self.id]}) + "\n")
+        return res
+
+
 # ---------------------------------------------------------------- preflight
 
 def preflight(ctx: Ctx, todo_ids: list[str] | None = None) -> dict:
@@ -537,36 +595,59 @@ def _inject(allow: bool) -> tuple[dict | None, str | None]:
     return (inj if isinstance(inj, dict) else None), (None if isinstance(inj, dict) else f"{TEST_ENV} must be an object")
 
 
-def run(client: str | None, yes: bool = False, check_only: bool = False, allow_test_inject: bool = False) -> int:
+def run(client: str | None, yes: bool = False, check_only: bool = False, allow_test_inject: bool = False,
+        jobs: int | None = None, ignore_power: bool = False) -> int:
+    from . import power
     t_all = time.time()
     if allow_test_inject and not os.environ.get("HS_HARNESS_RUN"):
         say(f"{TEST_FLAG} is for the harness only.")
+        return 2
+    why = power.refusal("bootstrap", allow_test_inject)
+    if why:
+        say(why)
+        return 2
+    if jobs is not None and jobs < 1:
+        say(f"--jobs must be 1 or more (got {jobs}); leave it out to use this Mac's performance cores.")
         return 2
     inj, err = _inject(allow_test_inject)
     if err:
         say(err)
         return 2
+    try:
+        pdir = power.plan_dir()
+    except power.JobsError as e:
+        say(str(e))
+        return 2
+    plan = Path(pdir) if pdir else None
+    steps = [PlanStep(s, plan / "bootstrap-state.json") for s in STEPS] if plan else STEPS
     # Homebrew's tools (cmake, mysql, ...) for the steps, even when `brew shellenv` isn't in this shell's profile
     path = orig_path = os.environ.get("PATH", "")
     for d in (str(P.BREW / "sbin"), str(P.BREW / "bin")):
         if d not in path.split(":"):
             path = f"{path}:{d}" if path else d
     os.environ["PATH"] = path
-    ctx = Ctx(client, yes, Probe(inj))
-    n = len(STEPS) + 1
+    ctx = Ctx(client, yes, Probe(inj), jobs, ignore_power, plan)
+    n = len(steps) + 1
     say("Moonglade setup" + (" (check only: nothing will be changed)" if check_only else "") + f" in {P.ROOT}")
-    emit(event="start", root=str(P.ROOT), check_only=check_only, test_inject=sorted(inj) if inj else None)
+    emit(event="start", root=str(P.ROOT), check_only=check_only, test_inject=sorted(inj) if inj else None,
+         plan_only=bool(plan), jobs=jobs, ignore_power=ignore_power)
+    guard = power.Guard("setup (./bootstrap)", "./bootstrap", ignore_power, say=lambda m: say("   " + m))
 
     def fail(i, step_id, label, e: StepFailed):
         say(f"\nSetup stopped at step {i}/{n}: {label}.\n  Problem: {e}\n  What to do: {e.hint or 'see the messages above'}")
         emit(event="step", step=step_id, state="failed", error=str(e), hint=e.hint, evidence=e.evidence,
-             total_s=round(time.time() - t_all, 1))
-        return 1
+             power=guard.record(), power_stop=isinstance(e, PowerStopped), total_s=round(time.time() - t_all, 1))
+        return power.STOP_EXIT if isinstance(e, PowerStopped) else 1
 
     # 1. preflight (always; it changes nothing)
     say(f"[1/{n}] Checking this Mac and your client ...")
     emit(event="step", step="preflight", state="start")
+    if plan:
+        say("   plan only: preflight skipped")
+        emit(event="step", step="preflight", state="skipped", why="plan only")
     try:
+        if plan:
+            raise _SkipPreflight
         # which steps are left decides the disk need; done() checks are read-only and cheap. The brew step is judged
         # by its own check below (it can't change disk use much).
         pre_done = {}
@@ -579,15 +660,18 @@ def run(client: str | None, yes: bool = False, check_only: bool = False, allow_t
                 pre_done[s.id] = (False, f"{type(e).__name__}: {e}")
         todo = [i for i, (ok, _w) in pre_done.items() if not ok]
         ev = preflight(ctx, todo)
+    except _SkipPreflight:
+        ev = None
     except StepFailed as e:
         return fail(1, "preflight", "Checking this Mac and your client", e)
-    cl = ev["client"]
-    say(f"   ok: Apple Silicon, macOS {ev['macos']}, Rosetta, Command Line Tools, Homebrew; client "
-        + (f"{cl['wow_exe_version']} enUS ({cl['kind']})" if "wow_exe_version" in cl else "already installed")
-        + f"; {ev['disk']['free_gb']} GB free")
-    emit(event="step", step="preflight", state="done", evidence=ev)
+    if ev is not None:
+        cl = ev["client"]
+        say(f"   ok: Apple Silicon, macOS {ev['macos']}, Rosetta, Command Line Tools, Homebrew; client "
+            + (f"{cl['wow_exe_version']} enUS ({cl['kind']})" if "wow_exe_version" in cl else "already installed")
+            + f"; {ev['disk']['free_gb']} GB free")
+        emit(event="step", step="preflight", state="done", evidence=ev)
 
-    for i, s in enumerate(STEPS, start=2):
+    for i, s in enumerate(steps, start=2):
         say(f"[{i}/{n}] {s.label} ...")
         t0 = time.time()
         try:
@@ -602,6 +686,14 @@ def run(client: str | None, yes: bool = False, check_only: bool = False, allow_t
             say(f"   to do ({why})")
             emit(event="step", step=s.id, state="todo", why=why)
             continue
+        try:
+            pause = guard.check(s.label)       # power-guard: pause below 35 % until 50 %; stop at 15 %
+        except power.PowerStop as e:
+            return fail(i, s.id, s.label, PowerStopped(f"the battery fell to {e.record.get('end_pct')} % while "
+                                                       "paused, so setup stopped before this step", POWER_HINT,
+                                                       {"pause": e.record}))
+        if pause:
+            emit(event="power", step=s.id, state="resumed", pause=pause)
         emit(event="step", step=s.id, state="start", why=why)
         try:
             res = s.run(ctx)
@@ -617,16 +709,25 @@ def run(client: str | None, yes: bool = False, check_only: bool = False, allow_t
         say("\nCheck complete: nothing was changed.")
         emit(event="end", ok=True, check_only=True, total_s=round(total, 1))
         return 0
+    if plan:
+        say("\nPlan complete: nothing was built or installed (plan only).")
+        emit(event="end", ok=True, plan_only=True, total_s=round(total, 1), power=guard.record())
+        return 0
     say(f"\nMoonglade is ready ({_fmt_s(total)}). Open {P.ROOT / 'dist' / 'Moonglade.app'} (double-click it in "
         "Finder, or drag it to the Dock), or run ./play in a terminal.")
     if str(P.BREW / "bin") not in orig_path.split(":"):
         say(f"To run ./play from a terminal, put Homebrew on your PATH first: eval \"$({BREW_BIN} shellenv)\" "
             "(add that line to ~/.zprofile to keep it). The app doesn't need this.")
-    emit(event="end", ok=True, total_s=round(total, 1))
+    emit(event="end", ok=True, total_s=round(total, 1), power=guard.record())
     return 0
 
 
-def main(client: str | None, yes: bool, check_only: bool, allow_test_inject: bool) -> int:
+class _SkipPreflight(Exception):
+    pass
+
+
+def main(client: str | None, yes: bool, check_only: bool, allow_test_inject: bool, jobs: int | None = None,
+         ignore_power: bool = False) -> int:
     # one bootstrap per folder: a flock on the repo folder itself, so a refused run creates no file
     fd = os.open(P.ROOT, os.O_RDONLY)
     try:
@@ -636,6 +737,6 @@ def main(client: str | None, yes: bool, check_only: bool, allow_test_inject: boo
         os.close(fd)
         return 2
     try:
-        return run(client, yes, check_only, allow_test_inject)
+        return run(client, yes, check_only, allow_test_inject, jobs, ignore_power)
     finally:
         os.close(fd)
