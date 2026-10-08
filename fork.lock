@@ -20,3 +20,20 @@ wowsilicon_runtime_sha256=dc67cf0c2dd1e4c1cfaffe924f4737aaa594645b135a7973ac3505
 ghidra_version=12.1.4
 ghidra_url=https://github.com/NationalSecurityAgency/ghidra/releases/download/Ghidra_12.1.4_build/ghidra_12.1.4_PUBLIC_20260921.zip
 ghidra_sha256=ddac49f903da9d5bac833e5cc79395098b9c33cfd3279be5f31bd00387d2d4db
+# Prebuilt releases (openspec/changes/release-build). Packaging fetches these into env/release/cache via
+# harness/hslib/downloads.py (pins release-mysql, release-mysql-source, release-python); a wrong hash fails packaging.
+# Oracle MySQL 8.4 LTS (8.4.11, latest 8.4 with a macOS arm64 tarball on 2026-10-08; 8.4.12 was a docker-only CPU
+# release). AzerothCore needs >= 8.0 (FindMySQL.cmake, DatabaseWorkerPool.h). Oracle publishes MD5 + GPG signatures,
+# no SHA-256: the sha256 below was computed 2026-10-08 from a download whose MD5 matched Oracle's published .md5
+# (6e89113f04f2af85d0a164573493db3a binary, 7e36429318298eb05a79054309f18cb2 source); GPG not checked (no gpg here).
+release_mysql_url=https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11-macos15-arm64.tar.gz
+release_mysql_sha256=b96e00493bc3499b9ffd7f08d65c5d64933af0383a8287d9873b64f94c2d6009
+release_mysql_source_url=https://cdn.mysql.com/Downloads/MySQL-8.4/mysql-8.4.11.tar.gz
+release_mysql_source_sha256=eb3051164d625dd346a8203f76e0d5d5d9aec51dbe9d51788e39ec6b3f1394c2
+# python-build-standalone 20261003, CPython 3.13.16 install_only_stripped; sha256 = the release's published SHA256SUMS.
+release_python_url=https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.13.16%2B20261003-aarch64-apple-darwin-install_only_stripped.tar.gz
+release_python_sha256=9e01f63bbb08576cd9c8bc2d0564d098cb30c8453a0cd4bcf6aef458f6d2a147
+# The same build's pgo+lto-full archive, used only for its python/licenses/ (licence texts of the libraries PBS links
+# into python3.13, for THIRD_PARTY/python); sha256 = the release's published SHA256SUMS.
+release_python_licenses_url=https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.13.16%2B20261003-aarch64-apple-darwin-pgo%2Blto-full.tar.zst
+release_python_licenses_sha256=ca3eb5bf8110eaed1c3e516be4bd4d52bcf636f8e888359353f274288406bae7

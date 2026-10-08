@@ -193,6 +193,7 @@ The practical procedure, run budget and pre-verification checklist are in `.clau
 | `patches/client/` | play-client patch records (binary and MPQ) applied by `hs client-build` |
 | `client-mods/glue/` | the front-menu login screen (GlueXML Lua/XML) |
 | `tools/era-diff/` | VMaNGOS vs AzerothCore diff and SQL generator |
+| `tools/release/`, `.github/workflows/release.yml` | prebuilt releases: the portable server build, payload packaging (`package.sh`), `delocate.py`, the no-Homebrew smoke test, and the tag-push workflow (runs only once the repo is public) |
 | `branding/` | app icon |
 | `fork.lock` | every pinned upstream: core, playerbots, and each download's URL + SHA-256 (client-data, VMaNGOS, Wine runtime, Ghidra) |
 | `bootstrap`, `Brewfile` | one-command setup (`harness/hslib/bootstrap.py`) and its Homebrew packages |
@@ -244,6 +245,8 @@ Generated and gitignored, never committed: `vendor/` (pinned sources), `build/`,
 Moonglade is a personal, non-commercial project. It is not affiliated with or endorsed by Blizzard Entertainment. World of Warcraft and its client files belong to Blizzard Entertainment.
 
 **Bring your own client; no game files are distributed.** This repo never contains a client, game data or a patched executable, and it doesn't point to client downloads. The client you install is your own copy. Client patches (`patches/client/`) are byte recipes keyed by the stock `Wow.exe` hash, applied locally to a derived copy; `client/` stays untouched. Stock mode works with any 3.3.5a (12340) enUS client; patched mode needs the unmodified 12340 `Wow.exe` (its SHA-256 is recorded in patch 0001). AzerothCore, mod-playerbots, the Wine runtime, Ghidra and the VMaNGOS data are fetched from their own upstreams at pinned versions (`fork.lock`) under their own licences.
+
+**Prebuilt releases** (`tools/release/package.sh`, openspec change `release-build`) bundle the server built from those pins, Oracle MySQL and a standalone Python, each pinned in `fork.lock`. A release never contains client or game files; the Wine runtime and the server data stay first-launch downloads. Every release ships its sources alongside (Moonglade at the tag, AzerothCore and mod-playerbots at the pinned commits with our patches, the exact MySQL source) with `SHA256SUMS`, and the zip carries the bundled components' licence texts in `THIRD_PARTY/`.
 
 ## Licence
 
