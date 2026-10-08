@@ -1,13 +1,13 @@
 ## 1. Paths and app shape
-- [ ] 1.1 `paths.py`: `MODE`, `APP`, `HOME`, the release layout table (design 1); record the dev path table from the parent commit as the `release.mode_resolution` golden; release refuses `HS_LANE=b`
-- [ ] 1.2 Move every `P.ROOT`/`P.ENV`/`P.DATA`/`P.BREW` runtime path in hslib (stack, config, downloads, wineinst, clientinst, clientbuild, settings, backups, play, launch, bootstrap, app) onto the resolver; reviewed list of dev-only exceptions
-- [ ] 1.3 `release.py`/`package.sh`: zip top level `Moonglade.app` with the payload at `Contents/Resources/Moonglade/`, bundle id `local.moonglade.release`; point `release-build`'s checks at the new root (list each edit and why it isn't a loosening)
-- [ ] 1.4 Test switches (`HS_RELEASE_HOME`, `HS_RELEASE_PORTS`, `HS_RELEASE_DOWNLOAD_BASE`, `HS_FIRSTLAUNCH_TEST`, `HS_APP_TEST_CLIENT_PICK`) with refusal outside `--allow-test-release` + live harness run / the app test hook
+- [x] 1.1 `paths.py`: `MODE`, `APP`, `HOME`, the release layout table (design 1); record the dev path table from the parent commit as the `release.mode_resolution` golden; release refuses `HS_LANE=b`
+- [x] 1.2 Move every `P.ROOT`/`P.ENV`/`P.DATA`/`P.BREW` runtime path in hslib (stack, config, downloads, wineinst, clientinst, clientbuild, settings, backups, play, launch, bootstrap, app) onto the resolver; reviewed list of dev-only exceptions
+- [x] 1.3 `release.py`/`package.sh`: zip top level `Moonglade.app` with the payload at `Contents/Resources/Moonglade/`, bundle id `local.moonglade.release`; point `release-build`'s checks at the new root (list each edit and why it isn't a loosening)
+- [x] 1.4 Test switches (`HS_RELEASE_HOME`, `HS_RELEASE_PORTS`, `HS_RELEASE_DOWNLOAD_BASE`, `HS_FIRSTLAUNCH_TEST`, `HS_APP_TEST_CLIENT_PICK`) with refusal outside `--allow-test-release` + live harness run / the app test hook
 
 ## 2. Release stack
-- [ ] 2.1 Payload `mysqld`/`mysqladmin`/`mysql`/`mysqldump` in stack and backups; release `my.cnf` (basedir, share dirs)
-- [ ] 2.2 `config` release mode: `SourceDirectory` = `APP/sql` (verify against `DBUpdater.cpp`; fix packaging if the layout differs), `MySQLExecutable`, `OPENSSL_CONF`, module keys as `AC_*` via `module_env`, server cwd `HOME/run`
-- [ ] 2.3 Launcher release mode: payload from the bundle, payload Python `-I -m hslib.play`, logs in HOME
+- [x] 2.1 Payload `mysqld`/`mysqladmin`/`mysql`/`mysqldump` in stack and backups; release `my.cnf` (basedir, share dirs)
+- [x] 2.2 `config` release mode: `SourceDirectory` = `APP/sql` (verify against `DBUpdater.cpp`; fix packaging if the layout differs), `MySQLExecutable`, `OPENSSL_CONF`, module keys as `AC_*` via `module_env`, server cwd `HOME/run`
+- [x] 2.3 Launcher release mode: payload from the bundle, payload Python `-I -m hslib.play`, logs in HOME
 
 ## 3. First launch
 - [ ] 3.1 Release step list in `bootstrap.py` + `hs first-launch` (preflight incl. disk need = client size + fixed part, client, data, wine, database, playclient, defaults); `home.json` step/attempt record
@@ -24,8 +24,8 @@
 - [ ] 4.4 `docs/setup.md`: "Using a release" (what goes where, how to remove everything); design.md "As built"
 
 ## 5. Follow-ups from the release-build verifier (2026-10-08)
-- [ ] 5.1 Narrow `tools/release/allowlist.json`: the `/.+/vendor/azerothcore-wotlk` and `/.+/env/release/build/cmake` entries accept any prefix. Anchor them to the build root the packaging run used (passed in by release.py), and add a counterexample: a different prefix fails `release.no_abs_paths`
-- [ ] 5.2 Release mode sets SourceDirectory and MySQLExecutable to payload paths and OPENSSL_CONF to a payload file, so a friend's Homebrew `/opt/homebrew/etc/openssl@3/openssl.cnf` is never read (check: `release.stack_from_payload` asserts the env)
-- [ ] 5.3 `bin/Moonglade` uses the payload Python in release mode and never searches `/opt/homebrew/bin` first
-- [ ] 5.4 Locally built zips carry this Mac's repo path (username) in the server binaries: `package.sh` labels local zips "local test build, not for publishing" (VERSION + file name); only CI-built zips are published
+- [x] 5.1 Narrow `tools/release/allowlist.json`: the `/.+/vendor/azerothcore-wotlk` and `/.+/env/release/build/cmake` entries accept any prefix. Anchor them to the build root the packaging run used (passed in by release.py), and add a counterexample: a different prefix fails `release.no_abs_paths`
+- [x] 5.2 Release mode sets SourceDirectory and MySQLExecutable to payload paths and OPENSSL_CONF to a payload file, so a friend's Homebrew `/opt/homebrew/etc/openssl@3/openssl.cnf` is never read (check: `release.stack_from_payload` asserts the env)
+- [x] 5.3 `bin/Moonglade` uses the payload Python in release mode and never searches `/opt/homebrew/bin` first
+- [x] 5.4 Locally built zips carry this Mac's repo path (username) in the server binaries: `package.sh` labels local zips "local test build, not for publishing" (VERSION + file name); only CI-built zips are published
 - [ ] 5.5 readline stub: two lines arriving in one read leave the second waiting (poll sees an empty fd while stdio buffered it); drain stdio's buffer before polling, with a piped two-line test
