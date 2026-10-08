@@ -565,11 +565,15 @@ class _LogWatch(threading.Thread):
         self.join(timeout=5)
 
 
-# The AI players' own characters: playerbots creates random-bot accounts and characters during the first start
-# (population.RNDBOT_ACCOUNTS: playerbots_account_type 1), so an interrupted first start already has some. Only other
-# characters (a player's) protect a datadir from the reset; an account missing from that table counts as a player's.
-PLAYER_CHARACTERS = ("SELECT COUNT(*) FROM characters WHERE account NOT IN (SELECT account_id FROM "
-                     f"{P.DB_NAMES['playerbots']}.playerbots_account_type WHERE account_type = 1)")
+# The AI players' own characters: playerbots creates its random-bot accounts (username prefix
+# AiPlayerbot.RandomBotAccountPrefix, "rndbot" in playerbots.conf.dist, which Moonglade doesn't change; RandomPlayerbotMgr
+# finds them with `username LIKE '<prefix>%'`) and their characters during the first start, so an interrupted first
+# start already has some. Only other characters (a player's) protect a datadir from the reset; a character whose
+# account is missing from acore_auth counts as a player's.
+BOT_ACCOUNT_PREFIX = "rndbot"
+PLAYER_CHARACTERS = (f"SELECT COUNT(*) FROM {P.DB_NAMES['characters']}.characters c LEFT JOIN "
+                     f"{P.DB_NAMES['auth']}.account a ON a.id = c.account "
+                     f"WHERE a.username IS NULL OR a.username NOT LIKE '{BOT_ACCOUNT_PREFIX}%'")
 
 
 def _characters_in_datadir() -> tuple[int | None, str]:
@@ -593,7 +597,7 @@ def _characters_in_datadir() -> tuple[int | None, str]:
             return 0, "SELECT COUNT(*) FROM characters -> 0"
         n = db.scalar(PLAYER_CHARACTERS, "characters")
         return (int(n) if n is not None and n.isdigit() else None), \
-            f"{total} character(s), {n!r} not the AI players' (playerbots_account_type 1)"
+            f"{total} character(s), {n!r} not on the AI players' {BOT_ACCOUNT_PREFIX}* accounts"
     except Exception as e:  # noqa: BLE001  (fail-closed: unknown counts as "can't tell")
         return None, f"{type(e).__name__}: {str(e)[:300]}"
     finally:
