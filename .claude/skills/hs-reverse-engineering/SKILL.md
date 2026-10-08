@@ -21,7 +21,7 @@ description: Read-only reverse engineering of the 3.3.5a client with Ghidra via 
 1. Find anchor strings (error messages, file names) → `strings`.
 2. `xrefs` on the string address → the referencing functions.
 3. `decompile` those functions; follow callers with more xrefs.
-4. Write findings with provenance: the binary's SHA-256 (first line of each report), the function addresses, and a behaviour description. Don't commit decompiled code; short excerpts in docs are fine, since nothing is redistributed.
+4. Write findings with provenance: the binary's SHA-256 (first line of each report), the function addresses, and a behaviour description. Don't commit decompiled code; short excerpts in docs are fine (the repo is public: keep them short, attributed and analytical, ADR-0005).
 
 ## Known anchors (Wow.exe 3.3.5.12340)
 - "GlueXML is modified or corrupt" @0x009f42c4, "GlueXML has corrupt signature" @0x009f42e4, "GlueXML missing signature" @0x009f4304, "GlueXML\GlueXML.toc" @0x009f432a. These are the starting points for the login-screen spike.

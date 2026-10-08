@@ -840,13 +840,6 @@
    "s": 0.51,
    "status_in_run": "pass"
   },
-  "repo.rename_script": {
-   "build_s": 0.0,
-   "duration_s": 5.63,
-   "run": "save-backups-verifier2",
-   "s": 5.63,
-   "status_in_run": "pass"
-  },
   "report.backups_tier_rule": {
    "build_s": 0.0,
    "duration_s": 0.47,

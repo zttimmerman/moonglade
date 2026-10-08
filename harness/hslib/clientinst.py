@@ -92,7 +92,7 @@ class _ZipSource:
             raise ClientInstallError(f"not a readable zip: {path}: {e}") from e
         infos = [i for i in self.z.infolist() if not i.is_dir()]
         tops = {i.filename.split("/", 1)[0] for i in self.z.infolist()}
-        # Strip a single top-level folder (e.g. [redacted]_3.3.5a/) if every member is under it.
+        # Strip a single top-level folder (e.g. MyClient_3.3.5a/) if every member is under it.
         self.prefix = ""
         if len(tops) == 1 and all("/" in i.filename for i in infos):
             self.prefix = next(iter(tops)) + "/"
@@ -343,11 +343,10 @@ def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> 
                 f"({'unchanged' if (now['size'], now['mtime_ns']) == (before['size'], before['mtime_ns']) else 'CHANGED'})")
             raise ClientInstallError(
                 f"{len(corrupt)} member(s) of {src} failed their zip CRC-32 check, so the source itself is "
-                f"damaged (e.g. an incomplete torrent download): "
+                f"damaged (e.g. an incomplete copy): "
                 + "; ".join(c["member"] for c in corrupt)
                 + ". Every other member was extracted; no manifest was written, so client/ is not a valid "
-                  "install. Repair the source (in Transmission: select the torrent, then Verify Local Data, "
-                  "and let it re-download the bad pieces), then re-run `harness/hs client-install` and only "
+                  "install. Repair or replace the source, then re-run `harness/hs client-install` and only "
                   "the missing files will be extracted.")
 
         files = {}

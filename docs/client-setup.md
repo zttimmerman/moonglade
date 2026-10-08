@@ -1,18 +1,18 @@
 # Client setup (macOS, WoWSilicon Wine runtime + mtld3d, repo-local prefix)
 
-How to install the Windows WotLK 3.3.5a (build 12340) client into this repo and run it against the local Moonglade server. The client binary is never patched. Only `Data/<locale>/realmlist.wtf` and `WTF/Config.wtf` are changed. The Wine layer is described in [ADR-0004](adr/0004-wine-layer-whisky.md).
+How to install the Windows WotLK 3.3.5a (build 12340) client into this repo and run it against the local Moonglade server. The installed client in `client/` is never modified beyond `Data/<locale>/realmlist.wtf` and `WTF/Config.wtf`. Patched mode (ADR-0009) applies the recipes in `patches/client/` only to a derived copy, `env/client-play/`; it needs the unmodified 12340 `Wow.exe`. Stock mode works with any 3.3.5a (12340) enUS client. Bring your own client: this repo doesn't provide one or point to downloads. The Wine layer is described in [ADR-0004](adr/0004-wine-layer-whisky.md).
 
 ## Prerequisites
 
 - **The pinned Wine runtime**: run `harness/hs wine-install`. It downloads WoWSilicon's Wine runtime r17 (Wine 11.13 with mtld3d, D3D9 to Metal; URL and SHA-256 in `fork.lock`), verifies it and unpacks it into `env/wowsilicon-r17/`. The prefix is `env/wineprefix-mtld3d/`. Whisky.app is not needed; its Wine 7.7 is only an optional A/B layer (`HS_WINE=whisky`, ADR-0004).
 - **Rosetta 2** (the Wine runtime is x86_64): `softwareupdate --install-rosetta` if `arch -x86_64 /usr/bin/true` fails.
-- **A 3.3.5a enUS client** as a zip or a folder, for example `~/Downloads/[redacted]_3.3.5a.zip`.
+- **A 3.3.5a enUS client** as a zip or a folder that you already own, for example `~/Downloads/YourClient_3.3.5a.zip`.
 - **About 19 GB of free disk** for a first install. The client is about 17.9 GB.
 
 ## 1. Install the client into `client/`
 
 ```
-harness/hs client-install ~/Downloads/[redacted]_3.3.5a.zip
+harness/hs client-install ~/Downloads/YourClient_3.3.5a.zip
 ```
 
 This command:
@@ -25,7 +25,7 @@ This command:
 
 The command is safe to re-run. If `client/` already matches the manifest, nothing is extracted. If files are missing or differ, only those are re-extracted.
 
-**If it reports corrupt members**, the source itself is damaged. In a torrent download that means some pieces are bad. In Transmission, select the torrent, choose **Verify Local Data**, and let it re-download the bad pieces. Then re-run the command. Only the missing files are extracted.
+**If it reports corrupt members**, the source itself is damaged (for example an incomplete copy or a failing disk). Repair or replace the source, then re-run the command. Only the missing files are extracted.
 
 Check the install at any time:
 

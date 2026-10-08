@@ -2,7 +2,7 @@
 
 m2-living-world task 4.1, builder B12, 2026-10-03. `perf.population_tuned` reads the `json tuning-runs` block at the end of this file. Rounds: 1 (N=50-300, original budget), 2 (N=500-1500, revised budget, task 2.2). The prose explains the numbers.
 
-**Target Mac:** Apple M2 Pro, 16 GB (`hw.memsize` 17179869184), macOS 26.6.2. The machine was **not idle** during these runs: [redacted] and other apps were open, and swap use stayed between 7.3 and 8.6 GB in every run (`sysctl vm.swapusage`, sampled with each measurement).
+**Target Mac:** Apple M2 Pro, 16 GB (`hw.memsize` 17179869184), macOS 26.6.2. The machine was **not idle** during these runs: several large desktop apps were open, and swap use stayed between 7.3 and 8.6 GB in every run (`sysctl vm.swapusage`, sampled with each measurement).
 
 **Budget** (performance-budget delta, revised 2026-10-03 after the first measurements, see the proposal's spec-change log): worldserver ≤ 6.0 GB; mysqld ≤ 1.0 GB; worldserver + mysqld + authserver ≤ 7.0 GB; world update p95 ≤ 100 ms and median ≤ 50 ms. Process memory is max(RSS, footprint). Host free + inactive is recorded, not limited. Every 10 s sample of a 10-minute window must stay within all of these. (The first half of this record was measured against the original guess: worldserver ≤ 4.0 GB and host ≥ 3.0 GB.)
 

@@ -29,6 +29,6 @@
 ## Consequences
 - One Hearthstone icon from launch to quit; clicking it or Cmd-Tabbing brings the game forward.
 - Lost under the accessory policy: Wine's menu bar shortcuts (Cmd-H, Cmd-Opt-Q, Wine's Cmd-Opt-Ctrl-F full screen). WoW's own window/full-screen setting and Alt-Enter are unaffected. Native green-button full screen is unverified; if it fails, use `regular`.
-- Uses `_LSSetApplicationInformationItem` (private API) for the name. Acceptable for a personal, never-distributed app, but a macOS update could break it. The Dock checks catch that, and the failure mode is cosmetic (back to two icons), not a broken game.
+- Uses `_LSSetApplicationInformationItem` (private API) for the name. Acceptable for an app each player builds locally (no signed binary is published), but a macOS update could break it. The Dock checks catch that, and the failure mode is cosmetic (back to two icons), not a broken game.
 - Works because the r17 `wine` binary isn't hardened-runtime signed. A future signed runtime would silently ignore the shim (graceful).
 - Performance: the shim runs only at window creation and on reopen/unminimise, with no per-frame work. `app.shim_perf` measures startup time and CPU with vs without it.

@@ -214,7 +214,7 @@ def prefix_processes(excluded: list | None = None) -> list[dict]:
     3. it is a process of the runtime whose command line runs Wow.exe (conservative: counted as ours);
     and a candidate counts only if process_scope() places it in the pinned runtime (F24: an unrelated process that
     merely has a file open under the prefix is not ours). Candidates left out are appended to `excluded` if given.
-    Processes of other prefixes ([redacted]) have a different server dir and WINEPREFIX."""
+    Processes of other prefixes (e.g. the user's own Whisky bottles) have a different server dir and WINEPREFIX."""
     tag = f"WINEPREFIX={P.WINEPREFIX}"
     sd = server_dir()
     by_lsof = (_lsof_pids(sd) if sd else set()) | _pids_with_open_files_under(P.WINEPREFIX, *([sd] if sd else []))

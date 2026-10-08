@@ -10,7 +10,7 @@ The repo SHALL carry the GPL-2.0-or-later licence text in `LICENSE`, a `NOTICE` 
 - Check: `public.license`
 
 ### Requirement: Tracked tree is free of personal data
-No tracked file SHALL match the built-in patterns (an email address other than noreply/example addresses, `/Users/<name>/` home paths, [redacted] links, "private repo" / "never redistributed" claims) or any line of the local denylist `env/public-denylist.txt` (untracked, 0600, written by the builder from the audit's §2/§7 findings and Zach's details). The check SHALL fail closed if the denylist is missing or empty.
+No tracked file SHALL match the built-in patterns (an email address other than noreply/example addresses, `/Users/<name>/` home paths, Claude Code session URLs, "private repo" / "never redistributed" claims) or any line of the local denylist `env/public-denylist.txt` (untracked, 0600, written by the builder from the audit's §2/§7 findings and Zach's details). The check SHALL fail closed if the denylist is missing or empty.
 
 #### Scenario: Clean tree passes
 - **GIVEN** the tracked tree after the scrub and the local denylist
@@ -37,7 +37,7 @@ No tracked file SHALL be a client or game asset (MPQ, DBC, EXE, DLL, BLP, M2, WD
 `tools/go-public/rewrite.sh` SHALL rewrite a scratch **mirror clone** (never the working checkout, never pushing) as follows:
 - author and committer emails mapped to Zach's GitHub noreply address;
 - `Claude-Session:` trailers removed;
-- "Hearthstone" → "Moonglade" in commit messages;
+- the old project name (the naming guard's `OLD_NAME`) → "Moonglade" in commit messages;
 - `__pycache__/` and `docs/research/img/` dropped from all history;
 - denylist lines replaced in all blobs.
 

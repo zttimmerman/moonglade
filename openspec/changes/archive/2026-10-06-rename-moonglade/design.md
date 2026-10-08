@@ -8,8 +8,8 @@
   - the rename change itself, and this guard's own source.
   It fails on any other hit.
 - Folder rename script (`tools/rename-folder.sh`, run by Zach with Claude Code closed):
-  - `mv ~/Documents/repos/[redacted] ~/Documents/repos/project-moonglade`;
-  - move `~/.claude/projects/[redacted]-Documents-repos-[redacted]` to the new encoded path (memory + transcripts);
+  - `mv` the repo folder from its old name to `project-moonglade`;
+  - move the repo's Claude Code project-data folder (`~/.claude/projects/<encoded old path>`) to the new encoded path (memory + transcripts);
   - update `git worktree` paths (`git worktree repair`);
   - remind Zach to update anything that hard-codes the old path (Dock pin, etc.).
   It prints what it would do (dry run) unless given `--apply`.

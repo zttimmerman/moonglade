@@ -2,7 +2,7 @@
 
 Moonglade is single-player, fully offline World of Warcraft: **Wrath of the Lich King 3.3.5a (build 12340)** on an Apple Silicon Mac. It runs a local **AzerothCore** server with **mod-playerbots**, so about 500 AI players fill the world, and you can add bot companions to your party. An optional **vanilla mode** gives levels 1–60 the pre-2.3 pace and difficulty, and all WotLK content stays in place: Outland, Northrend and Death Knights. The game's own login screen becomes a **front menu**, so you press Continue and you're in. One double-click (or `./play`) starts the server and the game. Quitting stops everything.
 
-It's a personal project, and nothing it produces is redistributed. **The WoW client isn't included.** You need your own Windows 3.3.5a enUS client.
+It's a personal project. The source is public under the GPL (GPL-2.0-or-later), and no client or game files are distributed. **The WoW client isn't included.** Bring your own Windows 3.3.5a enUS client.
 
 ## Status
 
@@ -32,7 +32,7 @@ It's a personal project, and nothing it produces is redistributed. **The WoW cli
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
 eval "$(/opt/homebrew/bin/brew shellenv)"     # add this line to ~/.zprofile to keep it
 
-# 2. clone (private repo)
+# 2. clone
 git clone https://github.com/zttimmerman/project-moonglade.git
 cd project-moonglade
 
@@ -241,4 +241,10 @@ Generated and gitignored, never committed: `vendor/` (pinned sources), `build/`,
 
 ## Legal and scope
 
-This is a personal project for one person's own offline play. World of Warcraft and its client files belong to Blizzard Entertainment. The client you install is your own copy, and this repo never contains or distributes it. Nothing Moonglade produces is redistributed: client files, the patched play client, builds or packages. AzerothCore, mod-playerbots, the Wine runtime, Ghidra and the VMaNGOS data are fetched from their own upstreams at pinned versions (`fork.lock`) under their own licences.
+Moonglade is a personal, non-commercial project. It is not affiliated with or endorsed by Blizzard Entertainment. World of Warcraft and its client files belong to Blizzard Entertainment.
+
+**Bring your own client; no game files are distributed.** This repo never contains a client, game data or a patched executable, and it doesn't point to client downloads. The client you install is your own copy. Client patches (`patches/client/`) are byte recipes keyed by the stock `Wow.exe` hash, applied locally to a derived copy; `client/` stays untouched. Stock mode works with any 3.3.5a (12340) enUS client; patched mode needs the unmodified 12340 `Wow.exe` (its SHA-256 is recorded in patch 0001). AzerothCore, mod-playerbots, the Wine runtime, Ghidra and the VMaNGOS data are fetched from their own upstreams at pinned versions (`fork.lock`) under their own licences.
+
+## Licence
+
+Moonglade's code is licensed under the **GNU General Public License, version 2 or (at your option) any later version** (GPL-2.0-or-later); see [LICENSE](LICENSE). That matches AzerothCore and mod-playerbots, whose files our patches change, and the VMaNGOS-derived data. [NOTICE](NOTICE) lists the parts under other terms: the OpenSpec-generated files (MIT), the VMaNGOS data attribution, and the branding (`branding/`, all rights reserved).

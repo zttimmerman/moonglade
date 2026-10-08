@@ -240,9 +240,9 @@ def verify_bundle(app: Path, ev: dict) -> None:
 
 
 def repo_roots() -> list[str]:
-    """This repo's folder path (as given and resolved), longest first. It still carries the old name until Zach runs
-    tools/rename-folder.sh; that's the folder, not wording the app shows, so name scans mask it first (e.g. the
-    shim's install name embeds its build path)."""
+    """This repo's folder path (as given and resolved), longest first. A checkout may still sit in a folder with the
+    old name; that's the folder, not wording the app shows, so name scans mask it first (e.g. the shim's install
+    name embeds its build path)."""
     return sorted({str(P.ROOT), str(P.ROOT.resolve())}, key=len, reverse=True)
 
 
