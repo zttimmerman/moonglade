@@ -401,13 +401,19 @@ def runs_without_homebrew(ctx):
     return ev
 
 
-GAME_PATTERNS = (r"(?i)\.mpq$", r"(?i)(^|/)wow(-64)?\.exe$", r"(?i)\.dbc$", r"(?i)(^|/)(maps|vmaps|mmaps|dbc|cameras)/",
-                 r"(?i)\.(map|vmtree|vmtile|mmap|mmtile|m2|wmo|blp|adt|wdt)$", r"(?i)client-data", r"(?i)(^|/)data\.zip$",
-                 r"(?i)(^|/)WTF/")
+# Game-file paths (spec: MPQ, Wow.exe, DBC, maps/vmaps/mmaps, client-data): client archives and executables by name,
+# extracted server data by its file types and by the folder names client-data unpacks into (lowercase, exact; source
+# folders like AzerothCore's src/.../Maps/ are code), and client-data itself.
+GAME_PATTERNS = (r"(?i)\.mpq$", r"(?i)(^|/)wow(-64)?\.exe$", r"(?i)\.dbc$", r"(?i)\.db2$",
+                 r"(^|/)(maps|vmaps|mmaps|dbc|Cameras)/", r"(?i)(^|/)[0-9]{7}\.map$",
+                 r"(?i)\.(vmtree|vmtile|vmo|mmap|mmtile|m2|wmo|blp|adt|wdt|skin|anim)$",
+                 r"(?i)(^|/)client-data/", r"(?i)(^|/)data\.zip$", r"(?i)(^|/)WTF/")
 
 
 def game_hits(names: list[str]) -> list[str]:
-    return [n for n in names if any(re.search(p, n) for p in GAME_PATTERNS)]
+    """Names matching a game-file pattern. Git's empty-folder markers (.gitkeep) don't count: AzerothCore's tree has
+    var/extractors/{maps,vmaps,mmaps,dbc,Cameras}/.gitkeep, which hold nothing."""
+    return [n for n in names if not n.endswith("/.gitkeep") and any(re.search(p, n) for p in GAME_PATTERNS)]
 
 
 def _archive_names(p: Path) -> list[str]:
@@ -458,6 +464,8 @@ def tarball_blobs(p: Path, prefix: str) -> dict:
     out = {}
     with tarfile.open(p, "r:gz") as t:
         for m in t:
+            if m.isdir() and m.name.rstrip("/") == prefix:
+                continue
             if not m.name.startswith(prefix + "/"):
                 out[f"<outside prefix> {m.name}"] = "?"
                 continue
