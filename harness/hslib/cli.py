@@ -146,8 +146,20 @@ def main(argv=None) -> int:
                         "`join <results.json> --label <change>` adds the checks a merging change's verifier full run "
                         "executed that the baseline lacks (existing times never change)")
     tb.add_argument("action", choices=["join"])
-    tb.add_argument("results")
+    tb.add_argument("results", nargs="?", help="a full run's results.json (default: harness/out/last-full-run/"
+                                               "results.json, the last unfiltered full run)")
     tb.add_argument("--label", required=True)
+    tb.add_argument("--baseline", type=Path, help=argparse.SUPPRESS)      # report.last_full_run: a scratch baseline
+    ka = sub.add_parser("keep-awake", help="keep this Mac and its display awake (the assertion every `hs run` holds) "
+                                           "for N hours (default 8) or until stopped (Ctrl-C)")
+    ka.add_argument("--hours", type=float, default=8.0)
+    ng = sub.add_parser("nightly", help="flake hunt: 3 unfiltered full runs on a clean main, results and a flake table "
+                                        "in harness/out/nightly/<date>/; --install/--uninstall manage a user "
+                                        "LaunchAgent that runs it nightly (installing it is Zach's call)")
+    ngx = ng.add_mutually_exclusive_group()
+    ngx.add_argument("--install", action="store_true", help="write and load ~/Library/LaunchAgents/<label>.plist")
+    ngx.add_argument("--uninstall", action="store_true", help="unload and remove that LaunchAgent")
+    ng.add_argument("--runs", type=int, default=3, help=argparse.SUPPRESS)
     ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns from env/branding/logo-source.jpeg")
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
 
@@ -157,6 +169,11 @@ def main(argv=None) -> int:
     for _var in ("HS_TEST_PRISTINE_CLIENT", "HS_TEST_PRISTINE_MUTATE"):   # report.client_pristine's self-test only
         if _os.environ.get(_var) and (a.cmd != "run" or _os.environ.get("HS_HARNESS_RUN") != "1"):
             log(f"${_var} is a test switch of report.client_pristine's self-test (nested `hs run` only); unset it")
+            return 2
+    from .guienv import PREFLIGHT_TEST_ENV
+    for _var in PREFLIGHT_TEST_ENV:                                      # report.gui_preflight's nested runs only
+        if _os.environ.get(_var) and (a.cmd != "run" or _os.environ.get("HS_HARNESS_RUN") != "1"):
+            log(f"${_var} is a test switch of report.gui_preflight (nested `hs run` only); unset it")
             return 2
 
     if a.cmd == "build":
@@ -214,13 +231,23 @@ def main(argv=None) -> int:
         if a.results_dir:
             a.results_dir.mkdir(parents=True, exist_ok=True)
             P.RESULTS, P.SUMMARY = a.results_dir.resolve() / "results.json", a.results_dir.resolve() / "summary.md"
-        from . import guienv
-        from .runner import gui_preflight
-        msg = gui_preflight(a.tier, a.only, a.ignore_gui_preflight, guienv.probe)
-        if msg:
-            print(msg)
+        from .runner import preflight_from_env
+        pf = preflight_from_env(a.tier, a.only, a.ignore_gui_preflight)
+        if pf["refuse"]:
+            print(pf["refuse"])
             return 2
-        return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean)
+        if _os.environ.get("HS_TEST_PREFLIGHT_ONLY") == "1":                # report.gui_preflight: decision only
+            _print({"preflight": pf})
+            return 0
+        return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean, preflight=pf)
+
+    if a.cmd == "keep-awake":
+        from .util import keep_awake_cli
+        return keep_awake_cli(a.hours)
+
+    if a.cmd == "nightly":
+        from . import nightly
+        return nightly.cli(do_install=a.install, do_uninstall=a.uninstall, runs=a.runs)
 
     if a.cmd == "pop-session":
         from . import population

@@ -120,3 +120,12 @@ def table(with_env: bool = False, own_only: bool = False) -> list[tuple[int, str
                 cmd += " " + " ".join(ae[1])
         rows.append((pid, cmd))
     return sorted(rows)
+
+
+def start_time(pid: int) -> int | None:
+    """The process's start time in whole seconds since the epoch (proc_bsdinfo.pbi_start_tvsec), None if it's gone.
+    With the pid it identifies a process across pid reuse (test-loop-speedups: harness run files)."""
+    buf = ctypes.create_string_buffer(136)
+    if _libproc.proc_pidinfo(pid, 3, ctypes.c_uint64(0), buf, 136) < 136:   # PROC_PIDTBSDINFO
+        return None
+    return struct.unpack_from("Q", buf.raw, 120)[0]

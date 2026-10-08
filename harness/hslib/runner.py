@@ -460,28 +460,76 @@ def select(reg: dict, tier: str, only: list[str] | None, gui_skip_ids: set | fro
     )
 
 
-def gui_preflight(tier: str, only: list[str] | None, ignore: bool, probe) -> str | None:
-    """`hs run`'s start-up refusal (B32): an unfiltered full/slow/gui run whose GUI preconditions already fail (screen
-    locked, display asleep, low battery on battery power; guienv.preflight_problem over `probe()`) doesn't start.
-    Returns the one-line reason, or None to go ahead (filtered or quick/backups runs, or `ignore`)."""
-    if ignore or only or tier not in ("full", "slow", "gui"):
-        return None
+def gui_preflight_decision(tier: str, only: list[str] | None, ignore: bool, probe, rule_fn=None) -> dict:
+    """`hs run`'s start-up preflight (B32; test-loop-speedups "The GUI preflight only guards runs that need the
+    screen"). Only unfiltered full/slow/gui runs are guarded. A locked screen or a sleeping display refuses only when
+    GUI-marked checks will execute: always for `--tier gui`, and for full/slow when the GUI path rule (`rule_fn`,
+    default gui_rule) says a GUI path changed or can't tell (fail closed). Low battery on battery power always
+    refuses. `ignore` (--ignore-gui-preflight) overrides both.
+    Returns {"guarded", "state" (the probe), "gui_due", "gui_rule_changed", "refuse" (one line or None)}; the run
+    records it in meta.gui_preflight."""
+    out = {"tier": tier, "guarded": not (only or tier not in ("full", "slow", "gui")), "ignored": bool(ignore),
+           "state": None, "gui_due": None, "gui_rule_changed": None, "refuse": None}
+    if not out["guarded"]:
+        return out
     from .guienv import preflight_problem
-    why = preflight_problem(probe())
-    if not why:
-        return None
-    return (f"[hs] refusing to start an unfiltered {tier} run: {why}; its GUI checks would fail. Fix that and "
-            "rerun, or pass --ignore-gui-preflight to run anyway.")
+    state = probe()
+    out["state"] = state
+    if tier == "gui":
+        out["gui_due"] = True
+    else:
+        rule = (rule_fn or gui_rule)()
+        out["gui_rule_changed"] = rule.get("changed_gui_paths")
+        out["gui_due"] = gui_changed(rule)
+    why = preflight_problem(state, gui_due=out["gui_due"])
+    if why and not ignore:
+        out["refuse"] = (f"[hs] refusing to start an unfiltered {tier} run: {why}; "
+                         + ("its GUI checks would fail" if out["gui_due"] and "battery" not in why
+                            else "a long run would drain the battery")
+                         + ". Fix that and rerun, or pass --ignore-gui-preflight to run anyway.")
+    return out
+
+
+def preflight_from_env(tier: str, only: list[str] | None, ignore: bool) -> dict:
+    """gui_preflight_decision with the real probe and rule, or report.gui_preflight's stubs from the environment."""
+    import os
+    from . import guienv
+    probe, rule_fn = guienv.probe, None
+    if os.environ.get("HS_TEST_GUI_PROBE"):
+        stub = json.loads(os.environ["HS_TEST_GUI_PROBE"])
+        probe = lambda: stub
+    if os.environ.get("HS_TEST_GUI_RULE"):
+        v = os.environ["HS_TEST_GUI_RULE"]
+        paths = {"changed": ["harness/app/launcher.m"], "unchanged": [], "unknown": None}[v]
+        rule_fn = lambda: {"changed_gui_paths": paths, "error": None, "stub": v}
+    return gui_preflight_decision(tier, only, ignore, probe, rule_fn)
+
+
+def gui_preflight(tier: str, only: list[str] | None, ignore: bool, probe, rule_fn=None) -> str | None:
+    """The one-line refusal of gui_preflight_decision, or None to go ahead."""
+    return gui_preflight_decision(tier, only, ignore, probe, rule_fn)["refuse"]
 
 
 def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full",
-        force_clean: bool = False) -> int:
-    # F12: a mysqld stall ("Semaphore wait > 600 s") happened while the display slept; hold a no-sleep assertion
-    with keep_awake() as awake:
-        return _run(only, leave_up, tier, force_clean, awake)
+        force_clean: bool = False, preflight: dict | None = None) -> int:
+    # test-loop-speedups: a run file (env/run/harness-runs/) tags this run's subprocesses, so a later run can heal
+    # them if this one is killed; removed on every exit except a kill
+    from . import runreg
+    rec = runreg.start()
+    try:
+        orphans = runreg.heal()
+        if orphans["dead_runs"]:
+            log(f"healed {len(orphans['orphans'])} orphan process(es) of {len(orphans['dead_runs'])} killed harness "
+                f"run(s); remaining: {len(orphans['remaining'])}")
+        # F12: a mysqld stall ("Semaphore wait > 600 s") happened while the display slept; hold a no-sleep assertion
+        # (test-loop-speedups "Runs keep the display awake": caffeinate -d ... -w <this pid>)
+        with keep_awake() as awake:
+            return _run(only, leave_up, tier, force_clean, awake, preflight, orphans | {"run": rec})
+    finally:
+        runreg.finish(rec)
 
 
-def _run(only, leave_up, tier, force_clean, awake) -> int:
+def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None) -> int:
     t_start = time.time()
     reg = load_all()
     rule = gui_rule() if tier in ("full", "slow") else None
@@ -498,7 +546,7 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
         "tier": tier, "force_clean": force_clean, "slow_tier_skipped": [c.id for c in slow_skips],
         "gui_tier_skipped": [c.id for c in gui_skips], "gui_rule": rule,
         "backups_tier_skipped": [c.id for c in bk_skips], "backups_rule": bk_rule,
-        "keep_awake": awake,
+        "keep_awake": awake, "gui_preflight": preflight, "orphans": orphans,
         "filter": only or [], "host": {"platform": platform.platform(), "machine": platform.machine(),
                                       "python": platform.python_version(), "disk_free_gb": round(du.free / 2**30, 1)},
     }
@@ -509,6 +557,7 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
     from .checks.resolution_checks import player_config_sha, player_marker_sha
     from . import backups
     ctx = {"force_clean": force_clean, "tier": tier, "player_config_sha256_start": player_config_sha(),
+           "keep_awake": awake, "gui_preflight": preflight, "orphans": orphans,
            "player_marker_sha256_start": player_marker_sha(),
            # save-backups: the player's env/backups/ must be byte-identical at the end (backups.player_untouched)
            "player_backups_fingerprint_start": backups.fingerprint(backups.PLAYER_ROOT)}
@@ -548,11 +597,38 @@ def _run(only, leave_up, tier, force_clean, awake) -> int:
     doc["meta"]["ok"] = run_ok(doc)
     from .util import redact
     doc = redact(doc)                     # no passwords in results.json / summary.md (check output tails etc.)
-    P.RESULTS.write_text(json.dumps(doc, indent=2, default=str))
-    P.SUMMARY.write_text(summary_md(doc))
-    log(f"wrote {P.RESULTS} and {P.SUMMARY}")
+    write_outputs(doc, P.RESULTS, P.SUMMARY)
     print(P.SUMMARY.read_text())
     return 0 if doc["meta"]["ok"] else 1
+
+
+# test-loop-speedups "The last full run's results are kept": every unfiltered full-tier run also writes here; no other
+# run does. `hs timing-baseline join` reads it by default.
+LAST_FULL_RUN = P.OUT / "last-full-run"
+
+
+def keeps_last_full_run(meta: dict) -> bool:
+    """An unfiltered full-tier run (not quick, slow, gui, backups or filtered)."""
+    return meta.get("full_run") is True and meta.get("tier") == "full" and not meta.get("filter")
+
+
+def write_outputs(doc: dict, results: Path, summary: Path, last_dir: Path | None = None) -> dict:
+    """Write results.json + summary.md, and a copy of both to `last_dir` (default LAST_FULL_RUN) when the run
+    keeps_last_full_run. Returns {"results", "summary", "last_full_run": dir or None}."""
+    text, md = json.dumps(doc, indent=2, default=str), summary_md(doc)
+    results.write_text(text)
+    summary.write_text(md)
+    log(f"wrote {results} and {summary}")
+    last = None
+    if keeps_last_full_run(doc["meta"]):
+        last = Path(last_dir or LAST_FULL_RUN)
+        last.mkdir(parents=True, exist_ok=True)
+        for name, body in (("results.json", text), ("summary.md", md)):
+            tmp = last / f".{name}.tmp"
+            tmp.write_text(body)
+            tmp.replace(last / name)
+        log(f"kept a copy in {last}")
+    return {"results": str(results), "summary": str(summary), "last_full_run": None if last is None else str(last)}
 
 
 def timing_lines(doc) -> list[str]:

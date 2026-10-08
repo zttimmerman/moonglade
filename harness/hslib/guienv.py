@@ -9,6 +9,9 @@ import re
 import subprocess
 
 MIN_BATTERY_PCT = 35          # CLAUDE session rule: below 35 % on battery, heavy work pauses
+# report.gui_preflight's test switches (test-loop-speedups): a stubbed probe (JSON), a stubbed GUI rule
+# (changed | unchanged | unknown) and "decide, print, exit"; the CLI refuses them outside a harness run
+PREFLIGHT_TEST_ENV = ("HS_TEST_GUI_PROBE", "HS_TEST_GUI_RULE", "HS_TEST_PREFLIGHT_ONLY")
 
 
 def screen_locked() -> bool:
@@ -39,11 +42,12 @@ def probe() -> dict:
     return {"locked": screen_locked(), "display_asleep": display_asleep(), "battery": battery()}
 
 
-def preflight_problem(state: dict) -> str | None:
-    """One line saying why GUI checks can't succeed now, or None. Unknown values don't refuse."""
-    if state.get("locked"):
+def preflight_problem(state: dict, gui_due: bool = True) -> str | None:
+    """One line saying why the run can't start now, or None. A locked screen or a sleeping display only counts when
+    GUI checks are due (`gui_due`); low battery on battery power always counts. Unknown values don't refuse."""
+    if gui_due and state.get("locked"):
         return "the screen is locked"
-    if state.get("display_asleep"):
+    if gui_due and state.get("display_asleep"):
         return "the display is asleep"
     b = state.get("battery") or {}
     if b.get("on_battery") and b.get("percent") is not None and b["percent"] < MIN_BATTERY_PCT:

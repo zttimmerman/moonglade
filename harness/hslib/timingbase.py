@@ -12,7 +12,10 @@ report.timing (reporting.timing_problems) compares a full run's baseline checks 
 When a change merges, its new checks join with their times from its verifier's full run (documented step, run by the
 orchestrator at merge time):
 
-    harness/hs timing-baseline join <verifier results-full.json> --label <change id>
+    harness/hs timing-baseline join [<verifier results-full.json>] --label <change id>
+
+Without a path it reads harness/out/last-full-run/results.json, the copy every unfiltered full run keeps (filtered and
+quick runs never overwrite it; test-loop-speedups).
 
 `join` only adds checks the baseline doesn't have; existing times are never raised (or changed) that way.
 """
@@ -22,7 +25,7 @@ import json
 from pathlib import Path
 
 from . import paths as P
-from .runner import TIMING_BASELINE, TIMING_SELF, check_build_s
+from .runner import LAST_FULL_RUN, TIMING_BASELINE, TIMING_SELF, check_build_s
 
 SCHEMA = 2
 
@@ -96,8 +99,24 @@ def join(path: Path, label: str, baseline_path: Path = TIMING_BASELINE) -> dict:
     return {"added": sorted(new), "unchanged": len(base["checks"]) - len(new)}
 
 
+def default_results() -> Path:
+    return LAST_FULL_RUN / "results.json"
+
+
 def cli(args) -> int:
     if args.action == "join":
-        print(json.dumps(join(Path(args.results), args.label), indent=1))
+        path = Path(args.results) if args.results else default_results()
+        if not path.is_file():
+            from .util import log
+            log(f"no results at {path}" + ("" if args.results else " (no unfiltered full run kept yet; pass a "
+                                                                     "results.json)"))
+            return 1
+        try:
+            res = join(path, args.label, Path(getattr(args, "baseline", None) or TIMING_BASELINE))
+        except BaselineError as e:
+            from .util import log
+            log(f"timing-baseline join: {e}")
+            return 1
+        print(json.dumps(res | {"results": str(path)}, indent=1))
         return 0
     raise SystemExit(f"unknown action {args.action}")
