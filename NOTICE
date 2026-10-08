@@ -15,6 +15,7 @@ OPENSPEC-GENERATED FILES (MIT)
   and remain under its MIT License:
     .claude/skills/openspec-*/SKILL.md
     .claude/commands/opsx/*.md
+    openspec/config.yaml
 
   MIT License
 

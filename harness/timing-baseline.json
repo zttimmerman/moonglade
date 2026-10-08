@@ -1857,13 +1857,6 @@
    "s": 0.56,
    "status_in_run": "pass"
   },
-  "repo.rename_script": {
-   "build_s": 0.0,
-   "duration_s": 4.29,
-   "run": "second-stack",
-   "s": 4.29,
-   "status_in_run": "pass"
-  },
   "report.backups_tier_rule": {
    "build_s": 0.0,
    "duration_s": 0.53,
@@ -2191,7 +2184,6 @@
     "repo.agent_guard_hook",
     "repo.naming",
     "repo.portable",
-    "repo.rename_script",
     "report.backups_tier_rule",
     "report.client_pristine",
     "report.coverage",
