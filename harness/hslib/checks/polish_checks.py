@@ -40,13 +40,13 @@ SAMPLE_HZ_MIN = 10
 AFTER_WINDOW_S = 5.0
 FOCUS_LIMIT_S = 2.0
 NOTHING_ON_SCREEN_S = 0.3     # hand-off: longest moment with neither the loading window nor the game window on screen
-# [play] lines as they were before launcher-polish (main at 1ba1d3b): every line a run prints must match one of
+# [play] lines as they were before launcher-polish (main at 552d1a2): every line a run prints must match one of
 # these say() templates, so the terminal output is unchanged
 PERF_SCRATCH = P.ENV / "check-play-shimperf"     # app.shim_perf's scratch play client (never env/client-play/)
-PLAY_LINES_BASE = "1ba1d3b"
+PLAY_LINES_BASE = "552d1a2"
 PLAY_LINES_FILES = ("harness/hslib/play.py", "harness/hslib/launch.py")
 # rename-moonglade (2026-10-05): the project name in those templates is mapped to the new one, and nothing else is.
-# A rename, not a loosening: every other character of every template is still the 1ba1d3b text, a line with the old
+# A rename, not a loosening: every other character of every template is still the 552d1a2 text, a line with the old
 # name now fails (the old name isn't allowed any more), and no template gains a wildcard.
 PLAY_LINES_RENAMES = ((OLD_NAME, NEW_NAME),)
 
