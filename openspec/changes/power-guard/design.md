@@ -10,3 +10,8 @@ F34: a 67 W charger loses to sustained full-core load on the M2 Pro (6 performan
 
 ## Risks
 - A paused run lengthens its wall time; the timing guard must ignore paused seconds (record the pause duration and subtract it).
+
+## As built (B37)
+- Plan-only mode (`HS_TEST_POWER_PLAN_ONLY=<scratch dir>`): `hs build` writes its plan and guard log to `<dir>/build.log`; `./bootstrap` (with `--allow-test-inject`) keeps step state in `<dir>/bootstrap-state.json`, and only its build step runs (as a plan-only `hs build` child).
+- The runner strips the power test switches from its environment before running checks, so they can't reach the checks' own subprocesses.
+- Paused time is recorded in `meta.power` and `meta.timing.paused_s` / `active_wall_s`, outside each check's timed duration. A stop writes partial results, brings the stack down (unless `--leave-up`) and exits 3.
