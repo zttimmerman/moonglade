@@ -360,6 +360,8 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
             rec |= {"status": "error", "message": f"{type(e).__name__}: {e}",
                     "evidence": {"traceback": traceback.format_exc()[-3000:], **({"log_excerpt": excerpt} if excerpt else {})}}
         rec["duration_s"] = round(time.time() - t0, 2)
+        if ctx.get("lane_timeline") is not None:          # second-stack: two-lane runs record when each check ran
+            ctx["lane_timeline"][c.id] = {"start": t0, "end": time.time(), "lane": P.LANE}
         say(f"{rec['status'].upper():5} {c.id} ({rec['duration_s']}s){'  ' + rec.get('message', '') if rec['status'] != 'pass' else ''}")
         results.append(rec)
     return results
@@ -420,9 +422,14 @@ def load_timing_baseline(path: Path | None = None) -> dict:
     b = json.loads(Path(path or TIMING_BASELINE).read_text())
     if not isinstance(b.get("checks"), dict) or not b["checks"]:
         raise ValueError("baseline has no per-check times")
-    for i, e in b["checks"].items():
-        if not isinstance(e.get("s"), (int, float)) or e.get("run") not in (b.get("runs") or {}):
-            raise ValueError(f"baseline entry {i} lacks a time or a known source run")
+    for key in ("checks", "checks_lanes2"):          # checks_lanes2: the two-lane baseline (second-stack), optional
+        if key == "checks_lanes2" and key not in b:
+            continue
+        if not isinstance(b[key], dict):
+            raise ValueError(f"baseline {key} isn't a mapping")
+        for i, e in b[key].items():
+            if not isinstance(e.get("s"), (int, float)) or e.get("run") not in (b.get("runs") or {}):
+                raise ValueError(f"baseline entry {key}.{i} lacks a time or a known source run")
     return b
 
 
@@ -524,7 +531,8 @@ def gui_preflight(tier: str, only: list[str] | None, ignore: bool, probe, rule_f
 
 
 def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full",
-        force_clean: bool = False, preflight: dict | None = None, ignore_power: bool = False) -> int:
+        force_clean: bool = False, preflight: dict | None = None, ignore_power: bool = False,
+        lanes: int | None = None) -> int:
     # test-loop-speedups: a run file (env/run/harness-runs/) tags this run's subprocesses, so a later run can heal
     # them if this one is killed; removed on every exit except a kill
     from . import runreg
@@ -543,7 +551,8 @@ def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full
         # F12: a mysqld stall ("Semaphore wait > 600 s") happened while the display slept; hold a no-sleep assertion
         # (test-loop-speedups "Runs keep the display awake": caffeinate -d ... -w <this pid>)
         with keep_awake() as awake:
-            return _run(only, leave_up, tier, force_clean, awake, preflight, orphans | {"run": rec}, ignore_power)
+            return _run(only, leave_up, tier, force_clean, awake, preflight, orphans | {"run": rec}, ignore_power,
+                        lanes)
     finally:
         runreg.finish(rec)
 
@@ -552,13 +561,19 @@ def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full
 POWER_GUARDED_TIERS = ("full", "slow", "gui")
 
 
-def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None, ignore_power=False) -> int:
+def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None, ignore_power=False,
+         lanes_req=None) -> int:
     t_start = time.time()
     from . import power
     guard = (power.Guard(f"the harness run (tier {tier})", "the same `harness/hs run` command", ignore_power, say=log,
                          again="it runs the checks again from the start.")
              if tier in POWER_GUARDED_TIERS else None)
     import os as _os
+    from . import lanes
+    battery_seq = _os.environ.get(power.BATTERY_ENV)           # second-stack: the lane preflight's own battery reader
+    lane_battery = power.Battery(battery_seq)
+    lane_switches = lanes.take_switches()                     # read once; never inherited by the checks
+    mem_start = lanes.Probe(lane_switches.get(lanes.MEMORY_ENV)).preflight()   # swap growth is measured from here
     for _v in power.TEST_ENV:            # read by the guard above; never inherited by the checks' own subprocesses
         _os.environ.pop(_v, None)
     reg = load_all()
@@ -608,7 +623,15 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     if bk_rule is not None:
         log(f"Backups rule: {'backups checks run' if backups_changed(bk_rule) else 'backups checks skipped by design'} "
             f"(changed backup paths: {bk_rule['changed_backup_paths']}{'; ' + bk_rule['error'] if bk_rule['error'] else ''})")
-    results = execute(selected, ctx, slow_skips, gui_skips=gui_skips, backups_skips=bk_skips, guard=guard)
+    # second-stack: one or two lanes (lanes.schedule; --lanes 1 is exactly the serial execute)
+    results, meta["lanes"] = lanes.schedule(selected, ctx, slow_skips, gui_skips, bk_skips, guard, requested=lanes_req,
+                                            tier=tier, only=only, switches=lane_switches, battery=lane_battery,
+                                            battery_seq=battery_seq, ignore_power=ignore_power, mem_start=mem_start,
+                                            say=log)
+    meta["lanes"]["memory_at_run_start"] = mem_start
+    if meta["lanes"]["mode"] == 2 and lanes.lane_b_running():   # the worker stops lane B; this is the safety net
+        from . import runreg
+        meta["lanes"]["final_lane_down"] = runreg.lane_down("b")
     meta["power"] = {"guarded": guard is not None, **(guard.record() if guard is not None else {})}
     paused = guard.paused_s() if guard is not None else 0.0
     if ctx.get("power_stop"):
@@ -675,6 +698,12 @@ def write_outputs(doc: dict, results: Path, summary: Path, last_dir: Path | None
             tmp.write_text(body)
             tmp.replace(last / name)
         log(f"kept a copy in {last}")
+        if last_dir is None:                  # second-stack: the last full run's wall time per lane mode (report.lanes)
+            from .lanes import record_full_run_wall
+            try:
+                record_full_run_wall(doc["meta"])
+            except OSError as e:
+                log(f"couldn't record the full run's wall time: {e}")
     return {"results": str(results), "summary": str(summary), "last_full_run": None if last is None else str(last)}
 
 
@@ -687,6 +716,8 @@ def timing_lines(doc) -> list[str]:
            f"new checks {len(t.get('new_checks_s') or {})} ({t.get('new_checks_sum_s', '?')} s)"
            + (f"; baseline checks {ev['now_sum_s']} s vs {ev['baseline_sum_s']} s "
               f"(limit {ev['limit_s']} s, ratio {ev['ratio']})" if "now_sum_s" in ev else "")]
+    if ev.get("speed_target"):
+        out.append(f"- Timing guard ({ev.get('lane_mode', 1)} lane(s)): {ev['speed_target']}")
     out += [f"- WARNING (timing): {w}" for w in t.get("warnings") or []]
     return out
 
@@ -699,6 +730,13 @@ def power_lines(doc) -> list[str]:
     if pw.get("stop"):
         out.append(f"- STOPPED (power): {pw['stop']['message']}")
     return out
+
+
+def lane_lines(doc) -> list[str]:
+    """summary.md: how many lanes ran and why (second-stack)."""
+    from .lanes import summary_line
+    line = summary_line(doc["meta"])
+    return [line] if line else []
 
 
 def summary_md(doc) -> str:
@@ -715,6 +753,7 @@ def summary_md(doc) -> str:
         "- Slowest: " + ", ".join(f"`{t['id']}` {t['s']}s" for t in (m.get("timing") or {}).get("top10", [])[:5]),
         *timing_lines(doc),
         *power_lines(doc),
+        *lane_lines(doc),
         "",
         "| Check | Status | Time | Note |",
         "|---|---|---|---|",

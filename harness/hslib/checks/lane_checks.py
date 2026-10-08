@@ -204,7 +204,11 @@ def lane_refusal(ctx):
     """second-stack "Lane B refused outside a harness run" (HS_LANE part): with HS_LANE=b and no live harness run
     (no run id, or a spoofed HS_HARNESS_RUN=1 with a dead run id), `hs up`, `./play`, `hs lane init`, `hs lane reset`,
     `./bootstrap --check` and a nested `hs run` each exit non-zero naming HS_LANE, and nothing in lane B started or
-    changed; a bad HS_LANE value is refused too. Control: inside this run, HS_LANE=b passes the guard."""
+    changed; a bad HS_LANE value is refused too. Control: inside this run, HS_LANE=b passes the guard.
+    "Test switches can't leak" (scheduler part): with each lane test switch (lanes.TEST_ENV: stubbed memory probe,
+    forced lane-B set, worker timeout) set and no harness run, `hs run`, `hs up`, `./play` and `./bootstrap --check`
+    each exit non-zero naming the switch, and `hs up` refuses it even with HS_HARNESS_RUN=1 (only a nested `hs run`
+    accepts it)."""
     outside = {k: v for k, v in os.environ.items() if k not in ("HS_HARNESS_RUN", runreg.ENV_ID, P.LANE_ENV)}
     dead = subprocess.Popen([sys.executable, "-c", "pass"])
     dead.wait()
@@ -221,30 +225,48 @@ def lane_refusal(ctx):
         ("./play (spoofed run id)", [PLAY, "--account", "test"], {P.LANE_ENV: "b", **spoof}),
         ("hs up (HS_LANE=c)", [HS, "up"], {P.LANE_ENV: "c"}),
     ]
+    from .. import lanes as _L
+    switch_vals = {_L.MEMORY_ENV: json.dumps({"pressure_level": 1, "avail_gb": 99, "swap_used_gb": 0,
+                                              "swap_free_gb": 9}),
+                   _L.FORCE_ENV: "era.default_on", _L.TIMEOUT_ENV: "5"}
+    for sw in _L.TEST_ENV:
+        cases += [
+            (f"hs run ({sw})", [HS, "run", "--tier", "quick", "--only", "lane.table"], {sw: switch_vals[sw]}),
+            (f"hs up ({sw})", [HS, "up"], {sw: switch_vals[sw]}),
+            (f"./play ({sw})", [PLAY, "--account", "test"], {sw: switch_vals[sw]}),
+            (f"./bootstrap --check ({sw})", [BOOTSTRAP, "--check"], {sw: switch_vals[sw]}),
+            (f"hs up ({sw}, HS_HARNESS_RUN=1)", [HS, "up"], {sw: switch_vals[sw], "HS_HARNESS_RUN": "1"}),
+        ]
     before_tree, t0 = _tree_mtimes(B["root"]), time.time()
+    a_before = _lane_pids("a")          # a refused command starts (or stops) nothing in lane A either
     rows, probs = [], []
     for name, cmd, extra in cases:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=300, env={**outside, **extra}, cwd=P.ROOT,
                            stdin=subprocess.DEVNULL)
         out = (r.stdout + r.stderr)
         b_now = _lane_pids("b")
-        row = {"case": name, "rc": r.returncode, "names_HS_LANE": "HS_LANE" in out, "output": out[-400:],
-               "lane_b_processes": b_now}
+        token = next((sw for sw in _L.TEST_ENV if sw in extra), P.LANE_ENV)
+        row = {"case": name, "rc": r.returncode, "must_name": token, "names_it": token in out, "output": out[-400:],
+               "lane_b_processes": b_now, "lane_a_changed": _lane_pids("a") != a_before}
         rows.append(row)
-        if r.returncode == 0 or not row["names_HS_LANE"] or b_now:
+        if r.returncode == 0 or not row["names_it"] or b_now or row["lane_a_changed"]:
             probs.append(name)
     after_tree = _tree_mtimes(B["root"])
     changed = sorted(k for k in set(before_tree) | set(after_tree) if before_tree.get(k) != after_tree.get(k))
     ctl = subprocess.run([sys.executable, "-c", "import hslib.paths as P; print(P.lane_refusal())"],
                          capture_output=True, text=True, timeout=60, cwd=P.ROOT,
                          env={**os.environ, P.LANE_ENV: "b", "PYTHONPATH": str(P.HARNESS)})
-    ev = {"cases": rows, "failed_cases": probs, "lane_b_files_changed": changed[:50],
+    ctl_sw = {"run_inside_this_run": _L.refusal("run", {**os.environ, _L.MEMORY_ENV: "{}"}),
+              "up_inside_this_run": _L.refusal("up", {**os.environ, _L.MEMORY_ENV: "{}"})}
+    ev = {"cases": rows, "failed_cases": probs, "lane_b_files_changed": changed[:50], "control_switches": ctl_sw,
           "lane_b_ports_after": _ports("b"), "control_inside_run": ctl.stdout.strip() or ctl.stderr[-300:],
           "seconds": round(time.time() - t0, 1)}
     require(not probs, f"not refused (or no HS_LANE in the message, or lane B started): {probs}", **ev)
     require(not changed, "a refused command changed files under env/lanes/b/", **ev)
     require(not any(ev["lane_b_ports_after"].values()), "a lane-B port is open after the refusals", **ev)
     require(ev["control_inside_run"] == "None", "control: HS_LANE=b is refused even inside this harness run", **ev)
+    require(ctl_sw["run_inside_this_run"] is None and ctl_sw["up_inside_this_run"],
+            "control: a nested `hs run` doesn't accept the lane test switches (or `hs up` does)", **ev)
     return ev
 
 
@@ -488,3 +510,339 @@ def lane_orphans(ctx):
         _cleanup_b(ev)
         import shutil
         shutil.rmtree(d, ignore_errors=True)
+
+
+# ============================================================================ scheduler (task groups 2-3)
+
+from .. import lanes as L                      # noqa: E402
+from ..registry import REGISTRY                # noqa: E402
+
+HEALTHY = {"pressure_level": 1, "avail_gb": 12.0, "swap_used_gb": 1.0, "swap_free_gb": 3.0}
+MERGE_B = ("era.default_on", "era.xp_curve")              # real LANE_B checks (lane B's own stack)
+MERGE_A = ("gm.server_info", "sql.world_populated")       # lane-A checks inside lane B's window
+MERGE_POST = "client.player_config_untouched"             # order 999: after the join
+
+
+def _nested(only: list[str], lanes: int, d: Path, extra_env: dict | None = None, tier: str = "full",
+            timeout: float = 1800) -> dict:
+    """A nested `hs run` (lane A) writing to `d`; {"rc", "s", "doc", "tail"}."""
+    t0 = time.time()
+    cmd = [HS, "run", "--tier", tier, "--lanes", str(lanes), "--results-dir", str(d)]
+    for o in only:
+        cmd += ["--only", o]
+    r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env={**_a_env(), **(extra_env or {})},
+                       cwd=P.ROOT, stdin=subprocess.DEVNULL)
+    try:
+        doc = json.loads((d / "results.json").read_text())
+    except (OSError, ValueError):
+        doc = {"meta": {}, "checks": []}
+    return {"cmd": " ".join(cmd[1:]).replace(str(P.ROOT) + "/", ""), "env": extra_env or {}, "rc": r.returncode,
+            "s": round(time.time() - t0, 1), "doc": doc, "tail": r.stderr[-2500:],
+            "started_after": t0}
+
+
+def _statuses(doc: dict, ids) -> dict:
+    return {r["id"]: r["status"] for r in doc.get("checks", []) if r["id"] in ids}
+
+
+def _lane_summary(n: dict) -> dict:
+    """The parts of a nested run's results a lane check asserts on (kept as evidence)."""
+    doc = n["doc"]
+    ml = doc["meta"].get("lanes") or {}
+    return {"cmd": n["cmd"], "env": n["env"], "rc": n["rc"], "s": n["s"], "tail": n["tail"][-800:],
+            "records": [(r["id"], r["status"], r.get("lane", "a"), r.get("message", "")[:200]) for r in doc["checks"]],
+            "lanes": {k: ml.get(k) for k in ("requested", "lanes", "mode", "assignment", "fallback", "barriers")},
+            "preflight": (ml.get("preflight") or {}).get("reasons"),
+            "b": {k: (ml.get("b") or {}).get(k) for k in ("wall_s", "rc", "timed_out", "stop", "error", "timeline",
+                                                         "started", "joined")} if ml.get("b") else None,
+            "timeline_a": ml.get("timeline_a")}
+
+
+def _ordered(doc: dict) -> bool:
+    ids = [r["id"] for r in doc["checks"] if r["id"] in REGISTRY]
+    return ids == sorted(ids, key=lambda i: (REGISTRY[i].order, i))
+
+
+# ============================================================================ lane.table
+
+@check("lane.table", order=33, capability=CAP, stack="any", tier="quick")
+def lane_table(ctx):
+    """second-stack "LANE_B table invariants": every LANE_B entry is a registered check with a written reason, and none
+    is gui, app.*, client.stock_mode, client.launch_smoke, a baseline/build check, a population/perf check, a
+    player-protection check or order >= 998, and each lies inside lane B's window (order 34-379). Self-test: the same
+    rules flag a synthetic table holding one check of each forbidden kind and an unregistered id."""
+    reg = REGISTRY
+    probs = L.table_problems(L.LANE_B, reg)
+    no_reason = sorted(i for i, why in L.LANE_B.items() if not (isinstance(why, str) and why.strip()))
+    rows = {i: {"order": reg[i].order, "stack": reg[i].stack, "tier": reg[i].tier, "why": L.LANE_B[i]}
+            for i in sorted(L.LANE_B) if i in reg}
+
+    def first(pred):
+        return next((c.id for c in sorted(reg.values(), key=lambda c: (c.order, c.id)) if pred(c)), None)
+    bad = {"gui": first(lambda c: c.gui), "app": first(lambda c: c.id.startswith("app.") and not c.gui),
+           "stock_mode": "client.stock_mode", "launch_smoke": "client.launch_smoke",
+           "build": first(lambda c: c.id.startswith("build.")), "baseline": "core.login_logout_race_baseline",
+           "population": first(lambda c: c.id.startswith("pop.")), "perf": first(lambda c: c.id.startswith("perf.")),
+           "order_998": first(lambda c: c.order >= 998), "protection": "play.player_account_untouched",
+           "lane_check": "lane.paths", "before_window": first(lambda c: c.order < L.START_ORDER and c.tier == "full"
+                                                             and not c.id.startswith(("build.", "lane.", "setup."))),
+           "unregistered": "no.such_check"}
+    flagged = {k: [p for p in L.table_problems([i], reg)] if i else None for k, i in bad.items()}
+    missed = sorted(k for k, v in flagged.items() if not v)
+    ev = {"table": rows, "problems": probs, "no_reason": no_reason, "window": [L.START_ORDER, L.JOIN_ORDER],
+          "self_test": {"table": bad, "flagged": flagged, "missed": missed}}
+    require(L.LANE_B and not probs, f"LANE_B breaks the table rules: {probs}", **ev)
+    require(not no_reason, "a LANE_B entry has no reason", **ev)
+    require(not missed, f"self-test: the rules didn't flag {missed}", **ev)
+    return ev
+
+
+# ============================================================================ lane.merge
+
+@check("lane.merge", order=33, capability=CAP, stack="any", tier="full")
+def lane_merge(ctx):
+    """second-stack "Two-lane run matches serial statuses": a nested run of two LANE_B checks (era.default_on,
+    era.xp_curve), two lane-A checks inside lane B's window (gm.server_info, sql.world_populated) and one after the
+    join (client.player_config_untouched, order 999) runs with --lanes 2 (memory probe and battery stubbed healthy, so
+    the preflight allows lane B) and then --lanes 1: both exit 0 with every check passing and the same status per
+    check; the two-lane run's meta.lanes shows mode 2 with the B checks run in lane B (records marked lane b, a lane-B
+    timeline), the records are in (order, id) order in both, and every lane-B check ended before the post-join check
+    started; the serial run used one lane. Lane B is down afterwards."""
+    ids = MERGE_B + MERGE_A + (MERGE_POST,)
+    ev: dict = {"selection": {"b": MERGE_B, "a": MERGE_A, "post_join": MERGE_POST}, "memory_before": _memory()}
+    require(all(i in L.LANE_B for i in MERGE_B) and not any(i in L.LANE_B for i in MERGE_A + (MERGE_POST,))
+            and L.is_join_point(REGISTRY[MERGE_POST]), "GIVEN not met: the selection doesn't match the LANE_B table",
+            **ev)
+    base = Path(tempfile.mkdtemp(prefix="hs-lane-merge-")).resolve()
+    stub = {L.MEMORY_ENV: json.dumps(HEALTHY), "HS_TEST_BATTERY_SEQ": "100p"}
+    try:
+        two = _nested(list(ids), 2, base / "two", stub)
+        ev["two_lanes"] = _lane_summary(two)
+        one = _nested(list(ids), 1, base / "one", {"HS_TEST_BATTERY_SEQ": "100p"})
+        ev["one_lane"] = _lane_summary(one)
+        s2, s1 = _statuses(two["doc"], ids), _statuses(one["doc"], ids)
+        ev["statuses"] = {"two": s2, "one": s1}
+        require(two["rc"] == 0 and one["rc"] == 0, "a nested run failed", **ev)
+        require(set(s2) == set(ids) and s2 == s1 and all(v == "pass" for v in s2.values()),
+                "the two runs' statuses differ (or a check didn't pass)", **ev)
+        m2, m1 = two["doc"]["meta"]["lanes"], one["doc"]["meta"]["lanes"]
+        b_marked = sorted(r["id"] for r in two["doc"]["checks"] if r.get("lane") == "b")
+        ev["b_marked"] = b_marked
+        require(m2.get("mode") == 2 and m2["assignment"]["b_ran"] == list(MERGE_B) and not m2["assignment"]["b_to_a"]
+                and b_marked == sorted(MERGE_B), "the two-lane run didn't run the B checks in lane B", **ev)
+        tl_b = (m2.get("b") or {}).get("timeline") or {}
+        tl_a = m2.get("timeline_a") or {}
+        require(set(tl_b) == set(MERGE_B) and all(tl_b[i].get("lane") == "b" for i in MERGE_B),
+                "no lane-B timeline for the B checks", **ev)
+        require(m1.get("mode") == 1 and not any(r.get("lane") == "b" for r in one["doc"]["checks"]),
+                "the --lanes 1 run used lane B", **ev)
+        require(_ordered(two["doc"]) and _ordered(one["doc"]), "records aren't in (order, id) order", **ev)
+        b_end = max(tl_b[i]["end"] for i in MERGE_B)
+        post_start = (tl_a.get(MERGE_POST) or {}).get("start")
+        a_win = [tl_a[i] for i in MERGE_A if i in tl_a]
+        ev["join"] = {"b_last_end": b_end, "post_join_start": post_start,
+                      "post_join_after_b_s": None if post_start is None else round(post_start - b_end, 2),
+                      "overlap_s": round(max(0.0, min(b_end, max((x["end"] for x in a_win), default=0))
+                                              - max(min(tl_b[i]["start"] for i in MERGE_B),
+                                                    min((x["start"] for x in a_win), default=b_end))), 2),
+                      "b_wall_s": m2["b"].get("wall_s"), "two_lane_run_s": two["s"], "one_lane_run_s": one["s"]}
+        require(post_start is not None and post_start >= b_end, "a lane-B check ended after the post-join check "
+                "started", **ev)
+        ev["nested_report_lanes"] = {k: _statuses(n["doc"], ["report.lanes"]) for k, n in (("two", two), ("one", one))}
+        require(all(v.get("report.lanes") == "pass" for v in ev["nested_report_lanes"].values()),
+                "a nested run's report.lanes didn't pass", **ev)
+        ev["lane_b_after"] = {"processes": _lane_pids("b"), "ports": _ports("b")}
+        require(_b_clear(), "lane B is still running after the nested runs", **ev)
+        return ev
+    finally:
+        _cleanup_b(ev)
+        import shutil
+        shutil.rmtree(base, ignore_errors=True)
+
+
+# ============================================================================ lane.preflight
+
+FALLBACK_B = ("client.config_gen", "client.inspect")     # forced lane-B set: cheap, stack-free, read-only checks
+
+
+def decision_cases() -> dict:
+    """lanes.preflight_decision / midrun_stop over readings at and around each ADR-0011 threshold."""
+    h = dict(HEALTHY)
+    start = {"swap_used_gb": 1.0}
+    plug = {"on_battery": False, "percent": 100}
+    rows = {
+        "healthy_a_up": (h, True, plug, False, True),
+        "pressure_2": (h | {"pressure_level": 2}, True, plug, False, False),
+        "avail_4.9_a_up": (h | {"avail_gb": 4.9}, True, plug, False, False),
+        "avail_5.0_a_up": (h | {"avail_gb": 5.0}, True, plug, False, True),
+        "a_stack_down_real_probe": (h | {"avail_gb": 12.0}, False, plug, False, False),
+        "swap_free_0.5_grew_1.2": (h | {"swap_free_gb": 0.5, "swap_used_gb": 2.2}, True, plug, False, False),
+        "swap_free_0.5_grew_0.5": (h | {"swap_free_gb": 0.5, "swap_used_gb": 1.5}, True, plug, False, True),
+        "probe_failed": (h | {"avail_gb": None}, True, plug, False, False),
+        "on_battery_90": (h, True, {"on_battery": True, "percent": 90}, False, False),
+        "plugged_40": (h, True, {"on_battery": False, "percent": 40}, False, False),
+        "on_battery_ignore_power": (h, True, {"on_battery": True, "percent": 90}, True, True),
+        "battery_unknown": (h, True, {"on_battery": None, "percent": None}, False, True),
+    }
+    out = {}
+    for k, (now, a_up, batt, ign, want) in rows.items():
+        d = L.preflight_decision(now, start, a_up, batt, ign)
+        out[k] = {"want_allowed": want, "allowed": d["allowed"], "reasons": d["reasons"], "ok": d["allowed"] == want}
+    mid = {"healthy": (h, None), "pressure_2": (h | {"pressure_level": 2}, "pressure"),
+           "swap_grew_1.6": (h | {"swap_used_gb": 2.6}, "swap grew"), "swap_grew_1.4": (h | {"swap_used_gb": 2.4}, None),
+           "probe_failed": (h | {"pressure_level": None}, "fail closed")}
+    for k, (now, want) in mid.items():
+        why = L.midrun_stop(now, start)
+        out[f"midrun_{k}"] = {"want": want, "stop": why, "ok": (why is None) if want is None else (why is not None and want in why)}
+    return out
+
+
+@check("lane.preflight", order=33, capability=CAP, stack="any", tier="full")
+def lane_preflight(ctx):
+    """second-stack "Low memory falls back to one lane" and "Pressure mid-run moves remaining checks to A": the
+    preflight/mid-run rules give the ADR-0011 verdict at and around each threshold (pressure, available memory with
+    A's stack up, a real reading taken with it down, swap, battery, a failed probe); a nested --lanes 2 run with the memory probe stubbed
+    below the threshold runs serially, runs every check, and meta.lanes.fallback names memory; one with the battery
+    stubbed at 40 % names power; one whose probe turns to pressure level 2 after lane B's first check lets B run only
+    that check, and the rest run in lane A, all passing. (Lane-B set forced to two cheap read-only checks.)"""
+    ev: dict = {"decisions": decision_cases()}
+    bad = sorted(k for k, v in ev["decisions"].items() if not v["ok"])
+    ev["decisions_wrong"] = bad
+    base = Path(tempfile.mkdtemp(prefix="hs-lane-preflight-")).resolve()
+    force = {L.FORCE_ENV: ",".join(FALLBACK_B)}
+    try:
+        low = _nested(list(FALLBACK_B), 2, base / "low", force | {
+            L.MEMORY_ENV: json.dumps(HEALTHY | {"avail_gb": 2.0}), "HS_TEST_BATTERY_SEQ": "100p"}, timeout=900)
+        pwr = _nested(list(FALLBACK_B), 2, base / "power", force | {
+            L.MEMORY_ENV: json.dumps(HEALTHY), "HS_TEST_BATTERY_SEQ": "40p"}, timeout=900)
+        mid = _nested(list(FALLBACK_B), 2, base / "mid", force | {
+            L.MEMORY_ENV: json.dumps({"preflight": HEALTHY, "midrun": [HEALTHY, HEALTHY | {"pressure_level": 2}]}),
+            "HS_TEST_BATTERY_SEQ": "100p"}, timeout=900)
+        ev["low_memory"], ev["low_power"], ev["midrun"] = _lane_summary(low), _lane_summary(pwr), _lane_summary(mid)
+        require(not bad, f"preflight/mid-run rules give the wrong verdict: {bad}", **ev)
+        for name, n, word in (("low_memory", low, "memory"), ("low_power", pwr, "power")):
+            ml, st = n["doc"]["meta"].get("lanes") or {}, _statuses(n["doc"], FALLBACK_B)
+            require(n["rc"] == 0 and st == {i: "pass" for i in FALLBACK_B},
+                    f"{name}: not every check ran and passed", **ev)
+            require(ml.get("lanes") == 2 and ml.get("mode") == 1 and ml.get("b") is None
+                    and not any(r.get("lane") == "b" for r in n["doc"]["checks"]),
+                    f"{name}: the run didn't fall back to one lane", **ev)
+            require(ml.get("fallback", "").startswith("preflight:") and word in ml["fallback"],
+                    f"{name}: meta.lanes.fallback doesn't name the {word} reason", **ev)
+        ml = mid["doc"]["meta"].get("lanes") or {}
+        st = _statuses(mid["doc"], FALLBACK_B)
+        lanes_of = {r["id"]: r.get("lane", "a") for r in mid["doc"]["checks"] if r["id"] in FALLBACK_B}
+        stop = (ml.get("b") or {}).get("stop") or {}
+        ev["midrun_lanes_of"] = lanes_of
+        require(mid["rc"] == 0 and st == {i: "pass" for i in FALLBACK_B}, "mid-run: not every check passed", **ev)
+        require(ml.get("mode") == 2 and ml["assignment"]["b_ran"] == [FALLBACK_B[0]]
+                and ml["assignment"]["b_to_a"] == list(FALLBACK_B[1:])
+                and lanes_of == {FALLBACK_B[0]: "b", **{i: "a" for i in FALLBACK_B[1:]}},
+                "mid-run: lane B didn't stop after its first check, or the rest didn't run in lane A", **ev)
+        require(stop.get("before_check") == FALLBACK_B[1] and "pressure level 2" in (stop.get("reason") or "")
+                and "mid-run" in (ml.get("fallback") or ""), "mid-run: the stop isn't recorded with its reason", **ev)
+        ev["lane_b_after"] = {"processes": _lane_pids("b"), "ports": _ports("b")}
+        require(_b_clear(), "lane B is still running after the nested runs", **ev)
+        return ev
+    finally:
+        _cleanup_b(ev)
+        import shutil
+        shutil.rmtree(base, ignore_errors=True)
+
+
+# ============================================================================ report.lanes (post-run)
+
+def lanes_problems(doc: dict, wall_s: float, serial_ref: dict | None) -> tuple[list[str], dict]:
+    """report.lanes over a results document: meta.lanes agrees with the records (on every run), and an unfiltered
+    full/slow run that the preflight let use lane B ran every selected LANE_B check there, with its wall time recorded
+    next to the last serial full run's."""
+    m = doc["meta"]
+    ml = m.get("lanes")
+    if not isinstance(ml, dict):
+        return ["no meta.lanes in the results"], {}
+    recs = [r for r in doc["checks"] if r["id"] in REGISTRY]
+    a = ml.get("assignment") or {}
+    planned, ran, to_a = a.get("b_planned") or [], a.get("b_ran") or [], a.get("b_to_a") or []
+    b_marked = [r["id"] for r in recs if r.get("lane") == "b"]
+    ids = [r["id"] for r in recs]
+    probs = []
+    if len(ids) != len(set(ids)):
+        probs.append("a check has more than one record")
+    if not _ordered(doc):
+        probs.append("records aren't in (order, id) order")
+    if sorted(b_marked) != sorted(ran):
+        probs.append(f"records marked lane b {sorted(b_marked)} != meta.lanes b_ran {sorted(ran)}")
+    if set(ran) | set(to_a) != set(planned) or set(ran) & set(to_a):
+        probs.append("b_ran + b_to_a isn't exactly b_planned")
+    allowed = set(L.LANE_B) if not ml.get("forced") else {x.strip() for x in ml["forced"].split(",")}
+    if not set(planned) <= allowed:
+        probs.append(f"planned for lane B but not in the table: {sorted(set(planned) - allowed)}")
+    tp = L.table_problems(planned, REGISTRY)
+    if tp:
+        probs.append(f"lane B ran checks the table rules forbid: {tp}")
+    power_stop = bool((m.get("power") or {}).get("stop"))
+    if not power_stop and [i for i in to_a if i not in ids]:
+        probs.append(f"lane-B checks moved to lane A have no record: {[i for i in to_a if i not in ids]}")
+    mode = ml.get("mode")
+    ev = {"mode": mode, "lanes": ml.get("lanes"), "requested": ml.get("requested"), "fallback": ml.get("fallback"),
+          "b_planned": planned, "b_ran": ran, "b_to_a": to_a, "b_marked": b_marked,
+          "preflight_reasons": (ml.get("preflight") or {}).get("reasons")}
+    if mode == 2:
+        b = ml.get("b") or {}
+        tl_b, tl_a = b.get("timeline") or {}, ml.get("timeline_a") or {}
+        missing_tl = [i for i in ran if i not in tl_b]
+        if missing_tl:
+            probs.append(f"no lane-B timeline for {missing_tl}")
+        b_end = max((tl_b[i]["end"] for i in ran if i in tl_b), default=None)
+        join_id = (ml.get("barriers") or {}).get("joined_before")
+        post = [i for i, t in tl_a.items() if i in REGISTRY and (L.is_join_point(REGISTRY[i]) or (
+            join_id in REGISTRY and (REGISTRY[i].order, i) >= (REGISTRY[join_id].order, join_id)))]
+        early = [i for i in post if b_end is not None and tl_a[i]["start"] < b_end]
+        if early:
+            probs.append(f"checks after the join started before lane B's last check ended: {early}")
+        if b.get("timed_out") or b.get("error") or b.get("rc") not in (0, None):
+            probs.append(f"lane B's worker failed (rc {b.get('rc')}, timed out {b.get('timed_out')}, error "
+                         f"{str(b.get('error'))[:200]})")
+        ev |= {"b_wall_s": b.get("wall_s"), "b_rc": b.get("rc"), "b_timed_out": b.get("timed_out"),
+               "b_stop": b.get("stop"), "b_error": b.get("error"), "post_join_checks": len(post)}
+    elif b_marked or ran:
+        probs.append("a one-lane run has lane-B records")
+    full = m.get("full_run") is True and m.get("tier") in ("full", "slow") and not m.get("filter")
+    ev["full_run"] = full
+    if not full:
+        ev["full_run_rule"] = "not evaluated: not an unfiltered full/slow run"
+        return probs, ev
+    ev["wall_s"] = round(wall_s, 1)
+    ev["serial_reference"] = serial_ref
+    if serial_ref and serial_ref.get("wall_s"):
+        ev["wall_vs_serial"] = {"this_run_s": round(wall_s, 1), "last_serial_full_run_s": serial_ref["wall_s"],
+                                "saved_s": round(serial_ref["wall_s"] - wall_s, 1)}
+    pf = ml.get("preflight") or {}
+    if mode == 2:
+        missing = sorted(set(L.b_ids([REGISTRY[i] for i in ids], None)) - set(ran))
+        if ml.get("forced"):
+            probs.append("a full run used a forced lane-B set")
+        if missing or to_a:
+            probs.append(f"the preflight allowed lane B but it didn't run every LANE_B check "
+                         f"({ml.get('fallback')}); not in lane B: {missing or to_a}")
+        ev["full_run_rule"] = "evaluated: two-lane full run"
+    elif ml.get("requested") == 1:
+        ev["full_run_rule"] = "not evaluated: --lanes 1 (the serial reference)"
+    elif pf and not pf.get("allowed"):
+        ev["full_run_rule"] = f"GIVEN not met: the preflight refused lane B ({'; '.join(pf.get('reasons') or [])})"
+    else:
+        probs.append(f"an unfiltered full run used one lane without a preflight refusal ({ml.get('fallback')})")
+    return probs, ev
+
+
+def lanes_record(doc: dict, wall_s: float) -> dict:
+    t0 = time.time()
+    try:
+        ref = L.serial_reference()
+    except Exception as e:  # noqa: BLE001
+        ref = {"error": f"{type(e).__name__}: {e}"}
+    probs, ev = lanes_problems(doc, wall_s, ref)
+    ok = not probs
+    return {"id": "report.lanes", "capability": CAP, "status": "pass" if ok else "fail",
+            "evidence": ev | {"problems": probs}, "duration_s": round(time.time() - t0, 2),
+            **({} if ok else {"message": "; ".join(probs)[:300]})}

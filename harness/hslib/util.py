@@ -1,11 +1,13 @@
 import re
 import shlex
 import subprocess
+import os
 import sys
 
 
 def log(msg: str) -> None:
-    print(f"[hs] {msg}", file=sys.stderr, flush=True)
+    lane = (os.environ.get("HS_LANE") or "").strip().lower()
+    print(f"[hs{' ' + lane if lane and lane != 'a' else ''}] {msg}", file=sys.stderr, flush=True)
 
 
 def run(cmd, *, cwd=None, check=True, capture=False, env=None, timeout=None, input=None):

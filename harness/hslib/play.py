@@ -607,6 +607,12 @@ def main(argv=None) -> int:
     if lane_why:
         say(lane_why)
         return EXIT_FAIL
+    from .lanes import TEST_ENV as LANE_TEST_ENV     # second-stack's scheduler test switches: never for ./play
+    for var in LANE_TEST_ENV:
+        if os.environ.get(var):
+            say(f"{var} is set: that's a test switch for the harness, not for playing. "
+                f"Unset it (`unset {var}`) and run ./play again.")
+            return EXIT_FAIL
     # power-guard's test switches are never for ./play or the app (which runs ./play): refused first, before anything
     from .power import TEST_ENV as POWER_TEST_ENV
     for var in POWER_TEST_ENV:

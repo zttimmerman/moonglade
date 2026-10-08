@@ -83,20 +83,34 @@ def build(primary: Path, primary_label: str, overrides: list[tuple[Path, str, li
     return base
 
 
+def lane_key(d: dict) -> tuple[int, str]:
+    """(lane mode, baseline key) of a run: serial runs join `checks`, two-lane runs `checks_lanes2` (second-stack:
+    report.timing compares like with like)."""
+    mode = 2 if (d["meta"].get("lanes") or {}).get("mode") == 2 else 1
+    return mode, ("checks" if mode == 1 else "checks_lanes2")
+
+
 def join(path: Path, label: str, baseline_path: Path = TIMING_BASELINE) -> dict:
-    """Add the checks `path` executed that the baseline lacks; never touches existing entries."""
+    """Add the checks `path` executed that the baseline lacks; never touches existing entries. A two-lane run joins
+    the two-lane baseline (checks_lanes2): its first join adds every check it executed."""
     base = json.loads(Path(baseline_path).read_text())
     if base.get("schema") != SCHEMA:
         raise BaselineError("not a per-check baseline")
     d = _run_doc(path)
     if label in base["runs"]:
         raise BaselineError(f"run label {label!r} is already in the baseline")
-    new = {i: e for i, e in entries(d, label).items() if i not in base["checks"]}
+    mode, key = lane_key(d)
+    have = base.setdefault(key, {})
+    new = {i: e for i, e in entries(d, label).items() if i not in have}
     if new:
-        base["runs"][label] = run_info(path, d) | {"used_for": sorted(new), "why": "checks new with this change"}
-        base["checks"].update(new)
+        base["runs"][label] = run_info(path, d) | {"used_for": sorted(new), "lanes": mode,
+                                                   "why": "checks new with this change" if have else
+                                                   f"first {mode}-lane full run (baseline {key})"}
+        have.update(new)
         Path(baseline_path).write_text(json.dumps(base, indent=1, sort_keys=True) + "\n")
-    return {"added": sorted(new), "unchanged": len(base["checks"]) - len(new)}
+    elif not have:
+        base.pop(key, None)
+    return {"lanes": mode, "baseline": key, "added": sorted(new), "unchanged": len(have) - len(new)}
 
 
 def default_results() -> Path:

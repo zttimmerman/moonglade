@@ -58,6 +58,9 @@ def main(argv=None) -> int:
     r.add_argument("--ignore-power", action="store_true",
                    help="full/slow/gui runs: don't pause between checks on low battery (below 35 %% until 50 %%)")
     r.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)   # nested runs (report.tiers) write here
+    r.add_argument("--lanes", type=int, choices=[1, 2],
+                   help="1: every check in lane A, serially; 2: the LANE_B checks in the second test stack alongside "
+                        "(when memory and power allow). Default: 2 for unfiltered full/slow runs, else 1")
     ps_ = sub.add_parser("pop-session", help="one M2 population session (cold start with the population profile, "
                                             "warm-up, 10 min of samples); tuning runs for the budget record")
     ps_.add_argument("--n", type=int, help="random bots (default: config.POPULATION_N)")
@@ -198,6 +201,12 @@ def main(argv=None) -> int:
             log(f"${_var} is a test switch of report.gui_preflight (nested `hs run` only); unset it")
             return 2
 
+    from . import lanes as _lanes                                        # second-stack's scheduler test switches
+    _why = _lanes.refusal(a.cmd)
+    if _why:
+        log(_why)
+        return 2
+
     from . import power                                                 # power-guard's test switches
     _why = power.refusal(a.cmd, getattr(a, "allow_test_inject", True) if a.cmd == "bootstrap" else True)
     if _why:
@@ -282,7 +291,7 @@ def main(argv=None) -> int:
             _print({"preflight": pf})
             return 0
         return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean, preflight=pf,
-                   ignore_power=a.ignore_power)
+                   ignore_power=a.ignore_power, lanes=a.lanes)
 
     if a.cmd == "keep-awake":
         from .util import keep_awake_cli
