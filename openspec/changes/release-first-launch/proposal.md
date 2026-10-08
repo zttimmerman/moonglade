@@ -25,3 +25,10 @@ Prebuilt releases, part 2 of 3 (STATUS "Next", Zach 2026-10-07; split in `releas
 - No game data values change (§7 not engaged).
 
 ## Spec-change log
+
+## Open questions resolved (orchestrator, 2026-10-08)
+1. A zip of the client is accepted as well as a folder (same as `./bootstrap`).
+2. Final bundle id and the payload's place inside the app: left to `release-signing`.
+3. Downloads resume per step, not per byte, for now; per-byte resume goes to the backlog if friends hit it.
+4. Updating an installed release, an uninstall/reset button and choosing the data folder's location: backlog, not this change.
+5. Checks clone from `client/` with `clonefile` into a scratch HOME only (independent copies, never symlinks or hard links, per the 2026-10-07 pristine-client incident); `report.client_pristine` must stay green on every run.
