@@ -27,7 +27,7 @@
    - the patched client launches and reaches the login screen with a custom GlueXML (runtime, via the existing launch checks);
    - stock mode still launches unmodified;
    - removing the patch from the queue gives an exe identical to stock.
-6. Personal use only; nothing produced is redistributed (CLAUDE.md §1).
+6. No client or game files are distributed: the repo publishes only the patch recipe, keyed by the stock hash, and each player applies it to their own copy (CLAUDE.md §1, as amended by go-public: the source is public under GPL-2.0-or-later).
 
 ## Alternatives considered
 - **Patch `client/` in place.** Rejected: not revertable, destroys the clean base, and makes `client.inspect` meaningless.

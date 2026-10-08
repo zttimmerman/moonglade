@@ -214,7 +214,7 @@ def prefix_processes(excluded: list | None = None, prefix: Path | None = None) -
     3. it is a process of the runtime whose command line runs Wow.exe (conservative: counted as ours);
     and a candidate counts only if process_scope() places it in the pinned runtime (F24: an unrelated process that
     merely has a file open under the prefix is not ours). Candidates left out are appended to `excluded` if given.
-    Processes of other prefixes ([redacted]) have a different server dir and WINEPREFIX.
+    Processes of other prefixes (e.g. the user's own Whisky bottles) have a different server dir and WINEPREFIX.
     `prefix` defaults to this lane's (paths.WINEPREFIX); lane B's prefix is env/lanes/b/<name> (second-stack). Rule 3
     needs a prefix match: the process's WINEPREFIX is this prefix, or it has none and this is lane A's prefix, so one
     lane's Wow.exe never counts as the other lane's."""

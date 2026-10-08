@@ -4,7 +4,7 @@
 - Source: `docs/research/public-readiness-audit.md` (B28, branch `research/public-readiness` 9064140), change `go-public`.
 
 ## Context
-CLAUDE.md §1 said Moonglade is a personal project whose output is never redistributed, and the repo was private. Zach wants friends to use it with their own 3.3.5a client.
+CLAUDE.md §1 said Moonglade is a personal project whose output nobody else receives, and the repo was private. Zach wants friends to use it with their own 3.3.5a client.
 
 ## Decision
 - The **source** is published under GPL-2.0-or-later (matches AzerothCore/mod-playerbots/VMaNGOS terms; "or later" keeps the AGPL-3.0 combined server binary legal). Branding stays all rights reserved.

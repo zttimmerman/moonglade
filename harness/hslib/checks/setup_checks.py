@@ -322,10 +322,6 @@ def portability_patterns() -> list[tuple[str, str]]:
 PORTABLE_ALLOW = [
     ("STATUS.md", "*", "the orchestrator's status log of the dev Mac (builders may not edit it); its Node path and "
                        "old-folder notes describe that Mac, not setup"),
-    ("tools/rename-folder.sh", "*", "the one-off move of the dev Mac's own folder (rename-moonglade): its defaults are "
-                                    "that folder by design, and repo.rename_script pins those lines"),
-    ("harness/hslib/checks/naming_checks.py", "repo-folder convention",
-     "repo.rename_script's expected text for tools/rename-folder.sh's default folders"),
     ("openspec/changes/archive/2026-10-06-rename-moonglade/*", "*", "archived record of the folder rename (history)"),
     ("openspec/changes/easy-setup/specs/easy-setup/spec.md", "absolute home path",
      "the scenario names the pattern the scan looks for"),
