@@ -544,3 +544,202 @@ def test_switches_refused(ctx):
     finally:
         shutil.rmtree(d, ignore_errors=True)
     return ev
+
+
+# ================================================================================================ stack_from_payload
+
+def sandbox_profile(scratch: Path) -> str:
+    """release-build's no-Homebrew profile, extended (design "Checks"): no reads of /opt/homebrew, /usr/local or the
+    dev checkout's vendor/ server/ build/ data/ env/ (except env/release/ and the run registry), and no writes in the
+    user's home folder outside `scratch`."""
+    repo = P.ROOT.resolve()
+    home = Path(pwd.getpwuid(os.getuid()).pw_dir).resolve()
+    deny_read = " ".join(f'(subpath "{repo / x}")' for x in ("vendor", "server", "build", "data", "env"))
+    return "\n".join([
+        "(version 1)", "(allow default)",
+        '(deny file-read* (subpath "/opt/homebrew") (subpath "/usr/local"))',
+        f"(deny file-read* {deny_read})",
+        f'(allow file-read* (subpath "{repo / "env" / "release"}") (subpath "{P.RUN_REGISTRY.resolve()}"))',
+        f'(deny file-write* (subpath "{home}"))',
+        f'(allow file-write* (subpath "{scratch.resolve()}"))',
+    ]) + "\n"
+
+
+def release_fixture_app(d: Path) -> Path:
+    """A clonefile copy of the packaged Moonglade.app at "<d>/Moonglade Test/Moonglade.app". Returns APP (the
+    payload folder inside it)."""
+    dst = d / "Moonglade Test" / "Moonglade.app"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["/bin/cp", "-c", "-R", str(NEW_APP), str(dst)], check=True)
+    return dst / "Contents" / "Resources" / "Moonglade"
+
+
+def _q(app: Path, sql: str, port: int, db: str = "acore_auth") -> str | None:
+    r = subprocess.run([str(app / "mysql/bin/mysql"), "--no-defaults", "--protocol=TCP", "-h127.0.0.1", f"-P{port}",
+                        f"-u{P.DB_USER}", f"-p{P.DB_PASS}", "--batch", "--skip-column-names", db, "-e", sql],
+                       capture_output=True, text=True, timeout=30)
+    return r.stdout.strip() if r.returncode == 0 else None
+
+
+def _proc_info(pred) -> list[dict]:
+    from .. import procs
+    out = []
+    for pid, argv in procs.argv_table():
+        if pred(argv):
+            ae = procs.args_env(pid)
+            env = dict(x.split("=", 1) for x in (ae[1] if ae else []) if "=" in x)
+            out.append({"pid": pid, "exe": procs.path(pid), "argv": argv[:4], "env": env})
+    return out
+
+
+def run_release(app: Path, args: list[str], env: dict, prof: Path, cwd: Path, timeout: int, log: Path) -> dict:
+    t0 = time.time()
+    with open(log, "a") as fh:
+        fh.write(f"\n==== {time.strftime('%H:%M:%S')} {' '.join(args)}\n")
+        fh.flush()
+        try:
+            r = subprocess.run([SANDBOX_EXEC, "-f", str(prof), str(app / "python/bin/python3"), "-I", "-m", "hslib",
+                                P.RELEASE_TEST_FLAG, *args], stdout=subprocess.PIPE, stderr=fh, text=True, env=env,
+                               cwd=cwd, timeout=timeout)
+            rc, out = r.returncode, r.stdout
+        except subprocess.TimeoutExpired as e:
+            rc, out = "timeout", str(e.stdout or "")
+    try:
+        js = json.loads(out) if out.strip().startswith("{") else None
+    except ValueError:
+        js = None
+    return {"rc": rc, "json": js, "stdout_tail": out[-600:], "s": round(time.time() - t0, 1)}
+
+
+@check("release.stack_from_payload", order=14, capability=CAP, stack="down", tier="slow")
+def stack_from_payload(ctx):
+    """Release mode brings the stack up (m0) and down from a scratch copy of the packaged app, a scratch HOME and
+    scratch ports, under a sandbox hiding Homebrew and the dev checkout: SOAP answers, mysqld is the payload's, the
+    updater's SourceDirectory is the payload's sql/ (and it populated the databases), OPENSSL_CONF and the AC_* keys
+    are in the servers' environment, m0's random-bot count (only via AC_*) is in effect, and shutdown is graceful.
+    Counterexample: without the AC_* module keys the playerbots default (500 bots) takes effect and is seen."""
+    from .release_checks import _need_payload
+    ev: dict = {"started": time.time()}
+    ev["package"] = {k: v for k, v in _need_payload(ctx).items() if k in ("package_rc", "version", "package_seconds")}
+    require((NEW_PAYLOAD / "VERSION").is_file(), "no Moonglade.app payload from this run's packaging", **ev)
+    d = SCRATCH_ROOT / f"sp-{os.getpid()}"           # short: HOME/run/mysql.sock must fit a 104-byte socket path
+    shutil.rmtree(d, ignore_errors=True)
+    d.mkdir(parents=True)
+    home = d / "h"
+    log = d / "release.log"
+    ports = dict(SCRATCH_PORTS)
+    try:
+        app = release_fixture_app(d)
+        home.mkdir()
+        t0 = time.time()
+        subprocess.run(["/bin/cp", "-c", "-R", str(P.CLIENT_DATA), str(home / "client-data")], check=True)
+        ev["client_data_clone_s"] = round(time.time() - t0, 1)
+        prof = d / "release.sb"
+        prof.write_text(sandbox_profile(d))
+        proof = subprocess.run([SANDBOX_EXEC, "-f", str(prof), "/bin/ls", str(P.ROOT / "vendor")], capture_output=True,
+                               text=True)
+        ev["sandbox"] = {"profile": prof.read_text(), "ls_vendor_rc": proof.returncode}
+        require(proof.returncode != 0, "the sandbox profile doesn't hide the checkout's vendor/", **ev)
+        (d / "tmp").mkdir()
+        env = release_env(home, HS_RELEASE_PORTS=json.dumps(ports), TMPDIR=str(d / "tmp") + "/",
+                          PATH="/usr/bin:/bin:/usr/sbin:/sbin")
+        up = run_release(app, ["up", "--profile", "m0"], env, prof, d, 2400, log)
+        ev["up"] = {k: up[k] for k in ("rc", "s", "stdout_tail")}
+        info = up["json"] or {}
+        ev["up_info"] = {k: info.get(k) for k in ("first_run", "profile", "mysqld", "authserver", "worldserver",
+                                                  "ready_s")}
+        require(up["rc"] == 0 and info.get("worldserver") == "started", "release mode couldn't bring the stack up",
+                **ev, log_tail=log.read_text(errors="replace")[-1500:],
+                world_log=(home / "logs/worldserver.out").read_text(errors="replace")[-1500:]
+                if (home / "logs/worldserver.out").exists() else None)
+        # what is running
+        my_cnf = f"--defaults-file={home / 'my.cnf'}"
+        mysqld = _proc_info(lambda a: my_cnf in a)
+        world = _proc_info(lambda a: a[:1] == [str(app / "server/bin/worldserver")])
+        auth = _proc_info(lambda a: a[:1] == [str(app / "server/bin/authserver")])
+        ws_env = world[0]["env"] if world else {}
+        ev["running"] = {"mysqld": [{k: x[k] for k in ("pid", "exe", "argv")} for x in mysqld],
+                         "worldserver": [{k: x[k] for k in ("pid", "exe", "argv")} for x in world],
+                         "authserver": [{k: x[k] for k in ("pid", "exe")} for x in auth],
+                         "worldserver_env": {k: v for k, v in ws_env.items()
+                                             if k.startswith("AC_AI_PLAYERBOT_M") or k in ("OPENSSL_CONF",)},
+                         "worldserver_ac_keys": len([k for k in ws_env if k.startswith("AC_")])}
+        require(len(mysqld) == 1 and mysqld[0]["exe"] == str(app / "mysql/bin/mysqld"),
+                "the running mysqld isn't the payload's", **ev)
+        require(world and world[0]["exe"] == str(app / "server/bin/worldserver") and auth
+                and auth[0]["exe"] == str(app / "server/bin/authserver"), "the servers aren't the payload's", **ev)
+        require(ws_env.get("OPENSSL_CONF") == str(home / "etc/openssl.cnf") and (home / "etc/openssl.cnf").is_file()
+                and auth[0]["env"].get("OPENSSL_CONF") == str(home / "etc/openssl.cnf"),
+                "OPENSSL_CONF isn't HOME's openssl.cnf for the servers", **ev)
+        # the updater's source: the rendered key, and it populated the databases from it (vendor/ is unreadable here)
+        conf = (home / "etc/worldserver.conf").read_text()
+        src = re.search(r'^SourceDirectory\s*=\s*"(.*)"\s*$', conf, re.M)
+        mexe = re.search(r'^MySQLExecutable\s*=\s*"(.*)"\s*$', conf, re.M)
+        wlog = (home / "logs/worldserver.out").read_text(errors="replace")
+        ev["updater"] = {"SourceDirectory": src and src.group(1), "MySQLExecutable": mexe and mexe.group(1),
+                         "populated": wlog.count("is empty, auto populating it"),
+                         "applying_lines": wlog.count(">> Applying"),
+                         "dead_refs": wlog.count("is missing in your update directory"),
+                         "errors": [l for l in wlog.splitlines() if "sql.updates" in l.lower() and "error" in l.lower()][:5]}
+        require(src and src.group(1) == str(app / "sql") and mexe and mexe.group(1) == str(app / "mysql/bin/mysql"),
+                "SourceDirectory / MySQLExecutable aren't the payload's", **ev)
+        require(ev["updater"]["populated"] >= 3 and ev["updater"]["applying_lines"] > 0
+                and ev["updater"]["dead_refs"] == 0, "the updater didn't populate the databases cleanly", **ev)
+        # m0's random-bot count, set only through AC_* (the payload has no readable module conf: cwd HOME/run)
+        n_acc = _q(app, f"SELECT COUNT(*) FROM account WHERE username LIKE '{'RNDBOT'}%'", ports["mysql"])
+        ev["m0"] = {"AC_AI_PLAYERBOT_MAX_RANDOM_BOTS": ws_env.get("AC_AI_PLAYERBOT_MAX_RANDOM_BOTS"),
+                    "rndbot_accounts": n_acc, "etc_modules_under_cwd": (home / "run/etc/modules").exists()}
+        require(ws_env.get("AC_AI_PLAYERBOT_MAX_RANDOM_BOTS") == "10" and n_acc is not None and 0 < int(n_acc) <= 10
+                and not ev["m0"]["etc_modules_under_cwd"], "m0's random-bot count isn't in effect", **ev)
+        down = run_release(app, ["down"], env, prof, d, 300, log)
+        dj = down["json"] or {}
+        ev["down"] = {"rc": down["rc"], "worldserver": dj.get("worldserver"), "mysqld": dj.get("mysqld"),
+                      "remaining": dj.get("remaining")}
+        require(down["rc"] == 0 and (dj.get("worldserver") or {}).get("graceful") is True and dj.get("graceful") is True
+                and not dj.get("remaining"), "the stack didn't shut down gracefully", **ev)
+        # counterexample: drop the AC_* module keys; the playerbots default (500 random bots -> ~50 accounts) shows
+        ce_env = dict(env, **{P.FIRSTLAUNCH_TEST_ENV: json.dumps({"drop_ac_env": True})})
+        args = [SANDBOX_EXEC, "-f", str(prof), str(app / "python/bin/python3"), "-I", "-m", "hslib",
+                P.RELEASE_TEST_FLAG, "up", "--profile", "m0"]
+        with open(log, "a") as fh:
+            fh.write("\n==== counterexample: drop_ac_env\n")
+            fh.flush()
+            proc = subprocess.Popen(args, stdout=fh, stderr=fh, env=ce_env, cwd=d)
+        seen, t1 = None, time.time()
+        try:
+            while time.time() - t1 < 900 and proc.poll() is None:
+                n = _q(app, "SELECT COUNT(*) FROM account WHERE username LIKE 'RNDBOT%'", ports["mysql"])
+                if n is not None and int(n) > 10:
+                    seen = int(n)
+                    break
+                time.sleep(2)
+            world = _proc_info(lambda a: a[:1] == [str(app / "server/bin/worldserver")])
+            ce_env_seen = world[0]["env"] if world else {}
+        finally:
+            if proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=30)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            cd = run_release(app, ["down"], env, prof, d, 300, log)
+        ev["counterexample"] = {"rndbot_accounts": seen, "after_s": round(time.time() - t1, 1),
+                                "AC_AI_PLAYERBOT_MAX_RANDOM_BOTS": ce_env_seen.get("AC_AI_PLAYERBOT_MAX_RANDOM_BOTS"),
+                                "ac_keys": sorted(k for k in ce_env_seen if k.startswith("AC_")),
+                                "down_rc": cd["rc"], "remaining": (cd["json"] or {}).get("remaining")}
+        require(seen is not None and "AC_AI_PLAYERBOT_MAX_RANDOM_BOTS" not in ce_env_seen,
+                "counterexample: without the AC_* module keys the default bot count wasn't seen", **ev)
+        require(cd["rc"] == 0 and not (cd["json"] or {}).get("remaining"),
+                "counterexample: the stack didn't stop afterwards", **ev)
+        require(not _proc_info(lambda a: any(str(home) in x for x in a)), "processes of the scratch HOME remain",
+                **ev)
+    finally:
+        # never leave a scratch stack behind
+        for pinfo in _proc_info(lambda a: any(str(d) in x for x in a)):
+            try:
+                os.kill(pinfo["pid"], 9)
+            except ProcessLookupError:
+                pass
+        ev["log_tail"] = log.read_text(errors="replace")[-1200:] if log.exists() else None
+        shutil.rmtree(d, ignore_errors=True)
+    return ev

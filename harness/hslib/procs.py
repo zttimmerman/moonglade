@@ -122,6 +122,16 @@ def table(with_env: bool = False, own_only: bool = False) -> list[tuple[int, str
     return sorted(rows)
 
 
+def argv_table() -> list[tuple[int, list[str]]]:
+    """[(pid, argv)] for every readable process, argv as the kernel has it (paths with spaces stay one argument)."""
+    rows = []
+    for pid in pids():
+        ae = args_env(pid)
+        if ae is not None and ae[0]:
+            rows.append((pid, ae[0]))
+    return sorted(rows)
+
+
 def start_time(pid: int) -> int | None:
     """The process's start time in whole seconds since the epoch (proc_bsdinfo.pbi_start_tvsec), None if it's gone.
     With the pid it identifies a process across pid reuse (test-loop-speedups: harness run files)."""

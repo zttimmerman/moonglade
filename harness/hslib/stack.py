@@ -65,8 +65,10 @@ def stack_processes(lane: str | None = None) -> dict[str, list[int]]:
     L = P.layout(lane or P.LANE)
     my_cnf = f"--defaults-file={L['my_cnf']}"
     found = {"mysqld": [], "authserver": [], "worldserver": []}
-    for pid, cmd in procs.table():
-        argv = cmd.split(" ")
+    # argv from the kernel, not a joined command line: release HOME (~/Library/Application Support/...) and app paths
+    # have spaces
+    for pid, argv in procs.argv_table():
+        cmd = " ".join(argv)
         if "mysqld" in cmd and my_cnf in argv:
             found["mysqld"].append(pid)
             continue
@@ -225,6 +227,9 @@ def mysql_down(timeout=60):
 
 # ---------------------------------------------------------------- servers
 
+SAFETY_AC_KEYS = ("AC_PLAYERBOTS_DATABASE_INFO", "AC_AI_PLAYERBOT_COMMAND_SERVER_PORT")
+
+
 def spawn_env(name: str) -> dict:
     """The server's environment: ours without any AC_* variable, plus (lane B and release mode) the AC_* module/DB
     keys (config.lane_env; the worldserver reads module confs from lane A's server/etc/modules otherwise, and a
@@ -236,8 +241,10 @@ def spawn_env(name: str) -> dict:
             ac = config.lane_env()
         except config.ConfigError as e:
             raise StackError(str(e)) from e
-        if P.MODE == "release" and P.firstlaunch_test().get("drop_ac_env"):     # counterexample (test switch only)
-            ac = {}
+        if P.MODE == "release" and P.firstlaunch_test().get("drop_ac_env"):
+            # counterexample (test switch only): no module settings, so playerbots falls back to its defaults; the DB
+            # info and the command-server port stay (never a default 3306 database, never a 0.0.0.0 listener)
+            ac = {k: v for k, v in ac.items() if k in SAFETY_AC_KEYS}
         env |= ac
     if P.MODE == "release":
         env["OPENSSL_CONF"] = str(P.OPENSSL_CONF)
