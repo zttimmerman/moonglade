@@ -155,6 +155,10 @@ def main(argv=None) -> int:
     bs.add_argument("--ignore-power", action="store_true",
                     help="don't pause setup on low battery (the guard pauses below 35 %% until 50 %%)")
     bs.add_argument("--allow-test-inject", action="store_true", help=argparse.SUPPRESS)   # setup.preflight only
+    fl = sub.add_parser("first-launch", help="release only: set up Moonglade's folder from your own WoW 3.3.5a "
+                                             "client (what the app's first-launch window runs); skips what's done")
+    fl.add_argument("--client", help="your WoW 3.3.5a (12340) enUS client: a folder or a .zip (only read, never "
+                                     "changed)")
     dl = sub.add_parser("download", help="fetch one pinned, SHA-256-verified download (fork.lock); client-data is "
                                          "also unpacked into data/client-data/")
     dl.add_argument("name", choices=["client-data", "vmangos", "wine-runtime", "ghidra"])
@@ -481,6 +485,10 @@ def main(argv=None) -> int:
     if a.cmd == "bootstrap":
         from . import bootstrap
         return bootstrap.main(a.client, a.yes, a.check, a.allow_test_inject, a.jobs, a.ignore_power)
+
+    if a.cmd == "first-launch":
+        from . import firstlaunch
+        return firstlaunch.main(a.client)
 
     if a.cmd == "download":
         from . import downloads

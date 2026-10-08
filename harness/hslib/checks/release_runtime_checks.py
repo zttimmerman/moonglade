@@ -223,6 +223,11 @@ def heal_scratch() -> dict:
                 mp = line.split("\t")[-1].strip()
                 subprocess.run(["/usr/bin/hdiutil", "detach", "-force", mp], capture_output=True, timeout=120)
                 out["detached"].append(mp)
+        from .. import pristine
+        try:
+            pristine.unlock(x)              # a scratch HOME's client copy is write-protected (first launch)
+        except OSError:
+            pass
         shutil.rmtree(x, ignore_errors=True)
         out["removed"].append(x.name)
     return out

@@ -55,9 +55,16 @@ CLIENT_DATA_DIRS = ("Cameras", "dbc", "maps", "mmaps", "vmaps")
 
 
 class DownloadError(RuntimeError):
-    def __init__(self, msg: str, evidence: dict | None = None):
+    """`kind`: "damaged" (the SHA-256 didn't match; the file was removed) or None (anything else)."""
+    def __init__(self, msg: str, evidence: dict | None = None, kind: str | None = None):
         super().__init__(msg)
         self.evidence = evidence or {}
+        self.kind = kind
+
+
+# release-first-launch (design 4, "Downloads"): a progress hook, PROGRESS(file name, bytes done, total bytes or None),
+# called after every chunk a download receives (first launch throttles what it shows). None: no progress reporting.
+PROGRESS = None
 
 
 def sha256_file(path: Path) -> str:
@@ -94,12 +101,23 @@ def _verify_or_remove(path: Path, want: str, what: str) -> str:
         path.unlink(missing_ok=True)
         raise DownloadError(f"{what}: SHA-256 mismatch (got {got}, fork.lock pins {want}); the file was removed and "
                             "nothing was unpacked. Run the command again to download a fresh copy.",
-                            {"file": str(path), "got": got, "want": want, "removed": not path.exists()})
+                            {"file": str(path), "got": got, "want": want, "removed": not path.exists()}, kind="damaged")
     return got
+
+
+def download_url(url: str) -> str:
+    """The URL to fetch for a pinned `url`: itself, or (release test switch $HS_RELEASE_DOWNLOAD_BASE, honoured only
+    with the test flag inside a live harness run) the same file name under that loopback base. The SHA-256 a download
+    must match always comes from fork.lock, whatever the URL."""
+    base = P.release_switch(P.RELEASE_DOWNLOAD_BASE_ENV)
+    if not base:
+        return url
+    return base.rstrip("/") + "/" + url.rsplit("/", 1)[-1]
 
 
 def _download(url: str, dest: Path, timeout: int = 300) -> None:
     """URL -> dest via dest.part (renamed into place only when complete)."""
+    url = download_url(url)
     part = dest.with_name(dest.name + ".part")
     part.unlink(missing_ok=True)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -108,12 +126,18 @@ def _download(url: str, dest: Path, timeout: int = 300) -> None:
     try:
         with urllib.request.urlopen(url, timeout=timeout) as r, open(part, "wb") as fh:
             last = t0
+            total = r.headers.get("Content-Length")
+            total = int(total) if total and total.isdigit() else None
+            if PROGRESS:
+                PROGRESS(dest.name, 0, total)
             while True:
                 b = r.read(1 << 20)
                 if not b:
                     break
                 fh.write(b)
                 n += len(b)
+                if PROGRESS:
+                    PROGRESS(dest.name, n, total)
                 if time.time() - last > 15:
                     log(f"  {n / 1e6:.0f} MB")
                     last = time.time()

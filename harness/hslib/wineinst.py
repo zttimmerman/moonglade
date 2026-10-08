@@ -41,7 +41,7 @@ def install(force: bool = False) -> dict:
     try:
         got = obtain("wine-runtime", lock)        # pinned + SHA-256-verified (a mismatch is removed, never unpacked)
     except DownloadError as e:
-        raise WineInstallError(str(e)) from None
+        raise WineInstallError(str(e)) from e     # first launch reads the cause's kind (damaged)
     tmp = got["path"]
     # unpack next to the destination and rename into place when complete: a killed install leaves only the temp
     # folder, which the next run removes

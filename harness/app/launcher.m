@@ -78,6 +78,22 @@
 //   a live harness run); otherwise the app refuses, naming them, and starts and writes nothing. HS_RELEASE_HOME must
 //   be below a .../harness/out/release-scratch/ folder. HS_APP_TEST_CLIENT_PICK is the app's own (the first-launch
 //   folder pick, honoured only with the test hook) and never reaches the play loop.
+//
+// First launch (release-first-launch design 4, task 3.5): a release app whose HOME isn't set up (home.json has no
+// first_launch.complete) shows the first-launch window instead of starting the game: the loading window's look plus a
+// button row and a close box. It runs `<payload python> -I -B -m hslib first-launch [--client <path>]` as a child
+// (output appended to HOME/logs/first-launch.log, followed like app.log) and shows its `[bootstrap] {json}` events:
+// each step's label, a determinate bar over all steps (download and copy steps by bytes; never backward), and one
+// plain detail line. States: "choose" (the child stopped with exit 3, need_client: Choose… opens an NSOpenPanel for
+// a folder or a .zip, then the child runs again with --client), "progress", "error" (the catalog's title and message;
+// Choose Again… when another folder is the fix, else Quit), "done" (setup is done, the folder given can be deleted,
+// Play starts the play loop in the same window). Closing the window or quitting mid-setup sends the child SIGTERM
+// (it stops cleanly and continues next time) and exits 0 once it has exited. Later opens go straight to the play loop.
+// Hook events: "firstlaunch" (every child event, with the bar), "setup_window" (each state: title, text, buttons),
+// "client_pick", "setup_button", "setup_exit" (the child's exit code).
+// Test-only (test hook + release flag): HS_APP_TEST_CLIENT_PICK is a ';'-separated script consumed one token per
+// prompt: at "choose" a path (picked), "cancel" (the panel cancelled; next token) or "quit"; at "error" a path
+// (Choose Again with it) or "quit"; at "done" "play" or "quit". An empty script answers "quit" everywhere.
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
 #include <signal.h>
@@ -167,6 +183,25 @@ static NSArray<NSString *> *ReleaseSwitches(void) {
 @property(strong) NSTask *restoreTask;
 @property BOOL leavingBackups;                         // Play chosen: closing the window doesn't quit
 @property(strong) NSString *testRestoreTarget;         // test-only: scratch schemas a restore goes to
+// first launch (release-first-launch)
+@property BOOL setupMode;
+@property(strong) NSTask *setupTask;
+@property(strong) NSString *setupLogPath;
+@property(strong) NSFileHandle *setupLogHandle;
+@property unsigned long long setupOffset;
+@property(strong) NSMutableString *setupPartial;
+@property(strong) NSTimer *setupTimer;
+@property(strong) NSString *setupState;                  // choose | progress | error | done | stopping
+@property(strong) NSMutableArray<NSString *> *pickScript; // test-only scripted answers
+@property(strong) NSButton *primaryButton;
+@property(strong) NSButton *secondaryButton;
+@property(strong) NSDictionary *setupFailure;            // the child's last "failed" step event
+@property(strong) NSDictionary *setupEnd;                // the child's "end" event
+@property(strong) NSDictionary *stepLabels;
+@property(strong) NSString *setupStepId;
+@property BOOL setupStopRequested;
+@property BOOL setupNeedClient;
+@property(strong) NSString *lastPick;
 @end
 
 @implementation HSLauncher
@@ -607,6 +642,13 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
     env[@"HS_FROM_APP"] = @"1";                        // ./play then keeps passwords out of app.log (play.shown_password)
     self.playArgs = args;
     self.playEnv = env;
+
+    // release-first-launch: a release whose HOME isn't set up shows the first-launch window instead of the game
+    if (self.releaseMode && ![self homeSetUp]) {
+        if (self.clientPick) self.pickScript = [[self.clientPick componentsSeparatedByString:@";"] mutableCopy];
+        [self startSetup:nil];
+        return;
+    }
 
     // save-backups: Option held at launch opens the Backups window instead of the game
     BOOL option = ([NSEvent modifierFlags] & NSEventModifierFlagOption) != 0;
@@ -1062,6 +1104,11 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
 }
 
 - (NSApplicationTerminateReply)applicationShouldTerminate:(NSApplication *)sender {
+    if (self.setupTask.running) {                       // first launch: stop the child cleanly, then exit
+        [self stopSetup:@"quit"];
+        return NSTerminateCancel;
+    }
+    if (self.setupMode && !self.task) [self finishSetup:@"quit"];
     if (self.task.running) {                            // stop the play loop first; playExited: exits the app
         [self requestStop:@"quit"];
         return NSTerminateCancel;
@@ -1376,12 +1423,20 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
 }
 
 - (void)windowWillClose:(NSNotification *)n {
+    if (self.setupMode && n.object == self.statusWindow) return;   // first launch: windowShouldClose decides
     if (n.object != self.backupsWindow || self.leavingBackups) return;
     [self record:@{@"kind": @"backups_window", @"state": @"closed", @"why": @"closed"}];
     [self finish:0];
 }
 
 - (BOOL)windowShouldClose:(NSWindow *)w {
+    if (self.setupMode && w == self.statusWindow) {     // the first-launch window's close box
+        [self record:@{@"kind": @"setup_button", @"button": @"close", @"state": self.setupState ?: @""}];
+        if (self.setupTask.running) [self stopSetup:@"window closed"];
+        else if (self.task.running) [self requestStop:@"window closed"];
+        else [self finishSetup:@"window closed"];
+        return NO;
+    }
     return !(w == self.backupsWindow && self.restoreTask.running);
 }
 
@@ -1422,6 +1477,379 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
     });
 }
 
+// ------------------------------------------------------------------ first launch (release-first-launch, task 3.5)
+
+- (BOOL)homeSetUp {
+    NSData *d = [NSData dataWithContentsOfFile:[self.home stringByAppendingPathComponent:@"home.json"]];
+    NSDictionary *h = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
+    if (![h isKindOfClass:[NSDictionary class]]) return NO;
+    NSDictionary *fl = [h[@"first_launch"] isKindOfClass:[NSDictionary class]] ? h[@"first_launch"] : nil;
+    return [fl[@"complete"] isKindOfClass:[NSNumber class]] && [fl[@"complete"] boolValue];
+}
+
+// Relative time each step usually takes (seconds on the dev Mac, rounded): the bar's slots
+static NSArray<NSArray *> *kSetupWeights(void) {
+    return @[@[@"preflight", @2], @[@"client", @60], @[@"data", @120], @[@"wine", @10], @[@"database", @900],
+             @[@"playclient", @20], @[@"defaults", @1]];
+}
+
+- (NSArray *)slotFor:(NSString *)step {
+    double total = 0, lo = 0, hi = 0;
+    for (NSArray *w in kSetupWeights()) total += [w[1] doubleValue];
+    double acc = 0;
+    for (NSArray *w in kSetupWeights()) {
+        if ([w[0] isEqual:step]) { lo = acc / total; hi = (acc + [w[1] doubleValue]) / total; break; }
+        acc += [w[1] doubleValue];
+    }
+    return @[@(lo), @(hi)];
+}
+
+- (double)expectFor:(NSString *)step {
+    for (NSArray *w in kSetupWeights()) if ([w[0] isEqual:step]) return [w[1] doubleValue];
+    return 5;
+}
+
+- (void)ensureSetupWindow {
+    if (self.statusWindow) return;
+    NSRect r = NSMakeRect(0, 0, 520, 230);
+    NSWindow *w = [[NSWindow alloc] initWithContentRect:r
+                                              styleMask:NSWindowStyleMaskTitled | NSWindowStyleMaskClosable |
+                                                        NSWindowStyleMaskMiniaturizable
+                                                backing:NSBackingStoreBuffered defer:NO];
+    w.title = @"Moonglade";
+    w.releasedWhenClosed = NO;
+    w.delegate = self;
+    HSBackgroundView *root = [[HSBackgroundView alloc] initWithFrame:r];
+    w.contentView = root;
+    NSImageView *iv = [NSImageView imageViewWithImage:[NSApp applicationIconImage]];
+    iv.frame = NSMakeRect(24, 122, 84, 84);
+    [root addSubview:iv];
+    NSTextField *title = [NSTextField labelWithString:@"Setting up Moonglade…"];
+    title.font = [NSFont boldSystemFontOfSize:16];
+    title.frame = NSMakeRect(124, 182, 372, 24);
+    title.lineBreakMode = NSLineBreakByTruncatingTail;
+    [root addSubview:title];
+    NSProgressIndicator *bar = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(124, 156, 372, 20)];
+    bar.style = NSProgressIndicatorStyleBar;
+    bar.indeterminate = NO;
+    bar.minValue = 0;
+    bar.maxValue = 1;
+    [root addSubview:bar];
+    NSTextField *detail = [NSTextField wrappingLabelWithString:@""];
+    detail.font = [NSFont systemFontOfSize:11];
+    detail.textColor = [NSColor secondaryLabelColor];
+    detail.frame = NSMakeRect(124, 58, 372, 94);
+    [root addSubview:detail];
+    NSTextField *notice = [NSTextField wrappingLabelWithString:@""];   // the play loop's [notice] line, after Play
+    notice.font = [NSFont systemFontOfSize:11];
+    notice.textColor = [NSColor systemOrangeColor];
+    notice.frame = NSMakeRect(124, 12, 372, 42);
+    notice.hidden = YES;
+    [root addSubview:notice];
+    self.primaryButton = [self button:@"" action:@selector(setupPrimary:) frame:NSMakeRect(386, 14, 120, 32)];
+    self.primaryButton.keyEquivalent = @"\r";
+    self.secondaryButton = [self button:@"" action:@selector(setupSecondary:) frame:NSMakeRect(262, 14, 120, 32)];
+    [root addSubview:self.primaryButton];
+    [root addSubview:self.secondaryButton];
+    self.noticeLabel = notice;
+    self.stageLabel = title;
+    self.titleLabel = title;
+    self.bar = bar;
+    self.statusDetail = detail;
+    self.statusWindow = w;
+    [w center];
+    self.barTimer = [NSTimer scheduledTimerWithTimeInterval:0.05 target:self selector:@selector(animateBar)
+                                                   userInfo:nil repeats:YES];
+}
+
+// One state of the first-launch window: title, text, buttons (primary first; nil hides one). Recorded for the hook.
+- (void)setupShow:(NSString *)state title:(NSString *)title text:(NSString *)text
+          primary:(NSString *)primary secondary:(NSString *)secondary {
+    [self ensureSetupWindow];
+    self.setupState = state;
+    self.titleLabel.stringValue = title;
+    self.statusDetail.stringValue = text;
+    self.primaryButton.title = primary ?: @"";
+    self.primaryButton.hidden = primary == nil;
+    self.secondaryButton.title = secondary ?: @"";
+    self.secondaryButton.hidden = secondary == nil;
+    self.bar.hidden = [state isEqual:@"choose"] && self.targetOverall <= 0;
+    NSMutableArray *buttons = [NSMutableArray array];
+    if (primary) [buttons addObject:primary];
+    if (secondary) [buttons addObject:secondary];
+    [self record:@{@"kind": @"setup_window", @"state": state, @"title": title, @"text": text, @"buttons": buttons,
+                   @"bar": @(self.targetOverall)}];
+    [NSApp activateIgnoringOtherApps:YES];
+    [self.statusWindow makeKeyAndOrderFront:nil];
+    if (self.snapshotDir) {
+        self.shownOverall = MAX(self.shownOverall, [self wantedOverall]);
+        self.bar.doubleValue = self.shownOverall;
+        [self snapshot:[NSString stringWithFormat:@"setup-%@", state]];
+    }
+    if ([self testMode] && ![state isEqual:@"progress"] && ![state isEqual:@"stopping"])
+        dispatch_async(dispatch_get_main_queue(), ^{ [self scriptAnswer]; });
+}
+
+// test-only: answer the prompt now on screen from the scripted picks (HS_APP_TEST_CLIENT_PICK)
+- (void)scriptAnswer {
+    if (![self testMode] || self.setupTask.running || self.task) return;
+    NSString *tok = self.pickScript.count ? self.pickScript.firstObject : @"quit";
+    if (self.pickScript.count) [self.pickScript removeObjectAtIndex:0];
+    [self record:@{@"kind": @"script_step", @"step": tok, @"state": self.setupState ?: @""}];
+    if ([tok isEqual:@"quit"]) { [self setupButton:@"quit"]; return; }
+    if ([self.setupState isEqual:@"done"]) {
+        [self setupButton:[tok isEqual:@"play"] ? @"play" : @"quit"];
+        return;
+    }
+    if ([tok isEqual:@"cancel"]) {
+        [self record:@{@"kind": @"client_pick", @"path": [NSNull null], @"source": @"test script", @"cancelled": @YES}];
+        [self scriptAnswer];
+        return;
+    }
+    [self picked:tok source:@"test script"];
+}
+
+- (void)setupPrimary:(id)sender {
+    NSString *st = self.setupState;
+    [self setupButton:[st isEqual:@"done"] ? @"play" : ([st isEqual:@"choose"] || ([st isEqual:@"error"] &&
+                       [self.setupFailure[@"choose_again"] boolValue])) ? @"choose" : @"quit"];
+}
+
+- (void)setupSecondary:(id)sender { [self setupButton:@"quit"]; }
+
+- (void)setupButton:(NSString *)which {
+    [self record:@{@"kind": @"setup_button", @"button": which, @"state": self.setupState ?: @""}];
+    if ([which isEqual:@"quit"]) { [self finishSetup:@"quit"]; return; }
+    if ([which isEqual:@"play"]) { [self setupPlay]; return; }
+    // choose: the folder picker (never in test mode: the script answers instead)
+    NSOpenPanel *p = [NSOpenPanel openPanel];
+    p.canChooseDirectories = YES;
+    p.canChooseFiles = YES;
+    p.allowsMultipleSelection = NO;
+    p.message = @"Choose your World of Warcraft 3.3.5a folder (the one with Wow.exe in it), or the .zip you downloaded.";
+    p.prompt = @"Choose";
+    [NSApp activateIgnoringOtherApps:YES];
+    [p beginSheetModalForWindow:self.statusWindow completionHandler:^(NSModalResponse r) {
+        if (r != NSModalResponseOK || !p.URL) {
+            [self record:@{@"kind": @"client_pick", @"path": [NSNull null], @"source": @"panel", @"cancelled": @YES}];
+            return;
+        }
+        [self picked:p.URL.path source:@"panel"];
+    }];
+}
+
+- (void)picked:(NSString *)path source:(NSString *)source {
+    [self record:@{@"kind": @"client_pick", @"path": path, @"source": source}];
+    self.lastPick = path;
+    [self startSetup:path];
+}
+
+- (void)startSetup:(NSString *)client {
+    self.setupMode = YES;
+    self.setupFailure = nil;
+    self.setupEnd = nil;
+    self.setupNeedClient = NO;
+    if (!self.setupPartial) self.setupPartial = [NSMutableString string];
+    [self.setupPartial setString:@""];
+    [self ensureSetupWindow];
+    NSString *logs = [self.home stringByAppendingPathComponent:@"logs"];
+    self.setupLogPath = [logs stringByAppendingPathComponent:@"first-launch.log"];
+    if (!self.setupLogHandle) {
+        int fd = open(self.setupLogPath.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
+        if (fd >= 0) self.setupLogHandle = [[NSFileHandle alloc] initWithFileDescriptor:fd closeOnDealloc:YES];
+    }
+    self.setupOffset = [[[NSFileManager defaultManager] attributesOfItemAtPath:self.setupLogPath error:nil] fileSize];
+    NSMutableArray *args = [NSMutableArray arrayWithArray:@[@"-I", @"-B", @"-m", @"hslib", @"first-launch"]];
+    if (client) [args addObjectsFromArray:@[@"--client", client]];
+    if ([self.playArgs containsObject:kReleaseFlag]) [args addObject:kReleaseFlag];
+    NSTask *t = [NSTask new];
+    t.executableURL = [NSURL fileURLWithPath:self.loopExe];
+    t.arguments = args;
+    t.currentDirectoryURL = [NSURL fileURLWithPath:self.home];
+    t.environment = self.playEnv;
+    t.standardInput = [NSFileHandle fileHandleWithNullDevice];
+    t.standardOutput = self.setupLogHandle ?: [NSFileHandle fileHandleWithNullDevice];
+    t.standardError = self.setupLogHandle ?: [NSFileHandle fileHandleWithNullDevice];
+    __weak HSLauncher *weakSelf = self;
+    t.terminationHandler = ^(NSTask *task) {
+        dispatch_async(dispatch_get_main_queue(), ^{ [weakSelf setupExited:task]; });
+    };
+    [self setupShow:@"progress" title:client ? @"Checking your game…" : @"Setting up Moonglade…"
+               text:client ? [NSString stringWithFormat:@"Reading “%@”. Moonglade only reads it and never "
+                              @"changes it.", client.lastPathComponent]
+                           : @"Checking this Mac." primary:nil secondary:nil];
+    NSError *err = nil;
+    if (![t launchAndReturnError:&err]) {
+        self.setupFailure = @{@"title": @"Moonglade couldn't start setting up",
+                              @"message": [NSString stringWithFormat:@"Something on this Mac stopped Moonglade from "
+                                           @"starting its setup (%@). Try opening it again.", err.localizedDescription]};
+        [self setupShow:@"error" title:self.setupFailure[@"title"] text:self.setupFailure[@"message"]
+                primary:@"Quit" secondary:nil];
+        return;
+    }
+    self.setupTask = t;
+    [self appLog:[NSString stringWithFormat:@"first launch pid %d: %@ %@", t.processIdentifier, self.loopExe,
+                  [args componentsJoinedByString:@" "]]];
+    [self.setupTimer invalidate];
+    self.setupTimer = [NSTimer scheduledTimerWithTimeInterval:0.25 target:self selector:@selector(setupTail)
+                                                     userInfo:nil repeats:YES];
+}
+
+- (void)setupTail {
+    NSFileHandle *h = [NSFileHandle fileHandleForReadingAtPath:self.setupLogPath];
+    if (!h) return;
+    [h seekToFileOffset:self.setupOffset];
+    NSData *d = [h readDataToEndOfFile];
+    [h closeFile];
+    if (d.length == 0) return;
+    self.setupOffset += d.length;
+    [self.setupPartial appendString:[[NSString alloc] initWithData:d encoding:NSUTF8StringEncoding] ?: @""];
+    NSArray *parts = [self.setupPartial componentsSeparatedByString:@"\n"];
+    [self.setupPartial setString:parts.lastObject];
+    for (NSUInteger i = 0; i + 1 < parts.count; i++) {
+        NSString *l = parts[i];
+        if (![l hasPrefix:@"[bootstrap] "]) {
+            NSString *t = [l stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceCharacterSet]];
+            if (t.length) [self.outLines addObject:t.length > 300 ? [t substringToIndex:300] : t];
+            if (self.outLines.count > 50) [self.outLines removeObjectAtIndex:0];
+            continue;
+        }
+        NSData *jd = [[l substringFromIndex:12] dataUsingEncoding:NSUTF8StringEncoding];
+        id ev = jd ? [NSJSONSerialization JSONObjectWithData:jd options:0 error:nil] : nil;
+        if ([ev isKindOfClass:[NSDictionary class]]) [self onSetupEvent:ev];
+    }
+}
+
+static NSString *HSBytes(double b) {
+    return b >= 1e9 ? [NSString stringWithFormat:@"%.1f GB", b / 1e9] : [NSString stringWithFormat:@"%.0f MB", b / 1e6];
+}
+
+- (void)onSetupEvent:(NSDictionary *)ev {
+    NSString *kind = [ev[@"event"] isKindOfClass:[NSString class]] ? ev[@"event"] : @"";
+    NSString *step = [ev[@"step"] isKindOfClass:[NSString class]] ? ev[@"step"] : nil;
+    NSString *state = [ev[@"state"] isKindOfClass:[NSString class]] ? ev[@"state"] : @"";
+    if ([kind isEqual:@"start"] && [ev[@"labels"] isKindOfClass:[NSDictionary class]]) self.stepLabels = ev[@"labels"];
+    NSString *label = step ? ([ev[@"label"] isKindOfClass:[NSString class]] ? ev[@"label"] : self.stepLabels[step]) : nil;
+    if ([kind isEqual:@"step"] && step) {
+        NSArray *slot = [self slotFor:step];
+        if ([state isEqual:@"start"]) {
+            self.setupStepId = step;
+            self.stageSince = [NSDate timeIntervalSinceReferenceDate];
+            self.stage = @{@"id": step, @"label": label ?: step, @"state": @"start", @"fraction": [NSNull null],
+                           @"slot": slot, @"expect_s": @([self expectFor:step])};
+            self.targetOverall = MAX(self.targetOverall, [slot[0] doubleValue]);
+            if (label) self.titleLabel.stringValue = label;
+            self.statusDetail.stringValue = [step isEqual:@"database"]
+                ? @"This is the longest part, and it only happens once. You can leave Moonglade open and come back."
+                : [step isEqual:@"preflight"] ? @"Checking this Mac." : @"";
+        } else if ([state isEqual:@"done"] || [state isEqual:@"already_done"] || [state isEqual:@"need_client"]) {
+            self.stage = nil;
+            self.targetOverall = MAX(self.targetOverall, [slot[1] doubleValue]);
+        } else if ([state isEqual:@"failed"]) {
+            self.stage = nil;
+            self.setupFailure = ev;
+        }
+    } else if ([kind isEqual:@"progress"] && step) {
+        NSArray *slot = [self slotFor:step];
+        id frac = ev[@"fraction"];
+        if ([frac isKindOfClass:[NSNumber class]]) {
+            double lo = [slot[0] doubleValue], hi = [slot[1] doubleValue];
+            self.targetOverall = MAX(self.targetOverall, lo + (hi - lo) * MIN(MAX([frac doubleValue], 0), 1));
+            self.stage = @{@"id": step, @"label": self.stage[@"label"] ?: step, @"state": @"progress",
+                           @"fraction": frac, @"slot": slot, @"expect_s": @([self expectFor:step])};
+        }
+        double done = [ev[@"done"] doubleValue], total = [ev[@"total"] isKindOfClass:[NSNumber class]]
+                                                          ? [ev[@"total"] doubleValue] : 0;
+        NSString *verb = [ev[@"what"] isEqual:@"copy"] ? @"Copied" : @"Downloaded";
+        self.statusDetail.stringValue = total > 0
+            ? [NSString stringWithFormat:@"%@ %@ of %@.", verb, HSBytes(done), HSBytes(total)]
+            : [NSString stringWithFormat:@"%@ %@.", verb, HSBytes(done)];
+    } else if ([kind isEqual:@"need_client"]) {
+        self.setupNeedClient = YES;
+    } else if ([kind isEqual:@"end"]) {
+        self.setupEnd = ev;
+        self.targetOverall = 1.0;
+    }
+    NSMutableDictionary *rec = [ev mutableCopy];
+    [rec removeObjectForKey:@"evidence"];               // the full evidence stays in first-launch.log
+    [rec removeObjectForKey:@"result"];
+    rec[@"event"] = kind;
+    rec[@"kind"] = @"firstlaunch";
+    rec[@"bar"] = @(self.targetOverall);
+    [self record:rec];
+}
+
+- (void)setupExited:(NSTask *)task {
+    [self.setupTimer invalidate];
+    self.setupTimer = nil;
+    [self setupTail];
+    int code = task.terminationStatus;
+    if (task.terminationReason == NSTaskTerminationReasonUncaughtSignal) code = 128 + code;
+    self.setupTask = nil;
+    [self record:@{@"kind": @"setup_exit", @"code": @(code), @"stop_requested": @(self.setupStopRequested)}];
+    [self appLog:[NSString stringWithFormat:@"first launch exited with %d", code]];
+    if (self.setupStopRequested) { [self finish:0]; return; }
+    if (code == 0 && self.setupEnd) {
+        NSString *src = [self.setupEnd[@"source"] isKindOfClass:[NSString class]] ? self.setupEnd[@"source"] : nil;
+        BOOL canDelete = [self.setupEnd[@"can_delete"] boolValue] && src;
+        NSString *text = canDelete
+            ? [NSString stringWithFormat:@"Setup is done. You can now delete the folder you gave Moonglade "
+               @"(“%@”): Moonglade keeps its own copy of the game. Press Play to start.", src]
+            : @"Setup is done. Press Play to start.";
+        [self setupShow:@"done" title:@"Moonglade is ready" text:text primary:@"Play" secondary:@"Quit"];
+        return;
+    }
+    if (code == 3 && self.setupNeedClient) {
+        [self setupShow:@"choose" title:@"Choose your World of Warcraft folder"
+                   text:@"Moonglade sets itself up from your own copy of World of Warcraft 3.3.5a (build 12340, in "
+                        @"English). Choose the folder that holds Wow.exe, or the .zip you downloaded. Moonglade only "
+                        @"reads it and never changes it."
+                primary:@"Choose…" secondary:@"Quit"];
+        return;
+    }
+    NSDictionary *f = self.setupFailure;
+    NSString *title = [f[@"title"] isKindOfClass:[NSString class]] ? f[@"title"] : @"Something went wrong while setting up";
+    NSString *msg = [f[@"message"] isKindOfClass:[NSString class]] ? f[@"message"]
+        : [NSString stringWithFormat:@"Setup stopped because of a problem Moonglade didn't expect. Open Moonglade "
+           @"again to continue where it stopped. If it keeps happening, the log says what went wrong: %@",
+           self.setupLogPath];
+    if (!f) self.setupFailure = @{@"title": title, @"message": msg, @"choose_again": @NO};
+    BOOL again = [self.setupFailure[@"choose_again"] boolValue];
+    [self setupShow:@"error" title:title text:msg primary:again ? @"Choose Again…" : @"Quit"
+          secondary:again ? @"Quit" : nil];
+}
+
+- (void)stopSetup:(NSString *)why {
+    if (!self.setupTask.running || self.setupStopRequested) return;
+    self.setupStopRequested = YES;
+    [self appLog:[NSString stringWithFormat:@"stop requested (%@): sending SIGTERM to first launch", why]];
+    [self setupShow:@"stopping" title:@"Stopping setup…"
+               text:@"Moonglade is stopping safely. It continues where it stopped the next time you open it."
+            primary:nil secondary:nil];
+    [self.setupTask terminate];
+}
+
+- (void)finishSetup:(NSString *)why {
+    [self appLog:[NSString stringWithFormat:@"first launch window closed (%@) in state %@", why, self.setupState]];
+    [self finish:[self.setupState isEqual:@"error"] ? 1 : 0];
+}
+
+// "All set" → Play: the same window becomes the loading window and the play loop starts
+- (void)setupPlay {
+    self.setupMode = NO;
+    self.primaryButton.hidden = YES;
+    self.secondaryButton.hidden = YES;
+    self.bar.hidden = NO;
+    self.statusWindow.styleMask &= ~NSWindowStyleMaskClosable;
+    self.stage = nil;
+    self.targetOverall = self.shownOverall = 0;
+    self.bar.doubleValue = 0;
+    self.statusDetail.stringValue = @"Starting the local server. This takes a minute or two.";
+    [self.setupLogHandle closeFile];
+    self.setupLogHandle = nil;
+    [self startPlay];
+}
+
 - (void)installSignalHandlers {
     self.signalSources = [NSMutableArray array];
     int sigs[] = {SIGTERM, SIGINT, SIGHUP};
@@ -1432,7 +1860,9 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
         __weak HSLauncher *weakSelf = self;
         dispatch_source_set_event_handler(s, ^{
             HSLauncher *me = weakSelf;
-            if (me.task.running) [me requestStop:[NSString stringWithFormat:@"signal %d", sig]];
+            if (me.setupTask.running) [me stopSetup:[NSString stringWithFormat:@"signal %d", sig]];
+            else if (me.task.running) [me requestStop:[NSString stringWithFormat:@"signal %d", sig]];
+            else if (me.setupMode && !me.task) [me finish:0];
             else [me finish:128 + sig];
         });
         dispatch_resume(s);

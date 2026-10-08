@@ -62,9 +62,22 @@ def run_root(environ=None) -> Path:
     return test_root(environ) or P.CLIENT
 
 
+# release-first-launch: the folder (or zip) a friend gives first launch is only ever read. protect() adds it to the
+# roots every writer guard refuses (in this process), next to client/ and the test stand-in.
+_EXTRA_ROOTS: list[Path] = []
+
+
+def protect(p) -> None:
+    """Treat `p` (the friend's own client folder or zip) like the pristine client for the rest of this process."""
+    p = Path(os.path.abspath(p))
+    if p not in _EXTRA_ROOTS:
+        _EXTRA_ROOTS.append(p)
+
+
 def roots(environ=None) -> list[Path]:
-    """Every folder the writer guards protect: client/ always, plus the test stand-in when set."""
-    out = [P.CLIENT]
+    """Every folder the writer guards protect: client/ always, plus the test stand-in when set, plus any folder
+    protect() added (first launch's source)."""
+    out = [P.CLIENT, *_EXTRA_ROOTS]
     try:
         t = test_root(environ)
     except PristineError:
