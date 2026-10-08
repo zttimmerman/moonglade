@@ -77,11 +77,12 @@ def preflight_cases() -> dict:
     return out
 
 
-def _nested_preflight(tier: str, state: dict, rule: str, only_decide: bool, harness_run: bool = True) -> dict:
-    """`harness/hs run --tier <tier>` with the stubbed probe and rule; the results dir must stay empty when refused."""
+def _nested_preflight(tier: str, state: dict, rule: str, harness_run: bool = True) -> dict:
+    """`harness/hs run --tier <tier>` with the stubbed probe and rule. $HS_TEST_PREFLIGHT_ONLY makes a run that isn't
+    refused print its decision and exit 0 instead of starting (so a broken preflight never starts a real full run
+    from a check); a refusal happens before that, exits 2, and must leave the results dir empty."""
     rd = _scratch("preflight")
-    env = _env(HS_TEST_GUI_PROBE=json.dumps(state), HS_TEST_GUI_RULE=rule,
-               **({"HS_TEST_PREFLIGHT_ONLY": "1"} if only_decide else {}))
+    env = _env(HS_TEST_GUI_PROBE=json.dumps(state), HS_TEST_GUI_RULE=rule, HS_TEST_PREFLIGHT_ONLY="1")
     if not harness_run:
         env.pop("HS_HARNESS_RUN", None)
     t0 = time.time()
@@ -94,7 +95,7 @@ def _nested_preflight(tier: str, state: dict, rule: str, only_decide: bool, harn
                "results_written": sorted(p.name for p in rd.iterdir())}
     finally:
         shutil.rmtree(rd, ignore_errors=True)
-    if only_decide and r.returncode == 0:
+    if r.returncode == 0:
         try:
             out["decision"] = json.loads(r.stdout)["preflight"]
         except (ValueError, KeyError) as e:
@@ -119,11 +120,11 @@ def gui_preflight(ctx):
                                                               or cases[n]["state"].get("display_asleep"))):
             probs.append(f"{n}: the screen state isn't recorded in the decision: {cases[n]['state']}")
     nested = {
-        "locked_gui_changed": _nested_preflight("full", LOCKED, "changed", False),
-        "asleep_tier_gui": _nested_preflight("gui", ASLEEP, "unchanged", False),
-        "low_battery_no_gui_change": _nested_preflight("full", LOW_BATT, "unchanged", False),
-        "locked_no_gui_change_decide": _nested_preflight("full", LOCKED, "unchanged", True),
-        "switch_outside_harness_run": _nested_preflight("full", LOCKED, "unchanged", True, harness_run=False),
+        "locked_gui_changed": _nested_preflight("full", LOCKED, "changed"),
+        "asleep_tier_gui": _nested_preflight("gui", ASLEEP, "unchanged"),
+        "low_battery_no_gui_change": _nested_preflight("full", LOW_BATT, "unchanged"),
+        "locked_no_gui_change_decide": _nested_preflight("full", LOCKED, "unchanged"),
+        "switch_outside_harness_run": _nested_preflight("full", LOCKED, "unchanged", harness_run=False),
     }
     for n in ("locked_gui_changed", "asleep_tier_gui", "low_battery_no_gui_change"):
         c = nested[n]
