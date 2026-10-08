@@ -46,12 +46,10 @@ from . import paths as P
 # Phase 1 (ADR-0011): server and stand-in checks. Each entry says why it's safe in lane B. Left out on purpose (see
 # design.md "As built: scheduler"): report.tiers (a post-run check; its nested quick tier has a 180 s budget that
 # contention would break, and runs app.bundle_valid, which rebuilds dist/Moonglade.app and kills stale test
-# launchers) and play.player_account_untouched (a player-protection check).
+# launchers), play.player_account_untouched (a player-protection check), and comp.* (they need the random bots that
+# lane A's long-lived DB has; lane B's per-run template clone has none online: in the measured two-lane run
+# 2026-10-08, comp.add_remove/follows/quest_shared failed "no online priest joined the party within 30 s").
 LANE_B = {
-    "comp.add_remove": "companion bots over SOAP + probe client on lane B's own stack (HSCOMP account in its DB)",
-    "comp.follows": "companion bots on lane B's own stack",
-    "comp.assists": "companion bots on lane B's own stack",
-    "comp.quest_shared": "companion bots on lane B's own stack",
     "era.sql_deterministic": "era SQL against lane B's world DB",
     "era.default_on": "reads lane B's rendered confs (P.LANE_ETC) and its module log",
     "era.xp_curve": "lane B's running server",
