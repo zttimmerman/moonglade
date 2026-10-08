@@ -76,6 +76,23 @@ class keep_awake:
         return False
 
 
+def keep_awake_cli(hours: float) -> int:
+    """`hs keep-awake [--hours N]` (test-loop-speedups): the same assertions a run holds (caffeinate -s -i -d -u), for N
+    hours or until stopped (Ctrl-C / SIGTERM). This process becomes caffeinate, so stopping it releases them."""
+    import os
+    import shutil
+    from datetime import datetime, timedelta
+    if not (0 < hours <= 24):
+        log("--hours must be more than 0 and at most 24")
+        return 2
+    secs = max(1, round(hours * 3600))
+    exe = shutil.which("caffeinate") or "/usr/bin/caffeinate"
+    until = (datetime.now() + timedelta(seconds=secs)).strftime("%H:%M")
+    log(f"keeping this Mac and its display awake until {until} ({hours:g} h; pid {os.getpid()}); Ctrl-C to stop")
+    os.execv(exe, [exe, "-s", "-i", "-d", "-u", "-t", str(secs)])
+    return 1   # not reached
+
+
 def awake_assertions(pid: int | None) -> list[str]:
     """Lines of `pmset -g assertions` owned by `pid` (evidence that the no-sleep assertion is held)."""
     if not pid:
