@@ -208,12 +208,15 @@ class ConfigError(RuntimeError):
     pass
 
 
-def common(logs: Path = P.LOGS, tmp: Path = P.TMP, source: Path = P.CORE_SRC) -> dict:
+def common(logs: Path = P.LOGS, tmp: Path = P.TMP, source: Path = P.SQL_SOURCE) -> dict:
+    """Keys both servers get. SourceDirectory and MySQLExecutable come from the resolver: dev the vendor/ tree and
+    Homebrew's mysql, release the payload's sql/ and mysql/bin/mysql (release-build "As built": the compiled-in
+    defaults name the build machine, so a release must always set them)."""
     return {
         "LogsDir": f'"{logs}"',
         "TempDir": f'"{tmp}"',
         "SourceDirectory": f'"{source}"',
-        "MySQLExecutable": f'"{P.BREW / "opt/mysql/bin/mysql"}"',
+        "MySQLExecutable": f'"{P.MYSQL}"',
         "BindIP": '"127.0.0.1"',
         "Updates.AutoSetup": "1",
     }
@@ -223,7 +226,7 @@ LANE_ENV_FILE = "ac-env.json"      # lane B: the AC_* variables stack._spawn giv
 
 
 def write_all(world_datadir: Path | None = None, extra_world: dict | None = None, *, etc: Path = P.LANE_ETC,
-              logs: Path = P.LOGS, run: Path = P.RUN, tmp: Path = P.TMP, source: Path = P.CORE_SRC,
+              logs: Path = P.LOGS, run: Path = P.RUN, tmp: Path = P.TMP, source: Path = P.SQL_SOURCE,
               profile: str | None = None, population_n: int | None = None, dist_dir: Path | None = None) -> dict:
     """Render authserver/worldserver/module confs into `etc` with the given profile (see PROFILES). The keyword
     paths default to this lane's stack; the unpatched baseline worldserver (core.login_logout_race_baseline) renders
@@ -233,7 +236,8 @@ def write_all(world_datadir: Path | None = None, extra_world: dict | None = None
     readers such as era.default_on) while the worldserver gets their values as AC_* env (etc/ac-env.json), because it
     only reads module confs from server/etc/modules, which stays lane A's."""
     prof = overrides(profile_name(profile), population_n)
-    lane_b = P.LANE != "a" and etc == P.LANE_ETC
+    # lane B and release mode (release-first-launch design 3): module keys go to the server as AC_* env
+    lane_b = (P.LANE != "a" or P.MODE == "release") and etc == P.LANE_ETC
     dist_dir = dist_dir or (P.SERVER_ETC if lane_b else etc)
     for d in (logs, tmp, run, etc):
         d.mkdir(parents=True, exist_ok=True)
@@ -290,13 +294,18 @@ def write_all(world_datadir: Path | None = None, extra_world: dict | None = None
         tmp_f.write_text(json.dumps(env, indent=1, sort_keys=True))
         os.replace(tmp_f, f)
         out["ac_env"] = sorted(env)
+    if P.MODE == "release" and etc == P.LANE_ETC:
+        # an empty OpenSSL config for the servers' OPENSSL_CONF (stack.spawn_env), so OpenSSL never opens the build
+        # machine's compiled-in OPENSSLDIR
+        P.OPENSSL_CONF.write_text("# Moonglade: intentionally empty (release mode sets OPENSSL_CONF to this file)\n")
+        out["openssl_conf"] = str(P.OPENSSL_CONF)
     return out
 
 
 def lane_env(etc: Path = P.LANE_ETC) -> dict[str, str]:
     """Lane B's AC_* variables as write_all wrote them (stack._spawn). Lane A: none. Fails closed (ConfigError)
     when lane B's file is missing or unreadable."""
-    if P.LANE == "a":
+    if P.LANE == "a" and P.MODE == "dev":
         return {}
     try:
         env = json.loads((etc / LANE_ENV_FILE).read_text())

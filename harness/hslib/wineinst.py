@@ -8,7 +8,7 @@ import tarfile
 from . import paths as P
 from .util import log
 
-RUNTIME_DIR = P.ENV / "wowsilicon-r17"
+RUNTIME_DIR = P.WINE_RUNTIME
 MARKER = RUNTIME_DIR / ".hs-runtime-sha256"
 
 
@@ -34,7 +34,7 @@ def install(force: bool = False) -> dict:
         # Never adopt an unverified tree: the marker is written only after a SHA-256-verified download.
         raise WineInstallError(f"{RUNTIME_DIR} exists but isn't a verified install of the pinned runtime "
                                f"(marker missing or different); re-run with --force to reinstall")
-    free_gb = shutil.disk_usage(P.ROOT).free / 2**30
+    free_gb = shutil.disk_usage(P.HOME).free / 2**30
     if free_gb < 1.0:
         raise WineInstallError(f"only {free_gb:.1f} GB free; need about 1 GB to download and unpack the runtime")
     from .downloads import DownloadError, obtain

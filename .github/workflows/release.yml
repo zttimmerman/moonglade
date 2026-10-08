@@ -61,8 +61,8 @@ jobs:
 
       - name: Smoke test without Homebrew
         run: >
-          env/release/payload/Moonglade/python/bin/python3 -I tools/release/smoke.py
-          --payload env/release/payload/Moonglade --scratch "env/release/smoke"
+          env/release/payload/Moonglade.app/Contents/Resources/Moonglade/python/bin/python3 -I tools/release/smoke.py
+          --payload env/release/payload/Moonglade.app/Contents/Resources/Moonglade --scratch "env/release/smoke"
           --sandbox --deny-write "${GITHUB_WORKSPACE}" --json env/release/smoke.json
 
       - name: Put Homebrew back

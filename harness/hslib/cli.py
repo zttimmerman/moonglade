@@ -12,6 +12,14 @@ def _print(obj):
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    from . import paths as _P0
+    # release-first-launch's test switches: refused before anything unless the test flag is given in a live harness
+    # run (the flag may appear anywhere on the command line and is taken out before parsing)
+    _why = _P0.test_release_refusal(argv=argv)
+    if _why:
+        log(_why)
+        return 2
+    argv = [a for a in argv if a != _P0.RELEASE_TEST_FLAG]
     if argv[:1] == ["probe"]:                 # pass everything (incl. --help) through to the probe CLI
         from .probe.__main__ import main as probe_main
         return probe_main(argv[1:])

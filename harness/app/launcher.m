@@ -66,11 +66,26 @@
 //   alert is also rendered off screen, collapsed and expanded, to <dir>/dialog-<id>[-details].png.
 // - Restore feedback: after a restore the Backups window's status line says "Restored. Your save is now from <date>."
 //   or "The restore didn't happen: <reason>." (hook event {"kind":"backups_status"}), before Play or Quit.
+//
+// release-first-launch (openspec/changes/release-first-launch, design 1-3; tasks 2.3, 5.3):
+// - Release mode: a bundle without Resources/repo-path whose Resources/Moonglade/VERSION exists (the release-build
+//   payload inside Moonglade.app). The payload is found from the bundle itself (so moving the app or Gatekeeper
+//   translocation just works), the play loop is the payload's own Python: `python/bin/python3 -I -m hslib.play` (never
+//   a python3 from PATH, and PATH never names /opt/homebrew or /usr/local), and app.log / play-last.json live in HOME
+//   (~/Library/Application Support/Moonglade/logs and run). Dev mode (repo-path) is unchanged.
+// - Release test switches (HS_RELEASE_HOME, HS_RELEASE_PORTS, HS_RELEASE_DOWNLOAD_BASE, HS_FIRSTLAUNCH_TEST): passed to
+//   the play loop only with the test hook and --allow-test-release on the command line (the play loop then also needs
+//   a live harness run); otherwise the app refuses, naming them, and starts and writes nothing. HS_RELEASE_HOME must
+//   be below a .../harness/out/release-scratch/ folder. HS_APP_TEST_CLIENT_PICK is the app's own (the first-launch
+//   folder pick, honoured only with the test hook) and never reaches the play loop.
 #import <Cocoa/Cocoa.h>
 #import <objc/runtime.h>
 #include <signal.h>
 #include <fcntl.h>
 #include <unistd.h>
+#include <pwd.h>
+#include <limits.h>
+#include <stdlib.h>
 
 static NSString *const kHookEnv = @"HS_APP_TEST_HOOK";
 static NSString *const kDisableEnv = @"HS_APP_TEST_DISABLE";
@@ -80,6 +95,11 @@ static NSString *const kWindowNote = @"local.moonglade.window";
 static NSString *const kTestOptionEnv = @"HS_APP_TEST_OPTION";
 static NSString *const kTestBackupsEnv = @"HS_APP_TEST_BACKUPS";
 static NSString *const kTestTargetEnv = @"HS_APP_TEST_RESTORE_TARGET";
+static NSString *const kReleaseFlag = @"--allow-test-release";
+static NSString *const kClientPickEnv = @"HS_APP_TEST_CLIENT_PICK";
+static NSArray<NSString *> *ReleaseSwitches(void) {
+    return @[@"HS_RELEASE_HOME", @"HS_RELEASE_PORTS", @"HS_RELEASE_DOWNLOAD_BASE", @"HS_FIRSTLAUNCH_TEST"];
+}
 
 // The loading window's background, drawn in drawRect: so an off-screen render (snapshot) has it too.
 @interface HSBackgroundView : NSView
@@ -92,7 +112,12 @@ static NSString *const kTestTargetEnv = @"HS_APP_TEST_RESTORE_TARGET";
 @end
 
 @interface HSLauncher : NSObject <NSApplicationDelegate, NSWindowDelegate, NSTableViewDataSource, NSTableViewDelegate>
-@property(strong) NSString *repo;
+@property(strong) NSString *repo;                // dev: the checkout; release: the payload (realpath)
+@property BOOL releaseMode;
+@property(strong) NSString *home;                // where logs/ and run/ are (dev: the checkout; release: HOME)
+@property(strong) NSString *loopExe;             // dev: /bin/bash; release: the payload's python3
+@property(strong) NSArray<NSString *> *loopPrefix;   // dev: [<repo>/play]; release: [-I, -m, hslib.play]
+@property(strong) NSString *clientPick;          // release, test hook only: the scripted first-launch folder pick
 @property(strong) NSString *logPath;
 @property(strong) NSString *hookPath;
 @property(strong) NSTask *task;
@@ -457,22 +482,87 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
 
     NSString *repo = [self resource:@"repo-path"];
     NSString *play = [repo stringByAppendingPathComponent:@"play"];
-    if (repo.length == 0 || ![[NSFileManager defaultManager] isExecutableFileAtPath:play]) {
+    NSString *payload = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"Moonglade"];
+    NSFileManager *fm = [NSFileManager defaultManager];
+    self.releaseMode = repo.length == 0
+        && [fm fileExistsAtPath:[payload stringByAppendingPathComponent:@"VERSION"]];
+    NSArray *argv = NSProcessInfo.processInfo.arguments;
+    BOOL releaseFlag = [argv containsObject:kReleaseFlag];
+    // the release test switches (and the app's own folder pick): only a release app with the test hook and the test
+    // flag may pass them on; anything else (the dev app included) refuses before starting or writing anything
+    NSMutableArray *set = [NSMutableArray array];
+    for (NSString *k in [ReleaseSwitches() arrayByAddingObject:kClientPickEnv]) if ([penv[k] length]) [set addObject:k];
+    NSString *scratch = penv[@"HS_RELEASE_HOME"];
+    BOOL scratchOK = !scratch.length || ([scratch isAbsolutePath]
+                                          && [scratch rangeOfString:@"/harness/out/release-scratch/"].location != NSNotFound);
+    if (set.count && !(self.releaseMode && [self testMode] && releaseFlag && scratchOK)) {
+        NSString *why = [NSString stringWithFormat:@"%@ %@ test-only (the harness's release checks) and %@ refused "
+                         @"%@. Unset %@ and open Moonglade again.",
+                         [set componentsJoinedByString:@", "], set.count == 1 ? @"is" : @"are",
+                         set.count == 1 ? @"is" : @"are",
+                         !self.releaseMode ? @"by the dev app"
+                         : !scratchOK ? @"unless HS_RELEASE_HOME is below .../harness/out/release-scratch/"
+                         : [NSString stringWithFormat:@"without the test hook and %@", kReleaseFlag],
+                         set.count == 1 ? @"it" : @"them"];
+        if ([self testMode]) {
+            int fd = open(self.hookPath.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
+            NSDictionary *evs[2] = {@{@"kind": @"refused", @"switches": set, @"text": why, @"pid": @(getpid()),
+                                      @"bundle": [[NSBundle mainBundle] bundlePath], @"t": [self now]},
+                                    @{@"kind": @"exit", @"code": @2, @"pid": @(getpid()), @"t": [self now]}};
+            for (int i = 0; i < 2 && fd >= 0; i++) {
+                NSMutableData *d = [[NSJSONSerialization dataWithJSONObject:evs[i] options:NSJSONWritingSortedKeys
+                                                                     error:nil] mutableCopy];
+                [d appendBytes:"\n" length:1];
+                write(fd, d.bytes, d.length);
+            }
+            if (fd >= 0) close(fd);
+        } else {
+            NSAlert *a = [NSAlert new];
+            a.messageText = @"Moonglade can't start";
+            a.informativeText = why;
+            [a runModal];
+        }
+        exit(2);                                        // nothing started, nothing written (no app.log either)
+    }
+    if (self.releaseMode) {
+        char real[PATH_MAX];
+        repo = realpath(payload.fileSystemRepresentation, real) ? [fm stringWithFileSystemRepresentation:real
+                                                                   length:strlen(real)] : payload;
+        play = nil;
+        struct passwd *pw = getpwuid(getuid());
+        NSString *userHome = pw ? [fm stringWithFileSystemRepresentation:pw->pw_dir length:strlen(pw->pw_dir)]
+                                : NSHomeDirectory();
+        self.home = scratch.length ? scratch
+                  : [userHome stringByAppendingPathComponent:@"Library/Application Support/Moonglade"];
+        self.loopExe = [repo stringByAppendingPathComponent:@"python/bin/python3"];
+        self.loopPrefix = @[@"-I", @"-m", @"hslib.play"];
+        if (![fm isExecutableFileAtPath:self.loopExe]) {
+            [self dialog:@"payload_missing" title:@"Moonglade is incomplete"
+                    text:@"This copy of Moonglade is missing parts it needs. Download it again and replace this "
+                         @"copy.\n\nNo log was written."
+                   style:NSAlertStyleCritical showLog:NO];
+            [self finish:1];
+        }
+    } else if (repo.length == 0 || ![fm isExecutableFileAtPath:play]) {
         [self dialog:@"repo_missing" title:@"Moonglade can't find its folder"
                 text:[NSString stringWithFormat:@"This app runs the game from the Moonglade folder at\n%@\nbut that "
                       @"folder (or its `play` script) isn't there any more. If you moved the folder, rebuild the app "
                       @"from it with `harness/hs app`.\n\nNo log was written.", repo.length ? repo : @"(not recorded)"]
                style:NSAlertStyleCritical showLog:NO];
         [self finish:1];
+    } else {
+        self.home = repo;
+        self.loopExe = @"/bin/bash";
+        self.loopPrefix = @[play];
     }
     self.repo = repo;
-    NSString *logs = [repo stringByAppendingPathComponent:@"env/logs"];
+    NSString *logs = [self.home stringByAppendingPathComponent:self.releaseMode ? @"logs" : @"env/logs"];
     [[NSFileManager defaultManager] createDirectoryAtPath:logs withIntermediateDirectories:YES attributes:nil error:nil];
     self.logPath = [logs stringByAppendingPathComponent:@"app.log"];
     int fd = open(self.logPath.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
     if (fd >= 0) self.logHandle = [[NSFileHandle alloc] initWithFileDescriptor:fd closeOnDealloc:YES];
-    [self appLog:[NSString stringWithFormat:@"==== Moonglade.app pid %d from %@ (repo %@)", getpid(),
-                  [[NSBundle mainBundle] bundlePath], repo]];
+    [self appLog:[NSString stringWithFormat:@"==== Moonglade.app pid %d from %@ (%@ %@)", getpid(),
+                  [[NSBundle mainBundle] bundlePath], self.releaseMode ? @"release, payload" : @"repo", repo]];
     if ([self testMode]) {                             // test-only switches: never honoured without the test hook
         if ([penv[kDisableEnv] length])
             self.disabled = [NSSet setWithArray:[penv[kDisableEnv] componentsSeparatedByString:@","]];
@@ -480,22 +570,32 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
         if (self.disabled.count || self.snapshotDir)
             [self record:@{@"kind": @"test_switches", @"disabled": self.disabled.allObjects,
                            @"snapshot_dir": self.snapshotDir ?: [NSNull null]}];
+        if (self.releaseMode && [penv[kClientPickEnv] length]) self.clientPick = penv[kClientPickEnv];
     } else if ([penv[kDisableEnv] length] || [penv[kSnapshotEnv] length]) {
         [self appLog:@"ignoring HS_APP_TEST_DISABLE / HS_APP_SNAPSHOT_DIR: test-only, need the test hook"];
     }
+    if ([penv[kClientPickEnv] length] && !self.clientPick)
+        [self appLog:@"ignoring HS_APP_TEST_CLIENT_PICK: test-only, needs the test hook and a release app"];
     [[NSDistributedNotificationCenter defaultCenter] addObserver:self selector:@selector(gameWindowNote:)
                                                             name:kWindowNote object:repo
                                               suspensionBehavior:NSNotificationSuspensionBehaviorDeliverImmediately];
 
-    NSMutableArray *args = [NSMutableArray arrayWithObject:play];
-    NSArray *argv = NSProcessInfo.processInfo.arguments;
+    NSMutableArray *args = [NSMutableArray arrayWithArray:self.loopPrefix];
     for (NSUInteger i = 1; i < argv.count; i++)
         if (![argv[i] hasPrefix:@"-psn_"]) [args addObject:argv[i]];
 
     NSMutableDictionary *env = [NSProcessInfo.processInfo.environment mutableCopy];
-    NSString *pyDir = [self resource:@"python-dir"];
-    NSString *path = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
-    env[@"PATH"] = pyDir.length ? [NSString stringWithFormat:@"%@:%@", pyDir, path] : path;
+    if (self.releaseMode) {
+        // the payload's Python only (5.3): no Homebrew or /usr/local on PATH, nothing from PYTHON* (-I ignores them)
+        env[@"PATH"] = @"/usr/bin:/bin:/usr/sbin:/sbin";
+        if (!([self testMode] && releaseFlag))
+            for (NSString *k in ReleaseSwitches()) [env removeObjectForKey:k];
+    } else {
+        NSString *pyDir = [self resource:@"python-dir"];
+        NSString *path = @"/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin";
+        env[@"PATH"] = pyDir.length ? [NSString stringWithFormat:@"%@:%@", pyDir, path] : path;
+    }
+    [env removeObjectForKey:kClientPickEnv];           // the app's own switch, never the play loop's
     [env removeObjectForKey:kHookEnv];                 // the hook is the app's, not the play loop's
     [env removeObjectForKey:kDisableEnv];
     [env removeObjectForKey:kSnapshotEnv];
@@ -534,9 +634,9 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
     unsigned long long size = [[[NSFileManager defaultManager] attributesOfItemAtPath:self.logPath error:nil] fileSize];
     self.tailOffset = size;
     NSTask *t = [NSTask new];
-    t.executableURL = [NSURL fileURLWithPath:@"/bin/bash"];
+    t.executableURL = [NSURL fileURLWithPath:self.loopExe];
     t.arguments = args;
-    t.currentDirectoryURL = [NSURL fileURLWithPath:repo];
+    t.currentDirectoryURL = [NSURL fileURLWithPath:self.releaseMode ? self.home : repo];
     t.environment = env;
     t.standardInput = [NSFileHandle fileHandleWithNullDevice];
     t.standardOutput = self.logHandle ?: [NSFileHandle fileHandleWithNullDevice];
@@ -622,7 +722,8 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
 // ------------------------------------------------------------------ the play loop ended
 
 - (NSDictionary *)playRecord:(int)pid {
-    NSString *p = [self.repo stringByAppendingPathComponent:@"env/run/play-last.json"];
+    NSString *p = [self.home stringByAppendingPathComponent:self.releaseMode ? @"run/play-last.json"
+                                                                              : @"env/run/play-last.json"];
     NSData *d = [NSData dataWithContentsOfFile:p];
     NSDictionary *rec = d ? [NSJSONSerialization JSONObjectWithData:d options:0 error:nil] : nil;
     if (![rec isKindOfClass:[NSDictionary class]] || [rec[@"pid"] intValue] != pid) return nil;
@@ -974,19 +1075,20 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
 // ------------------------------------------------------------------ the Backups window (save-backups)
 
 - (NSArray *)backupsArgs:(NSArray *)extra {
-    NSMutableArray *a = [NSMutableArray arrayWithObjects:[self.repo stringByAppendingPathComponent:@"play"],
-                         @"--backups", nil];
+    NSMutableArray *a = [NSMutableArray arrayWithArray:self.loopPrefix];
+    [a addObject:@"--backups"];
     [a addObjectsFromArray:extra];
     [a addObject:@"--json"];
     if ([self.playArgs containsObject:@"--allow-test-client-dir"]) [a addObject:@"--allow-test-client-dir"];
+    if ([self.playArgs containsObject:kReleaseFlag]) [a addObject:kReleaseFlag];
     return a;
 }
 
 - (NSTask *)backupsTask:(NSArray *)extra pipe:(NSPipe *)pipe {
     NSTask *t = [NSTask new];
-    t.executableURL = [NSURL fileURLWithPath:@"/bin/bash"];
+    t.executableURL = [NSURL fileURLWithPath:self.loopExe];
     t.arguments = [self backupsArgs:extra];
-    t.currentDirectoryURL = [NSURL fileURLWithPath:self.repo];
+    t.currentDirectoryURL = [NSURL fileURLWithPath:self.releaseMode ? self.home : self.repo];
     t.environment = self.playEnv;
     t.standardInput = [NSFileHandle fileHandleWithNullDevice];
     t.standardOutput = pipe;

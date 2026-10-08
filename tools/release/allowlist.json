@@ -1,11 +1,11 @@
 {
-  "about": "Reviewed allowlist for embedded path strings in the release payload (openspec/changes/release-build, spec 'Relocatable payload'). Strings only: load commands, install names and LC_RPATHs are never allowlisted. Each entry: file glob (payload-relative), a regex the whole string must match, and the reason it is harmless. Regexes avoid spelling a home path literally so repo.portable stays clean.",
+  "about": "Reviewed allowlist for embedded path strings in the release payload (openspec/changes/release-build, spec 'Relocatable payload'). Strings only: load commands, install names and LC_RPATHs are never allowlisted. Each entry: file glob (payload-relative), a regex the whole string must match, and the reason it is harmless. Regexes avoid spelling a home path literally so repo.portable stays clean. {build_root} stands for the checkout the packaging run built in (escaped; release.py and release.no_abs_paths substitute it), so the build-tree defaults are accepted only for that folder (release-first-launch 5.1).",
   "entries": [
-    {"file": "server/bin/*", "match": "/.+/vendor/azerothcore-wotlk",
+    {"file": "server/bin/*", "match": "{build_root}/vendor/azerothcore-wotlk",
      "reason": "AzerothCore's compiled-in default for the SourceDirectory config key (revision.h _SOURCE_DIRECTORY = CMAKE_SOURCE_DIR); release mode sets SourceDirectory to the payload's sql/ folder (release-first-launch)"},
-    {"file": "server/bin/*", "match": "/.+/env/release/build/cmake",
+    {"file": "server/bin/*", "match": "{build_root}/env/release/build/cmake",
      "reason": "AzerothCore's compiled-in default for the BuildDirectory config key (revision.h _BUILD_DIRECTORY); informational only, never read at runtime"},
-    {"file": "server/bin/*", "match": "/.+/env/release/inputs/release-mysql-[0-9a-f]{12}/mysql-[0-9.]+-macos[0-9]+-arm64/bin/mysql",
+    {"file": "server/bin/*", "match": "{build_root}/env/release/inputs/release-mysql-[0-9a-f]{12}/mysql-[0-9.]+-macos[0-9]+-arm64/bin/mysql",
      "reason": "AzerothCore's compiled-in default for the MySQLExecutable config key (revision.h _MYSQL_EXECUTABLE); release mode sets MySQLExecutable to the payload's mysql/bin/mysql (release-first-launch)"},
     {"file": "server/bin/*", "match": "/opt/homebrew/bin/cmake",
      "reason": "AzerothCore's compiled-in default for the CMakeCommand config key (revision.h _CMAKE_COMMAND); informational only, never run"},

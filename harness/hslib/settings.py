@@ -26,7 +26,7 @@ from pathlib import Path
 
 from . import config, paths as P
 
-FILE = P.ENV / "settings.json"
+FILE = P.SETTINGS_FILE
 ENV = "HS_SETTINGS"
 
 # Moonglade's defaults, in one place (easy-setup "The same setup as Zach's"): bootstrap writes the settings-file ones

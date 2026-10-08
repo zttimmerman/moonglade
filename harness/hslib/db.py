@@ -3,7 +3,7 @@ import subprocess
 
 from . import paths as P
 
-MYSQL = P.BREW / "opt/mysql/bin/mysql"
+MYSQL = P.MYSQL                   # dev: Homebrew's; release: the payload's
 
 
 def client_cnf(root=False):

@@ -7,8 +7,16 @@ Everything is written under env/release/ (work dir; --work, --cache and --out mu
     env/release/cache/     pinned downloads (fork.lock release_*; harness/hslib/downloads.py verifies every byte)
     env/release/inputs/    unpacked inputs, one folder per pinned sha256
     env/release/build/     the portable server build (cmake tree build/cmake, install build/install, readline stub)
-    env/release/payload/Moonglade/   the release payload tree (what the zip holds)
+    env/release/payload/Moonglade.app/   the release app (what the zip holds; release-first-launch design 2):
+        Contents/MacOS/Moonglade          the prebuilt launcher (a copy of the payload's bin/Moonglade)
+        Contents/Info.plist               bundle id local.moonglade.release (release-signing picks the final one)
+        Contents/Resources/AppIcon.icns   branding/AppIcon.icns
+        Contents/Resources/Moonglade/     the payload (below)
     env/release/out/       the release assets: the zip, the source tarballs, SOURCES.json, SHA256SUMS
+
+A zip built anywhere but CI ($GITHUB_ACTIONS) carries this Mac's repo path in the server binaries (AzerothCore's
+compiled-in revision.h defaults), so it is labelled "local test build, not for publishing" in VERSION ("build") and in
+its file name; only CI-built zips are published.
 
 It never writes build/, server/, data/, client/, env/client-play, env/player.json, env/settings.json, env/backups or the
 live databases, never installs Homebrew packages, and reads vendor/ without changing it (--sync-vendor, for CI, runs
@@ -54,6 +62,11 @@ import delocate                       # noqa: E402
 RELEASE_DIR = ROOT / "env" / "release"
 DEPLOYMENT_TARGET = "26.0"
 PAYLOAD_NAME = "Moonglade"
+APP_NAME = "Moonglade.app"
+APP_PAYLOAD = Path("Contents") / "Resources" / PAYLOAD_NAME     # the payload's place inside the app
+RELEASE_BUNDLE_ID = "local.moonglade.release"                     # not the dev app's local.moonglade.app
+LOCAL_LABEL = "local test build, not for publishing"
+LOCAL_SUFFIX = "-local-test-build-not-for-publishing"
 MYSQL_KEEP_BIN = ("mysqld", "mysql", "mysqldump")
 MYSQL_KEEP_SHARE = ("english", "charsets")
 # python-build-standalone parts a release never uses (tk/tcl GUI, tests, pip, headers, the shared libpython that only
@@ -115,7 +128,10 @@ class Ctx:
         self.inputs = self.work / "inputs"
         self.build = self.work / "build"
         self.payload_parent = self.work / "payload"
-        self.payload = self.payload_parent / PAYLOAD_NAME
+        self.app = self.payload_parent / APP_NAME
+        self.payload = self.app / APP_PAYLOAD
+        self.ci = os.environ.get("GITHUB_ACTIONS") == "true"
+        self.build_root = ROOT.resolve()          # the checkout this packaging run builds from (allowlist anchor)
         self.jobs, self.jobs_why = power.resolve_jobs(a.jobs)
         self.ignore_power = a.ignore_power
         self.sync_vendor = a.sync_vendor
@@ -126,6 +142,7 @@ class Ctx:
 
     def record(self) -> dict:
         return {"work": str(self.work), "cache": str(self.cache), "out": str(self.out), "version": self.version,
+                "build_root": str(self.build_root), "ci": self.ci,
                 "jobs": {"n": self.jobs, "why": self.jobs_why}}
 
 
@@ -521,18 +538,22 @@ def step_payload(c: Ctx) -> dict:
         "core_tree_with_patches": trees["azerothcore"]["tree"],
         "playerbots_tree_with_patches": trees["mod-playerbots"]["tree"],
         "mysql": Path(c.lock["release_mysql_url"]).name, "python": Path(c.lock["release_python_url"]).name,
-        "deployment_target": DEPLOYMENT_TARGET}, indent=2) + "\n")
-    # the forbidden-path gate over the whole payload
-    g = delocate.gate(stage, delocate.load_allowlist(ALLOWLIST))
+        "deployment_target": DEPLOYMENT_TARGET,
+        "build": "ci" if c.ci else LOCAL_LABEL}, indent=2) + "\n")
+    # the forbidden-path gate over the whole payload; the build-tree allowlist entries are anchored to this run's
+    # checkout (release-first-launch 5.1)
+    g = delocate.gate(stage, delocate.load_allowlist(ALLOWLIST, c.build_root))
     (c.build / "gate.json").write_text(json.dumps(g, indent=2) + "\n")
     if g["problems"]:
         raise ReleaseError(f"forbidden paths in the payload ({len(g['problems'])}): {g['problems'][:8]}")
     rec["gate"] = {"macho_files": g["macho_files"], "allowlisted": len(g["allowlisted"])}
+    app = c.work / "payload.tmp" / APP_NAME
+    rec["app"] = wrap_app(stage, app)
     if c.payload_parent.exists():
         shutil.rmtree(c.payload_parent)
     c.payload_parent.mkdir(parents=True)
-    stage.rename(c.payload)
-    shutil.rmtree(stage.parent, ignore_errors=True)
+    app.rename(c.app)
+    shutil.rmtree(app.parent, ignore_errors=True)
     rec["payload"] = str(c.payload)
     rec["payload_bytes"] = sum(p.lstat().st_size for p in c.payload.rglob("*") if p.is_file())
     return rec
@@ -541,7 +562,45 @@ def step_payload(c: Ctx) -> dict:
 # ------------------------------------------------------------------------------------------------------ assets
 
 def zip_name(c: Ctx) -> str:
-    return f"Moonglade-{c.version}-macos-arm64.zip"
+    return f"Moonglade-{c.version}-macos-arm64{'' if c.ci else LOCAL_SUFFIX}.zip"
+
+
+def release_info_plist() -> dict:
+    """The release app's Info.plist. No "not for redistribution" line and no final bundle id yet (release-signing)."""
+    return {
+        "CFBundleDevelopmentRegion": "en",
+        "CFBundleDisplayName": "Moonglade",
+        "CFBundleExecutable": "Moonglade",
+        "CFBundleIconFile": "AppIcon",
+        "CFBundleIdentifier": RELEASE_BUNDLE_ID,
+        "CFBundleInfoDictionaryVersion": "6.0",
+        "CFBundleName": "Moonglade",
+        "CFBundlePackageType": "APPL",
+        "CFBundleShortVersionString": "0.1",
+        "CFBundleVersion": "1",
+        "LSApplicationCategoryType": "public.app-category.role-playing-games",
+        "LSMinimumSystemVersion": DEPLOYMENT_TARGET,
+        "NSHighResolutionCapable": True,
+    }
+
+
+def wrap_app(payload: Path, app: Path) -> dict:
+    """Moonglade.app around the payload: the payload moves to Contents/Resources/Moonglade, the prebuilt launcher is
+    copied to Contents/MacOS/Moonglade, plus Info.plist, PkgInfo and the icon."""
+    import plistlib
+    if app.exists():
+        shutil.rmtree(app)
+    contents = app / "Contents"
+    (contents / "MacOS").mkdir(parents=True)
+    (contents / "Resources").mkdir()
+    payload.rename(app / APP_PAYLOAD)
+    pl = app / APP_PAYLOAD
+    shutil.copy2(pl / "bin" / "Moonglade", contents / "MacOS" / "Moonglade")
+    with open(contents / "Info.plist", "wb") as f:
+        plistlib.dump(release_info_plist(), f, fmt=plistlib.FMT_XML, sort_keys=True)
+    (contents / "PkgInfo").write_text("APPL????")
+    shutil.copy2(pl / "branding" / "AppIcon.icns", contents / "Resources" / "AppIcon.icns")
+    return {"app": str(app), "bundle_id": RELEASE_BUNDLE_ID, "payload": str(APP_PAYLOAD)}
 
 
 def git_archive(repo: Path, ref: str, prefix: str, dst: Path) -> None:
@@ -557,6 +616,8 @@ def git_archive(repo: Path, ref: str, prefix: str, dst: Path) -> None:
 def step_assets(c: Ctx) -> dict:
     if not (c.payload / "VERSION").is_file():
         raise ReleaseError(f"no payload at {c.payload}; run the payload step first")
+    if c.ci != (json.loads((c.payload / "VERSION").read_text()).get("build") == "ci"):
+        raise ReleaseError("the payload's VERSION build label doesn't match this run (CI vs local); rebuild the payload")
     c.guard.check("the assets step (zip + source tarballs)")
     trees = patched_trees(c)
     if c.out.exists():
@@ -564,8 +625,8 @@ def step_assets(c: Ctx) -> dict:
     c.out.mkdir(parents=True)
     assets: dict[str, dict] = {}
     z = c.out / zip_name(c)
-    sh(["/usr/bin/ditto", "-c", "-k", "--keepParent", "--norsrc", "--noextattr", "--noqtn", c.payload, z])
-    assets[z.name] = {"what": "the Moonglade payload (macOS arm64)"}
+    sh(["/usr/bin/ditto", "-c", "-k", "--keepParent", "--norsrc", "--noextattr", "--noqtn", c.app, z])
+    assets[z.name] = {"what": "Moonglade.app (macOS arm64)" + ("" if c.ci else f"; {LOCAL_LABEL}")}
     # the Moonglade source at this commit (the tag in CI)
     head = sh(["git", "-C", ROOT, "rev-parse", "HEAD"]).stdout.strip()
     src = c.out / f"moonglade-{c.version}-source.tar.gz"

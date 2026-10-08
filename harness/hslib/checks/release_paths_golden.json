@@ -1,0 +1,518 @@
+{
+ "about": "release-first-launch task 1.1: the dev-mode path table (every name paths.py exported, layout() of both lanes, and the path constants of the modules moved onto the resolver) recorded from the parent commit f205d67 (HS_LANE=a and b, HS_WINE unset). <ROOT> = the checkout, <USERHOME> = the user's home. release.mode_resolution requires every entry to be unchanged in dev mode.",
+ "modules": {
+  "a": {
+   "app.APP": "<ROOT>/dist/Moonglade.app",
+   "app.DIST": "<ROOT>/dist",
+   "app.LOG": "<ROOT>/env/logs/app.log",
+   "app.TMP": "<ROOT>/env/app-build/tmp",
+   "backups.MYSQLDUMP": "/opt/homebrew/opt/mysql/bin/mysqldump",
+   "backups.PLAYER_ROOT": "<ROOT>/env/backups",
+   "bootstrap.BREWFILE": "<ROOT>/Brewfile",
+   "bootstrap.BREW_BIN": "/opt/homebrew/bin/brew",
+   "bootstrap.DB_MARKER": "<ROOT>/data/.hs-db-ready.json",
+   "bootstrap.HS": "<ROOT>/harness/hs",
+   "clientbuild.PLAY": "<ROOT>/env/client-play",
+   "clientbuild.QUEUE": "<ROOT>/patches/client",
+   "config.common()": {
+    "BindIP": "\"127.0.0.1\"",
+    "LogsDir": "\"<ROOT>/env/logs\"",
+    "MySQLExecutable": "\"/opt/homebrew/opt/mysql/bin/mysql\"",
+    "SourceDirectory": "\"<ROOT>/vendor/azerothcore-wotlk\"",
+    "TempDir": "\"<ROOT>/env/tmp\"",
+    "Updates.AutoSetup": "1"
+   },
+   "db.MYSQL": "/opt/homebrew/opt/mysql/bin/mysql",
+   "downloads.CLIENT_DATA": "<ROOT>/data/client-data",
+   "downloads.CLIENT_DATA_MARKER": "<ROOT>/data/client-data/.hs-client-data.json",
+   "downloads.PINS": {
+    "client-data": [
+     "client_data_url",
+     "client_data_sha256",
+     "<ROOT>/data/downloads/Data.zip",
+     false
+    ],
+    "ghidra": [
+     "ghidra_url",
+     "ghidra_sha256",
+     "<ROOT>/env/ghidra.zip",
+     false
+    ],
+    "release-mysql": [
+     "release_mysql_url",
+     "release_mysql_sha256",
+     "<ROOT>/env/release/cache/mysql.tar.gz",
+     true
+    ],
+    "release-mysql-source": [
+     "release_mysql_source_url",
+     "release_mysql_source_sha256",
+     "<ROOT>/env/release/cache/mysql-source.tar.gz",
+     true
+    ],
+    "release-python": [
+     "release_python_url",
+     "release_python_sha256",
+     "<ROOT>/env/release/cache/python.tar.gz",
+     true
+    ],
+    "release-python-licenses": [
+     "release_python_licenses_url",
+     "release_python_licenses_sha256",
+     "<ROOT>/env/release/cache/python-full.tar.zst",
+     true
+    ],
+    "vmangos": [
+     "vmangos_db_url",
+     "vmangos_db_sha256",
+     "<ROOT>/data/downloads/vmangos-db-sqlite.zip",
+     true
+    ],
+    "wine-runtime": [
+     "wowsilicon_runtime_url",
+     "wowsilicon_runtime_sha256",
+     "<ROOT>/env/wowsilicon-runtime.tar.xz",
+     false
+    ]
+   },
+   "downloads.RELEASE_CACHE": "<ROOT>/env/release/cache",
+   "launch.DOCK_TOKEN": "<ROOT>",
+   "launch.WINE": "<ROOT>/env/wowsilicon-r17/.wine-runtime/bin/wine",
+   "launch.WINESERVER": "<ROOT>/env/wowsilicon-r17/.wine-runtime/bin/wineserver",
+   "play.LAST": "<ROOT>/env/run/play-last.json",
+   "play.LOCK": "<ROOT>/env/run/play.lock",
+   "play.PLAYER_FILE": "<ROOT>/env/player.json",
+   "settings.ERA_CONF_DIST": "<ROOT>/server/etc/modules/mod_era_profile.conf.dist",
+   "settings.FILE": "<ROOT>/env/settings.json",
+   "stack.ERRLOG": {
+    "authserver": "<ROOT>/env/logs/authserver.err",
+    "worldserver": "<ROOT>/env/logs/worldserver.err"
+   },
+   "stack.LOG": {
+    "authserver": "<ROOT>/env/logs/authserver.out",
+    "mysqld": "<ROOT>/env/logs/mysqld.err",
+    "worldserver": "<ROOT>/env/logs/worldserver.out"
+   },
+   "stack.MYSQLADMIN": "/opt/homebrew/opt/mysql/bin/mysqladmin",
+   "stack.MYSQLD": "/opt/homebrew/opt/mysql/bin/mysqld",
+   "stack.MY_CNF": "<ROOT>/env/my.cnf",
+   "stack.PIDFILE": {
+    "authserver": "<ROOT>/env/run/authserver.pid",
+    "mysqld": "<ROOT>/env/run/mysqld.pid",
+    "worldserver": "<ROOT>/env/run/worldserver.pid"
+   },
+   "stack.PROFILE_FILE": "<ROOT>/env/run/stack-profile.json",
+   "stack.my_cnf_text": "[mysqld]\nbasedir=/opt/homebrew/opt/mysql\ndatadir=<ROOT>/data/mysql\nport=3307\nbind-address=127.0.0.1\nmysqlx=OFF\nsocket=<ROOT>/env/run/mysql.sock\npid-file=<ROOT>/env/run/mysqld.pid\nlog-error=<ROOT>/env/logs/mysqld.err\ninnodb_buffer_pool_size=512M\nperformance_schema=OFF\ninnodb_log_buffer_size=16M\nmax_connections=300\nskip-name-resolve\nmax_allowed_packet=64M\ndisable-log-bin\n",
+   "wineinst.MARKER": "<ROOT>/env/wowsilicon-r17/.hs-runtime-sha256",
+   "wineinst.RUNTIME_DIR": "<ROOT>/env/wowsilicon-r17"
+  },
+  "b": {
+   "app.APP": "<ROOT>/dist/Moonglade.app",
+   "app.DIST": "<ROOT>/dist",
+   "app.LOG": "<ROOT>/env/lanes/b/logs/app.log",
+   "app.TMP": "<ROOT>/env/app-build/tmp",
+   "backups.MYSQLDUMP": "/opt/homebrew/opt/mysql/bin/mysqldump",
+   "backups.PLAYER_ROOT": "<ROOT>/env/backups",
+   "bootstrap.BREWFILE": "<ROOT>/Brewfile",
+   "bootstrap.BREW_BIN": "/opt/homebrew/bin/brew",
+   "bootstrap.DB_MARKER": "<ROOT>/data/.hs-db-ready.json",
+   "bootstrap.HS": "<ROOT>/harness/hs",
+   "clientbuild.PLAY": "<ROOT>/env/client-play",
+   "clientbuild.QUEUE": "<ROOT>/patches/client",
+   "config.common()": {
+    "BindIP": "\"127.0.0.1\"",
+    "LogsDir": "\"<ROOT>/env/lanes/b/logs\"",
+    "MySQLExecutable": "\"/opt/homebrew/opt/mysql/bin/mysql\"",
+    "SourceDirectory": "\"<ROOT>/vendor/azerothcore-wotlk\"",
+    "TempDir": "\"<ROOT>/env/lanes/b/tmp\"",
+    "Updates.AutoSetup": "1"
+   },
+   "db.MYSQL": "/opt/homebrew/opt/mysql/bin/mysql",
+   "downloads.CLIENT_DATA": "<ROOT>/data/client-data",
+   "downloads.CLIENT_DATA_MARKER": "<ROOT>/data/client-data/.hs-client-data.json",
+   "downloads.PINS": {
+    "client-data": [
+     "client_data_url",
+     "client_data_sha256",
+     "<ROOT>/data/downloads/Data.zip",
+     false
+    ],
+    "ghidra": [
+     "ghidra_url",
+     "ghidra_sha256",
+     "<ROOT>/env/ghidra.zip",
+     false
+    ],
+    "release-mysql": [
+     "release_mysql_url",
+     "release_mysql_sha256",
+     "<ROOT>/env/release/cache/mysql.tar.gz",
+     true
+    ],
+    "release-mysql-source": [
+     "release_mysql_source_url",
+     "release_mysql_source_sha256",
+     "<ROOT>/env/release/cache/mysql-source.tar.gz",
+     true
+    ],
+    "release-python": [
+     "release_python_url",
+     "release_python_sha256",
+     "<ROOT>/env/release/cache/python.tar.gz",
+     true
+    ],
+    "release-python-licenses": [
+     "release_python_licenses_url",
+     "release_python_licenses_sha256",
+     "<ROOT>/env/release/cache/python-full.tar.zst",
+     true
+    ],
+    "vmangos": [
+     "vmangos_db_url",
+     "vmangos_db_sha256",
+     "<ROOT>/data/downloads/vmangos-db-sqlite.zip",
+     true
+    ],
+    "wine-runtime": [
+     "wowsilicon_runtime_url",
+     "wowsilicon_runtime_sha256",
+     "<ROOT>/env/wowsilicon-runtime.tar.xz",
+     false
+    ]
+   },
+   "downloads.RELEASE_CACHE": "<ROOT>/env/release/cache",
+   "launch.DOCK_TOKEN": "<ROOT>",
+   "launch.WINE": "<ROOT>/env/wowsilicon-r17/.wine-runtime/bin/wine",
+   "launch.WINESERVER": "<ROOT>/env/wowsilicon-r17/.wine-runtime/bin/wineserver",
+   "play.LAST": "<ROOT>/env/lanes/b/run/play-last.json",
+   "play.LOCK": "<ROOT>/env/lanes/b/run/play.lock",
+   "play.PLAYER_FILE": "<ROOT>/env/player.json",
+   "settings.ERA_CONF_DIST": "<ROOT>/server/etc/modules/mod_era_profile.conf.dist",
+   "settings.FILE": "<ROOT>/env/settings.json",
+   "stack.ERRLOG": {
+    "authserver": "<ROOT>/env/lanes/b/logs/authserver.err",
+    "worldserver": "<ROOT>/env/lanes/b/logs/worldserver.err"
+   },
+   "stack.LOG": {
+    "authserver": "<ROOT>/env/lanes/b/logs/authserver.out",
+    "mysqld": "<ROOT>/env/lanes/b/logs/mysqld.err",
+    "worldserver": "<ROOT>/env/lanes/b/logs/worldserver.out"
+   },
+   "stack.MYSQLADMIN": "/opt/homebrew/opt/mysql/bin/mysqladmin",
+   "stack.MYSQLD": "/opt/homebrew/opt/mysql/bin/mysqld",
+   "stack.MY_CNF": "<ROOT>/env/lanes/b/my.cnf",
+   "stack.PIDFILE": {
+    "authserver": "<ROOT>/env/lanes/b/run/authserver.pid",
+    "mysqld": "<ROOT>/env/lanes/b/run/mysqld.pid",
+    "worldserver": "<ROOT>/env/lanes/b/run/worldserver.pid"
+   },
+   "stack.PROFILE_FILE": "<ROOT>/env/lanes/b/run/stack-profile.json",
+   "stack.my_cnf_text": "[mysqld]\nbasedir=/opt/homebrew/opt/mysql\ndatadir=<ROOT>/env/lanes/b/mysql\nport=3317\nbind-address=127.0.0.1\nmysqlx=OFF\nsocket=<ROOT>/env/lanes/b/run/mysql.sock\npid-file=<ROOT>/env/lanes/b/run/mysqld.pid\nlog-error=<ROOT>/env/lanes/b/logs/mysqld.err\ninnodb_buffer_pool_size=512M\nperformance_schema=OFF\ninnodb_log_buffer_size=16M\nmax_connections=300\nskip-name-resolve\nmax_allowed_packet=64M\ndisable-log-bin\n",
+   "wineinst.MARKER": "<ROOT>/env/wowsilicon-r17/.hs-runtime-sha256",
+   "wineinst.RUNTIME_DIR": "<ROOT>/env/wowsilicon-r17"
+  }
+ },
+ "paths": {
+  "a": {
+   "AUTH_PORT": 3724,
+   "BOTS_PATCHES": "<ROOT>/patches/playerbots",
+   "BOTS_SRC": "<ROOT>/vendor/mod-playerbots",
+   "BREW": "/opt/homebrew",
+   "BUILD": "<ROOT>/build",
+   "CLIENT": "<ROOT>/client",
+   "CLIENT_DATA": "<ROOT>/data/client-data",
+   "CLIENT_MANIFEST": "<ROOT>/env/client-manifest.json",
+   "COMP_CHAR": "Hscomp",
+   "COMP_PASS": "hscomp",
+   "COMP_USER": "HSCOMP",
+   "CORE_SRC": "<ROOT>/vendor/azerothcore-wotlk",
+   "DATA": "<ROOT>/data",
+   "DB_NAMES": {
+    "auth": "acore_auth",
+    "characters": "acore_characters",
+    "playerbots": "acore_playerbots",
+    "world": "acore_world"
+   },
+   "DB_PASS": "acore",
+   "DB_USER": "acore",
+   "DOWNLOADS": "<ROOT>/data/downloads",
+   "ENV": "<ROOT>/env",
+   "GLOBAL_RUN": "<ROOT>/env/run",
+   "GM_PASS": "hsgm",
+   "GM_USER": "HS_GM",
+   "HARNESS": "<ROOT>/harness",
+   "HOST": "127.0.0.1",
+   "LANE": "a",
+   "LANES": [
+    "a",
+    "b"
+   ],
+   "LANES_DIR": "<ROOT>/env/lanes",
+   "LANE_ENV": "HS_LANE",
+   "LANE_ETC": "<ROOT>/server/etc",
+   "LANE_PORTS": {
+    "a": {
+     "auth": 3724,
+     "mysql": 3307,
+     "soap": 7878,
+     "world": 8085
+    },
+    "b": {
+     "auth": 3734,
+     "mysql": 3317,
+     "soap": 7888,
+     "world": 8095
+    }
+   },
+   "LANE_ROOT": "<ROOT>/env",
+   "LOGS": "<ROOT>/env/logs",
+   "MODULES": "<ROOT>/modules",
+   "MYSQL_DATA": "<ROOT>/data/mysql",
+   "MYSQL_PORT": 3307,
+   "MYSQL_TEMPLATE": null,
+   "MY_CNF": "<ROOT>/env/my.cnf",
+   "OUT": "<ROOT>/harness/out",
+   "PATCHES": "<ROOT>/patches/core",
+   "PLAYER_BACKUPS": "<ROOT>/env/backups",
+   "PLAYER_FILE": "<ROOT>/env/player.json",
+   "PLAYER_PLAY_CLIENT": "<ROOT>/env/client-play",
+   "RESULTS": "<ROOT>/harness/results.json",
+   "ROOT": "<ROOT>",
+   "RUN": "<ROOT>/env/run",
+   "RUN_REGISTRY": "<ROOT>/env/run/harness-runs",
+   "SERVER": "<ROOT>/server",
+   "SERVER_BIN": "<ROOT>/server/bin",
+   "SERVER_ETC": "<ROOT>/server/etc",
+   "SETTINGS_FILE": "<ROOT>/env/settings.json",
+   "SOAP_PORT": 7878,
+   "STACK_PORTS": [
+    3307,
+    3724,
+    8085,
+    7878
+   ],
+   "SUMMARY": "<ROOT>/harness/summary.md",
+   "TEST_CHAR": "Hstester",
+   "TEST_PASS": "hstest",
+   "TEST_USER": "HSTEST",
+   "TMP": "<ROOT>/env/tmp",
+   "VENDOR": "<ROOT>/vendor",
+   "WHISKY_LIBS": "<USERHOME>/Library/Application Support/com.isaacmarovitz.Whisky/Libraries",
+   "WINEPREFIX": "<ROOT>/env/wineprefix-mtld3d",
+   "WINE_BIN": "<ROOT>/env/wowsilicon-r17/.wine-runtime/bin",
+   "WINE_EXE": "wine",
+   "WINE_LAYER": "mtld3d",
+   "WINE_LAYERS": {
+    "mtld3d": {
+     "bin": "<ROOT>/env/wowsilicon-r17/.wine-runtime/bin",
+     "env": {
+      "DYLD_LIBRARY_PATH": "<ROOT>/env/wowsilicon-r17/.wine-runtime/lib/external",
+      "WINEDLLOVERRIDES": "d3d9=b",
+      "WINE_LARGE_ADDRESS_AWARE": "1"
+     },
+     "exe": "wine",
+     "prefix": "<ROOT>/env/wineprefix-mtld3d"
+    },
+    "whisky": {
+     "bin": "<USERHOME>/Library/Application Support/com.isaacmarovitz.Whisky/Libraries/Wine/bin",
+     "exe": "wine64",
+     "prefix": "<ROOT>/env/wineprefix"
+    },
+    "wine11": {
+     "bin": "<ROOT>/env/wine-11/Wine Stable.app/Contents/Resources/wine/bin",
+     "exe": "wine",
+     "prefix": "<ROOT>/env/wineprefix-wine11"
+    }
+   },
+   "WINE_LOG": "<ROOT>/env/logs/wine.log",
+   "WORLD_PORT": 8085,
+   "layout(a)": {
+    "etc": "<ROOT>/server/etc",
+    "lane": "a",
+    "logs": "<ROOT>/env/logs",
+    "my_cnf": "<ROOT>/env/my.cnf",
+    "mysql_data": "<ROOT>/data/mysql",
+    "mysql_template": null,
+    "ports": {
+     "auth": 3724,
+     "mysql": 3307,
+     "soap": 7878,
+     "world": 8085
+    },
+    "root": "<ROOT>/env",
+    "run": "<ROOT>/env/run",
+    "tmp": "<ROOT>/env/tmp",
+    "wineprefix": "<ROOT>/env/wineprefix-mtld3d"
+   },
+   "layout(b)": {
+    "etc": "<ROOT>/env/lanes/b/etc",
+    "lane": "b",
+    "logs": "<ROOT>/env/lanes/b/logs",
+    "my_cnf": "<ROOT>/env/lanes/b/my.cnf",
+    "mysql_data": "<ROOT>/env/lanes/b/mysql",
+    "mysql_template": "<ROOT>/env/lanes/b/template",
+    "ports": {
+     "auth": 3734,
+     "mysql": 3317,
+     "soap": 7888,
+     "world": 8095
+    },
+    "root": "<ROOT>/env/lanes/b",
+    "run": "<ROOT>/env/lanes/b/run",
+    "tmp": "<ROOT>/env/lanes/b/tmp",
+    "wineprefix": "<ROOT>/env/lanes/b/wineprefix-mtld3d"
+   }
+  },
+  "b": {
+   "AUTH_PORT": 3734,
+   "BOTS_PATCHES": "<ROOT>/patches/playerbots",
+   "BOTS_SRC": "<ROOT>/vendor/mod-playerbots",
+   "BREW": "/opt/homebrew",
+   "BUILD": "<ROOT>/build",
+   "CLIENT": "<ROOT>/client",
+   "CLIENT_DATA": "<ROOT>/data/client-data",
+   "CLIENT_MANIFEST": "<ROOT>/env/client-manifest.json",
+   "COMP_CHAR": "Hscomp",
+   "COMP_PASS": "hscomp",
+   "COMP_USER": "HSCOMP",
+   "CORE_SRC": "<ROOT>/vendor/azerothcore-wotlk",
+   "DATA": "<ROOT>/data",
+   "DB_NAMES": {
+    "auth": "acore_auth",
+    "characters": "acore_characters",
+    "playerbots": "acore_playerbots",
+    "world": "acore_world"
+   },
+   "DB_PASS": "acore",
+   "DB_USER": "acore",
+   "DOWNLOADS": "<ROOT>/data/downloads",
+   "ENV": "<ROOT>/env",
+   "GLOBAL_RUN": "<ROOT>/env/run",
+   "GM_PASS": "hsgm",
+   "GM_USER": "HS_GM",
+   "HARNESS": "<ROOT>/harness",
+   "HOST": "127.0.0.1",
+   "LANE": "b",
+   "LANES": [
+    "a",
+    "b"
+   ],
+   "LANES_DIR": "<ROOT>/env/lanes",
+   "LANE_ENV": "HS_LANE",
+   "LANE_ETC": "<ROOT>/env/lanes/b/etc",
+   "LANE_PORTS": {
+    "a": {
+     "auth": 3724,
+     "mysql": 3307,
+     "soap": 7878,
+     "world": 8085
+    },
+    "b": {
+     "auth": 3734,
+     "mysql": 3317,
+     "soap": 7888,
+     "world": 8095
+    }
+   },
+   "LANE_ROOT": "<ROOT>/env/lanes/b",
+   "LOGS": "<ROOT>/env/lanes/b/logs",
+   "MODULES": "<ROOT>/modules",
+   "MYSQL_DATA": "<ROOT>/env/lanes/b/mysql",
+   "MYSQL_PORT": 3317,
+   "MYSQL_TEMPLATE": "<ROOT>/env/lanes/b/template",
+   "MY_CNF": "<ROOT>/env/lanes/b/my.cnf",
+   "OUT": "<ROOT>/harness/out",
+   "PATCHES": "<ROOT>/patches/core",
+   "PLAYER_BACKUPS": "<ROOT>/env/backups",
+   "PLAYER_FILE": "<ROOT>/env/player.json",
+   "PLAYER_PLAY_CLIENT": "<ROOT>/env/client-play",
+   "RESULTS": "<ROOT>/harness/results.json",
+   "ROOT": "<ROOT>",
+   "RUN": "<ROOT>/env/lanes/b/run",
+   "RUN_REGISTRY": "<ROOT>/env/run/harness-runs",
+   "SERVER": "<ROOT>/server",
+   "SERVER_BIN": "<ROOT>/server/bin",
+   "SERVER_ETC": "<ROOT>/server/etc",
+   "SETTINGS_FILE": "<ROOT>/env/settings.json",
+   "SOAP_PORT": 7888,
+   "STACK_PORTS": [
+    3317,
+    3734,
+    8095,
+    7888
+   ],
+   "SUMMARY": "<ROOT>/harness/summary.md",
+   "TEST_CHAR": "Hstester",
+   "TEST_PASS": "hstest",
+   "TEST_USER": "HSTEST",
+   "TMP": "<ROOT>/env/lanes/b/tmp",
+   "VENDOR": "<ROOT>/vendor",
+   "WHISKY_LIBS": "<USERHOME>/Library/Application Support/com.isaacmarovitz.Whisky/Libraries",
+   "WINEPREFIX": "<ROOT>/env/lanes/b/wineprefix-mtld3d",
+   "WINE_BIN": "<ROOT>/env/wowsilicon-r17/.wine-runtime/bin",
+   "WINE_EXE": "wine",
+   "WINE_LAYER": "mtld3d",
+   "WINE_LAYERS": {
+    "mtld3d": {
+     "bin": "<ROOT>/env/wowsilicon-r17/.wine-runtime/bin",
+     "env": {
+      "DYLD_LIBRARY_PATH": "<ROOT>/env/wowsilicon-r17/.wine-runtime/lib/external",
+      "WINEDLLOVERRIDES": "d3d9=b",
+      "WINE_LARGE_ADDRESS_AWARE": "1"
+     },
+     "exe": "wine",
+     "prefix": "<ROOT>/env/wineprefix-mtld3d"
+    },
+    "whisky": {
+     "bin": "<USERHOME>/Library/Application Support/com.isaacmarovitz.Whisky/Libraries/Wine/bin",
+     "exe": "wine64",
+     "prefix": "<ROOT>/env/wineprefix"
+    },
+    "wine11": {
+     "bin": "<ROOT>/env/wine-11/Wine Stable.app/Contents/Resources/wine/bin",
+     "exe": "wine",
+     "prefix": "<ROOT>/env/wineprefix-wine11"
+    }
+   },
+   "WINE_LOG": "<ROOT>/env/lanes/b/logs/wine.log",
+   "WORLD_PORT": 8095,
+   "layout(a)": {
+    "etc": "<ROOT>/server/etc",
+    "lane": "a",
+    "logs": "<ROOT>/env/logs",
+    "my_cnf": "<ROOT>/env/my.cnf",
+    "mysql_data": "<ROOT>/data/mysql",
+    "mysql_template": null,
+    "ports": {
+     "auth": 3724,
+     "mysql": 3307,
+     "soap": 7878,
+     "world": 8085
+    },
+    "root": "<ROOT>/env",
+    "run": "<ROOT>/env/run",
+    "tmp": "<ROOT>/env/tmp",
+    "wineprefix": "<ROOT>/env/wineprefix-mtld3d"
+   },
+   "layout(b)": {
+    "etc": "<ROOT>/env/lanes/b/etc",
+    "lane": "b",
+    "logs": "<ROOT>/env/lanes/b/logs",
+    "my_cnf": "<ROOT>/env/lanes/b/my.cnf",
+    "mysql_data": "<ROOT>/env/lanes/b/mysql",
+    "mysql_template": "<ROOT>/env/lanes/b/template",
+    "ports": {
+     "auth": 3734,
+     "mysql": 3317,
+     "soap": 7888,
+     "world": 8095
+    },
+    "root": "<ROOT>/env/lanes/b",
+    "run": "<ROOT>/env/lanes/b/run",
+    "tmp": "<ROOT>/env/lanes/b/tmp",
+    "wineprefix": "<ROOT>/env/lanes/b/wineprefix-mtld3d"
+   }
+  }
+ },
+ "recorded_from": "f205d67"
+}

@@ -34,7 +34,7 @@ PINS = {
     "client-data": ("client_data_url", "client_data_sha256", P.DOWNLOADS / "Data.zip", False),
     "vmangos": ("vmangos_db_url", "vmangos_db_sha256", P.DOWNLOADS / "vmangos-db-sqlite.zip", True),
     "wine-runtime": ("wowsilicon_runtime_url", "wowsilicon_runtime_sha256",
-                     P.ENV / "wowsilicon-runtime.tar.xz", False),
+                     P.WINE_RUNTIME_ARCHIVE, False),
     "ghidra": ("ghidra_url", "ghidra_sha256", P.ENV / "ghidra.zip", False),
     # prebuilt-release inputs (openspec/changes/release-build): tools/release fetches them with cache=RELEASE_CACHE
     "release-mysql": ("release_mysql_url", "release_mysql_sha256", P.ENV / "release/cache/mysql.tar.gz", True),
@@ -142,7 +142,7 @@ def obtain(name: str, lock: dict | None = None, cache: Path | None = None) -> di
         return ev | {"path": c, "from": "downloaded (kept in the cache)", "delete_after": False}
     k = p["keep_path"]
     if k.is_file():
-        _verify_or_remove(k, p["sha256"], str(k.relative_to(P.ROOT)))
+        _verify_or_remove(k, p["sha256"], str(k.relative_to(P.HOME)) if k.is_relative_to(P.HOME) else str(k))
         return ev | {"path": k, "from": "kept", "delete_after": not p["keep"]}
     _download(p["url"], k)
     _verify_or_remove(k, p["sha256"], f"downloaded {p['file']}")
@@ -189,7 +189,7 @@ def install_client_data(lock: dict | None = None) -> dict:
     s = client_data_state(lock)
     if s["done"]:
         return s | {"installed": False, "reason": "already unpacked from the pinned zip"}
-    free = shutil.disk_usage(P.ROOT).free
+    free = shutil.disk_usage(P.HOME).free
     if free < 5 * 10**9:
         raise DownloadError(f"not enough free disk for the server data: {free / 1e9:.1f} GB free, need about 5 GB")
     got = obtain("client-data", lock)

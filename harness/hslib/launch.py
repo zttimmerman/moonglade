@@ -70,7 +70,7 @@ class LaunchError(RuntimeError):
 
 FROM_APP_ENV = "HS_FROM_APP"          # set by Moonglade.app (launcher.m) for its play loop
 APP_BUNDLE_ENV = "HS_APP_BUNDLE"      # the launcher's bundle path (for its icon)
-DOCK_TOKEN = str(P.ROOT)              # object of the launcher <-> shim distributed notifications
+DOCK_TOKEN = str(P.APP)               # object of the launcher <-> shim distributed notifications
 _dock_test = False                    # ./play --client-cmd (a test stand-in): the shim's test-only hooks may run
 
 
@@ -91,7 +91,7 @@ def dock_env() -> dict:
     app = os.environ.get(FROM_APP_ENV) == "1"
     bundle_icon = Path(os.environ.get(APP_BUNDLE_ENV, "")) / "Contents/Resources/AppIcon.icns"
     icon = bundle_icon if app and os.environ.get(APP_BUNDLE_ENV) and bundle_icon.is_file() \
-        else P.ROOT / "branding" / "AppIcon.icns"
+        else P.APP / "branding" / "AppIcon.icns"
     env = {"DYLD_INSERT_LIBRARIES": dockshim.ensure_built(),
            "HSDOCK_POLICY": pol["policy"] if app else "regular",
            "HSDOCK_NAME": "Moonglade", "HSDOCK_ICON": str(icon), "HSDOCK_LOG": str(dockshim.LOG),

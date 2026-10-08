@@ -161,7 +161,7 @@ def manifest_client_dir(client: Path) -> str:
     pre-rename project folder); absolute only for an install outside the repo."""
     c = Path(os.path.abspath(client))
     try:
-        return str(c.relative_to(Path(os.path.abspath(P.ROOT))))
+        return str(c.relative_to(Path(os.path.abspath(P.HOME))))
     except ValueError:
         return str(c)
 
@@ -296,7 +296,7 @@ def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> 
                 todo.append(rel)               # no trusted record of what's there: rewrite binaries
         full = len(todo) == len(members)
         to_write = sum(srcobj.size(r) for r in todo)
-        free = shutil.disk_usage(P.ROOT).free
+        free = shutil.disk_usage(P.HOME).free
         # A full-size client (the 3.3.5a enUS client is ~17.9 GB) needs 19 GB free; smaller
         # writes (repairs, test trees) need what they write plus 1 GB of headroom.
         need = max(MIN_FREE_FULL, to_write + MARGIN) if full and to_write >= 10 * 10**9 else to_write + MARGIN
@@ -391,7 +391,7 @@ def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> 
         "files_written": len(todo), "bytes_written": to_write, "seconds": round(time.time() - t0, 1),
         "source": manifest["source"], "wow_exe_version": manifest["wow_exe_version"],
         "binaries_sha256": binaries, "mpq_count": len(mpqs),
-        "disk_free_gb_after": round(shutil.disk_usage(P.ROOT).free / 1e9, 1),
+        "disk_free_gb_after": round(shutil.disk_usage(P.HOME).free / 1e9, 1),
         "version_ok": ver["file_version"] == EXPECTED_BUILD,
     }
     if ver["file_version"] != EXPECTED_BUILD:

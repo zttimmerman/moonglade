@@ -58,7 +58,7 @@ from pathlib import Path
 from . import launch, paths as P, stack
 
 LOCK = P.RUN / "play.lock"
-PLAYER_FILE = P.ENV / "player.json"
+PLAYER_FILE = P.PLAYER_FILE
 DEFAULT_PLAYER = "PLAYER"
 
 
@@ -607,6 +607,11 @@ def main(argv=None) -> int:
     if lane_why:
         say(lane_why)
         return EXIT_FAIL
+    rel_why = P.test_release_refusal(argv=argv)     # release-first-launch's test switches: refused before anything
+    if rel_why:
+        say(rel_why)
+        return EXIT_FAIL
+    argv = [a for a in argv if a != P.RELEASE_TEST_FLAG]
     from .lanes import TEST_ENV as LANE_TEST_ENV     # second-stack's scheduler test switches: never for ./play
     for var in LANE_TEST_ENV:
         if os.environ.get(var):
@@ -651,11 +656,12 @@ def main(argv=None) -> int:
             say(f"{var} is set: that's a test switch for the harness, not for playing. "
                 f"Unset it (`unset {var}`) and run ./play again.")
             return EXIT_FAIL
-    from .build import moved_problem
-    moved = moved_problem()                  # F30: the repo folder moved since the server was built
-    if moved:
-        say(f"Couldn't start: {moved['message']}")
-        return EXIT_FAIL
+    if P.MODE == "dev":
+        from .build import moved_problem
+        moved = moved_problem()              # F30: the repo folder moved since the server was built
+        if moved:
+            say(f"Couldn't start: {moved['message']}")
+            return EXIT_FAIL
     from . import backups
     try:                                     # save-backups: $HS_BACKUP_DIR & co. only with the test flag
         backup_plan = backups.plan(args)

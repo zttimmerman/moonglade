@@ -24,6 +24,7 @@ DYLIB = DIR / "hsdock.dylib"
 STAMP = DIR / "stamp.json"
 LOG = P.LOGS / "dockshim.log"
 ARCHS = ("x86_64", "arm64")
+RELEASE_DYLIB = P.APP / "bin" / "hsdock.dylib"       # release mode: prebuilt by tools/release
 
 
 class ShimBuildError(RuntimeError):
@@ -66,7 +67,12 @@ def build() -> dict:
 
 
 def ensure_built() -> str:
-    """Path of an up-to-date shim, building it if needed."""
+    """Path of an up-to-date shim, building it if needed. Release mode: the payload's prebuilt bin/hsdock.dylib (a
+    friend's Mac has no compiler), never built."""
+    if P.MODE == "release":
+        if not RELEASE_DYLIB.is_file():
+            raise ShimBuildError(f"the app's Wine host shim {RELEASE_DYLIB} is missing")
+        return str(RELEASE_DYLIB)
     if not up_to_date():
         build()
     return str(DYLIB)

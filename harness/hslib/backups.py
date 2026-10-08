@@ -49,7 +49,7 @@ from pathlib import Path
 
 from . import db, paths as P
 
-PLAYER_ROOT = P.ENV / "backups"
+PLAYER_ROOT = P.PLAYER_BACKUPS
 TEST_ROOT_ENV = "HS_BACKUP_DIR"
 TEST_FAIL_ENV = "HS_BACKUP_TEST_FAIL"
 TEST_FREE_ENV = "HS_BACKUP_TEST_FREE_BYTES"
@@ -61,7 +61,7 @@ KIND_LABEL = {"auto": "Automatic (on quit)", "before-restore": "Before restore (
 MIN_FREE_BYTES = 2 * 2**30                            # design.md: skip with a recorded failure below 2 GB free
 STATUS = ".last-backup.json"
 FORMAT = 1
-MYSQLDUMP = P.BREW / "opt/mysql/bin/mysqldump"
+MYSQLDUMP = P.MYSQLDUMP          # dev: Homebrew's; release: the payload's
 GZIP = "/usr/bin/gzip"
 _ID_RE = re.compile(r"^\d{8}-\d{6}-(auto|before-restore)$")
 INSERT_CHUNK = 1 << 20                                # bytes of row literals per INSERT statement
