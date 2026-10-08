@@ -694,7 +694,8 @@ def stack_from_payload(ctx):
         down = run_release(app, ["down"], env, prof, d, 300, log)
         dj = down["json"] or {}
         ev["down"] = {"rc": down["rc"], "worldserver": dj.get("worldserver"), "mysqld": dj.get("mysqld"),
-                      "remaining": dj.get("remaining")}
+                      "remaining": dj.get("remaining"), "stdout_tail": down["stdout_tail"][-300:],
+                      "log_tail": log.read_text(errors="replace")[-800:]}
         require(down["rc"] == 0 and (dj.get("worldserver") or {}).get("graceful") is True and dj.get("graceful") is True
                 and not dj.get("remaining"), "the stack didn't shut down gracefully", **ev)
         # counterexample: drop the AC_* module keys; the playerbots default (500 random bots -> ~50 accounts) shows

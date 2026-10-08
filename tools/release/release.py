@@ -28,7 +28,7 @@ The payload:
     server/bin/{authserver,worldserver}   rpath @executable_path/../lib; built with readline replaced by a stub
     server/lib/                           bundled dylibs (delocate.py), incl. Oracle's libmysqlclient
     server/etc/                           *.conf.dist (+ modules/)
-    mysql/                                Oracle MySQL: bin/{mysqld,mysql,mysqldump}, lib/ dylibs, share/{english,charsets}
+    mysql/                                Oracle MySQL: bin/{mysqld,mysql,mysqldump,mysqladmin}, lib/ dylibs, share/{english,charsets}
     python/                               python-build-standalone, pruned; site-packages/moonglade-harness.pth -> harness/
     harness/ play bootstrap patches/ client-mods/ branding/   the repo's tracked files
     sql/data/sql/{base,create,custom,updates} + sql/modules/<module>/data/sql   the DB updater's SourceDirectory
@@ -67,7 +67,7 @@ APP_PAYLOAD = Path("Contents") / "Resources" / PAYLOAD_NAME     # the payload's 
 RELEASE_BUNDLE_ID = "local.moonglade.release"                     # not the dev app's local.moonglade.app
 LOCAL_LABEL = "local test build, not for publishing"
 LOCAL_SUFFIX = "-local-test-build-not-for-publishing"
-MYSQL_KEEP_BIN = ("mysqld", "mysql", "mysqldump")
+MYSQL_KEEP_BIN = ("mysqld", "mysql", "mysqldump", "mysqladmin")   # mysqladmin: stack.mysql_down (release mode)
 MYSQL_KEEP_SHARE = ("english", "charsets")
 # python-build-standalone parts a release never uses (tk/tcl GUI, tests, pip, headers, the shared libpython that only
 # embedders need)
