@@ -740,7 +740,12 @@ def lane_preflight(ctx):
                 and lanes_of == {FALLBACK_B[0]: "b", **{i: "a" for i in FALLBACK_B[1:]}},
                 "mid-run: lane B didn't stop after its first check, or the rest didn't run in lane A", **ev)
         require(stop.get("before_check") == FALLBACK_B[1] and "pressure level 2" in (stop.get("reason") or "")
-                and "mid-run" in (ml.get("fallback") or ""), "mid-run: the stop isn't recorded with its reason", **ev)
+                and "mid-run" in (ml.get("fallback") or "") and ml.get("fallback_kind") == "midrun",
+                "mid-run: the stop isn't recorded with its reason", **ev)
+        rl = next((r for r in mid["doc"]["checks"] if r["id"] == "report.lanes"), {})
+        ev["midrun_report_lanes"] = {"status": rl.get("status"), "note": (rl.get("evidence") or {}).get("note")}
+        require(rl.get("status") == "pass" and "mid-run fallback" in (ev["midrun_report_lanes"]["note"] or ""),
+                "mid-run: report.lanes didn't pass with a fallback note", **ev)
         ev["lane_b_after"] = {"processes": _lane_pids("b"), "ports": _ports("b")}
         require(_b_clear(), "lane B is still running after the nested runs", **ev)
         return ev
@@ -800,11 +805,23 @@ def lanes_problems(doc: dict, wall_s: float, serial_ref: dict | None) -> tuple[l
         early = [i for i in post if b_end is not None and tl_a[i]["start"] < b_end]
         if early:
             probs.append(f"checks after the join started before lane B's last check ended: {early}")
-        if b.get("timed_out") or b.get("error") or b.get("rc") not in (0, None):
+        failed = bool(b.get("timed_out") or b.get("error") or b.get("rc") not in (0, None))
+        if failed:
             probs.append(f"lane B's worker failed (rc {b.get('rc')}, timed out {b.get('timed_out')}, error "
                          f"{str(b.get('error'))[:200]})")
+        # a mid-run memory/power stop is the designed fallback (spec: the remaining B checks run in A): a note, not a
+        # failure; checks moved to A without such a recorded reason (and without a worker failure) are unexplained
+        stop_reason = (b.get("stop") or {}).get("reason") or ""
+        recorded = stop_reason.startswith(("memory:", "power:"))
+        if to_a and recorded:
+            ev_note = f"mid-run fallback ({stop_reason}): {to_a} ran in lane A"
+        else:
+            ev_note = None
+        if to_a and not recorded and not failed:
+            probs.append(f"lane-B checks ran in lane A without a recorded fallback reason: {to_a}")
         ev |= {"b_wall_s": b.get("wall_s"), "b_rc": b.get("rc"), "b_timed_out": b.get("timed_out"),
-               "b_stop": b.get("stop"), "b_error": b.get("error"), "post_join_checks": len(post)}
+               "b_stop": b.get("stop"), "b_error": b.get("error"), "post_join_checks": len(post),
+               "note": ev_note}
     elif b_marked or ran:
         probs.append("a one-lane run has lane-B records")
     full = m.get("full_run") is True and m.get("tier") in ("full", "slow") and not m.get("filter")
@@ -819,13 +836,13 @@ def lanes_problems(doc: dict, wall_s: float, serial_ref: dict | None) -> tuple[l
                                 "saved_s": round(serial_ref["wall_s"] - wall_s, 1)}
     pf = ml.get("preflight") or {}
     if mode == 2:
-        missing = sorted(set(L.b_ids([REGISTRY[i] for i in ids], None)) - set(ran))
+        missing = sorted(set(L.b_ids([REGISTRY[i] for i in ids], None)) - set(ran) - set(to_a))
         if ml.get("forced"):
             probs.append("a full run used a forced lane-B set")
-        if missing or to_a:
-            probs.append(f"the preflight allowed lane B but it didn't run every LANE_B check "
-                         f"({ml.get('fallback')}); not in lane B: {missing or to_a}")
-        ev["full_run_rule"] = "evaluated: two-lane full run"
+        if missing:
+            probs.append(f"LANE_B checks neither run in lane B nor moved to lane A: {missing}")
+        ev["full_run_rule"] = ("evaluated: two-lane full run" + (f"; {ev.get('note')}" if ev.get("note") else
+                                                                 "; every LANE_B check ran in lane B"))
     elif ml.get("requested") == 1:
         ev["full_run_rule"] = "not evaluated: --lanes 1 (the serial reference)"
     elif pf and not pf.get("allowed"):
@@ -835,6 +852,29 @@ def lanes_problems(doc: dict, wall_s: float, serial_ref: dict | None) -> tuple[l
     return probs, ev
 
 
+def synthetic_lanes_cases() -> dict:
+    """lanes_problems on two synthetic unfiltered full-run documents (B planned: era.default_on, era.xp_curve):
+    (a) a mid-run pressure stop before era.xp_curve, which then ran in A -> no problem, with a note; (b) a killed
+    worker (rc -9, no stop reason) whose era.xp_curve ran in A -> a problem."""
+    b1, b2 = "era.default_on", "era.xp_curve"
+
+    def doc(b: dict) -> dict:
+        recs = [{"id": b1, "status": "pass", "lane": "b"}, {"id": b2, "status": "pass"}]
+        ml = {"mode": 2, "lanes": 2, "requested": None, "forced": None, "fallback": "x",
+              "assignment": {"b_planned": [b1, b2], "b_ran": [b1], "b_to_a": [b2]}, "preflight": {"allowed": True},
+              "barriers": {"joined_before": None}, "timeline_a": {b2: {"start": 20.0, "end": 21.0}},
+              "b": {"timeline": {b1: {"start": 1.0, "end": 2.0, "lane": "b"}}, "rc": 0, **b}}
+        return {"meta": {"full_run": True, "tier": "full", "filter": [], "lanes": ml}, "checks": recs}
+    a_probs, a_ev = lanes_problems(doc({"stop": {"reason": "memory: pressure level 2 (>= 2, warn)",
+                                                 "before_check": b2}}), 100.0, None)
+    k_probs, _ = lanes_problems(doc({"rc": -9, "stop": None}), 100.0, None)
+    out = {"a_midrun_pressure_stop": {"problems": a_probs, "note": a_ev.get("note")},
+           "b_killed_worker_no_reason": {"problems": k_probs}}
+    out["verdict"] = {"a_passes_with_note": not a_probs and bool(a_ev.get("note")),
+                      "b_fails": any("worker failed" in p for p in k_probs)}
+    return out
+
+
 def lanes_record(doc: dict, wall_s: float) -> dict:
     t0 = time.time()
     try:
@@ -842,6 +882,9 @@ def lanes_record(doc: dict, wall_s: float) -> dict:
     except Exception as e:  # noqa: BLE001
         ref = {"error": f"{type(e).__name__}: {e}"}
     probs, ev = lanes_problems(doc, wall_s, ref)
+    syn = synthetic_lanes_cases()
+    ev["synthetic"] = syn
+    probs += [f"synthetic case {k} has the wrong verdict" for k, ok in syn["verdict"].items() if not ok]
     ok = not probs
     return {"id": "report.lanes", "capability": CAP, "status": "pass" if ok else "fail",
             "evidence": ev | {"problems": probs}, "duration_s": round(time.time() - t0, 2),

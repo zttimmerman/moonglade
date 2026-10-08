@@ -431,6 +431,7 @@ def schedule(selected: list, ctx: dict, slow_skips, gui_skips, bk_skips, guard, 
                 "start_after_order_below": START_ORDER, "join_before": f"order >= {JOIN_ORDER}, gui, app.*, "
                                                                        f"order >= {PROTECT_ORDER}"},
             "assignment": {"b_planned": [], "b_ran": [], "b_to_a": []}, "preflight": None, "fallback": None,
+            "fallback_kind": None,     # preflight | midrun | timeout | worker_failed (the Phase 2 gate counts these)
             "b": None}
     if n == 1:
         meta["fallback"] = "--lanes 1" if requested == 1 else "one lane by default for this run"
@@ -485,6 +486,7 @@ def schedule(selected: list, ctx: dict, slow_skips, gui_skips, bk_skips, guard, 
             meta["ensure_ready"] = lanestack.ensure_ready()
         except Exception as e:  # noqa: BLE001  (no lane B: serial, with the reason)
             meta["fallback"] = f"lane B isn't ready: {type(e).__name__}: {e}"[:500]
+            meta["fallback_kind"] = "not_ready"
         if not meta["fallback"]:
             timeout = float(switches.get(TIMEOUT_ENV) or WORKER_TIMEOUT_S)
             spec = {"tier": tier, "force_clean": bool(ctx.get("force_clean")), "memory_stub": switches.get(MEMORY_ENV),
@@ -497,6 +499,7 @@ def schedule(selected: list, ctx: dict, slow_skips, gui_skips, bk_skips, guard, 
             say(f"lane B: started a worker (pid {worker.proc.pid}) for {len(planned)} check(s): {', '.join(planned)}")
     else:
         meta["fallback"] = "preflight: " + "; ".join(pf["reasons"])
+        meta["fallback_kind"] = "preflight"
         say(f"lane B not used ({meta['fallback']}); running every check in lane A")
     if worker is None:
         meta["assignment"]["b_to_a"] = list(planned)          # every planned lane-B check runs in lane A
@@ -533,9 +536,12 @@ def schedule(selected: list, ctx: dict, slow_skips, gui_skips, bk_skips, guard, 
     if left and not meta["fallback"]:
         if st.get("stop"):
             meta["fallback"] = f"mid-run: {st['stop'].get('reason')}; {len(left)} lane-B check(s) ran in lane A"
+            meta["fallback_kind"] = "midrun"
         elif j["timed_out"]:
             meta["fallback"] = f"worker timed out; {len(left)} lane-B check(s) ran in lane A"
+            meta["fallback_kind"] = "timeout"
         else:
+            meta["fallback_kind"] = "worker_failed"
             meta["fallback"] = (f"worker failed (rc {j['rc']}{', ' + str(st.get('error'))[:200] if st.get('error') else ''}); "
                                 f"{len(left)} lane-B check(s) ran in lane A")
     if j["rc"] != 0 and not j["timed_out"] and lane_b_running():
@@ -570,6 +576,8 @@ def summary_line(meta: dict) -> str:
         b = ml.get("b") or {}
         a = ml.get("assignment") or {}
         return (f"- Lanes: 2 (lane B ran {len(a.get('b_ran') or [])} check(s) in {b.get('wall_s')} s"
-                + (f"; {len(a.get('b_to_a') or [])} moved to lane A: {ml.get('fallback')}" if a.get("b_to_a") else "")
+                + (f"; FALLBACK ({ml.get('fallback_kind')}): {len(a.get('b_to_a') or [])} moved to lane A: "
+                   f"{ml.get('fallback')}" if a.get("b_to_a") else "")
                 + ")")
-    return f"- Lanes: 1 ({ml.get('fallback')})"
+    return (f"- Lanes: 1 ({'FALLBACK (' + ml['fallback_kind'] + '): ' if ml.get('fallback_kind') else ''}"
+            f"{ml.get('fallback')})")
