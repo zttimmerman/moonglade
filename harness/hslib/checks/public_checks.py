@@ -190,7 +190,7 @@ def scrub_selftest(denylist: Path | None) -> dict:
 @check("public.tree_scrub", order=7, capability=CAP, stack="any", tier="quick")
 def public_tree_scrub(ctx, denylist: Path | None = None):
     """Every tracked file (staged blob and path) is free of the built-in patterns (non-noreply emails, home paths,
-    Claude Code session URLs, private-repo / never-redistributed claims) and of every local denylist line; a
+    Claude Code session URLs, claims that the repo is private or never shared) and of every local denylist line; a
     planted denylist entry and home path in a temporary index are both reported with file and line; a missing or
     empty denylist is an error, never a pass."""
     res = S.scan_tree(P.ROOT, denylist)            # DenylistError -> the check errors (fail-closed)
@@ -393,8 +393,8 @@ def public_history_dryrun(ctx, denylist: Path | None = None, rewrite_cmd: list |
                                             "by_kind")}
         ev["after_hits"] = post["hits"][:40]
         msgs = _g(mirror, "log", "--all", "--format=%H%x00%B%x1e")
-        old_msgs = [m.split("\0")[0][:12] for m in msgs.split("\x1e") if re.search(OLD_NAME, m, re.I)]
-        trailer_msgs = [m.split("\0")[0][:12] for m in msgs.split("\x1e") if "Claude-Session" in m]
+        old_msgs = [m.strip().split("\0")[0][:12] for m in msgs.split("\x1e") if re.search(OLD_NAME, m, re.I)]
+        trailer_msgs = [m.strip().split("\0")[0][:12] for m in msgs.split("\x1e") if "Claude-Session" in m]
         emails = sorted(set(_g(mirror, "log", "--all", "--format=%ae%n%ce").split()))
         paths = {ln.partition(" ")[2] for ln in _g(mirror, "rev-list", "--all", "--objects").splitlines()}
         dropped_left = sorted(p for p in paths if re.search(r"(^|/)__pycache__(/|$)|\.pyc$|^docs/research/img(/|$)", p))

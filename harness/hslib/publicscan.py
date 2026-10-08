@@ -4,7 +4,7 @@ Two scans share one pattern set:
 - the tracked tree (every entry of a git index, read from its staged blob): built-in patterns (personal and wording)
   plus every line of the local denylist;
 - the full history of a repo (every commit and tag object reachable from any ref, every reachable blob and every path
-  name): the personal built-in patterns plus the denylist. Wording patterns ("private repo") are tree-only: old
+  name): the personal built-in patterns plus the denylist. Wording patterns (claims that the repo is private or never shared) are tree-only: old
   versions of a document may say what was true then.
 
 The denylist (`env/public-denylist.txt`, untracked, 0600) holds one literal string per line, matched
@@ -66,9 +66,13 @@ def builtin_patterns() -> list[tuple[str, str, re.Pattern]]:
     return [
         ("home path", "personal", re.compile(re.escape(_USERS).encode() + rb"(?!Shared/)[A-Za-z0-9._-]+/")),
         ("claude session link", "personal", re.compile(_SESSION.encode())),
-        ("private-repo claim", "wording", re.compile(rb"(?i)private[ -]repo")),
-        ("never-redistributed claim", "wording", re.compile(rb"(?i)never[ -]+redistribut")),
+        ("private-visibility claim", "wording", re.compile(rb"(?i)private[ -]repo")),
+        ("no-redistribution claim", "wording", re.compile(rb"(?i)never[ -]+redistribut")),
     ]
+
+
+def kind_of(label: str) -> str:
+    return next((k for lab, k, _ in builtin_patterns() if lab == label), "personal")
 
 
 # Tracked paths where a *wording* pattern may appear, with the reason. Personal patterns and the denylist have no
@@ -162,7 +166,7 @@ def scan_tree(root: Path | None = None, denylist: Path | None = None, *, env: di
     for rel, sha in entries:
         by_sha.setdefault(sha, []).append(rel)
         for label, _ in find_hits(rel.encode(), pats):
-            if label in ("private-repo claim", "never-redistributed claim") and _wording_allowed(rel):
+            if kind_of(label) == "wording" and _wording_allowed(rel):
                 continue
             hits.append({"file": rel, "line": 0, "pattern": label + " (in the path)"})
     blobs = {sha: data for sha, _typ, data in _cat_batch(root, list(by_sha), env)}
@@ -173,7 +177,7 @@ def scan_tree(root: Path | None = None, denylist: Path | None = None, *, env: di
             p = root / rel
             data = p.read_bytes() if p.is_file() and not p.is_symlink() else blobs[sha]
             for label, line in find_hits(data, pats):
-                if label in ("private-repo claim", "never-redistributed claim"):
+                if kind_of(label) == "wording":
                     why = _wording_allowed(rel)
                     if why:
                         allowed[why] = allowed.get(why, 0) + 1
