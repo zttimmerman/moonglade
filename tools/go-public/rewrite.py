@@ -9,7 +9,7 @@ What it does, on every ref of the target:
 - author and committer emails that aren't already a noreply address -> NOREPLY (Zach's GitHub noreply address);
 - commit and tag messages: `Claude-Session:` trailer lines (and any other Claude Code session URL) removed, the old
   project name -> Moonglade (case kept), every denylist string -> [redacted];
-- every blob: every denylist string (case-insensitive) -> [redacted];
+- every blob: every Claude Code session URL and every denylist string (case-insensitive) -> [redacted];
 - paths dropped from all history: any `__pycache__/` folder, `*.pyc`, `docs/research/img/`.
 
 It refuses, before changing anything, unless the target is a bare repository that isn't this checkout's own git
@@ -113,7 +113,7 @@ def run(target: Path, denylist: Path | None = None) -> None:
     import git_filter_repo as fr
 
     def blob_cb(blob, _meta):
-        blob.data = redact(blob.data, deny)
+        blob.data = redact(SESSION_URL_RX.sub(S.REDACTED, blob.data), deny)
 
     def filename_cb(name):
         return None if DROP_PATH_RX.search(name) else name
