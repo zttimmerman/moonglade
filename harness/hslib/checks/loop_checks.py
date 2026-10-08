@@ -578,6 +578,7 @@ def orphans_healed(ctx):
     d = _scratch("orphans")
     victim = None
     play_pids: list[int] = []
+    victim_play_cmds: list[str] = []
     s = None
     try:
         # ---- A: a harness run killed mid-run
@@ -596,6 +597,7 @@ def orphans_healed(ctx):
             if ready["play"]:
                 os.kill(victim.pid, signal.SIGSTOP)      # it must not stop its stand-in before the kill
                 play_pids = [o["pid"] for o in ready["play"]]
+                victim_play_cmds = [o["cmd"] for o in ready["play"]]
             if ready["play"] and ready["stand_in"] and ready["worldserver"]:
                 break
             time.sleep(0.5)
@@ -626,13 +628,6 @@ def orphans_healed(ctx):
         require(not heal.get("remaining") and not ev["victim_tagged_after"] and is_clear(ev["remaining_after_heal"]),
                 "the killed run's processes weren't all stopped", **ev)
         require(not any(x.get("id") == rid for x in runreg.records()), "the killed run's run file wasn't removed", **ev)
-        # the victim's stand-in temp dir (its ./play's --client-cmd)
-        for o in found_play:
-            parts = o["cmd"].split()
-            if "--client-cmd" in parts:
-                sd = Path(parts[parts.index("--client-cmd") + 1]).parent
-                if sd.name.startswith("hs-play-") and sd.parent == Path(tempfile.gettempdir()).resolve():
-                    shutil.rmtree(sd, ignore_errors=True)
 
         # ---- B: a ./play no harness run started, while another killed run is healed
         s = StandIn("outside")
@@ -702,4 +697,11 @@ def orphans_healed(ctx):
         for x in runreg.dead_runs():                  # never leave a run file of ours behind
             if x.get("pid") in ((victim.pid if victim else None),):
                 Path(x["file"]).unlink(missing_ok=True)
+        # the victim's stand-in temp dir (its ./play's --client-cmd; its check never got to clean it up)
+        for cmd in victim_play_cmds:
+            parts = cmd.split()
+            if "--client-cmd" in parts:
+                sd = Path(parts[parts.index("--client-cmd") + 1]).parent
+                if sd.name.startswith("hs-play-") and sd.parent == Path(tempfile.gettempdir()).resolve():
+                    shutil.rmtree(sd, ignore_errors=True)
         shutil.rmtree(d, ignore_errors=True)
