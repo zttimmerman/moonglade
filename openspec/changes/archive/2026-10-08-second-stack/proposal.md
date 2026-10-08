@@ -17,3 +17,6 @@ A full harness run takes 36–48 min, and about 88% of it needs the one server s
 harness/hslib (paths, stack, config, db, launch, procs, runreg, runner, play, nightly, new lanes.py/lane.py), cli, some checks' GIVENs (lane-aware), timing baseline (lane-mode label). No game data, no client changes.
 
 ## Spec-change log
+
+- 2026-10-08 (verifier note): `report.timing` compares a two-lane run only with a two-lane baseline (`checks_lanes2`), so the first two-lane full run is "not evaluated". The ≤110% guard is unchanged for serial runs. Reason: two-lane per-check times include contention and aren't comparable with serial times. The baseline was joined from the verified run (bf778b0) before merge, so later runs are evaluated. This is a temporary loosening for one run; review it at the next human gate.
+- 2026-10-08: `comp.*` and `report.tiers` were left out of LANE_B (design.md "As built: scheduler"). The expected saving drops from ADR-0011's ~10 min to ~6–7 min. Follow-up: a populated lane-B template.
