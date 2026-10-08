@@ -219,7 +219,7 @@ def common(logs: Path = P.LOGS, tmp: Path = P.TMP, source: Path = P.SQL_SOURCE) 
         "MySQLExecutable": f'"{P.MYSQL}"',
         "BindIP": '"127.0.0.1"',
         "Updates.AutoSetup": "1",
-    }
+    } | ({"Updates.ArchivedRedundancy": "0"} if P.MODE == "release" else {})   # release: archive/ holds names only
 
 
 LANE_ENV_FILE = "ac-env.json"      # lane B: the AC_* variables stack._spawn gives the worldserver (in P.LANE_ETC)

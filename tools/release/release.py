@@ -356,6 +356,30 @@ def patched_trees(c: Ctx) -> dict:
     return out
 
 
+def archive_placeholders(tree: str, sql: Path) -> int:
+    """Empty files named like AzerothCore's data/sql/archive/<db>/*.sql (release-first-launch task 2.2).
+
+    The base databases list every archived update as applied with state ARCHIVED and updates_include names the archive
+    folders (data/sql/base/db_*/updates*.sql). DBUpdater (UpdateFetcher::Update) skips a file that is ARCHIVED both on
+    disk and in the database without reading it (Updates.ArchivedRedundancy = 0, release mode pins it), but a file it
+    can't find at all is a "dead reference": 2,200 warnings and a "Cleanup is disabled" error on every start. The real
+    archive is 213 MB (the zip must stay under 200 MB), so the release ships the names only; the AzerothCore source
+    asset holds the files."""
+    names = sh(["git", "-C", P.CORE_SRC, "ls-tree", "-r", "--name-only", tree, "data/sql/archive"]).stdout.split()
+    n = 0
+    for f in names:
+        if f.endswith(".sql"):
+            dst = sql / f
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            dst.write_bytes(b"")
+            n += 1
+    (sql / "data/sql/archive/README.md").write_text(
+        "Names only: these files are empty on purpose. The databases mark every one of them as an archived update "
+        "that is already applied, so the server never reads them; the full files are in the AzerothCore source "
+        "asset of this release (tools/release/release.py archive_placeholders).\n")
+    return n
+
+
 def build_app_binaries(c: Ctx, dst: Path) -> dict:
     """The launcher (harness/app/launcher.m) and the Wine host shim (harness/app/dockshim.m), compiled like
     hslib/app.py and hslib/dockshim.py do, into the payload's bin/."""
@@ -526,7 +550,8 @@ def step_payload(c: Ctx) -> dict:
                               sql / "modules" / "mod-playerbots")
     ours = sorted({"/".join(f.split("/")[:4]) for f in tracked(("modules",)) if f.split("/")[2:4] == ["data", "sql"]})
     n_ours = git_tree_extract(ROOT, head, tuple(ours), sql) if ours else 0
-    rec["sql_files"] = {"core": n_core, "mod-playerbots": n_bots, "ours": n_ours}
+    rec["sql_files"] = {"core": n_core, "mod-playerbots": n_bots, "ours": n_ours,
+                        "archive_placeholders": archive_placeholders(trees["azerothcore"]["tree"], sql)}
     # prebuilt launcher + Wine host shim
     rec["app"] = build_app_binaries(c, stage / "bin")
     # licences
