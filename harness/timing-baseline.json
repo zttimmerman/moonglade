@@ -735,6 +735,55 @@
    "s": 0.03,
    "status_in_run": "pass"
   },
+  "power.bootstrap_resume": {
+   "build_s": 0.0,
+   "duration_s": 0.26,
+   "run": "power-guard",
+   "s": 0.26,
+   "status_in_run": "pass"
+  },
+  "power.jobs_default": {
+   "build_s": 0.0,
+   "duration_s": 0.2,
+   "run": "power-guard",
+   "s": 0.2,
+   "status_in_run": "pass"
+  },
+  "power.jobs_override": {
+   "build_s": 0.0,
+   "duration_s": 0.38,
+   "run": "power-guard",
+   "s": 0.38,
+   "status_in_run": "pass"
+  },
+  "power.pause_resume": {
+   "build_s": 0.0,
+   "duration_s": 0.2,
+   "run": "power-guard",
+   "s": 0.2,
+   "status_in_run": "pass"
+  },
+  "power.run_pause": {
+   "build_s": 0.0,
+   "duration_s": 3.56,
+   "run": "power-guard",
+   "s": 3.56,
+   "status_in_run": "pass"
+  },
+  "power.stop_low": {
+   "build_s": 0.0,
+   "duration_s": 0.92,
+   "run": "power-guard",
+   "s": 0.92,
+   "status_in_run": "pass"
+  },
+  "power.switch_refusal": {
+   "build_s": 0.0,
+   "duration_s": 0.86,
+   "run": "power-guard",
+   "s": 0.86,
+   "status_in_run": "pass"
+  },
   "re.ghidra_installed": {
    "build_s": 0.0,
    "duration_s": 0.19,
@@ -925,6 +974,24 @@
   "python": "3.14.7"
  },
  "runs": {
+  "power-guard": {
+   "finished": "2026-10-08T12:34:05+00:00",
+   "machine": "arm64",
+   "repo_sha": "8919c09b0dfbff0d5bda7e6f5601b232dc488922",
+   "source": "harness/out/last-full-run/results.json",
+   "started": "2026-10-08T11:46:18+00:00",
+   "used_for": [
+    "power.bootstrap_resume",
+    "power.jobs_default",
+    "power.jobs_override",
+    "power.pause_resume",
+    "power.run_pause",
+    "power.stop_low",
+    "power.switch_refusal"
+   ],
+   "wall_s": 2868.0,
+   "why": "checks new with this change"
+  },
   "save-backups-verifier2": {
    "finished": "2026-10-06T18:30:59+00:00",
    "machine": "arm64",

@@ -598,6 +598,13 @@ def _parse(argv):
 
 def main(argv=None) -> int:
     argv = sys.argv[1:] if argv is None else argv
+    # power-guard's test switches are never for ./play or the app (which runs ./play): refused first, before anything
+    from .power import TEST_ENV as POWER_TEST_ENV
+    for var in POWER_TEST_ENV:
+        if os.environ.get(var):
+            say(f"{var} is set: that's a test switch for the harness, not for playing. "
+                f"Unset it (`unset {var}`) and run ./play again.")
+            return EXIT_FAIL
     if "--backups" in argv:                 # save-backups: list / restore (backups.cli), never a play session
         from . import backups
         return backups.cli([a for a in argv if a != "--backups"])

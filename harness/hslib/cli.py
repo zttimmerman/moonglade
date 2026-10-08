@@ -23,7 +23,10 @@ def main(argv=None) -> int:
                    help="clean build: from-empty if the build inputs changed since the last passing from-empty build "
                         "(or no stamp), else prove the install is current (stamp + no-op incremental build)")
     b.add_argument("--force-clean", action="store_true", help="always wipe build/ and build from empty")
-    b.add_argument("-j", "--jobs", type=int, default=8)
+    b.add_argument("-j", "--jobs", type=int, default=None,
+                   help="compile jobs (default: this Mac's performance cores, never all cores; power-guard)")
+    b.add_argument("--ignore-power", action="store_true",
+                   help="don't pause the build on low battery (the guard pauses below 35 %% until 50 %%)")
 
     u = sub.add_parser("up", help="start mysqld, authserver, worldserver; wait for readiness")
     u.add_argument("--world-datadir", type=Path, help="override worldserver DataDir (self-tests)")
@@ -52,6 +55,8 @@ def main(argv=None) -> int:
     r.add_argument("--ignore-gui-preflight", action="store_true",
                    help="start an unfiltered full/slow/gui run although the screen is locked, the display asleep or "
                         "the battery low (GUI checks will then fail; for runs that knowingly accept that)")
+    r.add_argument("--ignore-power", action="store_true",
+                   help="full/slow/gui runs: don't pause between checks on low battery (below 35 %% until 50 %%)")
     r.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)   # nested runs (report.tiers) write here
     ps_ = sub.add_parser("pop-session", help="one M2 population session (cold start with the population profile, "
                                             "warm-up, 10 min of samples); tuning runs for the budget record")
@@ -134,6 +139,10 @@ def main(argv=None) -> int:
                                                "once client/ is installed)")
     bs.add_argument("--yes", action="store_true", help="install missing Homebrew packages without asking")
     bs.add_argument("--check", action="store_true", help="only check this Mac and the client; change nothing")
+    bs.add_argument("--jobs", type=int, default=None,
+                    help="server build jobs (default: this Mac's performance cores)")
+    bs.add_argument("--ignore-power", action="store_true",
+                    help="don't pause setup on low battery (the guard pauses below 35 %% until 50 %%)")
     bs.add_argument("--allow-test-inject", action="store_true", help=argparse.SUPPRESS)   # setup.preflight only
     dl = sub.add_parser("download", help="fetch one pinned, SHA-256-verified download (fork.lock); client-data is "
                                          "also unpacked into data/client-data/")
@@ -176,10 +185,30 @@ def main(argv=None) -> int:
             log(f"${_var} is a test switch of report.gui_preflight (nested `hs run` only); unset it")
             return 2
 
+    from . import power                                                 # power-guard's test switches
+    _why = power.refusal(a.cmd, getattr(a, "allow_test_inject", True) if a.cmd == "bootstrap" else True)
+    if _why:
+        log(_why)
+        return 2
+
     if a.cmd == "build":
-        from .build import build, BuildError
+        from .build import build, plan_only, BuildError
+        if a.jobs is not None and a.jobs < 1:
+            log(f"--jobs must be 1 or more (got {a.jobs}); leave it out to use this Mac's performance cores")
+            return 2
         try:
-            _print(build(clean=a.clean, jobs=a.jobs, force_clean=a.force_clean))
+            pdir = power.plan_dir()
+            if pdir:
+                _print(plan_only(a.jobs, a.ignore_power, pdir))
+            else:
+                _print(build(clean=a.clean, jobs=a.jobs, force_clean=a.force_clean, ignore_power=a.ignore_power))
+        except power.PowerStop as e:
+            log("BUILD STOPPED by the power guard (see the line above)")
+            _print(getattr(e, "info", None) or {"power": getattr(e, "guard", e.record)})
+            return power.STOP_EXIT
+        except power.JobsError as e:
+            log(str(e))
+            return 2
         except BuildError as e:
             log(f"BUILD FAILED: {e}")
             if e.info:
@@ -239,7 +268,8 @@ def main(argv=None) -> int:
         if _os.environ.get("HS_TEST_PREFLIGHT_ONLY") == "1":                # report.gui_preflight: decision only
             _print({"preflight": pf})
             return 0
-        return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean, preflight=pf)
+        return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean, preflight=pf,
+                   ignore_power=a.ignore_power)
 
     if a.cmd == "keep-awake":
         from .util import keep_awake_cli
@@ -420,7 +450,7 @@ def main(argv=None) -> int:
 
     if a.cmd == "bootstrap":
         from . import bootstrap
-        return bootstrap.main(a.client, a.yes, a.check, a.allow_test_inject)
+        return bootstrap.main(a.client, a.yes, a.check, a.allow_test_inject, a.jobs, a.ignore_power)
 
     if a.cmd == "download":
         from . import downloads

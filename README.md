@@ -45,6 +45,8 @@ cd project-moonglade
 
 `./bootstrap` checks the Mac and your client first and changes nothing until those pass. Then it installs the Homebrew packages it needs (it asks first; `--yes` skips the question), builds the pinned server, downloads the pinned server data and Wine runtime (each checked against its SHA-256 in `fork.lock`), creates the databases, installs your client (only reading your copy), builds the play client and the app, and sets [Moonglade's defaults](docs/setup.md#moonglades-defaults) (vanilla mode on, the normal world size, the front menu). The first run took 36 minutes on the dev Mac (M2 Pro), most of it building the server. Run it again any time: finished steps are skipped (a re-run takes seconds), and an interrupted run continues where it stopped. If a step fails, it says which one, why, and what to do.
 
+**Chargers and the battery pause.** A laptop on a small charger (the stock 67 W one, for example) can lose charge even while plugged in during the server build. So the build uses only the Mac's performance cores (`--jobs N` changes that), and setup, builds and long harness runs pause with one line when the battery drops below 35 %, plugged in or not, and continue by themselves at 50 %. If the battery still falls to 15 %, the work stops cleanly; run the same command again later and it continues from that step. `--ignore-power` turns the pause off.
+
 **First run of the game:** Moonglade creates your personal account `PLAYER` with a random password (not a GM) and saves it in `env/player.json`. That file is gitignored and readable only by you. To pick your own name and password, create that file before the first run (see docs/setup.md, "First run").
 
 ## Playing

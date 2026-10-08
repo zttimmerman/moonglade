@@ -109,10 +109,13 @@ def discard_foreign_build(build_dir=None, src=None) -> dict | None:
     return foreign | {"discarded": str(build_dir), "removed": not build_dir.exists()}
 
 
-def build_install(jobs=8, build_dir=None, src=None, configure_only=False, log_path=None) -> dict:
+def build_install(jobs=None, build_dir=None, src=None, configure_only=False, log_path=None,
+                  ignore_power=False) -> dict:
     """cmake configure + build + install into baseline/ (incremental after the first time). Log: BUILD_LOG.
     A build tree made in another folder is discarded first (discard_foreign_build). `build_dir`/`src`/`configure_only`
     let build.moved_repo exercise that on a scratch build dir without building."""
+    from . import power
+    jobs, jobs_why = power.resolve_jobs(jobs)        # power-guard: performance cores unless given
     bdir, sdir = build_dir or BUILD, src or SRC
     P.OUT.mkdir(parents=True, exist_ok=True)
     discarded = discard_foreign_build(bdir, sdir)
@@ -124,8 +127,20 @@ def build_install(jobs=8, build_dir=None, src=None, configure_only=False, log_pa
     if not configure_only:
         plan += [["cmake", "--build", str(bdir), "-j", str(jobs)], ["cmake", "--install", str(bdir)]]
     blog = log_path or BUILD_LOG
+    names = ["the configure step (cmake)", "the compile step (cmake --build)", "the install step (cmake --install)"]
     with open(blog, "w") as fh:
-        for step in plan:
+        def sink(m):
+            fh.write(m + "\n")
+            fh.flush()
+        sink(power.jobs_line(jobs, jobs_why))
+        log(power.jobs_line(jobs, jobs_why))
+        guard = power.Guard("the baseline server build", "the harness run", ignore_power, say=log, sink=sink)
+        for name, step in zip(names, plan):
+            try:
+                guard.check(name)            # power-guard: pause on low battery; a stop propagates (PowerStop)
+            except power.PowerStop as e:
+                e.guard = guard.record()
+                raise
             s0 = time.time()
             log("$ " + " ".join(step) + f"   (log: {blog})")
             fh.write("\n$ " + " ".join(step) + "\n")
@@ -137,12 +152,14 @@ def build_install(jobs=8, build_dir=None, src=None, configure_only=False, log_pa
                                     discarded_foreign_build=discarded)
     if configure_only:
         return {"first_build": first, "steps": steps, "wall_s": round(time.time() - t0, 1), "log": str(blog),
-                "discarded_foreign_build": discarded, "cache": build.cmake_cache_info(bdir)}
+                "discarded_foreign_build": discarded, "cache": build.cmake_cache_info(bdir),
+                "jobs": {"n": jobs, "why": jobs_why}, "power": guard.record()}
     wb = SERVER_BIN / "worldserver"
     if not os.access(wb, os.X_OK):
         raise BaselineError("baseline worldserver missing after install", steps=steps)
     return {"first_build": first, "steps": steps, "wall_s": round(time.time() - t0, 1), "log": str(blog),
-            "worldserver": str(wb), "worldserver_sha256": build._sha256_file(wb), "discarded_foreign_build": discarded}
+            "worldserver": str(wb), "worldserver_sha256": build._sha256_file(wb), "discarded_foreign_build": discarded,
+            "jobs": {"n": jobs, "why": jobs_why}, "power": guard.record()}
 
 
 def worldserver_pids() -> list[int]:
