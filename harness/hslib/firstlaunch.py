@@ -576,35 +576,87 @@ PLAYER_CHARACTERS = (f"SELECT COUNT(*) FROM {P.DB_NAMES['characters']}.character
                      f"WHERE a.username IS NULL OR a.username NOT LIKE '{BOT_ACCOUNT_PREFIX}%'")
 
 
+PROBE_DIR_PREFIX = "dc-"                 # short: the probe socket must fit 103 bytes too
+
+
+def _stop_probes() -> list[int]:
+    """Kill the throwaway mysqld of a datadir check a killed run left behind, and remove its folders."""
+    from . import procs
+    killed = []
+    for pid, argv in procs.argv_table():
+        if pid != os.getpid() and any(str(P.TMP / PROBE_DIR_PREFIX) in a for a in argv):
+            try:
+                os.kill(pid, signal.SIGKILL)
+                killed.append(pid)
+            except ProcessLookupError:
+                pass
+    if P.TMP.is_dir():
+        for x in P.TMP.glob(PROBE_DIR_PREFIX + "*"):
+            shutil.rmtree(x, ignore_errors=True)
+    return killed
+
+
 def _characters_in_datadir() -> tuple[int | None, str]:
     """(number of player characters, how it was found) in the existing HOME/mysql; None when it can't be told
-    (fail-closed: the caller then keeps the datadir)."""
-    from . import db, stack
+    (fail-closed: the caller then keeps the datadir). The datadir itself is never opened: its APFS clone in HOME/tmp
+    is, by a throwaway mysqld (socket only, no network), which is stopped and removed afterwards."""
     if not (P.MYSQL_DATA / "acore_characters").exists():
         return 0, "no acore_characters database folder"
+    from . import stack
+    _stop_probes()
+    d = P.TMP / f"{PROBE_DIR_PREFIX}{os.getpid()}"
+    sock = d / "s"
+    proc = None
     try:
-        stack.mysql_up()
-    except Exception as e:  # noqa: BLE001
-        return None, f"mysqld didn't start on it: {type(e).__name__}: {str(e)[:300]}"
-    try:
-        try:
-            total = db.scalar("SELECT COUNT(*) FROM characters", "characters")
-        except Exception as e:  # noqa: BLE001
-            if "doesn't exist" in str(e):
-                return 0, "no characters table yet"
-            raise
+        d.mkdir(parents=True)
+        r = subprocess.run(["/bin/cp", "-cR", str(P.MYSQL_DATA), str(d / "data")], capture_output=True, text=True)
+        if r.returncode != 0:
+            return None, f"couldn't clone the datadir: {r.stderr.strip()[-300:]}"
+        for f in (d / "data").glob("*.pid"):
+            f.unlink()
+        cnf = d / "my.cnf"
+        cnf.write_text("[mysqld]\n" + "".join(f"{k}={v}\n" for k, v in (
+            ("basedir", P.MYSQL_BASE), ("datadir", d / "data"), ("socket", sock), ("pid-file", d / "m.pid"),
+            ("log-error", d / "err.log"), ("innodb_buffer_pool_size", "128M"))) +
+            ("" if P.MODE == "dev" else f"lc-messages-dir={P.MYSQL_BASE / 'share'}\n"
+             f"character-sets-dir={P.MYSQL_BASE / 'share' / 'charsets'}\n") +
+            "skip-networking\nmysqlx=OFF\nperformance_schema=OFF\ndisable-log-bin\n")
+        proc = subprocess.Popen([str(stack.MYSQLD), f"--defaults-file={cnf}"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+
+        def q(sql: str) -> tuple[int, str]:
+            r_ = subprocess.run([str(P.MYSQL), "--no-defaults", f"--socket={sock}", "-uroot", "--batch",
+                                 "--skip-column-names", "-e", sql], capture_output=True, text=True, timeout=60)
+            return r_.returncode, (r_.stdout.strip() if r_.returncode == 0 else r_.stderr.strip())
+        t0 = time.time()
+        while time.time() - t0 < 120 and proc.poll() is None:
+            if sock.exists() and q("SELECT 1")[0] == 0:
+                break
+            time.sleep(0.5)
+        else:
+            err = (d / "err.log").read_text(errors="replace")[-400:] if (d / "err.log").exists() else ""
+            return None, f"mysqld didn't start on the datadir's clone: {err}"
+        rc, total = q(f"SELECT COUNT(*) FROM {P.DB_NAMES['characters']}.characters")
+        if rc != 0:
+            return (0, "no characters table yet") if "doesn't exist" in total else (None, f"query failed: {total}")
         if total == "0":
             return 0, "SELECT COUNT(*) FROM characters -> 0"
-        n = db.scalar(PLAYER_CHARACTERS, "characters")
-        return (int(n) if n is not None and n.isdigit() else None), \
-            f"{total} character(s), {n!r} not on the AI players' {BOT_ACCOUNT_PREFIX}* accounts"
-    except Exception as e:  # noqa: BLE001  (fail-closed: unknown counts as "can't tell")
-        return None, f"{type(e).__name__}: {str(e)[:300]}"
+        rc, n = q(PLAYER_CHARACTERS)
+        if rc != 0 or not n.isdigit():
+            return None, f"{total} character(s); the player-character query failed: {n[-300:]}"
+        return int(n), f"{total} character(s), {n} not on the AI players' {BOT_ACCOUNT_PREFIX}* accounts"
+    except (OSError, subprocess.SubprocessError) as e:
+        return None, f"{type(e).__name__}: {e}"
     finally:
-        try:
-            stack.mysql_down()
-        except Exception:  # noqa: BLE001
-            pass
+        if proc is not None and proc.poll() is None:
+            subprocess.run([str(P.MYSQLADMIN), "--no-defaults", f"--socket={sock}", "-uroot", "shutdown"],
+                           capture_output=True, timeout=120)
+            try:
+                proc.wait(timeout=60)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+        shutil.rmtree(d, ignore_errors=True)
 
 
 class DatabaseStep(Step):
