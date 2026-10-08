@@ -1,6 +1,6 @@
 # ADR-0011: A second isolated harness stack ("lane B")
 
-- Status: **proposed** (2026-10-08). Zach agreed to the direction on 2026-10-08 ("Yep. Your call" on doing it and its place in the queue); acceptance waits on the Phase 0 spike results below.
+- Status: **accepted for Phase 1** (2026-10-08). Zach agreed to the direction on 2026-10-08 ("Yep. Your call" on doing it and its place in the queue). The Phase 0 spike (`docs/research/second-stack-spike.md`) measured one lane at 4.6 GB without a client and 5.2 GB with one, and found statically that 3.3.5a honours `realmlist host:port` (Grunt connect at 0x8cbb40 parses `:port`, default 3724). Phase 2 (real clients in lane B) turns on only after Phase 1 nightly runs show the memory preflight holding.
 - Source: read-only design pass at main 0ab6a8b; timings from `harness/out/last-full-run` and test-loop-speedups B36 (`openspec/changes/archive/2026-10-07-test-loop-speedups/design.md`).
 
 ## Context
@@ -42,7 +42,10 @@ Two facts shape the design:
 - **Meaning change:** "nothing from this repo is running" becomes "nothing from this lane". The timing baseline gets a lane-mode label and a re-join.
 - **Disk:** ~0 at clone time, growing with copy-on-write.
 
-## Risks and Phase 0 spike (before acceptance)
+## Memory preflight (from the spike)
+Lane B starts only when, with A's stack up, the pressure level (`kern.memorystatus_vm_pressure_level`) is 1, free + inactive + speculative + purgeable is ≥ 5 GB (≥ 6 GB for a client in B), and swap has ≥ 1 GB free or has grown ≤ 1 GB since the run started. Mid-run, pressure level ≥ 2 or swap growth > 1.5 GB stops B from starting new checks; the remaining B checks run in A.
+
+## Risks
 - **Memory.** Lane B is ~4 GB without a client and ~5.5 GB with one, for a peak of ~10–11 GB on a 16 GB Mac that already swaps. The spike measures the m0 world + one Wow.exe. Population checks stay in A.
 - **Phase 2.** Blocked if 3.3.5a ignores `:port` in realmlist.
 - **Contention flakes** (e.g. `comp.assists`, F23): watch the nightly runs.
