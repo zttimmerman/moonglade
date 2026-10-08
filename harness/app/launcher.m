@@ -656,7 +656,9 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
         [self finish:1];
     }
     self.task = t;
-    [self appLog:[NSString stringWithFormat:@"play loop pid %d: %@", t.processIdentifier, [args componentsJoinedByString:@" "]]];
+    [self appLog:[NSString stringWithFormat:@"play loop pid %d: %@%@", t.processIdentifier,
+                  self.releaseMode ? [self.loopExe stringByAppendingString:@" "] : @"",
+                  [args componentsJoinedByString:@" "]]];
     self.tailTimer = [NSTimer scheduledTimerWithTimeInterval:0.25 target:self selector:@selector(tail)
                                                     userInfo:nil repeats:YES];
 }

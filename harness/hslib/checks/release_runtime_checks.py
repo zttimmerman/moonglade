@@ -187,6 +187,47 @@ def _outside_run(env: dict) -> dict:
     return {k: v for k, v in env.items() if k not in ("HS_HARNESS_RUN", "HS_HARNESS_RUN_ID")}
 
 
+def heal_scratch() -> dict:
+    """Kill-safety: a killed earlier run leaves scratch folders (and their mysqld/servers, a mounted image) under
+    harness/out/release-scratch/<tag>-<pid>. Every folder whose run pid is gone is cleaned: processes whose argv names
+    it are killed, images mounted inside it detached, the folder removed. Folders of live runs are left alone."""
+    from .. import procs
+    out = {"killed": [], "detached": [], "removed": []}
+    if not SCRATCH_ROOT.is_dir():
+        return out
+    stale = []
+    for x in SCRATCH_ROOT.iterdir():
+        pid = x.name.rsplit("-", 1)[-1]
+        if not x.is_dir() or not pid.isdigit():
+            continue
+        try:
+            os.kill(int(pid), 0)
+            alive = not procs.is_zombie(int(pid))
+        except ProcessLookupError:
+            alive = False
+        except PermissionError:
+            alive = True
+        if not alive:
+            stale.append(x)
+    for x in stale:
+        for pid, argv in procs.argv_table():
+            if pid != os.getpid() and any(str(x) in a for a in argv):
+                try:
+                    os.kill(pid, 9)
+                    out["killed"].append(pid)
+                except ProcessLookupError:
+                    pass
+        info = subprocess.run(["/usr/bin/hdiutil", "info"], capture_output=True, text=True).stdout
+        for line in info.splitlines():
+            if str(x) in line and "\t" in line:
+                mp = line.split("\t")[-1].strip()
+                subprocess.run(["/usr/bin/hdiutil", "detach", "-force", mp], capture_output=True, timeout=120)
+                out["detached"].append(mp)
+        shutil.rmtree(x, ignore_errors=True)
+        out["removed"].append(x.name)
+    return out
+
+
 def scratch_dir(tag: str) -> Path:
     d = SCRATCH_ROOT / f"{tag}-{os.getpid()}"
     if d.exists():
@@ -359,7 +400,8 @@ def mode_resolution(ctx):
     """Dev keeps the parent commit's full path table (lanes A and B) and no new repo-path use outside the reviewed
     list; a scratch release app resolves to release mode with writable paths under the scratch HOME and inputs under
     APP; without the switch HOME is the user's ~/Library/Application Support/Moonglade, untouched."""
-    ev: dict = {"started": time.time()}
+    healed = heal_scratch()
+    ev: dict = {"healed": healed, "started": time.time()}
     golden = json.loads(GOLDEN.read_text())
     ev["golden_from"] = golden.get("recorded_from")
     # dev, lanes A and B
@@ -468,19 +510,38 @@ def open_with_hook(bundle: Path, hook: Path, env: dict, args: list[str], timeout
     return {"open_rc": r.returncode, "open_out": (r.stdout + r.stderr).strip()[-300:], "events": _hook_events(hook)}
 
 
+def exec_with_hook(bundle: Path, hook: Path, env: dict, args: list[str], timeout: float = 60) -> dict:
+    """Run the app's launcher binary directly with the test hook (no LaunchServices); stopped after `timeout`."""
+    full = _clean_env(HS_APP_TEST_HOOK=str(hook), **env)
+    proc = subprocess.Popen([str(bundle / "Contents/MacOS/Moonglade"), *args], env=full, stdin=subprocess.DEVNULL,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+    try:
+        rc = proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        os.killpg(proc.pid, 9)
+        rc = "timeout"
+    return {"rc": rc, "events": _hook_events(hook)}
+
+
 @check("release.test_switches_refused", order=14, capability=CAP, stack="down", tier="quick")
 def test_switches_refused(ctx):
     """Each release test switch is refused, naming it, by ./play, harness/hs, the payload's -m hslib.play / -m hslib,
     the dev app (test hook) and a release app (test hook) without the test flag or outside a live harness run; nothing
     starts and the scratch and real HOMEs stay absent/unchanged. With the flag in this run the switch is honoured."""
+    healed = heal_scratch()
     from .. import app as A, stack
-    ev: dict = {"started": time.time(), "cases": []}
+    ev: dict = {"healed": healed, "started": time.time(), "cases": []}
     d = scratch_dir("switches")
     real_before = real_home_state()
     try:
         app = quick_app(d, with_launcher=True)
         bundle = app.parents[2]
         vals = switch_values(d)
+        cur = A.up_to_date()
+        if not cur.get("current"):          # a changed launcher.m: rebuild dist/Moonglade.app (as app.bundle_valid does)
+            rb = subprocess.run([str(P.HARNESS / "hs"), "app"], capture_output=True, text=True, timeout=600,
+                                env=_clean_env())
+            ev["dev_app_rebuilt"] = {"why": cur.get("why"), "rc": rb.returncode, "tail": rb.stderr[-300:]}
         dev_app_ok = bool(A.up_to_date().get("current"))
         bad = []
         for name, val in vals.items():
@@ -541,6 +602,37 @@ def test_switches_refused(ctx):
         ev["counterexample_allowed"] = {"rc": t.get("rc"), "home": (t.get("table") or {}).get("HOME")}
         require(t.get("rc") == 0 and t["table"]["HOME"] == str(home),
                 "counterexample: the switch wasn't honoured with the flag inside the harness run", **ev)
+        # ... and a release app with the test hook and the flag, inside this run, honours it: its play loop is the
+        # payload's Python (-I -B -m hslib.play), its log is in the scratch HOME, and PATH has no Homebrew (tasks 2.3,
+        # 5.3). The play loop's single-instance lock is held here, so it stops at once ("already running").
+        import fcntl
+        home2 = d / "h2"
+        (home2 / "run").mkdir(parents=True)
+        lock_fd = os.open(home2 / "run" / "play.lock", os.O_RDWR | os.O_CREAT, 0o644)
+        try:
+            fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            os.write(lock_fd, str(os.getpid()).encode())
+            hook = d / "hook-allowed.jsonl"
+            run_env = {P.RELEASE_HOME_ENV: str(home2), "HS_HARNESS_RUN": os.environ.get("HS_HARNESS_RUN", ""),
+                       "HS_HARNESS_RUN_ID": os.environ.get("HS_HARNESS_RUN_ID", ""),
+                       P.HARNESS_RUN_REGISTRY_ENV: str(P.RUN_REGISTRY)}
+            # the launcher binary is run directly (not through LaunchServices): its play loop reads the scratch app and
+            # HOME under ~/Documents, and a LaunchServices launch of a scratch copy (a new TCC identity per path)
+            # makes macOS ask for Documents access every time; run directly, it belongs to the harness's own grant
+            res = exec_with_hook(bundle, hook, run_env, [P.RELEASE_TEST_FLAG], timeout=60)
+        finally:
+            os.close(lock_fd)
+        app_log = home2 / "logs" / "app.log"
+        text = app_log.read_text(errors="replace") if app_log.is_file() else ""
+        loop_line = next((x for x in text.splitlines() if "play loop pid" in x), "")
+        ev["release_app_allowed"] = {"events": [e.get("kind") + ":" + str(e.get("id", "")) for e in res["events"]],
+                                     "app_log": str(app_log), "loop_line": loop_line[-300:],
+                                     "busy_line": next((x for x in text.splitlines() if "already running" in x), "")}
+        require(loop_line.endswith(f"{app / 'python/bin/python3'} -I -B -m hslib.play {P.RELEASE_TEST_FLAG}")
+                and "already running" in ev["release_app_allowed"]["busy_line"]
+                and any(e.get("kind") == "dialog" and e.get("id") == "already_running" for e in res["events"]),
+                "the release app (hook + flag, in this run) didn't run the payload's play loop with its log in the "
+                "scratch HOME", **ev)
     finally:
         shutil.rmtree(d, ignore_errors=True)
     return ev
@@ -618,8 +710,9 @@ def stack_from_payload(ctx):
     updater's SourceDirectory is the payload's sql/ (and it populated the databases), OPENSSL_CONF and the AC_* keys
     are in the servers' environment, m0's random-bot count (only via AC_*) is in effect, and shutdown is graceful.
     Counterexample: without the AC_* module keys the playerbots default (500 bots) takes effect and is seen."""
+    healed = heal_scratch()
     from .release_checks import _need_payload
-    ev: dict = {"started": time.time()}
+    ev: dict = {"healed": healed, "started": time.time()}
     ev["package"] = {k: v for k, v in _need_payload(ctx).items() if k in ("package_rc", "version", "package_seconds")}
     require((NEW_PAYLOAD / "VERSION").is_file(), "no Moonglade.app payload from this run's packaging", **ev)
     d = SCRATCH_ROOT / f"sp-{os.getpid()}"           # short: HOME/run/mysql.sock must fit a 104-byte socket path
@@ -834,8 +927,9 @@ def app_readonly(ctx):
     error, and the image's contents hash the same before and after. Counterexample: writing into the app from the
     image fails and that failure is caught by the same log scan. (First launch + the stand-in play loop: see the scope
     note above.)"""
+    healed = heal_scratch()
     from .release_checks import _need_payload
-    ev: dict = {"started": time.time(), "scope": "stack only until first launch / play_standin exist (tasks 3.x)"}
+    ev: dict = {"healed": healed, "started": time.time(), "scope": "stack only until first launch / play_standin exist (tasks 3.x)"}
     _need_payload(ctx)
     d = SCRATCH_ROOT / f"ro-{os.getpid()}"
     shutil.rmtree(d, ignore_errors=True)
@@ -902,8 +996,9 @@ def app_moved(ctx):
     HOME, and neither run writes anything inside APP (its tree hashes the same). Counterexample: the payload's Python
     without -B writes __pycache__ into the app, and the hash comparison sees it. (First launch + the stand-in play
     loop: see the scope note above.)"""
+    healed = heal_scratch()
     from .release_checks import _need_payload
-    ev: dict = {"started": time.time(), "scope": "stack only until first launch / play_standin exist (tasks 3.x)"}
+    ev: dict = {"healed": healed, "started": time.time(), "scope": "stack only until first launch / play_standin exist (tasks 3.x)"}
     _need_payload(ctx)
     d = SCRATCH_ROOT / f"mv-{os.getpid()}"
     shutil.rmtree(d, ignore_errors=True)
