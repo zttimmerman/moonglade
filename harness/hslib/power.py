@@ -231,6 +231,9 @@ class Guard:
                 rec |= {"end": _now(), "end_pct": pct, "paused_s": round(time.time() - t0, 1)}
                 self._out(f"Battery at {pct} %: continuing ({step}).")
                 return rec
+            if self.battery.stub and self.battery.i > len(self.battery.seq) + 2:
+                # a stubbed sequence that ended mid-pause would otherwise loop forever at poll interval 0
+                raise RuntimeError(f"${BATTERY_ENV} ended while paused at {pct} % (test sequence too short)")
             if self.poll_s:
                 time.sleep(self.poll_s)
             r = self._read(step)
