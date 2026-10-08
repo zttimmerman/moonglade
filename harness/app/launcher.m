@@ -70,7 +70,7 @@
 // release-first-launch (openspec/changes/release-first-launch, design 1-3; tasks 2.3, 5.3):
 // - Release mode: a bundle without Resources/repo-path whose Resources/Moonglade/VERSION exists (the release-build
 //   payload inside Moonglade.app). The payload is found from the bundle itself (so moving the app or Gatekeeper
-//   translocation just works), the play loop is the payload's own Python: `python/bin/python3 -I -m hslib.play` (never
+//   translocation just works), the play loop is the payload's own Python: `python/bin/python3 -I -B -m hslib.play` (never
 //   a python3 from PATH, and PATH never names /opt/homebrew or /usr/local), and app.log / play-last.json live in HOME
 //   (~/Library/Application Support/Moonglade/logs and run). Dev mode (repo-path) is unchanged.
 // - Release test switches (HS_RELEASE_HOME, HS_RELEASE_PORTS, HS_RELEASE_DOWNLOAD_BASE, HS_FIRSTLAUNCH_TEST): passed to
@@ -116,7 +116,7 @@ static NSArray<NSString *> *ReleaseSwitches(void) {
 @property BOOL releaseMode;
 @property(strong) NSString *home;                // where logs/ and run/ are (dev: the checkout; release: HOME)
 @property(strong) NSString *loopExe;             // dev: /bin/bash; release: the payload's python3
-@property(strong) NSArray<NSString *> *loopPrefix;   // dev: [<repo>/play]; release: [-I, -m, hslib.play]
+@property(strong) NSArray<NSString *> *loopPrefix;   // dev: [<repo>/play]; release: [-I, -B, -m, hslib.play]
 @property(strong) NSString *clientPick;          // release, test hook only: the scripted first-launch folder pick
 @property(strong) NSString *logPath;
 @property(strong) NSString *hookPath;
@@ -535,7 +535,7 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
         self.home = scratch.length ? scratch
                   : [userHome stringByAppendingPathComponent:@"Library/Application Support/Moonglade"];
         self.loopExe = [repo stringByAppendingPathComponent:@"python/bin/python3"];
-        self.loopPrefix = @[@"-I", @"-m", @"hslib.play"];
+        self.loopPrefix = @[@"-I", @"-B", @"-m", @"hslib.play"];   // -B: never write __pycache__ into the app
         if (![fm isExecutableFileAtPath:self.loopExe]) {
             [self dialog:@"payload_missing" title:@"Moonglade is incomplete"
                     text:@"This copy of Moonglade is missing parts it needs. Download it again and replace this "

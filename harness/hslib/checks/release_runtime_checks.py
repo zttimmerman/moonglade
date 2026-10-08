@@ -492,12 +492,12 @@ def test_switches_refused(ctx):
                 ("harness/hs status", [str(P.HARNESS / "hs"), "status"], base, P.ROOT),
                 ("harness/hs --allow-test-release status outside a harness run",
                  [str(P.HARNESS / "hs"), P.RELEASE_TEST_FLAG, "status"], _outside_run(base), P.ROOT),
-                ("payload -m hslib.play", [str(app / "python/bin/python3"), "-I", "-m", "hslib.play"],
+                ("payload -m hslib.play", [str(app / "python/bin/python3"), "-I", "-B", "-m", "hslib.play"],
                  release_env(None, **{name: val}), d),
                 ("payload -m hslib.play --allow-test-release outside a harness run",
-                 [str(app / "python/bin/python3"), "-I", "-m", "hslib.play", P.RELEASE_TEST_FLAG],
+                 [str(app / "python/bin/python3"), "-I", "-B", "-m", "hslib.play", P.RELEASE_TEST_FLAG],
                  release_env(None, flag_run=False, **{name: val}), d),
-                ("payload -m hslib status", [str(app / "python/bin/python3"), "-I", "-m", "hslib", "status"],
+                ("payload -m hslib status", [str(app / "python/bin/python3"), "-I", "-B", "-m", "hslib", "status"],
                  release_env(None, **{name: val}), d),
             ]
             for label, args, env, cwd in entries:
@@ -598,7 +598,7 @@ def run_release(app: Path, args: list[str], env: dict, prof: Path, cwd: Path, ti
         fh.write(f"\n==== {time.strftime('%H:%M:%S')} {' '.join(args)}\n")
         fh.flush()
         try:
-            r = subprocess.run([SANDBOX_EXEC, "-f", str(prof), str(app / "python/bin/python3"), "-I", "-m", "hslib",
+            r = subprocess.run([SANDBOX_EXEC, "-f", str(prof), str(app / "python/bin/python3"), "-I", "-B", "-m", "hslib",
                                 P.RELEASE_TEST_FLAG, *args], stdout=subprocess.PIPE, stderr=fh, text=True, env=env,
                                cwd=cwd, timeout=timeout)
             rc, out = r.returncode, r.stdout
@@ -700,7 +700,7 @@ def stack_from_payload(ctx):
                 and not dj.get("remaining"), "the stack didn't shut down gracefully", **ev)
         # counterexample: drop the AC_* module keys; the playerbots default (500 random bots -> ~50 accounts) shows
         ce_env = dict(env, **{P.FIRSTLAUNCH_TEST_ENV: json.dumps({"drop_ac_env": True})})
-        args = [SANDBOX_EXEC, "-f", str(prof), str(app / "python/bin/python3"), "-I", "-m", "hslib",
+        args = [SANDBOX_EXEC, "-f", str(prof), str(app / "python/bin/python3"), "-I", "-B", "-m", "hslib",
                 P.RELEASE_TEST_FLAG, "up", "--profile", "m0"]
         with open(log, "a") as fh:
             fh.write("\n==== counterexample: drop_ac_env\n")
@@ -742,5 +742,209 @@ def stack_from_payload(ctx):
             except ProcessLookupError:
                 pass
         ev["log_tail"] = log.read_text(errors="replace")[-1200:] if log.exists() else None
+        shutil.rmtree(d, ignore_errors=True)
+    return ev
+
+
+# ================================================================================================ app_readonly, app_moved
+# Scope note (builder a, 2026-10-08): first launch (tasks 3.x) and the release play loop with the stand-in client
+# (release.play_standin) aren't built yet, so these two checks exercise what release mode has today: the resolver and
+# the release stack (database first start, servers, shutdown) from a read-only volume and from a moved app. The
+# scenarios' "first launch runs headless" and "stand-in play loop reaches ready" parts are to be added to them when
+# those exist (tasks 3.5 and 4.2).
+
+PROBLEM_LINES = re.compile(r"read-only file system|permission denied|operation not permitted|\berofs\b|\beacces\b",
+                           re.I)
+
+
+def tree_hash(root: Path) -> dict:
+    """sha256 over every path under root (relative path, type, mode, size, content or link target) and the count."""
+    import hashlib
+    h = hashlib.sha256()
+    n = 0
+    for dirpath, dirnames, filenames in os.walk(root):
+        dirnames.sort()
+        for name in sorted(dirnames + filenames):
+            f = Path(dirpath) / name
+            st = f.lstat()
+            rel = str(f.relative_to(root))
+            h.update(f"{rel}\0{st.st_mode}\0".encode())
+            if f.is_symlink():
+                h.update(os.readlink(f).encode())
+            elif f.is_file():
+                h.update(str(st.st_size).encode())
+                with open(f, "rb") as fh:
+                    for chunk in iter(lambda: fh.read(1 << 20), b""):
+                        h.update(chunk)
+            n += 1
+    return {"sha256": h.hexdigest(), "entries": n}
+
+
+def problem_lines(*files: Path) -> list[str]:
+    out = []
+    for f in files:
+        for p in ([f] if f.is_file() else sorted(x for x in f.rglob("*") if x.is_file()) if f.is_dir() else []):
+            try:
+                for line in p.read_text(errors="replace").splitlines():
+                    if PROBLEM_LINES.search(line):
+                        out.append(f"{p.name}: {line.strip()[:200]}")
+            except OSError:
+                pass
+    return out
+
+
+def stack_cycle(app: Path, home: Path, d: Path, prof: Path, log: Path, tag: str) -> dict:
+    """Release `up --profile m0` then `down` with APP `app` and HOME `home` (scratch ports); evidence of both."""
+    env = release_env(home, HS_RELEASE_PORTS=json.dumps(SCRATCH_PORTS), TMPDIR=str(d / "tmp") + "/",
+                      PATH="/usr/bin:/bin:/usr/sbin:/sbin")
+    (d / "tmp").mkdir(exist_ok=True)
+    up = run_release(app, ["up", "--profile", "m0"], env, prof, d, 2400, log)
+    info = up["json"] or {}
+    world = _proc_info(lambda a: a[:1] == [str(app / "server/bin/worldserver")])
+    mysqld = _proc_info(lambda a: f"--defaults-file={home / 'my.cnf'}" in a)
+    down = run_release(app, ["down"], env, prof, d, 300, log)
+    dj = down["json"] or {}
+    return {"tag": tag, "up_rc": up["rc"], "up_s": up["s"], "first_run": info.get("first_run"),
+            "worldserver": info.get("worldserver"), "mysqld": info.get("mysqld"),
+            "initialized": "initializing repo-local MySQL datadir" in log.read_text(errors="replace").split(
+                f"==== ")[-2] if log.exists() else None,
+            "world_exe": [x["exe"] for x in world], "mysqld_exe": [x["exe"] for x in mysqld],
+            "down_rc": down["rc"], "graceful": (dj.get("worldserver") or {}).get("graceful") is True
+            and dj.get("graceful") is True, "remaining": dj.get("remaining"),
+            "up_tail": up["stdout_tail"][-300:] if up["rc"] != 0 else None}
+
+
+def _cycle_ok(c: dict, app: Path) -> bool:
+    return (c["up_rc"] == 0 and c["worldserver"] == "started" and c["down_rc"] == 0 and c["graceful"]
+            and not c["remaining"] and c["world_exe"] == [str(app / "server/bin/worldserver")]
+            and c["mysqld_exe"] == [str(app / "mysql/bin/mysqld")])
+
+
+def _home_prep(d: Path) -> Path:
+    home = d / "h"
+    home.mkdir()
+    subprocess.run(["/bin/cp", "-c", "-R", str(P.CLIENT_DATA), str(home / "client-data")], check=True)
+    return home
+
+
+@check("release.app_readonly", order=14, capability=CAP, stack="down", tier="slow")
+def app_readonly(ctx):
+    """Moonglade.app on a read-only disk image at a path with spaces: release mode sets up and runs the stack from it
+    with a scratch HOME (database first start, m0, graceful shutdown), no log line reports a read-only or permission
+    error, and the image's contents hash the same before and after. Counterexample: writing into the app from the
+    image fails and that failure is caught by the same log scan. (First launch + the stand-in play loop: see the scope
+    note above.)"""
+    from .release_checks import _need_payload
+    ev: dict = {"started": time.time(), "scope": "stack only until first launch / play_standin exist (tasks 3.x)"}
+    _need_payload(ctx)
+    d = SCRATCH_ROOT / f"ro-{os.getpid()}"
+    shutil.rmtree(d, ignore_errors=True)
+    d.mkdir(parents=True)
+    mnt = d / "Read Only Disk"
+    log = d / "release.log"
+    attached = False
+    try:
+        stage = d / "stage"
+        stage.mkdir()
+        subprocess.run(["/bin/cp", "-c", "-R", str(NEW_APP), str(stage / "Moonglade.app")], check=True)
+        dmg = d / "Moonglade.dmg"
+        t0 = time.time()
+        r = subprocess.run(["/usr/bin/hdiutil", "create", "-quiet", "-srcfolder", str(stage), "-volname", "Moonglade RO",
+                            "-format", "UDRO", "-fs", "APFS", str(dmg)], capture_output=True, text=True, timeout=900)
+        require(r.returncode == 0, "hdiutil create failed", **ev, out=(r.stdout + r.stderr)[-400:])
+        shutil.rmtree(stage)
+        mnt.mkdir()
+        r = subprocess.run(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-noautoopen", "-mountpoint",
+                            str(mnt), str(dmg)], capture_output=True, text=True, timeout=300)
+        require(r.returncode == 0, "hdiutil attach -readonly failed", **ev, out=(r.stdout + r.stderr)[-400:])
+        attached = True
+        ev["image_s"] = round(time.time() - t0, 1)
+        app = mnt / "Moonglade.app" / "Contents" / "Resources" / "Moonglade"
+        mount_info = subprocess.run(["/sbin/mount"], capture_output=True, text=True).stdout
+        ev["mount"] = [l for l in mount_info.splitlines() if str(mnt) in l]
+        require(ev["mount"] and "read-only" in ev["mount"][0], "the image isn't mounted read-only", **ev)
+        before = tree_hash(mnt)
+        home = _home_prep(d)
+        prof = d / "release.sb"
+        prof.write_text(sandbox_profile(d))
+        c = stack_cycle(app, home, d, prof, log, "read-only image")
+        ev["cycle"] = c
+        after = tree_hash(mnt)
+        ev["image_hash"] = {"before": before, "after": after}
+        probs = problem_lines(log, home / "logs")
+        ev["problem_lines"] = probs[:10]
+        require(_cycle_ok(c, app) and c["first_run"] is True, "the stack didn't run from the read-only image", **ev)
+        require(not probs, "a log line reports a read-only or permission error", **ev)
+        require(before == after and before["entries"] > 1000, "the image's contents changed", **ev)
+        # counterexample: a write into the app on the image fails, and the log scan catches it
+        ce_log = d / "ce.log"
+        subprocess.run([str(app / "python/bin/python3"), "-I", "-B", "-c",
+                        f"open({str(app / 'written-by-moonglade')!r}, 'w')"], stdout=open(ce_log, "w"),
+                       stderr=subprocess.STDOUT, timeout=60)
+        ev["counterexample"] = problem_lines(ce_log)[:2]
+        require(ev["counterexample"], "counterexample: a write into the read-only app wasn't caught", **ev)
+    finally:
+        for pinfo in _proc_info(lambda a: any(str(d) in x for x in a)):
+            try:
+                os.kill(pinfo["pid"], 9)
+            except ProcessLookupError:
+                pass
+        if attached:
+            subprocess.run(["/usr/bin/hdiutil", "detach", "-force", str(mnt)], capture_output=True, timeout=120)
+        shutil.rmtree(d, ignore_errors=True)
+    return ev
+
+
+@check("release.app_moved", order=14, capability=CAP, stack="down", tier="slow")
+def app_moved(ctx):
+    """Set up a scratch HOME from the app at one path (database first start), move the app to a second path, and run
+    again: no new setup (the datadir is reused, no initialisation), every server runs from the new APP with the same
+    HOME, and neither run writes anything inside APP (its tree hashes the same). Counterexample: the payload's Python
+    without -B writes __pycache__ into the app, and the hash comparison sees it. (First launch + the stand-in play
+    loop: see the scope note above.)"""
+    from .release_checks import _need_payload
+    ev: dict = {"started": time.time(), "scope": "stack only until first launch / play_standin exist (tasks 3.x)"}
+    _need_payload(ctx)
+    d = SCRATCH_ROOT / f"mv-{os.getpid()}"
+    shutil.rmtree(d, ignore_errors=True)
+    d.mkdir(parents=True)
+    log = d / "release.log"
+    try:
+        app1 = release_fixture_app(d)
+        bundle1 = app1.parents[2]
+        home = _home_prep(d)
+        prof = d / "release.sb"
+        prof.write_text(sandbox_profile(d))
+        h0 = tree_hash(bundle1)
+        c1 = stack_cycle(app1, home, d, prof, log, "first path")
+        h1 = tree_hash(bundle1)
+        bundle2 = d / "Moved Here" / "Moonglade.app"
+        bundle2.parent.mkdir()
+        os.rename(bundle1, bundle2)
+        app2 = bundle2 / "Contents" / "Resources" / "Moonglade"
+        c2 = stack_cycle(app2, home, d, prof, log, "after the move")
+        h2 = tree_hash(bundle2)
+        conf = (home / "etc/worldserver.conf").read_text()
+        ev |= {"first": c1, "moved": c2, "app_hash": {"before": h0, "after_first": h1, "after_move": h2},
+               "conf_source_dir": (re.search(r'^SourceDirectory\s*=\s*"(.*)"', conf, re.M) or [None, None])[1],
+               "home_entries": sorted(x.name for x in home.iterdir())}
+        require(_cycle_ok(c1, app1) and c1["first_run"] is True, "the first run didn't set up and run", **ev)
+        require(_cycle_ok(c2, app2), "the stack didn't run from the moved app", **ev)
+        require(c2["first_run"] is False and c2["initialized"] is False,
+                "the moved app set the databases up again", **ev)
+        require(ev["conf_source_dir"] == str(app2 / "sql"), "the confs don't follow the moved app", **ev)
+        require(h0 == h1 == h2, "something was written inside the app", **ev)
+        # counterexample: without -B the payload's Python writes __pycache__ into the app, and the hash sees it
+        subprocess.run([str(app2 / "python/bin/python3"), "-I", "-c", "import hslib.paths"], capture_output=True,
+                       env=release_env(home), cwd=d, timeout=60)
+        h3 = tree_hash(bundle2)
+        ev["counterexample"] = {"hash_changed": h3 != h2, "entries_added": h3["entries"] - h2["entries"]}
+        require(h3 != h2, "counterexample: a write inside the app wasn't seen", **ev)
+    finally:
+        for pinfo in _proc_info(lambda a: any(str(d) in x for x in a)):
+            try:
+                os.kill(pinfo["pid"], 9)
+            except ProcessLookupError:
+                pass
         shutil.rmtree(d, ignore_errors=True)
     return ev
