@@ -36,7 +36,16 @@ PINS = {
     "wine-runtime": ("wowsilicon_runtime_url", "wowsilicon_runtime_sha256",
                      P.ENV / "wowsilicon-runtime.tar.xz", False),
     "ghidra": ("ghidra_url", "ghidra_sha256", P.ENV / "ghidra.zip", False),
+    # prebuilt-release inputs (openspec/changes/release-build): tools/release fetches them with cache=RELEASE_CACHE
+    "release-mysql": ("release_mysql_url", "release_mysql_sha256", P.ENV / "release/cache/mysql.tar.gz", True),
+    "release-mysql-source": ("release_mysql_source_url", "release_mysql_source_sha256",
+                             P.ENV / "release/cache/mysql-source.tar.gz", True),
+    "release-python": ("release_python_url", "release_python_sha256", P.ENV / "release/cache/python.tar.gz", True),
+    "release-python-licenses": ("release_python_licenses_url", "release_python_licenses_sha256",
+                                P.ENV / "release/cache/python-full.tar.zst", True),
 }
+RELEASE_CACHE = P.ENV / "release" / "cache"
+RELEASE_PINS = ("release-mysql", "release-mysql-source", "release-python", "release-python-licenses")
 # fork.lock *_url keys that are git remotes (pinned by commit SHA instead of a file hash)
 GIT_URL_KEYS = ("core_repo", "playerbots_repo")
 

@@ -1,0 +1,92 @@
+# Prebuilt release (openspec/changes/release-build). Runs only when a version tag is pushed to the PUBLIC repo, on
+# GitHub-hosted macOS arm64 runners (ADR-0012: no self-hosted runners; public repos get free macOS minutes). It builds
+# the payload with tools/release/package.sh, smoke-tests it with Homebrew moved aside, then creates a draft release
+# with the zip, the source assets and SHA256SUMS. Zach publishes the draft by hand.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # never while the repo is private (macOS minutes cost money there)
+    if: ${{ github.event.repository.private == false }}
+    runs-on: macos-26
+    timeout-minutes: 240
+    env:
+      CCACHE_DIR: ${{ github.workspace }}/env/ccache
+      CCACHE_MAXSIZE: 3G
+      HOMEBREW_NO_AUTO_UPDATE: "1"
+    steps:
+      - name: Check out the tag
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - name: Install build dependencies (runner only)
+        run: brew install boost openssl@3 ccache cmake zstd
+
+      - name: Restore ccache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: env/ccache
+          key: ccache-macos-arm64-${{ hashFiles('fork.lock', 'patches/**', 'modules/**', 'tools/release/**') }}
+          restore-keys: ccache-macos-arm64-
+
+      - name: Restore pinned downloads
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: env/release/cache
+          key: release-inputs-${{ hashFiles('fork.lock') }}
+
+      - name: Package
+        run: >
+          tools/release/package.sh all --sync-vendor --ignore-power
+          --version "${GITHUB_REF_NAME}" --record env/release/record.json
+
+      - name: Download size under 200 MB
+        run: |
+          size=$(stat -f %z env/release/out/Moonglade-"${GITHUB_REF_NAME}"-macos-arm64.zip)
+          echo "zip: ${size} bytes"
+          test "${size}" -lt 200000000
+
+      - name: Move Homebrew aside
+        run: sudo mv /opt/homebrew /opt/homebrew.aside
+
+      - name: Smoke test without Homebrew
+        run: >
+          env/release/payload/Moonglade/python/bin/python3 -I tools/release/smoke.py
+          --payload env/release/payload/Moonglade --scratch "env/release/smoke"
+          --sandbox --deny-write "${GITHUB_WORKSPACE}" --json env/release/smoke.json
+
+      - name: Put Homebrew back
+        if: always()
+        run: if [ -d /opt/homebrew.aside ]; then sudo mv /opt/homebrew.aside /opt/homebrew; fi
+
+      - name: Keep the records
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-records
+          path: |
+            env/release/record.json
+            env/release/smoke.json
+            env/release/build/build.log
+            env/release/build/gate.json
+          if-no-files-found: warn
+
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          gh release create "${GITHUB_REF_NAME}" env/release/out/*
+          --draft --verify-tag --title "Moonglade ${GITHUB_REF_NAME}"
+          --notes "Prebuilt Moonglade for Apple Silicon Macs. Bring your own World of Warcraft 3.3.5a client;
+          no game files are included. Source for everything in the zip is attached (see SOURCES.json); verify
+          downloads with SHA256SUMS."

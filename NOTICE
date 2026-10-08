@@ -57,6 +57,19 @@ QUOTATIONS
   for analysis (Wine, LGPL-2.1-or-later; mod-playerbots, GPL-2.0; one short
   excerpt of the 3.3.5a login screen's Lua), each with its source.
 
+PREBUILT RELEASES
+  A prebuilt release (tools/release/package.sh) bundles third-party software under
+  its own licences: AzerothCore and mod-playerbots (GPL-2.0; some AzerothCore
+  files are AGPL-3.0, see docs/adr/0012-going-public.md), Oracle MySQL (GPL-2.0
+  with Oracle's additional permissions), OpenSSL (Apache-2.0), Boost (BSL-1.0),
+  python-build-standalone/CPython (PSF and the licences of the libraries it links)
+  and the other libraries listed in the release's THIRD_PARTY/INDEX.json, whose
+  folder holds every licence text. The release's source assets (Moonglade at the
+  tag, AzerothCore and mod-playerbots at the fork.lock commits with patches/
+  applied, the MySQL source) are published next to it. Release servers link a
+  small readline stand-in (tools/release/readline-stub, GPL-2.0-or-later) instead
+  of GNU readline. No client or game files are in a release.
+
 BRANDING (all rights reserved)
   The Moonglade logo and app icon (branding/) are not covered by the GPL or by
   any other licence granted here: all rights reserved. Forks should use their

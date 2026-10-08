@@ -1,0 +1,4 @@
+Licence texts used when a bundled library's Homebrew keg ships none (tools/release/release.py FALLBACK_LICENSES).
+
+BSL-1.0.txt  Boost Software License 1.0, fetched 2026-10-08 from https://www.boost.org/LICENSE_1_0.txt
+             sha256 c9bff75738922193e67fa726fa225535870d2aa1059f91452c411736284ad566
