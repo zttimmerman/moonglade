@@ -53,9 +53,6 @@ def main(argv=None) -> int:
                    help="start an unfiltered full/slow/gui run although the screen is locked, the display asleep or "
                         "the battery low (GUI checks will then fail; for runs that knowingly accept that)")
     r.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)   # nested runs (report.tiers) write here
-    r.add_argument("--serial", action="store_true",
-                   help="run every check one after another (the reference schedule; by default a few file-only "
-                        "checks run alongside the early checks, see hslib/sidelane.py)")
     ps_ = sub.add_parser("pop-session", help="one M2 population session (cold start with the population profile, "
                                             "warm-up, 10 min of samples); tuning runs for the budget record")
     ps_.add_argument("--n", type=int, help="random bots (default: config.POPULATION_N)")
@@ -163,9 +160,6 @@ def main(argv=None) -> int:
     ngx.add_argument("--install", action="store_true", help="write and load ~/Library/LaunchAgents/<label>.plist")
     ngx.add_argument("--uninstall", action="store_true", help="unload and remove that LaunchAgent")
     ng.add_argument("--runs", type=int, default=3, help=argparse.SUPPRESS)
-    fw = sub.add_parser("full-run-wall", help="judge a results.json against the full-run wall-time limit and its "
-                                              "serial reference (default: harness/out/last-full-run); starts nothing")
-    fw.add_argument("results", nargs="?", type=Path)
     ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns from env/branding/logo-source.jpeg")
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
 
@@ -231,14 +225,6 @@ def main(argv=None) -> int:
             return 1
         return 0
 
-    if a.cmd == "run" and _os.environ.get("HS_SIDELANE_WORKER"):   # test-loop-speedups: never recurse from the side lane
-        log("`hs run` inside the side lane worker: refusing")
-        return 2
-
-    if a.cmd == "full-run-wall":
-        from .fullwall import cli as _fw
-        return _fw(str(a.results) if a.results else None)
-
     if a.cmd == "run":
         from . import paths as P
         from .runner import run
@@ -253,8 +239,7 @@ def main(argv=None) -> int:
         if _os.environ.get("HS_TEST_PREFLIGHT_ONLY") == "1":                # report.gui_preflight: decision only
             _print({"preflight": pf})
             return 0
-        return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean, preflight=pf,
-                   serial=a.serial)
+        return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean, preflight=pf)
 
     if a.cmd == "keep-awake":
         from .util import keep_awake_cli
