@@ -9,7 +9,7 @@
 - [ ] 2.3 Developer ID path in `sign.py`: identity from the keychain, `--timestamp`, default designated requirement; `notarize` (submit `--wait` with the API key, save the log, fail unless `Accepted` with no issues, staple, validate, re-zip, refresh `SHA256SUMS`/`SOURCES.json`). Exercised locally only up to the credential check
 
 ## 3. Icon and Info.plist
-- [ ] 3.1 Get the approved navy and logo scale from Zach's mockup (ask the orchestrator; else propose values) and the template's corner radius (record the source or flag it); `icon.py` tile stage with `AppIcon.json` `tile` record; regenerate `branding/AppIcon.{png,icns,json}`; preview sheet (16-1024 px, light and dark) for Zach
+- [x] 3.1 Get the approved navy and logo scale from Zach's mockup (ask the orchestrator; else propose values) and the template's corner radius (record the source or flag it); `icon.py` tile stage with `AppIcon.json` `tile` record; regenerate `branding/AppIcon.{png,icns,json}`; preview sheet (16-1024 px, light and dark) for Zach
 - [ ] 3.2 Shim test-mode icon sampling (`HSDOCK_ICON_SAMPLES` → logged RGBA); `launch.dock_env()` unchanged unless a check shows a path not using `branding/`
 - [ ] 3.3 Drop the dev plist's `NSHumanReadableCopyright` line; rebuild the dev app once (note in STATUS whether macOS asked for any permission again)
 
