@@ -496,6 +496,8 @@ def schedule(selected: list, ctx: dict, slow_skips, gui_skips, bk_skips, guard, 
             meta["mode"] = 2
             meta["b"] = {"started": worker.t0, "pid": worker.proc.pid, "timeout_s": timeout,
                          "log": str(worker.log_path.relative_to(P.ROOT))}
+            # release.player_data_untouched: when lane B ran (it must not overlap the release bracket)
+            ctx["lane_b_window"] = {"started": worker.t0, "pid": worker.proc.pid}
             say(f"lane B: started a worker (pid {worker.proc.pid}) for {len(planned)} check(s): {', '.join(planned)}")
     else:
         meta["fallback"] = "preflight: " + "; ".join(pf["reasons"])
@@ -533,6 +535,7 @@ def schedule(selected: list, ctx: dict, slow_skips, gui_skips, bk_skips, guard, 
                   "prepare": st.get("prepare"), "down": st.get("down"), "stop": st.get("stop"),
                   "error": st.get("error"), "timeline": st.get("timeline") or {}}
     meta["assignment"] |= {"b_ran": ran, "b_to_a": left}
+    ctx["lane_b_window"] |= {"finished": st.get("finished") or t_join, "ran": ran}
     if left and not meta["fallback"]:
         if st.get("stop"):
             meta["fallback"] = f"mid-run: {st['stop'].get('reason')}; {len(left)} lane-B check(s) ran in lane A"

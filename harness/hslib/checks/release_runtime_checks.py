@@ -1557,33 +1557,149 @@ BRACKET_PREFIXES = ("release.", "firstlaunch.")
 PDU_ID = "release.player_data_untouched"
 
 
+def _load_state(path) -> tuple[dict | None, str | None]:
+    try:
+        return json.loads(Path(path).read_text()), None
+    except (OSError, ValueError, TypeError) as e:
+        return None, f"{type(e).__name__}: {e}"
+
+
+def _ok_fp(fp) -> bool:
+    return isinstance(fp, dict) and "error" not in fp and isinstance(fp.get("db"), dict) and "error" not in fp["db"]
+
+
+def bracket_verdict(plan: dict | None, state: dict | None, xlog: list, lane_b: dict | None = None,
+                    run_id: str | None = None) -> tuple[list[str], dict]:
+    """Whether the run's bracket is complete and clean, from the run's plan, its persisted state and the actual
+    execution log of lane A (every execute call of the run). Returns (problems, info); info["mode"] is "bracketed"
+    when any release.*/firstlaunch.* check ran or was planned in the run, else "none_ran". Fail-closed: anything
+    missing is a problem naming what is missing."""
+    execd = [e for e in xlog if "id" in e]
+    rel_ran = [e["id"] for e in execd if e["id"].startswith(BRACKET_PREFIXES) and e["id"] != PDU_ID]
+    info: dict = {"release_ran": rel_ran, "planned": (plan or {}).get("inner")}
+    probs: list[str] = []
+    if not plan:
+        return ["the runner planned no bracket for this run (no release_bracket_plan in the run's state)"], info
+    if state is None:
+        return ["the run's bracket state file is missing or unreadable"], info
+    if run_id is not None and state.get("run_id") != run_id:
+        probs.append(f"the bracket state belongs to run {state.get('run_id')}, not this run ({run_id})")
+    if state.get("save_error"):
+        probs.append(f"persisting the bracket failed: {state['save_error']}")
+    marks = {e["bracket"]: i for i, e in enumerate(xlog) if "bracket" in e}
+    info["markers"] = {k: {"log_index": i, "at": xlog[i].get("at"), "check": xlog[i].get("check")} for k, i in marks.items()}
+    if not rel_ran and not plan.get("inner"):
+        info["mode"] = "none_ran"
+        if "start" not in marks or not _ok_fp(state.get("start")):
+            probs.append("no release.*/firstlaunch.* check ran, and the start fingerprint (before this check) is "
+                         "missing or erroneous")
+        return probs, info
+    info["mode"] = "bracketed"
+    missing = [w for w in ("start", "end") if w not in marks or not _ok_fp(state.get(w))]
+    if missing:
+        why = {w: (state[w].get("error") or (state[w].get("db") or {}).get("error") or "incomplete record")
+                  if isinstance(state.get(w), dict) else "not taken" for w in missing}
+        probs.append(f"release.*/firstlaunch.* checks ran in this run ({rel_ran}) but the bracket's "
+                     f"{' and '.join(missing)} fingerprint{'s are' if len(missing) > 1 else ' is'} missing or "
+                     f"erroneous ({why})")
+        return probs, info
+    i0, i1 = marks["start"], marks["end"]
+    if not i0 < i1:
+        return probs + [f"the end fingerprint (log {i1}) isn't after the start (log {i0})"], info
+    inside = [e["id"] for e in xlog[i0 + 1:i1] if "id" in e]
+    info["inside"] = inside
+    outside_rel = [i for i in rel_ran if i not in inside]
+    if outside_rel:
+        probs.append(f"release.*/firstlaunch.* checks ran outside the bracket: {outside_rel}")
+    foreign = [i for i in inside if not i.startswith(BRACKET_PREFIXES) or i == PDU_ID]
+    if foreign:
+        probs.append(f"checks other than release.*/firstlaunch.* ran inside the bracket: {foreign}")
+    not_run = [i for i in plan.get("inner") or [] if i not in rel_ran]
+    if not_run:
+        probs.append(f"planned release.*/firstlaunch.* checks didn't run, so the bracket isn't the run's: {not_run}")
+    if list(state.get("ran") or []) != inside:
+        probs.append(f"the persisted bracket ({state.get('ran')}) differs from the run's execution log ({inside})")
+    if lane_b and lane_b.get("started") is not None:
+        t0, t1 = xlog[i0]["at"], xlog[i1]["at"]
+        b0, b1 = lane_b["started"], lane_b.get("finished") or float("inf")
+        info["lane_b"] = {"started": b0, "finished": lane_b.get("finished"), "overlaps_bracket": b0 < t1 and b1 > t0}
+        if b0 < t1 and b1 > t0:
+            probs.append(f"lane B ran during the bracket ({b0:.0f}-{b1:.0f} vs {t0:.0f}-{t1:.0f})")
+    return probs, info
+
+
 @check(PDU_ID, order=998, capability=CAP, stack="down", tier="full")
 def player_data_untouched(ctx):
-    """Bracketing every release.* and firstlaunch.* check of the run (the runner takes the fingerprint right before
-    the first of them, after bringing lane A down, and right after the last; no other check runs in between):
+    """Bracketing every release.* and firstlaunch.* check of the WHOLE run (all lane-A segments: the runner plans
+    the bracket from the run's selection, takes the start fingerprint right before the first of them, after
+    bringing lane A down, and the end right after the last, and persists both under the run's output dir keyed by
+    the run id; the run's execution log must show that no other check ran in between and lane B didn't run then):
     env/backups, env/player.json, env/settings.json, env/client-play, the client/ manifest, CHECKSUM TABLE of the
     live acore_auth / acore_characters (their datadir files while lane A's mysqld is down) and the real
-    ~/Library/Application Support/Moonglade are unchanged. Counterexample: on an APFS clone of the live datadir (a
-    throwaway mysqld, never the live databases), a write to a row that isn't the PLAYER's changes both the CHECKSUM
-    TABLE and the datadir-file fingerprint, while the PLAYER's own rows are unchanged."""
-    br = (ctx or {}).get("release_bracket") or {}
-    start, end = br.get("start", "missing"), br.get("end")
-    ev: dict = {"bracket": {k: v for k, v in br.items() if k not in ("start", "end")}, "start": _slim_fp(start)}
-    require(isinstance(start, dict) and "error" not in start,
-            "the runner didn't record the player's data before the first release/firstlaunch check", **ev)
-    if end is None:                                  # no release/firstlaunch check ran: compare with now
-        end = player_data_fingerprint()
+    ~/Library/Application Support/Moonglade are unchanged. Fail-closed: if any release.*/firstlaunch.* check ran
+    and the start or end fingerprint is missing, it fails naming which. Counterexample: on an APFS clone of the live
+    datadir (a throwaway mysqld, never the live databases), a write to a row that isn't the PLAYER's changes both
+    the CHECKSUM TABLE and the datadir-file fingerprint, while the PLAYER's own rows are unchanged."""
+    ctx = ctx or {}
+    plan = ctx.get("release_bracket_plan")
+    state, err = _load_state(plan["state_file"]) if plan else (None, None)
+    probs, info = bracket_verdict(plan, state, ctx.get("exec_log") or [], ctx.get("lane_b_window"), ctx.get("run_id"))
+    st = state or {}
+    ev: dict = {"bracket": info | {"state_file": (plan or {}).get("state_file"), "state_error": err,
+                                   "start_check": st.get("start_check"), "end_check": st.get("end_check")},
+                "start": _slim_fp(st.get("start", "missing"))}
+    require(not probs, "; ".join(probs), **ev)
+    start = st["start"]
+    if info["mode"] == "none_ran":                 # no release/firstlaunch check in the whole run: compare with now
+        end = json.loads(json.dumps(player_data_fingerprint(), default=str))   # same JSON round trip as the start
         ev["end_taken"] = "now (no release.*/firstlaunch.* check ran in this run)"
+    else:
+        end = st["end"]
     ev["end"] = _slim_fp(end)
-    outside = [i for i in br.get("ran", []) if not i.startswith(BRACKET_PREFIXES) or i == PDU_ID]
-    require(not outside, f"checks other than release.*/firstlaunch.* ran inside the bracket: {outside}", **ev)
     require("error" not in start["db"] and "error" not in end.get("db", {}),
             "the live databases couldn't be fingerprinted", **ev)
     diff = fp_differences(start, end)
     ev["differences"] = diff
     require(not diff, f"the dev player's data changed: {diff}", **ev)
     ev["counterexample"] = _pdu_counterexample()
+    ev["counterexample"]["bracket"] = _bracket_counterexamples()
     return ev
+
+
+def _bracket_counterexamples() -> dict:
+    """bracket_verdict on two-lane-shaped synthetic runs (segment 1 runs the release checks, lane B starts after it,
+    the check runs in a later segment): complete bracket -> no problem; end missing -> problem naming "end"; start
+    missing -> "start"; a dev check inside -> problem; lane B overlapping -> problem; a release check that ran but
+    the plan has none (state empty) -> problem, never "none ran"."""
+    ok_fp = {"db": {"sha256": "x"}}
+    plan = {"run_id": "R", "inner": ["firstlaunch.preflight", "release.pins"], "start_check": "firstlaunch.preflight",
+            "end_check": "release.pins"}
+    log_full = [{"id": "build.clean"}, {"bracket": "start", "at": 10.0, "check": "firstlaunch.preflight"},
+                {"id": "firstlaunch.preflight"}, {"id": "release.pins"}, {"bracket": "end", "at": 20.0, "check": "release.pins"},
+                {"id": "lane.x"}, {"id": PDU_ID}]
+    state = {"run_id": "R", "start": ok_fp, "end": ok_fp, "ran": ["firstlaunch.preflight", "release.pins"]}
+    out = {}
+    out["complete"] = bracket_verdict(plan, state, log_full, {"started": 25.0, "finished": 90.0}, "R")[0]
+    out["end_missing"] = bracket_verdict(plan, {k: v for k, v in state.items() if k != "end"},
+                                         [e for e in log_full if e.get("bracket") != "end"], {"started": 25.0}, "R")[0]
+    out["start_missing"] = bracket_verdict(plan, {k: v for k, v in state.items() if k != "start"},
+                                           [e for e in log_full if e.get("bracket") != "start"], None, "R")[0]
+    log_dev = log_full[:3] + [{"id": "lane.x"}] + log_full[3:]
+    out["dev_inside"] = bracket_verdict(plan, state | {"ran": ["firstlaunch.preflight", "lane.x", "release.pins"]},
+                                        log_dev, None, "R")[0]
+    out["lane_b_overlap"] = bracket_verdict(plan, state, log_full, {"started": 15.0, "finished": 90.0}, "R")[0]
+    out["no_plan_but_ran"] = bracket_verdict({"run_id": "R", "inner": []}, {"run_id": "R"}, log_full[:1] + log_full[2:4] + [log_full[-1]], None, "R")[0]
+    require(out["complete"] == [], "bracket counterexample: a complete bracket was refused", **out)
+    require(any("end fingerprint is missing" in p for p in out["end_missing"]), "bracket counterexample: a missing end "
+            "wasn't caught", **out)
+    require(any("start fingerprint is missing" in p for p in out["start_missing"]), "bracket counterexample: a missing "
+            "start wasn't caught", **out)
+    require(any("lane.x" in p for p in out["dev_inside"]), "bracket counterexample: a dev check inside wasn't caught", **out)
+    require(any("lane B ran during" in p for p in out["lane_b_overlap"]), "bracket counterexample: lane B overlap "
+            "wasn't caught", **out)
+    require(out["no_plan_but_ran"] and not any("none" in p for p in out["no_plan_but_ran"]),
+            "bracket counterexample: release checks that ran without a bracket weren't caught", **out)
+    return out
 
 
 def _pdu_counterexample() -> dict:
