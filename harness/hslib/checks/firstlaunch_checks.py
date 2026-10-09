@@ -501,8 +501,10 @@ def measure_home(home: Path, free_before: int | None = None) -> dict:
              # SQL import: from the first "auto populating" to the last "is up-to-date"/"Applying" line
              "sql_import_s": span((ll.get("populating") or {}).get("first_s"),
                                   max([(ll.get(k) or {}).get("last_s") or 0 for k in ("up_to_date", "applying")])),
-             # bot setup: "World initialized" to world-ready (SOAP), i.e. what playerbots does after the world loads
-             "bot_setup_s": span((ll.get("world_initialized") or {}).get("first_s"), ph.get("ready")),
+             # bot setup: the last SQL import line to world-ready (SOAP): the world loading and playerbots creating
+             # and logging in its random bots (playerbots' own lines run from its schema import to here)
+             "bot_setup_s": span(max([(ll.get(k) or {}).get("last_s") or 0 for k in ("up_to_date", "applying",
+                                                                                     "populating")]), ph.get("ready")),
              "shutdown_s": span(ph.get("down_start"), ph.get("down_end")), "first_start_total_s": ph.get("ready")}
     free_after = shutil.disk_usage(home).free
     return {"du_bytes": sizes, "du_total_bytes": sum(v for v in sizes.values() if v),
@@ -644,6 +646,9 @@ def second_open_plays(ctx):
     d, home, bundle = Path(fx["d"]), Path(fx["home"]), Path(fx["bundle"])
     r = app_play(bundle, home, d, "second")
     ev["second_open"] = _slim(r)
+    ev["measure_after_play"] = {x: int(subprocess.run(["/usr/bin/du", "-sk", str(home / x)], capture_output=True,
+                                                      text=True).stdout.split()[0]) * 1024
+                                for x in ("wine", "mysql", "backups") if (home / x).exists()}
     require(not r["setup_windows"] and not r["firstlaunch_steps"], "the second open showed the first-launch window",
             **ev)
     probs = play_ok(r)
