@@ -419,7 +419,9 @@ def icon_everywhere(ctx):
         require(ev["dock_env_icons"]["dev_app_run"] == str(bundle_icon(A.APP))
                 and ev["dock_env_icons"]["release_app_run"] == str(bundle_icon(rel)),
                 "an app run's HSDOCK_ICON isn't its own bundle's icon", **ev)
-        ev["decoded"] = {k: same_icon(p, ref, t) for k, p in files.items()}
+        decoded: dict = {}                                # each distinct file decoded once
+        ev["decoded"] = {k: decoded.setdefault(str(p), same_icon(p, ref, t)) if str(p) not in decoded
+                         else decoded[str(p)] for k, p in files.items()}
         bad = [k for k, v in ev["decoded"].items() if not v["ok"]]
         require(not bad, f"icon files that aren't the navy-tile icon: {bad}", **ev)
         # counterexample: an app run whose bundle icon is the logo on a transparent surround
@@ -428,7 +430,11 @@ def icon_everywhere(ctx):
         (ce.parent / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIconFile": "AppIcon"}))
         iconset = d / "ce" / "AppIcon.iconset"
         iconset.mkdir()
-        I.write_png(iconset / next(k for k, v in I.ICONSET.items() if v == I.CANVAS), I.CANVAS, I.CANVAS, I.load_logo(diameter=I.ICON_DIAMETER))
+        clear = bytearray(ref)                            # the logo kept, everything else transparent
+        for i in range(0, len(clear), 4):
+            if not is_gold(list(clear[i:i + 4])):
+                clear[i:i + 4] = b"\0\0\0\0"
+        I.write_png(iconset / next(k for k, v in I.ICONSET.items() if v == I.CANVAS), I.CANVAS, I.CANVAS, bytes(clear))
         subprocess.run(["/usr/bin/iconutil", "-c", "icns", str(iconset), "-o", str(ce / "AppIcon.icns")], check=True,
                        capture_output=True)
         ce_env = dock_env_for(ce.parents[1])
