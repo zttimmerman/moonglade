@@ -17,8 +17,10 @@ firstlaunch.flow       (slow) a scratch copy of this run's packaged Moonglade.ap
                        Counterexample (same scenario, "can be deleted only after the copy is verified"): with the
                        corrupt-copy test switch the client step fails with the plain message, "can now delete" is never
                        shown, and the next launch redoes the client copy (verified) before it continues.
+firstlaunch.second_open_plays, .source_untouched, .client_refusals, .downloads, .kill_resume: see each docstring.
 Shared helpers (for the other firstlaunch.* / release.* checks): LoopbackServer, ensure_cache, scratch_client,
-run_engine, setup_events.
+run_engine, setup_events; the run's shared set-up HOME (fixture), the app's play loop with the stand-in (app_play,
+play_ok) and task 4.1's measurements (measure_home).
 """
 from __future__ import annotations
 
@@ -1102,6 +1104,9 @@ def datadir_fingerprint(root: Path) -> dict:
     return out
 
 
+DB_KILL_AFTER_S = 40
+
+
 @check("firstlaunch.kill_resume", order=15, capability=CAP, stack="down", tier="slow")
 def kill_resume(ctx):
     """First launch on a scratch HOME (packaged app, client/ as the source, loopback downloads) SIGKILLed with its
@@ -1128,12 +1133,20 @@ def kill_resume(ctx):
         prof.write_text(sandbox_profile(d))
         n_ev = lambda evs, step, what="progress": sum(1 for e in evs if e.get("event") == what   # noqa: E731
                                                       and e.get("step") == step)
+        seen_world: dict = {}
+
+        def db_mid(evs):
+            # well into the first start: the world server has run DB_KILL_AFTER_S (SQL import under way or done, the
+            # characters database exists), so the reset rule has a real datadir to count characters in
+            if any(e.get("event") == "phase" and str(e.get("phase", "")).startswith("world_") for e in evs):
+                seen_world.setdefault("t", time.time())
+            return "t" in seen_world and time.time() - seen_world["t"] >= DB_KILL_AFTER_S \
+                and (home / "mysql" / "acore_characters").is_dir()
         phases = [
             ("client copy", {"force_byte_copy": True}, lambda evs: n_ev(evs, "client") >= 3),
             ("server-data download", {}, lambda evs: n_ev(evs, "data") >= 3),
             ("server-data unpack", {}, lambda evs: (home / "client-data.unpack" / "dbc").exists()),
-            ("database setup", {}, lambda evs: any(e.get("event") == "phase" and str(e.get("phase", "")).startswith(
-                "world_") for e in evs)),
+            ("database setup", {}, db_mid),
             ("finish", {}, None),
         ]
         idents: dict = {}
@@ -1184,6 +1197,10 @@ def kill_resume(ctx):
                 and ev["end"]["client"].get("manifest") and not ev["end"]["client"].get("mismatches"),
                 "the end state isn't a finished setup", **ev)
         require(not ev["end"]["leftovers"], "partial files or temp folders were left", **ev)
+        rs = last["reset"] or {}
+        require(rs.get("moved_aside_to") and rs.get("characters") == 0 and "character" in str(rs.get("how"))
+                and "no acore_characters" not in str(rs.get("how")),
+                "the killed database wasn't counted (on a clone) and moved aside", **ev)
         require(not _proc_info(lambda a: any(str(home) in x for x in a)), "processes of the scratch HOME remain", **ev)
         # counterexample: a player's character in a not-done database -> kept, files unchanged
         md = d / "m"

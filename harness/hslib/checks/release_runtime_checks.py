@@ -23,6 +23,8 @@ release.stack_from_payload     (slow) a scratch copy of the packaged Moonglade.a
                                OPENSSL_CONF = HOME's file and the AC_* module keys, m0's random-bot count (set only via
                                AC_*) is in effect, shutdown is graceful. Counterexample: the drop-AC_* test switch makes
                                the playerbots default (500) take effect, which the check sees.
+release.app_readonly, release.app_moved, release.play_standin, release.client_smoke, release.player_data_untouched,
+release.readline_stub          see each check's docstring (release-first-launch builder c; design "As built").
 """
 from __future__ import annotations
 
