@@ -1,0 +1,6 @@
+## Design
+Follow the spike doc's "A1 in detail" and "Live test plan for A1" sections (`git show origin/spike/front-menu-saves:docs/research/front-menu-saves-spike.md`).
+- **Listener.** A thread in the launcher process (`launch.py` / app): bind 127.0.0.1 on port 0, then pass the port and nonce to the glue the way other launch data is passed (HSProfiles.lua generation), never inside `client/`. Read a single challenge per connection, capped at 64 KiB. Fixed reply codes, picked from the live table. A run-scoped log line names only the verb and the outcome.
+- **Glue.** Put the frames in `HSFrontMenu.xml`, since stock GlueXML may not expose `CreateFrame`. Hook the status-dialog updates while a request is pending, call `StatusDialogClick()` to dismiss, and reset `realmList` on reply or after a 5 s timeout.
+- **Test actions.** Add `ctl:<verb>` and `realm:reset` to the HS_GLUE_TEST action set. They are refused through the existing test-switch guard.
+- **Tiers.** The offline checks (`listener`, `test_actions_refused`) must cost under 1 s, because the quick tier has about 6 s of headroom. Put them in full if they can't fit. The live checks are GUI, full tier (or slow if long). Share one client session across the live scenarios where possible.
