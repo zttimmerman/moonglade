@@ -428,7 +428,7 @@ def icon_everywhere(ctx):
         (ce.parent / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIconFile": "AppIcon"}))
         iconset = d / "ce" / "AppIcon.iconset"
         iconset.mkdir()
-        I.write_png(iconset / "icon_512x512@2x.png", I.CANVAS, I.CANVAS, I.load_logo(diameter=I.ICON_DIAMETER))
+        I.write_png(iconset / next(k for k, v in I.ICONSET.items() if v == I.CANVAS), I.CANVAS, I.CANVAS, I.load_logo(diameter=I.ICON_DIAMETER))
         subprocess.run(["/usr/bin/iconutil", "-c", "icns", str(iconset), "-o", str(ce / "AppIcon.icns")], check=True,
                        capture_output=True)
         ce_env = dock_env_for(ce.parents[1])

@@ -449,7 +449,7 @@ def dock_icon_rendered(ctx):
     try:
         iconset = d / "AppIcon.iconset"
         iconset.mkdir()
-        I.write_png(iconset / "icon_512x512@2x.png", I.CANVAS, I.CANVAS, I.load_logo(diameter=I.ICON_DIAMETER))
+        I.write_png(iconset / next(k for k, v in I.ICONSET.items() if v == I.CANVAS), I.CANVAS, I.CANVAS, I.load_logo(diameter=I.ICON_DIAMETER))
         subprocess.run(["/usr/bin/iconutil", "-c", "icns", str(iconset), "-o", str(d / "transparent.icns")],
                        check=True, capture_output=True)
         ce = shim_icon_run(d / "transparent.icns", d)

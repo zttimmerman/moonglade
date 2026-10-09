@@ -673,8 +673,9 @@ def slow_tier_rule(ctx):
 # rename-moonglade cycle 2: + app.names_running (the opened-app half of app.bundle_valid, split out so quick runs
 # never put windows on screen)
 # release-first-launch: + release.client_smoke (the real Wow.exe's first window from a release HOME, design "Checks")
+# release-signing: + app.dock_icon_rendered (its counterexample puts a shim-loaded notepad window on screen)
 GUI_CHECKS = ("app.single_dock_icon", "app.handoff_focus", "app.reopen_focuses_game", "app.reopen_unminimizes",
-              "app.reopen_during_loading", "app.names_running", "release.client_smoke")
+              "app.reopen_during_loading", "app.names_running", "release.client_smoke", "app.dock_icon_rendered")
 
 
 def _scratch_repo_paths() -> dict:
