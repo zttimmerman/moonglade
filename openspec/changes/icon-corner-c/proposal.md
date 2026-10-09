@@ -16,6 +16,7 @@ PR #29 shipped A. C matches the shape macOS 26 draws for its own apps, so Moongl
 ## Sources
 - C's geometry: the matplotlib issue 31895 measurement (comment by iccir), as recorded in the archived design `2026-10-09-release-signing/design.md`.
 - Continuous corners: Core Animation's `CALayer.cornerCurve = .continuous`, used as the reference rendering.
+- The curve construction: "Drawing Code for iOS 7 Rounded Rectangles" (PaintCode/PixelCut, 2013-11-18), with the outer curves' end points as Core Animation emits them on macOS 26 (design "As built").
 
 ## Spec-change log
 - 2026-10-09: the "App bundle with the navy-tile icon" requirement now names the tile shape (832/216, continuous) and adds a scenario for it. This is a tightening.
