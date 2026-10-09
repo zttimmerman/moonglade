@@ -952,6 +952,13 @@ def stack_from_payload(ctx):
         sql_root = str(app / "sql") + "/"
         applied = re.findall(r">> Applying '([^']+)'", wlog)
         seen = sorted(watch.files)
+        # the one .sql file the updater writes itself: CreateDatabase (DBUpdater.cpp:238-262) writes a one-line
+        # "CREATE DATABASE" query to create_table.sql in the worldserver's cwd (HOME/run), applies it and removes it,
+        # when a database doesn't exist yet. Allowed only at exactly that path and only if the log says it created one.
+        temp_sql = str(home / "run" / "create_table.sql")
+        created = "Creating database" in wlog
+        ev["updater"]["create_table_sql"] = {"path": temp_sql, "seen_open": temp_sql in seen, "log_creating_database": created}
+        seen = [f for f in seen if not (f == temp_sql and created)]
         ev["updater"]["sql_files_open"] = {"count": len(seen), "polls": watch.polls, "sample": seen[:5],
                                            "outside_app_sql": [f for f in seen if not f.startswith(sql_root)][:5],
                                            "applying_names": len(applied),
