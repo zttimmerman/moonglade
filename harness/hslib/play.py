@@ -30,6 +30,7 @@ profile file with the login is generated into the play client at each start and 
 `stock`: the untouched client/, exactly as before (type the login). Test-only: $HS_PLAY_CLIENT_DIR builds/uses a
 scratch play client instead of env/client-play/ (needs --allow-test-client-dir), $HS_PLAY_SKIP_PATCHES leaves
 patches out of that scratch build (counterexamples), $HS_GLUE_TEST passes the GlueXML test hook (frontmenu.py).
+$HS_SAVESCTL_TEST sets the control listener's test knobs (savesctl.py; test flag and test account only).
 
 Save backups (save-backups, backups.py): when a session that started the game ends, cleanup takes a backup after the
 world and login servers have stopped and before the database stops (stack.down's before_database hook; shutdown
@@ -260,7 +261,8 @@ def choose_world(say=say) -> dict:
 # environment switches the harness sets (HS_HARNESS_RUN is set by `hs run` for every check's subprocesses).
 HARNESS_ENV = ("HS_HARNESS_RUN", "HS_LANE", "HS_PLAYER_FILE", "HS_PLAYER_DEFAULT_NAME", "HS_SETTINGS", "HS_PROFILE",
                "HS_CLIENT_DIR", "HS_GLUE_TEST", "HS_PLAY_SKIP_PATCHES", "HS_TEST_OWN_CLIENT",
-               "HS_BACKUP_DIR", "HS_BACKUP_TEST_FAIL", "HS_BACKUP_TEST_FREE_BYTES", "HS_BACKUP_TEST_PAUSE_S")
+               "HS_BACKUP_DIR", "HS_BACKUP_TEST_FAIL", "HS_BACKUP_TEST_FREE_BYTES", "HS_BACKUP_TEST_PAUSE_S",
+               "HS_SAVESCTL_TEST")
 # test-only (client.config_gate): treat this scratch play client as the player's own, so the gate's "own client"
 # branch can be exercised end to end without ever touching env/client-play/. It can only make the gate stricter
 # (another directory counts as the player's), and main() refuses it without --allow-test-client-dir.
@@ -484,11 +486,18 @@ class Loop:
             self.profiles_dir = launch.client_dir()
             # the GlueXML test hook only ever reaches a test-account run (main() also refuses it without the flag)
             hook = frontmenu.test_hook_from_env() if self.args.account == "test" else None
+            # saves-channel: the control listener the front menu talks to (127.0.0.1, per-launch nonce); its port and
+            # nonce reach the glue only through the generated login file, and it closes when the game exits
+            from . import savesctl
+            self.ctl = savesctl.from_env(self.args.account).start()
+            self.rec["savesctl"] = {"addr": self.ctl.summary()["addr"],
+                                    "test": bool(self.ctl.test)}
             self.rec["client"]["profiles"] = frontmenu.write(
                 self.profiles_dir, frontmenu.with_context([{"name": login["account"].upper(),
                                                            "account": login["account"],
                                                            "password": login["password"]}]),
-                default=login["account"], test=hook, about=frontmenu.about_info())
+                default=login["account"], test=hook, about=frontmenu.about_info(),
+                control={"port": self.ctl.port, "nonce": self.ctl.nonce})
         st.start("launching")
         say("Starting the game client..." if args_ is None else f"Starting the test stand-in client ({name})...")
         proc = launch.start_client(args_, cwd)
@@ -557,6 +566,8 @@ class Loop:
         self.step("cleanup_start")
         sd = self.shutdown                  # [shutdown] lines: the launcher's shutdown window (launcher-fixes)
         clean: dict = {}
+        if getattr(self, "ctl", None) is not None:      # saves-channel: the control listener closes with the game
+            self.rec["savesctl"] = self.rec.get("savesctl", {}) | self.ctl.stop()
         if launch.prefix_processes():
             sd.send("shutdown_game", "start")
             clean["stop_prefix"] = launch.stop_prefix()
@@ -638,10 +649,21 @@ def main(argv=None) -> int:
             f"Unset it (`unset {PLAY_CLIENT_ENV}`) and run ./play again.")
         return EXIT_FAIL
     from .resolution import TEST_ENV as DISPLAY_TEST_ENV
-    for var in (GLUE_TEST_ENV, SKIP_ENV, DISPLAY_TEST_ENV, OWN_CLIENT_TEST_ENV):   # test-only; refused before anything
+    from .savesctl import TEST_ENV as CTL_TEST_ENV, ControlError, test_knobs
+    for var in (GLUE_TEST_ENV, SKIP_ENV, DISPLAY_TEST_ENV, OWN_CLIENT_TEST_ENV, CTL_TEST_ENV):   # test-only; refused before anything
         if os.environ.get(var) and not args.allow_test_client_dir:
             say(f"{var} is set: that's a test switch for the harness, not for playing. "
                 f"Unset it (`unset {var}`) and run ./play again.")
+            return EXIT_FAIL
+    if os.environ.get(CTL_TEST_ENV):          # saves-channel: the control listener's test knobs, test account only
+        if args.account != "test":
+            say(f"{CTL_TEST_ENV} is set: that's a test switch for the harness test account only. "
+                f"Unset it (`unset {CTL_TEST_ENV}`) and run ./play again.")
+            return EXIT_FAIL
+        try:
+            test_knobs(os.environ[CTL_TEST_ENV])
+        except ControlError as e:
+            say(str(e))
             return EXIT_FAIL
     # report.client_pristine's self-test switches belong to `harness/hs run` only; ./play refuses them even in tests
     from .pristine import TEST_ENV as PRISTINE_TEST_ENV
