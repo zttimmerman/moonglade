@@ -189,7 +189,7 @@ def main(argv=None) -> int:
                                       "reset only inside a harness run")
     ln.add_argument("action", choices=["init", "status", "down", "reset"])
     ln.add_argument("--force", action="store_true", help="init: rebuild the template even if one exists")
-    ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns from env/branding/logo-source.jpeg")
+    ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns + .json (logo on the navy tile) from env/branding/logo-source.jpeg")
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
 
     a = ap.parse_args(argv)

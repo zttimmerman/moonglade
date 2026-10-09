@@ -31,12 +31,58 @@
     ]
   },
   "cut_radius_source_px": 951.464,
-  "resampled_size": 887,
+  "resampled_size": 613,
   "canvas": 1024,
   "icon_circle_canvas_px": {
-    "cx": 512.494,
-    "cy": 512.016,
-    "r": 412.084
+    "cx": 512.496,
+    "cy": 511.857,
+    "r": 284.789
+  },
+  "tile": {
+    "source_sha256": "c1fd3dd969d9a010ac24cf3b556701e59cabf1a43d933325a8bae9f14260edd7",
+    "shape": "rounded square, circular-arc corners (approved mockup)",
+    "body_px": 824.0,
+    "x0_px": 100.0,
+    "y0_px": 100.0,
+    "corner_radius_px": 185.4,
+    "corner_radius_frac": 0.225,
+    "fill": {
+      "kind": "vertical gradient, t = y / canvas",
+      "top_rgb": [
+        28,
+        38,
+        62
+      ],
+      "bottom_rgb": [
+        18,
+        24,
+        38
+      ]
+    },
+    "glow": {
+      "disc_box_frac": [
+        0.2,
+        0.2,
+        0.8,
+        0.8
+      ],
+      "rgba": [
+        90,
+        120,
+        170,
+        110
+      ],
+      "blur_sigma_px": 81.92
+    },
+    "shadow": {
+      "blur_sigma_px": 20.0,
+      "alpha": 0.35,
+      "dy_px": 12,
+      "reach_px": 60
+    },
+    "logo_scale": 0.86,
+    "logo_canvas_px": 708,
+    "logo_diameter_px": 569.719
   },
   "params": {
     "EDGE_DEFICIT": 96.0,
@@ -47,6 +93,6 @@
     "INSET_SRC_PX": 8.0,
     "ICON_DIAMETER": 824
   },
-  "png_sha256": "dc38c7de0b61555a7c7d4a8703a2f61fe8a77f5a588128006726f025808f3806",
-  "icns_sha256": "86b15f255cfeec38b7bc93cfc3661f383570e8472b151842d254c87011a599ec"
+  "png_sha256": "ae5231310eba12ba9bcd0cdce53a6d1c6f515fd05e574e7483351b1036120591",
+  "icns_sha256": "80a8a2f14867a1e92bf7a3ab5389109e27e2dda461660d8271bf75af6b23ab67"
 }

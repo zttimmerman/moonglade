@@ -1,5 +1,6 @@
-"""App icon generator (openspec/changes/launcher-app, task 1.1): Zach's "zW+" gold-ring logo → a round icon on a
-transparent background, as `branding/AppIcon.png` (1024×1024 RGBA) and `branding/AppIcon.icns` (16-1024 px incl. @2x).
+"""App icon generator (openspec/changes/launcher-app, task 1.1; navy tile: openspec/changes/release-signing, task 3.1):
+Zach's "zW+" gold-ring logo on a dark navy macOS rounded-square tile, as `branding/AppIcon.png` (1024×1024 RGBA) and
+`branding/AppIcon.icns` (16-1024 px incl. @2x), with the measurements and parameters in `branding/AppIcon.json`.
 
 Source: `env/branding/logo-source.jpeg` (gitignored; 2048×2048 JPEG, white surround, no alpha). Stdlib Python plus
 macOS `sips` (JPEG decode and resampling) and `iconutil` (icns packing). Run with `harness/hs icon`.
@@ -21,8 +22,14 @@ How the ring is found (nothing about its position or size is hardcoded):
    gold over ~4 source px) falls outside it, so no white halo survives. Alpha is the exact coverage of each output
    pixel by that circle (a 1 px analytic ramp), which gives a clean anti-aliased edge; fully transparent pixels
    are RGB 0.
-6. Layout follows Apple's macOS icon grid: the round icon is ICON_DIAMETER (824) px across on the 1024 canvas,
-   centred. `sips` resamples the whole source by the factor that maps the cut circle to that diameter.
+6. `sips` resamples the whole source once, by the factor that maps the cut circle to the ring's size on the tile
+   (`logo_diameter()`), and the ring is centred on the 1024 canvas.
+
+The tile (render_tile; the "Approved navy tile" in release-signing design.md, recovered from the mockup Zach picked
+on 2026-10-08): Apple's macOS icon-grid body (TILE_BODY = 824 px square on the 1024 canvas, centred), corner radius
+body × TILE_RADIUS_FRAC as circular arcs, a vertical navy gradient with a soft centred glow, a drop shadow, and the
+ring scaled to int(body × LOGO_SCALE) / CANVAS of its borderless size (the mockup scaled the whole 824-on-1024
+borderless icon to that many px). Blurs follow Pillow's GaussianBlur (three extended box passes) in floats.
 
 Deterministic: same source + same macOS tools → identical pixels (the PNG is written with filter 0 and zlib level 9,
 no timestamps or metadata). `app.icon` re-runs this into a temp dir and compares the decoded pixels.
@@ -37,6 +44,7 @@ import struct
 import subprocess
 import tempfile
 import zlib
+from itertools import accumulate
 from pathlib import Path
 
 from . import paths as P
@@ -48,7 +56,19 @@ ICNS_OUT = BRANDING / "AppIcon.icns"
 META_OUT = BRANDING / "AppIcon.json"
 
 CANVAS = 1024
-ICON_DIAMETER = 824            # Apple macOS icon grid: 824×824 body on a 1024 canvas
+ICON_DIAMETER = 824            # Apple macOS icon grid: 824×824 body on a 1024 canvas (the borderless ring's size)
+# approved navy tile (release-signing design.md "Approved navy tile"); per CANVAS unless noted
+TILE_BODY = 824                # tile square, centred (Apple's grid body)
+TILE_RADIUS_FRAC = 0.225       # corner radius = body × this, circular arcs (approved); Apple's shapes: design.md 6
+TILE_TOP_RGB = (28, 38, 62)    # gradient at t = y/canvas = 0 ...
+TILE_BOTTOM_RGB = (18, 24, 38)  # ... and at t = 1
+GLOW_BOX = (0.2, 0.2, 0.8, 0.8)  # glow disc's bounding box, fractions of the canvas
+GLOW_RGBA = (90, 120, 170, 110)
+GLOW_BLUR_FRAC = 0.08          # Gaussian sigma, fraction of the canvas
+SHADOW_BLUR_512 = 10.0         # shadow: tile mask blurred this many px per 512 px of canvas ...
+SHADOW_ALPHA = 0.35            # ... times this alpha ...
+SHADOW_DY_512 = 6              # ... moved this many px down per 512 px of canvas
+LOGO_SCALE = 0.86              # the borderless icon was scaled to int(body × this) px on the tile
 EDGE_DEFICIT = 96.0            # 255-min(RGB): white surround ≈ 0-10, gold ring ≈ 180-200
 RAYS = 720
 RAY_STEP = 0.5
@@ -262,10 +282,171 @@ def detect_ring(w: int, h: int, rgb: bytes) -> dict:
     return {"cx": cx, "cy": cy, "r": r, "rounds": rounds}
 
 
+
+# ---------------------------------------------------------------- tile stage (release-signing, design 6)
+
+def _box_params(sigma: float, passes: int) -> tuple[int, float]:
+    """Pillow's _gaussian_blur_radius: integer box radius l plus the fractional edge weight a."""
+    s2 = sigma * sigma / passes
+    L = math.sqrt(12.0 * s2 + 1.0)
+    l = int(math.floor((L - 1.0) / 2.0))
+    a = (2 * l + 1) * (l * (l + 1) - 3 * s2) / (6 * (s2 - (l + 1) * (l + 1)))
+    return l, a
+
+
+def blur_reach(sigma: float, passes: int = 3) -> int:
+    """How far (px) `box_blur` can spread a value: passes × (l + 1)."""
+    l, _ = _box_params(sigma, passes)
+    return passes * (l + 1)
+
+
+def box_blur(plane: list[float], w: int, h: int, sigma: float, passes: int = 3) -> list[float]:
+    """Gaussian blur approximated the way Pillow's GaussianBlur(radius=sigma) does it: `passes` extended box blurs
+    (box radius l plus a fractional edge weight a) along rows, then the same along columns; edges extend the border
+    pixel. Floats in, floats out (no per-pass rounding, so not bit-identical to Pillow)."""
+    l, a = _box_params(sigma, passes)
+    norm = 1.0 / (2 * (l + a) + 1)
+    pad = l + 2
+
+    def line(x: list[float]) -> list[float]:
+        n = len(x)
+        for _ in range(passes):
+            ext = [x[0]] * pad + x + [x[-1]] * pad
+            ps = [0.0, *accumulate(ext)]                     # ps[k] = sum(ext[:k])
+            x = [(ps[i + pad + l + 1] - ps[i + pad - l] + a * (ext[i + pad - l - 1] + ext[i + pad + l + 1])) * norm
+                 for i in range(n)]
+        return x
+
+    rows = [line(plane[y * w:(y + 1) * w]) for y in range(h)]
+    cols = [line([rows[y][x] for y in range(h)]) for x in range(w)]
+    return [cols[x][y] for y in range(h) for x in range(w)]
+
+
+def rounded_rect_coverage(n: int, x0: float, y0: float, size: float, radius: float) -> list[float]:
+    """Coverage (0..1) of each pixel of an n×n canvas by a circular-arc rounded square: a 1 px analytic ramp on the
+    signed distance to its edge (pixel i spans [i, i+1))."""
+    cx, cy = x0 + size / 2, y0 + size / 2
+    inner = size / 2 - radius
+    out = [0.0] * (n * n)
+    for y in range(n):
+        qy = abs(y + 0.5 - cy) - inner
+        if qy - radius >= 0.5:
+            continue
+        for x in range(n):
+            qx = abs(x + 0.5 - cx) - inner
+            sd = math.hypot(max(qx, 0.0), max(qy, 0.0)) + min(max(qx, qy), 0.0) - radius
+            if sd < 0.5:
+                out[y * n + x] = 1.0 if sd <= -0.5 else 0.5 - sd
+    return out
+
+
+def tile_geometry(n: int = CANVAS) -> dict:
+    """The tile's body (Apple's 824/1024 grid body, centred) and approved corner radius on an n×n canvas."""
+    body = n * TILE_BODY / CANVAS
+    return {"canvas": n, "body": body, "x0": (n - body) / 2, "y0": (n - body) / 2,
+            "corner_radius": body * TILE_RADIUS_FRAC}
+
+
+def logo_diameter(n: int = CANVAS) -> float:
+    """The ring's diameter on the tile. The mockup scaled the whole borderless icon (ring ICON_DIAMETER px across a
+    CANVAS-px canvas) to int(body × LOGO_SCALE) px; the ring is cut straight to that size here (one resample)."""
+    return ICON_DIAMETER * int(tile_geometry(n)["body"] * LOGO_SCALE) / CANVAS
+
+
+def render_tile(logo: bytes, n: int = CANVAS, mask: list[float] | None = None) -> bytes:
+    """The approved navy tile (release-signing design.md "Approved navy tile") on an n×n canvas with `logo` (n×n
+    RGBA, already at its final size and place) on top. `mask` overrides the tile's coverage (to preview other corner
+    shapes); the shadow is cast by whichever mask is used. Returns n×n RGBA, straight alpha; alpha-0 pixels are RGB 0.
+
+    Layers, bottom to top: shadow (black, SHADOW_ALPHA × the mask moved SHADOW_DY down and blurred SHADOW_BLUR),
+    tile (vertical gradient TILE_TOP_RGB → TILE_BOTTOM_RGB, t = y/n, with a glow: GLOW_RGBA's colour at up to its
+    alpha over a centred disc of GLOW_BOX blurred GLOW_BLUR_FRAC × n), logo. The mockup's shadow numbers are per
+    512 px and scale with n."""
+    g = tile_geometry(n)
+    k = n / 512
+    if mask is None:
+        mask = rounded_rect_coverage(n, g["x0"], g["y0"], g["body"], g["corner_radius"])
+    dy = round(SHADOW_DY_512 * k)
+    shadow = box_blur([0.0] * (dy * n) + mask[:n * n - dy * n], n, n, SHADOW_BLUR_512 * k)
+    gr, gc = (GLOW_BOX[2] - GLOW_BOX[0]) * n / 2, n / 2
+    glow = box_blur([1.0 if math.hypot(i % n + 0.5 - gc, i // n + 0.5 - gc) <= gr else 0.0 for i in range(n * n)],
+                    n, n, GLOW_BLUR_FRAC * n)
+    ga_max = GLOW_RGBA[3] / 255
+    out = bytearray(n * n * 4)
+    for y in range(n):
+        t = y / n
+        base = [TILE_TOP_RGB[c] + (TILE_BOTTOM_RGB[c] - TILE_TOP_RGB[c]) * t for c in range(3)]
+        for x in range(n):
+            i = y * n + x
+            tm, sa = mask[i], SHADOW_ALPHA * shadow[i]
+            p = i * 4
+            la = logo[p + 3] / 255
+            A = tm + sa * (1 - tm)                           # tile over shadow
+            A2 = la + A * (1 - la)                           # logo over that
+            a8 = min(255, round(A2 * 255))
+            if a8 == 0:
+                continue
+            ga = ga_max * glow[i]
+            for c in range(3):
+                col = (GLOW_RGBA[c] * ga + base[c] * (1 - ga)) * tm / A if A > 0 else 0.0
+                out[p + c] = min(255, max(0, round((logo[p + c] * la + col * A * (1 - la)) / A2)))
+            out[p + 3] = a8
+    return bytes(out)
+
+
 # ---------------------------------------------------------------- generator
 
 def _sha256(p: Path) -> str:
     return hashlib.sha256(Path(p).read_bytes()).hexdigest()
+
+
+def cut_logo(source: Path, tmp: Path, ring: dict, src_w: int, diameter: float, n: int = CANVAS) -> tuple[bytes, dict]:
+    """The gold ring cut out of the source (cut circle = fitted edge - INSET_SRC_PX), resampled by `sips` so the cut
+    circle is `diameter` px across, centred on an n×n transparent canvas. Returns (RGBA, geometry)."""
+    r_cut = ring["r"] - INSET_SRC_PX
+    m = round(src_w * (diameter / 2) / r_cut)                # resampled size: cut circle → diameter
+    s = m / src_w
+    scaled = tmp / f"scaled-{m}.bmp"
+    _sips("-s", "format", "bmp", "-z", m, m, source, "--out", scaled)
+    nw, nh, srgb = read_bmp(scaled)
+    if (nw, nh) != (m, m):
+        raise IconError(f"sips resampled to {nw}x{nh}, expected {m}x{m}")
+    # continuous coordinates (pixel i spans [i, i+1)); source edge points are pixel-centre coordinates
+    ccx, ccy = (ring["cx"] + 0.5) * s, (ring["cy"] + 0.5) * s
+    ox, oy = round(n / 2 - ccx), round(n / 2 - ccy)
+    cx, cy, R = ccx + ox, ccy + oy, r_cut * s
+    out = bytearray(n * n * 4)
+    for y in range(n):
+        dy = y + 0.5 - cy
+        if abs(dy) >= R + 0.5:
+            continue
+        half = math.sqrt(max(0.0, (R + 0.5) ** 2 - dy * dy))
+        x0, x1 = max(0, int(math.floor(cx - half))), min(n - 1, int(math.ceil(cx + half)))
+        sy = y - oy
+        if not 0 <= sy < nh:
+            continue
+        for x in range(x0, x1 + 1):
+            sx = x - ox
+            if not 0 <= sx < nw:
+                continue
+            a = R - math.hypot(x + 0.5 - cx, dy) + 0.5
+            if a <= 0:
+                continue
+            i, j = (y * n + x) * 4, (sy * nw + sx) * 3
+            out[i:i + 3] = srgb[j:j + 3]
+            out[i + 3] = 255 if a >= 1 else round(a * 255)
+    return bytes(out), {"cut_radius_source_px": r_cut, "resampled_size": m, "cx": cx, "cy": cy, "r": R}
+
+
+def load_logo(source: Path = SOURCE, diameter: float | None = None) -> bytes:
+    """The cut ring at `diameter` (default: its size on the tile) on a CANVAS×CANVAS transparent canvas."""
+    tmp = Path(tempfile.mkdtemp(prefix="hs-icon-"))
+    try:
+        _sips("-s", "format", "bmp", source, "--out", tmp / "src.bmp")
+        sw, sh, rgb = read_bmp(tmp / "src.bmp")
+        return cut_logo(source, tmp, detect_ring(sw, sh, rgb), sw, diameter or logo_diameter())[0]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
 
 
 def generate(source: Path = SOURCE, out_dir: Path | None = None) -> dict:
@@ -280,39 +461,9 @@ def generate(source: Path = SOURCE, out_dir: Path | None = None) -> dict:
         _sips("-s", "format", "bmp", source, "--out", tmp / "src.bmp")
         sw, sh, rgb = read_bmp(tmp / "src.bmp")
         ring = detect_ring(sw, sh, rgb)
-        r_cut = ring["r"] - INSET_SRC_PX
-        n = round(sw * (ICON_DIAMETER / 2) / r_cut)          # resampled size: cut circle → ICON_DIAMETER
-        s = n / sw
-        _sips("-s", "format", "bmp", "-z", n, n, source, "--out", tmp / "scaled.bmp")
-        nw, nh, srgb = read_bmp(tmp / "scaled.bmp")
-        if (nw, nh) != (n, n):
-            raise IconError(f"sips resampled to {nw}x{nh}, expected {n}x{n}")
-        # continuous coordinates (pixel i spans [i, i+1)); source edge points are pixel-centre coordinates
-        ccx, ccy = (ring["cx"] + 0.5) * s, (ring["cy"] + 0.5) * s
-        ox, oy = round(CANVAS / 2 - ccx), round(CANVAS / 2 - ccy)
-        cx, cy, R = ccx + ox, ccy + oy, r_cut * s
-        out = bytearray(CANVAS * CANVAS * 4)
-        for y in range(CANVAS):
-            dy = y + 0.5 - cy
-            if abs(dy) >= R + 0.5:
-                continue
-            half = math.sqrt(max(0.0, (R + 0.5) ** 2 - dy * dy))
-            x0, x1 = max(0, int(math.floor(cx - half))), min(CANVAS - 1, int(math.ceil(cx + half)))
-            sy = y - oy
-            if not 0 <= sy < nh:
-                continue
-            for x in range(x0, x1 + 1):
-                sx = x - ox
-                if not 0 <= sx < nw:
-                    continue
-                a = R - math.hypot(x + 0.5 - cx, dy) + 0.5
-                if a <= 0:
-                    continue
-                i, j = (y * CANVAS + x) * 4, (sy * nw + sx) * 3
-                out[i:i + 3] = srgb[j:j + 3]
-                out[i + 3] = 255 if a >= 1 else round(a * 255)
+        logo, lg = cut_logo(source, tmp, ring, sw, logo_diameter())
         png = out_dir / PNG_OUT.name
-        write_png(png, CANVAS, CANVAS, bytes(out))
+        write_png(png, CANVAS, CANVAS, render_tile(logo))
 
         iconset = tmp / "AppIcon.iconset"
         iconset.mkdir()
@@ -325,13 +476,30 @@ def generate(source: Path = SOURCE, out_dir: Path | None = None) -> dict:
         r = subprocess.run([ICONUTIL, "-c", "icns", str(iconset), "-o", str(icns)], capture_output=True, text=True)
         if r.returncode != 0:
             raise IconError(f"iconutil failed: {r.stderr.strip()}")
+        src_sha = _sha256(source)
+        geo = tile_geometry()
+        sh_sigma = SHADOW_BLUR_512 * CANVAS / 512
         meta = {"source": str(source.relative_to(P.ROOT)) if source.is_relative_to(P.ROOT) else str(source),
-                "source_sha256": _sha256(source), "source_size": [sw, sh],
+                "source_sha256": src_sha, "source_size": [sw, sh],
                 "ring_source_px": {"cx": round(ring["cx"], 3), "cy": round(ring["cy"], 3), "r": round(ring["r"], 3),
                                    "fit_rounds": [{k: (round(v, 3) if isinstance(v, float) else v) for k, v in rd.items()}
                                                   for rd in ring["rounds"]]},
-                "cut_radius_source_px": round(r_cut, 3), "resampled_size": n,
-                "canvas": CANVAS, "icon_circle_canvas_px": {"cx": round(cx, 3), "cy": round(cy, 3), "r": round(R, 3)},
+                "cut_radius_source_px": round(lg["cut_radius_source_px"], 3), "resampled_size": lg["resampled_size"],
+                "canvas": CANVAS,
+                "icon_circle_canvas_px": {"cx": round(lg["cx"], 3), "cy": round(lg["cy"], 3), "r": round(lg["r"], 3)},
+                "tile": {"source_sha256": src_sha,
+                         "shape": "rounded square, circular-arc corners (approved mockup)",
+                         "body_px": geo["body"], "x0_px": geo["x0"], "y0_px": geo["y0"],
+                         "corner_radius_px": round(geo["corner_radius"], 3), "corner_radius_frac": TILE_RADIUS_FRAC,
+                         "fill": {"kind": "vertical gradient, t = y / canvas", "top_rgb": list(TILE_TOP_RGB),
+                                  "bottom_rgb": list(TILE_BOTTOM_RGB)},
+                         "glow": {"disc_box_frac": list(GLOW_BOX), "rgba": list(GLOW_RGBA),
+                                  "blur_sigma_px": round(GLOW_BLUR_FRAC * CANVAS, 3)},
+                         "shadow": {"blur_sigma_px": sh_sigma, "alpha": SHADOW_ALPHA,
+                                    "dy_px": round(SHADOW_DY_512 * CANVAS / 512),
+                                    "reach_px": blur_reach(sh_sigma)},
+                         "logo_scale": LOGO_SCALE, "logo_canvas_px": int(geo["body"] * LOGO_SCALE),
+                         "logo_diameter_px": round(logo_diameter(), 3)},
                 "params": {"EDGE_DEFICIT": EDGE_DEFICIT, "RAYS": RAYS, "RAY_STEP": RAY_STEP, "RUN": RUN,
                            "OUTLIER_PX": OUTLIER_PX, "INSET_SRC_PX": INSET_SRC_PX, "ICON_DIAMETER": ICON_DIAMETER},
                 "png_sha256": _sha256(png), "icns_sha256": _sha256(icns)}
