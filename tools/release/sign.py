@@ -300,6 +300,9 @@ def plan(app: Path, oracle: dict) -> list[dict]:
         prel = payload_rel(app, p)
         if prel is not None and prel in oracle:
             continue
+        if prel is not None and prel.startswith(ORACLE_DIR + "/"):
+            unknown.append(f"{r} (in {ORACLE_DIR}/ but not in the Oracle record)")
+            continue
         if r == "Contents/MacOS/Moonglade":
             continue
         ft = macho_filetype(p)
@@ -313,7 +316,8 @@ def plan(app: Path, oracle: dict) -> list[dict]:
         else:
             libs.append({"path": p, "rel": r, "role": "library", "identifier": f"{BUNDLE_ID}.{p.name}"})
     if unknown:
-        raise SignError(f"executables with no signing role (add them to sign.ROLES): {unknown}")
+        raise SignError(f"Mach-O files with no signing role (executables need one in sign.ROLES; mysql/ holds only "
+                        f"Oracle's recorded files): {unknown}")
     gone = [k for k in oracle if not (app / PAYLOAD_REL / k).is_file()]
     if gone:
         raise SignError(f"recorded Oracle files missing from the app: {gone}")
@@ -440,7 +444,11 @@ def sign(app: Path, build: Path, config: Path, oracle_record: Path, env: EnvRead
                             "local builds use ad-hoc")
     if not (app / "Contents/Info.plist").is_file():
         raise SignError(f"no app at {app}; run the payload step first")
+    (build / "sign.json").unlink(missing_ok=True)        # only a signing that verified leaves a record
     odir = app / PAYLOAD_REL / ORACLE_DIR
+    version = app / PAYLOAD_REL / "VERSION"
+    if oracle_record.is_file() and version.is_file() and oracle_record.stat().st_mtime < version.stat().st_mtime:
+        raise SignError(f"the Oracle signature record {oracle_record} is older than the payload; run payload again")
     if oracle_record.is_file():
         oracle = json.loads(oracle_record.read_text())
     elif odir.is_dir() and any(is_macho(p) for p in odir.rglob("*")):
