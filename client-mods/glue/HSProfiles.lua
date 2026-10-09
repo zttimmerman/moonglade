@@ -4,3 +4,4 @@
 HS_PROFILES = {};
 HS_PROFILE_DEFAULT = nil;
 HS_TEST = nil;
+HS_CONTROL = nil;

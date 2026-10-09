@@ -193,6 +193,27 @@
 						</Anchor>
 					</Anchors>
 				</Texture>
+				<!-- saves-channel: control request state and the stock status dialog (HSFrontMenu_UpdateMarker) -->
+				<Texture name="HSTestMarkerControl">
+					<Size x="40" y="40"/>
+					<Anchors>
+						<Anchor point="TOPLEFT">
+							<Offset>
+								<AbsDimension x="53" y="-53"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</Texture>
+				<Texture name="HSTestMarkerStock">
+					<Size x="40" y="40"/>
+					<Anchors>
+						<Anchor point="TOPLEFT">
+							<Offset>
+								<AbsDimension x="106" y="-53"/>
+							</Offset>
+						</Anchor>
+					</Anchors>
+				</Texture>
 			</Layer>
 		</Layers>
 	</Frame>
@@ -394,6 +415,46 @@
 				</Frames>
 			</Frame>
 		</Frames>
+	</Frame>
+
+	<!-- saves-channel (HSFrontMenu.lua, HSControl_*): the small overlay shown while a request to the launcher is
+	     pending (instead of the stock connecting / error dialogs), and the request's clock and timeout -->
+	<Frame name="HSControlOverlay" parent="GlueParent" setAllPoints="true" frameStrata="FULLSCREEN" enableMouse="true" hidden="true">
+		<Frames>
+			<Frame name="HSControlOverlayBox">
+				<Size x="320" y="80"/>
+				<Anchors>
+					<Anchor point="CENTER"/>
+				</Anchors>
+				<Backdrop bgFile="Interface\DialogFrame\UI-DialogBox-Background" edgeFile="Interface\DialogFrame\UI-DialogBox-Border" tile="true">
+					<BackgroundInsets>
+						<AbsInset left="11" right="12" top="12" bottom="11"/>
+					</BackgroundInsets>
+					<TileSize>
+						<AbsValue val="32"/>
+					</TileSize>
+					<EdgeSize>
+						<AbsValue val="32"/>
+					</EdgeSize>
+				</Backdrop>
+				<Layers>
+					<Layer level="ARTWORK">
+						<FontString name="HSControlOverlayText" inherits="GlueFontNormalLarge" text="">
+							<Anchors>
+								<Anchor point="CENTER"/>
+							</Anchors>
+						</FontString>
+					</Layer>
+				</Layers>
+			</Frame>
+		</Frames>
+	</Frame>
+	<Frame name="HSControlFrame" parent="GlueParent">
+		<Scripts>
+			<OnUpdate>
+				HSControl_OnUpdate(self, elapsed);
+			</OnUpdate>
+		</Scripts>
 	</Frame>
 
 	<!-- seamless-experience: the character-list event and the overlay's per-frame bookkeeping -->
