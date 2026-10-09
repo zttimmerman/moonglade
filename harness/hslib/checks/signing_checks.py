@@ -243,6 +243,8 @@ def workflow_problems(text: str) -> tuple[list[str], dict]:
             probs.append("signing happens after Homebrew is moved aside")
     if smoke_i is not None and "env/release/payload/Moonglade.app/Contents/Resources/Moonglade" not in steps[smoke_i]["body"]:
         probs.append("the smoke doesn't run the packaged (signed) app's payload")
+    if smoke_i is not None and not re.search(r"python3 -I -B ", steps[smoke_i]["body"]):
+        probs.append("the smoke runs the signed app's Python without -B (it would write __pycache__ into the sealed app)")
     if None not in (mode_i, secret_i, pkg_i) and not (mode_i < secret_i < pkg_i):
         probs.append("the secret check doesn't run after reading the mode and before building")
     if None not in (notarize_i, draft_i, spctl_i) and not (notarize_i < spctl_i < draft_i):
@@ -296,6 +298,9 @@ def workflow_mutations(text: str) -> dict[str, str]:
         ncb = "\n".join("      - " + l if i == 0 else ("        " + l if l else "") for i, l in enumerate(nc["lines"]))
         if ncb in text:
             out["no_notarized_check"] = text.replace(ncb + "\n", "", 1)
+    # 6. the smoke's Python without -B (writes __pycache__ into the signed app before it is zipped)
+    out["smoke_without_B"] = text.replace("python/bin/python3 -I -B tools/release/smoke.py",
+                                          "python/bin/python3 -I tools/release/smoke.py", 1)
     # 4. fixed release notes
     out["fixed_notes"] = re.sub(r'--notes-file "tools/release/notes/\$\{SIGNING_MODE\}\.md"',
                                 '--notes "Prebuilt Moonglade."', text, count=1)
@@ -385,7 +390,7 @@ def mode_setting(ctx):
         for name, mutated in workflow_mutations(text).items():
             caught[name] = workflow_problems(mutated)[0][:3] if mutated != text else ["(mutation didn't apply)"]
         ev["workflow"]["counterexamples"] = caught
-        require(len(caught) == 5 and all(v and v != ["(mutation didn't apply)"] for v in caught.values()),
+        require(len(caught) == 6 and all(v and v != ["(mutation didn't apply)"] for v in caught.values()),
                 "a mutated workflow wasn't caught", **ev)
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -624,9 +629,12 @@ def run_smoke(app: Path, d: Path, tag: str) -> dict:
     """tools/release/smoke.py --sandbox on `app`'s payload (the release workflow's smoke, with this app's Python)."""
     js = d / f"smoke-{tag}.json"
     pl = app / PAYLOAD_REL
-    r = subprocess.run([str(pl / "python/bin/python3"), "-I", str(TOOLS / "smoke.py"), "--payload", str(pl),
-                        "--scratch", str(d / f"smoke-{tag}"), "--sandbox", "--json", str(js)],
+    # short scratch: mysqld's socket path (<scratch>/Second Place/my.sock) must stay under macOS's 104 bytes
+    scratch = WORK / f"sm-{os.getpid() % 100000}-{abs(hash(tag)) % 1000}"
+    r = subprocess.run([str(pl / "python/bin/python3"), "-I", "-B", str(TOOLS / "smoke.py"), "--payload", str(pl),
+                        "--scratch", str(scratch), "--sandbox", "--json", str(js)],
                        capture_output=True, text=True, cwd=d, timeout=900, env=_clean_env())
+    shutil.rmtree(scratch, ignore_errors=True)
     try:
         rec = json.loads(js.read_text())
     except (OSError, ValueError):
@@ -754,13 +762,13 @@ def _satisfies(app: Path, requirement: str) -> dict:
     return {"rc": r.returncode, "out": r.stderr.strip()[-300:]}
 
 
-def _cstring_offset(p: Path) -> int:
-    """File offset of the launcher's __TEXT,__cstring section (arm64 slice of a thin file)."""
-    out = subprocess.run(["/usr/bin/otool", "-l", str(p)], capture_output=True, text=True).stdout
-    m = re.search(r"sectname __cstring\n\s+segname __TEXT\n(?:.*\n){3}\s+offset (\d+)", out)
-    if not m:
-        raise RuntimeError("no __TEXT,__cstring in the launcher")
-    return int(m.group(1))
+def _string_offset(data: bytes) -> int:
+    """Offset of a byte inside one of the launcher's own strings ("Moonglade" past the Mach-O header and load
+    commands): changing it changes the code hash and nothing the check runs."""
+    i = data.find(b"Moonglade", 0x4000)
+    if i < 0:
+        raise RuntimeError("no 'Moonglade' string in the launcher")
+    return i
 
 
 @check("signing.stable_identity", order=13, capability=CAP, stack="any", tier="slow")
@@ -782,7 +790,7 @@ def stable_identity(ctx):
         for rel in ("Contents/MacOS/Moonglade",):
             p = app2 / rel
             data = bytearray(p.read_bytes())
-            off = _cstring_offset(p)
+            off = _string_offset(bytes(data))
             data[off] = (data[off] + 1) % 256                    # one byte of the launcher's strings
             p.unlink()
             p.write_bytes(bytes(data))

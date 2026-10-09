@@ -18,7 +18,7 @@
 #### Scenario: Icon is the logo on a navy tile
 - **GIVEN** the committed `AppIcon.icns` and its PNG
 - **WHEN** the harness decodes them
-- **THEN** the .icns contains every standard size from 16 to 1024 px (incl. @2x); in the 1024 px image the pixels outside the tile's rounded square (the canvas corners and margin) are fully transparent (alpha 0); a ring of sample points just inside the tile's edge, including its four rounded corners, is opaque and within a small colour distance of the recorded navy; the centre is opaque; the gold ring is present at the recorded scale (sampled points on the ring are gold, not navy); and re-running the generator on the logo source reproduces the committed PNG pixel for pixel. A scratch icon rendered with the old transparent layout, and one with a white tile, each fail
+- **THEN** the .icns contains every standard size from 16 to 1024 px (incl. @2x); in the 1024 px image, with the tile's geometry taken from AppIcon.json's `tile` record (never hard-coded in the check), the canvas corners and every pixel outside the tile's rounded square and its recorded shadow band are fully transparent (alpha 0); a ring of sample points just inside the tile's edge, including its four rounded corners, is opaque and within a small colour distance of the recorded navy; the centre is opaque; the gold ring is present at the recorded scale (sampled points on the ring are gold, not navy); and re-running the generator on the logo source reproduces the committed PNG pixel for pixel. A scratch icon rendered with the old transparent layout, and one with a white tile, each fail
 - Check: `app.icon`
 
 ### Requirement: One icon everywhere

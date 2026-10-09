@@ -132,7 +132,7 @@ jobs:
 
       - name: Smoke test the signed app without Homebrew
         run: >
-          env/release/payload/Moonglade.app/Contents/Resources/Moonglade/python/bin/python3 -I tools/release/smoke.py
+          env/release/payload/Moonglade.app/Contents/Resources/Moonglade/python/bin/python3 -I -B tools/release/smoke.py
           --payload env/release/payload/Moonglade.app/Contents/Resources/Moonglade --scratch "env/release/smoke"
           --sandbox --deny-write "${GITHUB_WORKSPACE}" --json env/release/smoke.json
 
