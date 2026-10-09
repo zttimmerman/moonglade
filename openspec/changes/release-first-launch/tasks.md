@@ -10,12 +10,12 @@
 - [x] 2.3 Launcher release mode: payload from the bundle, payload Python `-I -m hslib.play`, logs in HOME
 
 ## 3. First launch
-- [ ] 3.1 Release step list in `bootstrap.py` + `hs first-launch` (preflight incl. disk need = client size + fixed part, client, data, wine, database, playclient, defaults); `home.json` step/attempt record
-- [ ] 3.2 Client step: read-only source (pristine rules extended), clonefile on same volume else byte copy, manifest verify before "can delete"
-- [ ] 3.3 Download progress events; per-step resume; plain errors for offline and damaged downloads
-- [ ] 3.4 Database step: initialise, first start, safe reset rule (attempt record + no characters), phase timestamps
-- [ ] 3.5 Launcher first-launch window: choose-folder, progress, error + choose again, "All set" + Play; second open goes to the play loop; closing mid-setup stops cleanly
-- [ ] 3.6 Error catalog (design 5) wired to every failure path
+- [x] 3.1 Release step list in `bootstrap.py` + `hs first-launch` (preflight incl. disk need = client size + fixed part, client, data, wine, database, playclient, defaults); `home.json` step/attempt record
+- [x] 3.2 Client step: read-only source (pristine rules extended), clonefile on same volume else byte copy, manifest verify before "can delete"
+- [x] 3.3 Download progress events; per-step resume; plain errors for offline and damaged downloads
+- [x] 3.4 Database step: initialise, first start, safe reset rule (attempt record + no characters), phase timestamps
+- [x] 3.5 Launcher first-launch window: choose-folder, progress, error + choose again, "All set" + Play; second open goes to the play loop; closing mid-setup stops cleanly
+- [x] 3.6 Error catalog (design 5) wired to every failure path
 
 ## 4. Measure, check, document
 - [ ] 4.1 Measure on a scratch HOME (×3): DB first start split (initialise / SQL import / bot setup), first-launch time per step, HOME size per folder (clone vs copy); put the fixed disk part into preflight with the citation; record all in design.md "Measurements"

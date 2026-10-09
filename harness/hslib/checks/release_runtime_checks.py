@@ -613,6 +613,10 @@ def test_switches_refused(ctx):
         import fcntl
         home2 = d / "h2"
         (home2 / "run").mkdir(parents=True)
+        # a set-up HOME (release-first-launch 3.5: a HOME whose first launch isn't complete gets the first-launch
+        # window instead of the play loop; this control is about the play loop)
+        (home2 / "home.json").write_text(json.dumps({"layout": P.HOME_LAYOUT_VERSION,
+                                                     "first_launch": {"complete": True}}) + "\n")
         lock_fd = os.open(home2 / "run" / "play.lock", os.O_RDWR | os.O_CREAT, 0o644)
         try:
             fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
