@@ -480,6 +480,23 @@ function HSFrontMenu_UpdateMarker()
 	else
 		HSTestMarkerOverlay:SetTexture(1, 1, 1, 1);
 	end
+	-- saves-channel, second row: control request (magenta = pending with our overlay up; then the last result:
+	-- green = accepted, red = refused, blue = couldn't reach the launcher; white = none yet) and the stock status
+	-- dialog (red = on screen, white = not)
+	local c = HSControlState;
+	if ( c.pending and HSControlOverlay:IsVisible() ) then
+		HSTestMarkerControl:SetTexture(1, 0, 1, 1);
+	elseif ( c.last ) then
+		local rgb = ({ A = {0, 1, 0}, R = {1, 0, 0}, U = {0, 0, 1} })[c.last.cls] or {0, 0, 0};
+		HSTestMarkerControl:SetTexture(rgb[1], rgb[2], rgb[3], 1);
+	else
+		HSTestMarkerControl:SetTexture(1, 1, 1, 1);
+	end
+	if ( GlueDialog:IsVisible() ) then
+		HSTestMarkerStock:SetTexture(1, 0, 0, 1);
+	else
+		HSTestMarkerStock:SetTexture(1, 1, 1, 1);
+	end
 	HSTestMarker:Show();
 end
 
@@ -579,6 +596,8 @@ end
 -- "showlog" (debugging aid: the end of the in-memory test log as text on screen, for a following "shot");
 -- seamless-polish: "mainmenu" (click Main Menu on character select; the next character list runs
 -- HS_TEST.charselect_again), "continue" (as in HS_TEST.script).
+-- saves-channel: "ctl:<verb><arg>" (one control request, HSControl_Send), "realm:reset" (realmList back without the
+-- listener's port). Like every act here they exist only in HS_TEST, which only a test run's generated file carries.
 function HSFrontMenu_TestAct(act)
 	if ( act == "details" ) then
 		HSFrontMenu_Mark("press:details");
@@ -615,9 +634,142 @@ function HSFrontMenu_TestAct(act)
 	elseif ( act == "quit" ) then
 		HSFrontMenu_Mark("quit");
 		QuitGame();
+	elseif ( strsub(act, 1, 4) == "ctl:" ) then         -- saves-channel: one request to the launcher ("ctl:S")
+		HSFrontMenu_Mark("press:ctl:" .. strsub(act, 5));
+		HSControl_Send(strsub(act, 5, 5), strsub(act, 6));
+	elseif ( act == "realm:reset" ) then
+		HSControl_ResetRealm();
 	else
 		HSFrontMenu_Mark("unknown-act:" .. tostring(act));
 	end
+end
+
+-- ---------------------------------------------------------------- saves-channel: requests to the launcher
+
+-- How the menu asks the launcher something (openspec/changes/saves-channel; channel A1 of the front-menu-saves spike).
+-- The launcher listens on 127.0.0.1 (harness/hslib/savesctl.py) and puts its port and a per-launch nonce into the
+-- generated HSProfiles.lua as HS_CONTROL. A request points the client's realmList console variable at the listener
+-- and "logs in" with the account name HS<nonce><verb><arg>: the client sends its ordinary logon challenge there, and
+-- the listener answers with a failure code. The client shows that code as a stock status text (OPEN_STATUS_DIALOG
+-- "CANCEL" with LOGIN_STATE_CONNECTING, then UPDATE_STATUS_DIALOG(<text>, OKAY)); the text is the reply. While a request
+-- is pending, our small overlay is shown and the stock connecting and error dialogs are kept off screen; the result is
+-- acknowledged the way the stock Okay button would (StatusDialogClick), and realmList goes back to what it was, on
+-- the reply or after HS_CONTROL_TIMEOUT seconds. A forgotten reset couldn't stick either: the launcher rewrites
+-- realmlist at every start (clientcfg.py).
+-- Replies: the texts of the two codes the launcher uses (savesctl.py ACCEPTED / REFUSED; the live table in the
+-- change's design.md). Any other text, or none in time, means the launcher couldn't be reached.
+HS_CONTROL_REPLY = { accepted = "LOGIN_DBBUSY", refused = "LOGIN_BANNED" };
+HS_CONTROL_TIMEOUT = 5;
+HS_CONTROL_TEXT = { pending = "One moment" .. "\226\128\166", unreachable = "Couldn't reach Moonglade. Nothing changed." };
+
+local CTL = { clock = 0, pending = nil, last = nil, n = 0, graceUntil = 0, saved = nil };
+HSControlState = CTL;
+
+local function ctlClean(s)
+	return (gsub(gsub(tostring(s or ""), "[\r\n;|\"]", ","), ":", "."));
+end
+
+-- Send one request. Returns false (and does nothing) without a listener, while another request is pending, or away
+-- from the login screen.
+function HSControl_Send(verb, arg)
+	if ( not HS_CONTROL or not HS_CONTROL.port or not HS_CONTROL.nonce or CTL.pending
+	     or CURRENT_GLUE_SCREEN ~= "login" or (HSLoadingOverlay and HSLoadingOverlay:IsShown()) ) then
+		HSFrontMenu_Mark("ctl:skip:" .. tostring(verb) .. ":" .. tostring(CURRENT_GLUE_SCREEN));
+		return false;
+	end
+	CTL.n = CTL.n + 1;
+	CTL.saved = GetCVar("realmList");
+	SetCVar("realmList", "127.0.0.1:" .. HS_CONTROL.port);
+	CTL.pending = { verb = verb, t0 = CTL.clock, stockFrames = 0, events = 0, result = nil,
+	                realmSet = GetCVar("realmList") };
+	HSControlOverlayText:SetText(HS_CONTROL_TEXT.pending);
+	HSControlOverlay:Show();
+	HSFrontMenu_Mark("ctl:send:" .. verb .. ":realm=" .. (CTL.pending.realmSet == ("127.0.0.1:" .. HS_CONTROL.port) and 1 or 0));
+	-- DefaultServerLogin wipes the password string it's given, in place (HSFrontMenu_Login): a throwaway one per request
+	DefaultServerLogin("HS" .. HS_CONTROL.nonce .. verb .. (arg or ""), format("HSCTL%dX", CTL.n));
+	return true;
+end
+
+local function classify(text)
+	if ( text and _G[HS_CONTROL_REPLY.accepted] and text == _G[HS_CONTROL_REPLY.accepted] ) then return "A"; end
+	if ( text and _G[HS_CONTROL_REPLY.refused] and text == _G[HS_CONTROL_REPLY.refused] ) then return "R"; end
+	return "U";
+end
+
+local function finish(text, why)
+	local p = CTL.pending;
+	CTL.pending = nil;
+	CTL.graceUntil = CTL.clock + 2;           -- late status events of this request stay off screen too
+	SetCVar("realmList", CTL.saved);
+	local realmOk = (GetCVar("realmList") == CTL.saved) and 1 or 0;
+	local cls = classify(text);
+	HSControlOverlay:Hide();
+	CTL.last = { verb = p.verb, cls = cls, text = text, why = why, secs = CTL.clock - p.t0, realmOk = realmOk,
+	             stockFrames = p.stockFrames };
+	HSFrontMenu_Mark(format("ctl:result:%s:%s:%s:%.1fs:realm=%d:stock=%d:%s", p.verb, cls, why, CTL.clock - p.t0,
+		realmOk, p.stockFrames, ctlClean(strsub(text or "", 1, 60))));
+	if ( HSSeamless_Rec ) then
+		HSSeamless_Rec(format("K%s%d%d:%s:%d", cls, realmOk, p.stockFrames > 0 and 1 or 0,
+			HSSeamless_Adler(text or ""), math.floor((CTL.clock - p.t0) * 10 + 0.5)));
+	end
+end
+
+-- realm:reset (test action): realmList back to the value before the last request (or without a port).
+function HSControl_ResetRealm()
+	local v = CTL.saved or gsub(GetCVar("realmList") or "", ":%d+$", "");
+	SetCVar("realmList", v);
+	HSFrontMenu_Mark("realm:reset:" .. ((GetCVar("realmList") == v) and 1 or 0));
+end
+
+function HSControl_OnUpdate(self, elapsed)
+	CTL.clock = CTL.clock + elapsed;
+	local p = CTL.pending;
+	if ( not p ) then return; end
+	if ( GlueDialog:IsVisible() ) then p.stockFrames = p.stockFrames + 1; end
+	if ( p.result ) then
+		StatusDialogClick();                      -- what the stock Okay button does (GlueDialogTypes.OKAY.OnAccept)
+		finish(p.result, "reply");
+	elseif ( CTL.clock - p.t0 > HS_CONTROL_TIMEOUT ) then
+		StatusDialogClick();                      -- what the stock Cancel button does (GlueDialogTypes.CANCEL.OnAccept)
+		finish(nil, "timeout");
+	end
+end
+
+-- While a request is pending (and briefly after it), the client's status dialogs are ours: recorded, never shown.
+local HS_Ctl_DialogShow = GlueDialog_Show;
+function GlueDialog_Show(which, text, data)
+	if ( CTL.pending or CTL.clock < CTL.graceUntil ) then
+		HSFrontMenu_Mark("ctl:icpt:" .. tostring(which));
+		if ( CTL.pending and which ~= "CANCEL" and not CTL.pending.result ) then
+			CTL.pending.result = text or (GlueDialogTypes[which] and GlueDialogTypes[which].text) or "";
+		elseif ( not CTL.pending and which ~= "CANCEL" ) then
+			StatusDialogClick();
+		end
+		return;
+	end
+	return HS_Ctl_DialogShow(which, text, data);
+end
+
+local HS_Ctl_DialogOnEvent = GlueDialog_OnEvent;
+function GlueDialog_OnEvent(self, event, arg1, arg2, arg3)
+	if ( (CTL.pending or CTL.clock < CTL.graceUntil)
+	     and (event == "OPEN_STATUS_DIALOG" or event == "UPDATE_STATUS_DIALOG" or event == "CLOSE_STATUS_DIALOG") ) then
+		local p = CTL.pending;
+		if ( p ) then p.events = p.events + 1; end
+		HSFrontMenu_Mark("ctl:ev:" .. event .. ":" .. ctlClean(strsub(tostring(arg1 or ""), 1, 40)) .. ":"
+			.. ctlClean(strsub(tostring(arg2 or ""), 1, 40)));
+		if ( event == "OPEN_STATUS_DIALOG" ) then
+			GlueDialog_Show(arg1, arg2, arg3);
+		elseif ( event == "UPDATE_STATUS_DIALOG" and arg1 and strlen(arg1) > 0 and arg2 and arg2 ~= CANCEL ) then
+			if ( p and not p.result ) then
+				p.result = arg1;
+			elseif ( not p ) then
+				StatusDialogClick();
+			end
+		end
+		return;
+	end
+	return HS_Ctl_DialogOnEvent(self, event, arg1, arg2, arg3);
 end
 
 -- ---------------------------------------------------------------- load time
