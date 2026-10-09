@@ -49,12 +49,12 @@ def realm_name() -> dict:
                 return {"name": rows[0][0], "source": "auth.realmlist"}
     except Exception:  # noqa: BLE001  (fall back to the base SQL)
         pass
-    sql = P.CORE_SRC / "data" / "sql" / "base" / "db_auth" / "realmlist.sql"
+    sql = P.SQL_SOURCE / "data" / "sql" / "base" / "db_auth" / "realmlist.sql"
     try:
         m = re.search(r"\(1,'([^']+)'", sql.read_text(errors="replace"))
     except OSError as e:
         return {"name": None, "source": None, "error": f"{type(e).__name__}: {e}"}
-    return {"name": m.group(1) if m else None, "source": str(sql.relative_to(P.ROOT))}
+    return {"name": m.group(1) if m else None, "source": str(sql.relative_to(P.APP))}
 
 
 def first_start_settings() -> tuple[dict, dict]:

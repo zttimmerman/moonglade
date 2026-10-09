@@ -49,8 +49,8 @@ from . import paths as P
 
 HS = P.HARNESS / "hs"
 BREWFILE = P.ROOT / "Brewfile"
-BREW_BIN = P.BREW / "bin" / "brew"
-DB_MARKER = P.DATA / ".hs-db-ready.json"
+BREW_BIN = P.BREW / "bin" / "brew" if P.BREW else None    # dev only
+DB_MARKER = P.DB_MARKER
 DB_NAMES = ("acore_auth", "acore_world", "acore_characters", "acore_playerbots")
 TEST_ENV = "HS_BOOTSTRAP_TEST"
 TEST_FLAG = "--allow-test-inject"
@@ -150,7 +150,7 @@ class Probe:
         return self._get("brew_missing", real)
 
     def free_bytes(self) -> int:
-        return self._get("free_bytes", lambda: shutil.disk_usage(P.ROOT).free)
+        return self._get("free_bytes", lambda: shutil.disk_usage(P.HOME).free)
 
     def answer(self, prompt: str) -> str:
         if "answer" in self.inject:

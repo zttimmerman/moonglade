@@ -35,8 +35,8 @@ from pathlib import Path
 from . import mpq, paths as P, pristine
 from .clientinst import load_manifest, mismatches, sha256_file
 
-QUEUE = P.ROOT / "patches" / "client"
-PLAY = P.ENV / "client-play"
+QUEUE = P.CLIENT_PATCH_QUEUE
+PLAY = P.PLAYER_PLAY_CLIENT
 STAMP = "hs-build.json"
 SCHEMA = 1
 STATE_DIRS = ("WTF", "Screenshots", "Cache", "Logs", "Errors")   # the player's / the game's own state
@@ -147,7 +147,7 @@ def mpq_files(rec: dict, base: Path) -> tuple[dict, dict]:
     """{inside: bytes} for a data record, plus provenance evidence."""
     files, prov = {}, {}
     for inside, src in rec["files"].items():
-        b = (P.ROOT / src).read_bytes()
+        b = (P.APP / src).read_bytes()
         files[inside] = b
         prov[inside] = {"source": src, "sha256": _sha_bytes(b)}
     if rec.get("toc"):
@@ -171,7 +171,7 @@ def loose_files(rec: dict, base: Path, shadow_check: bool = False) -> dict:
     so a symlink or an absolute path can't escape). With shadow_check (the actual build, not the input hashing): also a
     destination that any of the base client's archives holds (a loose file would shadow it)."""
     out = {}
-    root = P.ROOT.resolve()
+    root = P.APP.resolve()
     for dest, src in rec["files"].items():
         rel = dest.replace("\\", "/")
         parts = rel.split("/")
@@ -184,7 +184,7 @@ def loose_files(rec: dict, base: Path, shadow_check: bool = False) -> dict:
                                    "already in the base client; refusing")
         if (base / rel).exists():
             raise ClientBuildError(f"patch {rec['id']}: {rel} already exists in the base client; refusing to overwrite it")
-        srcp = (P.ROOT / src).resolve()
+        srcp = (P.APP / src).resolve()
         if root not in srcp.parents or not srcp.is_file():
             raise ClientBuildError(f"patch {rec['id']}: source {src} is not a file inside the repo; refusing")
         out[rel] = (srcp, _sha_bytes(srcp.read_bytes()))

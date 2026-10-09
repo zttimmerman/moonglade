@@ -16,7 +16,7 @@ RE = Path(os.environ.get("HS_RE_DIR", P.ENV / "re")).resolve()
 RE_BIN = RE / "bin"
 RE_OUT = RE / "out"
 SCRIPTS = P.HARNESS / "ghidra_scripts"
-JAVA_HOME = P.BREW / "opt/openjdk@21/libexec/openjdk.jdk/Contents/Home"
+JAVA_HOME = P.BREW / "opt/openjdk@21/libexec/openjdk.jdk/Contents/Home" if P.BREW else None   # dev only
 
 
 class GhidraError(RuntimeError):

@@ -38,7 +38,12 @@ EXPECTED_BUILD = "3.3.5.12340"
 
 
 class ClientInstallError(Exception):
-    pass
+    """`kind` (release first launch maps it to a plain message): "source_damaged" (zip members fail their CRC),
+    "copy_mismatch" (the verified copy doesn't match what was read), "source_changed", or None."""
+    def __init__(self, msg: str = "", kind: str | None = None, evidence: dict | None = None):
+        super().__init__(msg)
+        self.kind = kind
+        self.evidence = evidence or {}
 
 
 def _now() -> str:
@@ -161,7 +166,7 @@ def manifest_client_dir(client: Path) -> str:
     pre-rename project folder); absolute only for an install outside the repo."""
     c = Path(os.path.abspath(client))
     try:
-        return str(c.relative_to(Path(os.path.abspath(P.ROOT))))
+        return str(c.relative_to(Path(os.path.abspath(P.HOME))))
     except ValueError:
         return str(c)
 
@@ -232,22 +237,90 @@ def _stream(srcobj, rel: str, dest: Path, want_hash: bool) -> str | None:
     return h.hexdigest() if h else None
 
 
+_CLONE_NOFOLLOW, _CLONE_NOOWNERCOPY = 0x0001, 0x0002
+_libc = None
+
+
+def clonefile(src: Path, dst: Path) -> None:
+    """APFS clonefile(2): `dst` (must not exist) becomes a copy-on-write clone of the file `src`: a new inode that
+    shares src's storage until either is changed, so writing the clone never touches src. Raises OSError (EXDEV on
+    another volume, ENOTSUP on a file system without clones)."""
+    global _libc
+    import ctypes
+    if _libc is None:
+        _libc = ctypes.CDLL("/usr/lib/libSystem.B.dylib", use_errno=True)
+        _libc.clonefile.argtypes = (ctypes.c_char_p, ctypes.c_char_p, ctypes.c_uint32)
+    if _libc.clonefile(os.fsencode(src), os.fsencode(dst), _CLONE_NOFOLLOW | _CLONE_NOOWNERCOPY) != 0:
+        e = ctypes.get_errno()
+        raise OSError(e, os.strerror(e), str(dst))
+
+
+def _clone(srcobj, rel: str, dest: Path, want_hash: bool) -> str | None:
+    """Like _stream, but the file is an APFS clone of the source file (folder sources on the same volume only). The
+    clone may inherit the source's flags and modes (e.g. the dev client's write-protection), so they are cleared on the
+    clone (a new inode) before it is renamed into place. The SHA-256 (if asked) is read from the source."""
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    part = dest.with_name(dest.name + ".hs-part")
+    part.unlink(missing_ok=True)
+    try:
+        clonefile(srcobj.members[rel], part)
+        st = os.lstat(part)
+        if st.st_flags:
+            os.chflags(part, 0, follow_symlinks=False)
+        if not st.st_mode & 0o200:
+            os.chmod(part, (st.st_mode & 0o7777) | 0o200)
+        if part.stat().st_size != srcobj.size(rel):
+            raise ClientInstallError(f"{rel}: the clone has {part.stat().st_size} bytes, expected {srcobj.size(rel)}")
+        mt = srcobj.mtime(rel)
+        os.utime(part, (mt, mt))
+        os.replace(part, dest)
+    except BaseException:
+        if part.exists() or part.is_symlink():
+            try:
+                os.chflags(part, 0, follow_symlinks=False)
+            except OSError:
+                pass
+            part.unlink(missing_ok=True)
+        raise
+    return sha256_file(srcobj.members[rel]) if want_hash else None
+
+
+def same_volume(src: Path, dest_dir: Path) -> bool:
+    """`src` and the nearest existing folder of `dest_dir` are on one file system (clones are possible)."""
+    d = Path(dest_dir)
+    while not d.exists() and d != d.parent:
+        d = d.parent
+    try:
+        return os.stat(src).st_dev == os.stat(d).st_dev
+    except OSError:
+        return False
+
+
 def install(src: Path, client: Path = P.CLIENT, manifest_path: Path = P.CLIENT_MANIFEST,
-            run_config: bool = True) -> dict:
+            run_config: bool = True, *, clone: bool = False, verify: bool = False, before_verify=None,
+            progress=None) -> dict:
     """Install (or repair) the client. The install folder is write-protected at the file-system level (pristine.py):
     the protection is lifted for the install only and restored on the way out, also when the install fails; a killed
-    install leaves it lifted, and the next install (or bootstrap) restores it."""
+    install leaves it lifted, and the next install (or bootstrap) restores it.
+
+    release first launch (release-first-launch design 4) passes the keyword options; their defaults are the dev
+    behaviour: `clone` makes each file of a folder source on the same volume an APFS clone (else, or when a clone
+    fails, a byte copy); `verify` checks the finished copy against what was read from the source (every size, and the
+    .exe/.dll SHA-256s re-read from the copy) before the manifest is written, so a copy that doesn't match never gets
+    one (ClientInstallError kind "copy_mismatch"); `before_verify(client)` runs just before that check (the
+    corrupt-copy test switch); `progress(bytes done, bytes to write)` hears the copy's progress."""
     from . import pristine
     client_p = Path(client)
     if client_p.is_symlink():
         raise ClientInstallError(f"the install folder {client_p} is a symlink; refusing (install into a real folder)")
     with pristine.unlocked(client_p):
-        res = _install(src, client_p, Path(manifest_path), run_config)
+        res = _install(src, client_p, Path(manifest_path), run_config, clone, verify, before_verify, progress)
     res["write_protection"] = {k: v for k, v in pristine.status(client_p).items() if k != "paths"}
     return res
 
 
-def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> dict:
+def _install(src: Path, client: Path, manifest_path: Path, run_config: bool, clone: bool = False,
+             verify: bool = False, before_verify=None, progress=None) -> dict:
     src = Path(src).expanduser().resolve()
     client = Path(client).resolve()
     if not src.exists():
@@ -296,7 +369,7 @@ def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> 
                 todo.append(rel)               # no trusted record of what's there: rewrite binaries
         full = len(todo) == len(members)
         to_write = sum(srcobj.size(r) for r in todo)
-        free = shutil.disk_usage(P.ROOT).free
+        free = shutil.disk_usage(P.HOME).free
         # A full-size client (the 3.3.5a enUS client is ~17.9 GB) needs 19 GB free; smaller
         # writes (repairs, test trees) need what they write plus 1 GB of headroom.
         need = max(MIN_FREE_FULL, to_write + MARGIN) if full and to_write >= 10 * 10**9 else to_write + MARGIN
@@ -321,9 +394,23 @@ def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> 
         done_bytes, last = 0, time.time()
         hashes: dict[str, str] = {}
         corrupt = []
+        can_clone = clone and srcobj.kind == "dir" and same_volume(src, client)
+        methods = {"clone": 0, "copy": 0}
+        if progress:
+            progress(0, to_write)
         for i, rel in enumerate(sorted(todo, key=lambda r: srcobj.size(r))):
             try:
-                h = _stream(srcobj, rel, client / rel, _is_hashed(rel))
+                h = None
+                if can_clone:
+                    try:
+                        h = _clone(srcobj, rel, client / rel, _is_hashed(rel))
+                        methods["clone"] += 1
+                    except OSError as e:
+                        log(f"  clone of {rel} failed ({e}); copying its bytes instead")
+                        can_clone = False
+                if not can_clone:
+                    h = _stream(srcobj, rel, client / rel, _is_hashed(rel))
+                    methods["copy"] += 1
             except (zipfile.BadZipFile, zlib.error, EOFError) as e:
                 # Keep going so one pass finds every bad member; the bad file isn't left on disk.
                 log(f"  CORRUPT in source: {rel}: {e}")
@@ -332,6 +419,8 @@ def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> 
             if h:
                 hashes[rel] = h
             done_bytes += srcobj.size(rel)
+            if progress:
+                progress(done_bytes, to_write)
             if time.time() - last > 15:
                 log(f"  {done_bytes / 1e9:.2f}/{to_write / 1e9:.2f} GB ({i + 1}/{len(todo)} files)")
                 last = time.time()
@@ -341,7 +430,7 @@ def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> 
             log(f"source stat before {before['size']} bytes mtime_ns {before['mtime_ns']}; "
                 f"after {now['size']} bytes mtime_ns {now['mtime_ns']} "
                 f"({'unchanged' if (now['size'], now['mtime_ns']) == (before['size'], before['mtime_ns']) else 'CHANGED'})")
-            raise ClientInstallError(
+            raise ClientInstallError(kind="source_damaged", evidence={"corrupt": corrupt}, msg=
                 f"{len(corrupt)} member(s) of {src} failed their zip CRC-32 check, so the source itself is "
                 f"damaged (e.g. an incomplete copy): "
                 + "; ".join(c["member"] for c in corrupt)
@@ -353,14 +442,27 @@ def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> 
         for rel in sorted(members):
             rec = {"size": srcobj.size(rel)}
             if _is_hashed(rel):
-                rec["sha256"] = hashes.get(rel) or sha256_file(client / rel)
+                # verify: a binary kept from an earlier (unverified) copy is hashed from the source, never trusted
+                rec["sha256"] = hashes.get(rel) or (_src_sha(srcobj, rel) if verify else sha256_file(client / rel))
             files[rel] = rec
     finally:
         srcobj.close()
 
     after = source_stat(src)
     if (after["size"], after["mtime_ns"]) != (before["size"], before["mtime_ns"]):
-        raise ClientInstallError(f"source changed during install: before {before}, after {after}")
+        raise ClientInstallError(f"source changed during install: before {before}, after {after}",
+                                 kind="source_changed")
+    copy_check = None
+    if verify:
+        if before_verify:
+            before_verify(client)
+        bad = mismatches(client, {"files": files}, hash_binaries=True)
+        copy_check = {"files": len(files), "hashed": sum(1 for v in files.values() if "sha256" in v),
+                      "mismatches": bad[:20], "methods": methods}
+        if bad:
+            raise ClientInstallError(f"the copy in {client} doesn't match what was read from {src}: {len(bad)} "
+                                     f"file(s) differ (e.g. {bad[:2]}); no install record was written",
+                                     kind="copy_mismatch", evidence=copy_check)
 
     wow = next(client / r for r in files if r.lower() == "wow.exe")
     try:
@@ -391,14 +493,24 @@ def _install(src: Path, client: Path, manifest_path: Path, run_config: bool) -> 
         "files_written": len(todo), "bytes_written": to_write, "seconds": round(time.time() - t0, 1),
         "source": manifest["source"], "wow_exe_version": manifest["wow_exe_version"],
         "binaries_sha256": binaries, "mpq_count": len(mpqs),
-        "disk_free_gb_after": round(shutil.disk_usage(P.ROOT).free / 1e9, 1),
+        "disk_free_gb_after": round(shutil.disk_usage(P.HOME).free / 1e9, 1),
         "version_ok": ver["file_version"] == EXPECTED_BUILD,
     }
+    if verify:
+        result["copy_check"] = copy_check
     if ver["file_version"] != EXPECTED_BUILD:
         log(f"WARNING: Wow.exe file version is {ver['file_version']}, expected {EXPECTED_BUILD}")
     if run_config:
         result["client_config"] = _configure(client)
     return result
+
+
+def _src_sha(srcobj, rel: str) -> str:
+    h = hashlib.sha256()
+    with srcobj.open(rel) as fh:
+        for chunk in iter(lambda: fh.read(CHUNK), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _configure(client: Path) -> dict:

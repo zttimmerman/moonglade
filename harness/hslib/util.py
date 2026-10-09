@@ -115,7 +115,7 @@ def _known_secrets() -> list[str]:
     from pathlib import Path
     from . import paths as P
     out = []
-    for f in {P.ENV / "player.json", *([Path(os.environ["HS_PLAYER_FILE"])] if os.environ.get("HS_PLAYER_FILE") else [])}:
+    for f in {P.PLAYER_FILE, *([Path(os.environ["HS_PLAYER_FILE"])] if os.environ.get("HS_PLAYER_FILE") else [])}:
         try:
             pw = str(json.loads(Path(f).read_text())["password"])
         except (OSError, ValueError, KeyError, TypeError):

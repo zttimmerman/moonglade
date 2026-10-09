@@ -2,7 +2,7 @@
 """Make Mach-O files in a release payload relocatable (openspec/changes/release-build, task 2.1).
 
     delocate.py fix  --root PAYLOAD --libdir server/lib [--search DIR ...] [--record OUT.json] FILE ...
-    delocate.py gate --root PAYLOAD [--allowlist tools/release/allowlist.json] [--json OUT.json]
+    delocate.py gate --root PAYLOAD [--allowlist tools/release/allowlist.json --build-root CHECKOUT] [--json OUT.json]
 
 fix: for each FILE (payload-relative), every non-system dependency (absolute, @loader_path, @executable_path or @rpath,
 resolved against the file's own LC_RPATHs and --search) is copied into LIBDIR, its references are rewritten to
@@ -206,15 +206,26 @@ def fix(root: Path, libdir_rel: str, files: list[str], search: list[Path]) -> di
 
 # ---------------------------------------------------------------------------------------------------------- gate
 
-def load_allowlist(path: Path | None) -> list[dict]:
+BUILD_ROOT = "{build_root}"
+
+
+def load_allowlist(path: Path | None, build_root: Path | str | None = None) -> list[dict]:
+    """The allowlist's entries. "{build_root}" in a match regex stands for the checkout the packaging run built in
+    and is replaced by it (escaped); an allowlist using it without a build root is refused (fail closed)."""
     if not path:
         return []
     doc = json.loads(Path(path).read_text())
     entries = doc["entries"] if isinstance(doc, dict) else doc
+    out = []
     for e in entries:
         if not (e.get("file") and e.get("match") and e.get("reason")):
             raise DelocateError(f"allowlist entry without file/match/reason: {e}")
-    return entries
+        if BUILD_ROOT in e["match"]:
+            if not build_root:
+                raise DelocateError(f"allowlist entry {e['match']!r} needs the build root (--build-root)")
+            e = e | {"match": e["match"].replace(BUILD_ROOT, re.escape(str(build_root)))}
+        out.append(e)
+    return out
 
 
 def allowed(rel: str, s: str, allow: list[dict]) -> dict | None:
@@ -284,6 +295,7 @@ def main(argv=None) -> int:
     g = sub.add_parser("gate")
     g.add_argument("--root", type=Path, required=True)
     g.add_argument("--allowlist", type=Path)
+    g.add_argument("--build-root", type=Path, help="the checkout the packaging run built in ({build_root})")
     g.add_argument("--json", type=Path)
     a = ap.parse_args(argv)
     try:
@@ -293,7 +305,7 @@ def main(argv=None) -> int:
                 a.record.write_text(json.dumps(rec, indent=2) + "\n")
             print(f"delocate: bundled {len(rec['bundled'])} libraries into {a.libdir}, re-signed {len(rec['signed'])}")
             return 0
-        res = gate(a.root, load_allowlist(a.allowlist))
+        res = gate(a.root, load_allowlist(a.allowlist, a.build_root))
         if a.json:
             a.json.write_text(json.dumps(res, indent=2) + "\n")
         for pr in res["problems"]:

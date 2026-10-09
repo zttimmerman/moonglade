@@ -12,8 +12,8 @@ from pathlib import Path
 from . import config, db, paths as P, procs, soap, srp6
 from .util import log, tail
 
-MYSQLD = P.BREW / "opt/mysql/bin/mysqld"
-MYSQLADMIN = P.BREW / "opt/mysql/bin/mysqladmin"
+MYSQLD = P.MYSQLD                 # dev: Homebrew's; release: the payload's (paths.MYSQL_BASE)
+MYSQLADMIN = P.MYSQLADMIN
 MY_CNF = P.MY_CNF
 LOG = {
     "mysqld": P.LOGS / "mysqld.err",
@@ -65,8 +65,10 @@ def stack_processes(lane: str | None = None) -> dict[str, list[int]]:
     L = P.layout(lane or P.LANE)
     my_cnf = f"--defaults-file={L['my_cnf']}"
     found = {"mysqld": [], "authserver": [], "worldserver": []}
-    for pid, cmd in procs.table():
-        argv = cmd.split(" ")
+    # argv from the kernel, not a joined command line: release HOME (~/Library/Application Support/...) and app paths
+    # have spaces
+    for pid, argv in procs.argv_table():
+        cmd = " ".join(argv)
         if "mysqld" in cmd and my_cnf in argv:
             found["mysqld"].append(pid)
             continue
@@ -127,13 +129,14 @@ def _wait(pred, timeout, interval=1.0, watch_pid=None, what=""):
 
 # ---------------------------------------------------------------- mysql
 
-def _write_my_cnf():
-    P.LANE_ROOT.mkdir(parents=True, exist_ok=True)
-    P.RUN.mkdir(parents=True, exist_ok=True)
-    P.LOGS.mkdir(parents=True, exist_ok=True)
-    MY_CNF.write_text(
+def my_cnf_text() -> str:
+    """This lane's my.cnf. Release mode adds the payload MySQL's share dirs (error messages, character sets)."""
+    release = (f"lc-messages-dir={P.MYSQL_BASE / 'share'}\n"
+               f"character-sets-dir={P.MYSQL_BASE / 'share' / 'charsets'}\n") if P.MODE == "release" else ""
+    return (
         "[mysqld]\n"
-        f"basedir={P.BREW / 'opt/mysql'}\n"
+        f"basedir={P.MYSQL_BASE}\n"
+        + release +
         f"datadir={P.MYSQL_DATA}\n"
         f"port={P.MYSQL_PORT}\n"
         "bind-address=127.0.0.1\n"
@@ -152,6 +155,13 @@ def _write_my_cnf():
         "max_allowed_packet=64M\n"
         "disable-log-bin\n"
     )
+
+
+def _write_my_cnf():
+    P.LANE_ROOT.mkdir(parents=True, exist_ok=True)
+    P.RUN.mkdir(parents=True, exist_ok=True)
+    P.LOGS.mkdir(parents=True, exist_ok=True)
+    MY_CNF.write_text(my_cnf_text())
 
 
 def mysql_ready() -> bool:
@@ -217,15 +227,27 @@ def mysql_down(timeout=60):
 
 # ---------------------------------------------------------------- servers
 
+SAFETY_AC_KEYS = ("AC_PLAYERBOTS_DATABASE_INFO", "AC_AI_PLAYERBOT_COMMAND_SERVER_PORT")
+
+
 def spawn_env(name: str) -> dict:
-    """The server's environment: ours without any AC_* variable, plus (lane B) the lane's AC_* module/DB keys
-    (config.lane_env; the worldserver reads module confs from lane A's server/etc/modules otherwise)."""
+    """The server's environment: ours without any AC_* variable, plus (lane B and release mode) the AC_* module/DB
+    keys (config.lane_env; the worldserver reads module confs from lane A's server/etc/modules otherwise, and a
+    release has none it could read). Release mode also sets OPENSSL_CONF to HOME's empty openssl.cnf, so OpenSSL never
+    opens the build machine's compiled-in OPENSSLDIR (release-build "As built")."""
     env = {k: v for k, v in os.environ.items() if not k.startswith("AC_")}
-    if P.LANE != "a":
+    if P.LANE != "a" or P.MODE == "release":
         try:
-            env |= config.lane_env()
+            ac = config.lane_env()
         except config.ConfigError as e:
             raise StackError(str(e)) from e
+        if P.MODE == "release" and P.firstlaunch_test().get("drop_ac_env"):
+            # counterexample (test switch only): no module settings, so playerbots falls back to its defaults; the DB
+            # info and the command-server port stay (never a default 3306 database, never a 0.0.0.0 listener)
+            ac = {k: v for k, v in ac.items() if k in SAFETY_AC_KEYS}
+        env |= ac
+    if P.MODE == "release":
+        env["OPENSSL_CONF"] = str(P.OPENSSL_CONF)
     return env
 
 
@@ -236,8 +258,9 @@ def _spawn(name: str):
     # log non-deterministic; keep them separate and always show both in failure excerpts.
     fh = open(LOG[name], "w")
     eh = open(ERRLOG[name], "w")
+    P.SERVER_CWD.mkdir(parents=True, exist_ok=True)
     proc = subprocess.Popen([str(P.SERVER_BIN / name), "-c", str(P.LANE_ETC / f"{name}.conf")],
-                            cwd=P.SERVER_BIN, stdin=subprocess.DEVNULL, stdout=fh, stderr=eh,
+                            cwd=P.SERVER_CWD, stdin=subprocess.DEVNULL, stdout=fh, stderr=eh,
                             start_new_session=True, env=env)
     PIDFILE[name].write_text(str(proc.pid))
     return proc
@@ -386,12 +409,16 @@ def up(world_datadir: Path | None = None, timeout: int | None = None, profile: s
         P.require_lane_allowed("starting the stack")     # lane B only inside a harness run (second-stack)
     except P.LaneRefused as e:
         raise StackError(str(e)) from e
+    why = P.test_release_refusal()
+    if why:
+        raise StackError(f"starting the stack refused: {why}")
     if not (P.SERVER_BIN / "worldserver").exists():
         raise StackError("server not built; run `harness/hs build` first")
-    from .build import moved_problem
-    moved = moved_problem()             # F30: a server built in another folder; refuse before starting anything
-    if moved:
-        raise StackError(moved["message"])
+    if P.MODE == "dev":
+        from .build import moved_problem
+        moved = moved_problem()         # F30: a server built in another folder; refuse before starting anything
+        if moved:
+            raise StackError(moved["message"])
     name = config.profile_name(profile)
     was_running = bool(stack_processes()["worldserver"])
     if was_running:

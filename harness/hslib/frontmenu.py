@@ -60,11 +60,18 @@ def about_info() -> dict:
     import subprocess
     from . import app, config, stack
     lock = P.fork_lock()
-    r = subprocess.run(["git", "-C", str(P.ROOT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
-    commit = r.stdout.strip() or "unknown"
-    dirty = subprocess.run(["git", "-C", str(P.ROOT), "status", "--porcelain", "--untracked-files=no"],
-                           capture_output=True, text=True).stdout.strip()
-    era = P.SERVER_ETC / "modules" / config.ERA_CONF
+    if P.MODE == "release":         # no git (and no Command Line Tools prompt): the payload's VERSION
+        try:
+            commit = str(json.loads((P.APP / "VERSION").read_text()).get("commit") or "")[:7] or "unknown"
+        except (OSError, ValueError):
+            commit = "unknown"
+        dirty = ""
+    else:
+        r = subprocess.run(["git", "-C", str(P.ROOT), "rev-parse", "--short", "HEAD"], capture_output=True, text=True)
+        commit = r.stdout.strip() or "unknown"
+        dirty = subprocess.run(["git", "-C", str(P.ROOT), "status", "--porcelain", "--untracked-files=no"],
+                               capture_output=True, text=True).stdout.strip()
+    era = (P.SERVER_ETC if P.MODE == "dev" else P.LANE_ETC) / "modules" / config.ERA_CONF
     m = re.search(r"^\s*EraProfile\.Enable\s*=\s*(\d)", era.read_text(), re.M) if era.exists() else None
     rp = stack.running_profile()
     if not rp:

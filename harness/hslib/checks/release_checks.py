@@ -43,7 +43,10 @@ CAP = "release-build"
 TOOLS = P.ROOT / "tools" / "release"
 PACKAGE = TOOLS / "package.sh"
 WORK = P.ENV / "release"
-PAYLOAD = WORK / "payload" / "Moonglade"
+APP_BUNDLE = WORK / "payload" / "Moonglade.app"          # release-first-launch: the zip's top level
+PAYLOAD = APP_BUNDLE / "Contents" / "Resources" / "Moonglade"   # the release-build payload, inside the app
+LOCAL_SUFFIX = "-local-test-build-not-for-publishing"     # tools/release/release.py: locally built zips
+LOCAL_LABEL = "local test build, not for publishing"
 OUT = WORK / "out"
 ALLOWLIST = TOOLS / "allowlist.json"
 FORBIDDEN = ("/opt/homebrew", "/usr/local", "/Users/")
@@ -248,12 +251,16 @@ def scan_payload(root: Path, allow: list[dict]) -> dict:
     return {"macho_files": len(files), "problems": problems, "allowlisted": allowlisted}
 
 
-def load_allowlist() -> list[dict]:
+def load_allowlist(build_root: str) -> list[dict]:
+    """The reviewed allowlist with "{build_root}" replaced by the checkout the packaging run built in (escaped;
+    release-first-launch 5.1: the build-tree defaults are accepted for that folder only)."""
     entries = json.loads(ALLOWLIST.read_text())["entries"]
     bad = [e for e in entries if not (e.get("file") and e.get("match") and len(e.get("reason", "")) >= 20)]
     if bad:
         raise RuntimeError(f"allowlist entries without file, match and a written reason: {bad}")
-    return entries
+    if not build_root or not os.path.isabs(build_root):
+        raise RuntimeError(f"no build root from the packaging run ({build_root!r}); can't anchor the allowlist")
+    return [e | {"match": e["match"].replace("{build_root}", re.escape(build_root))} for e in entries]
 
 
 # ================================================================================================ release.pins
@@ -353,7 +360,11 @@ def no_abs_paths(ctx):
     """Every Mach-O in the payload loads only system or in-payload libraries, no load command/rpath/string names
     /opt/homebrew, /usr/local or /Users/ outside the reviewed allowlist, and a planted Homebrew rpath is caught."""
     ev = _need_payload(ctx)
-    allow = load_allowlist()
+    build_root = ((ctx["release_package"].get("record") or {}).get("ctx") or {}).get("build_root")
+    require(build_root == str(P.ROOT.resolve()), "the packaging record doesn't name this checkout as its build root",
+            **ev, build_root=build_root)
+    allow = load_allowlist(build_root)
+    ev["build_root"] = build_root
     res = scan_payload(PAYLOAD, allow)
     ev |= {"macho_files": res["macho_files"], "problems": res["problems"][:40], "allowlisted": res["allowlisted"]}
     require(res["macho_files"] >= 10, "too few Mach-O files found; the scan didn't see the payload", **ev)
@@ -371,6 +382,21 @@ def no_abs_paths(ctx):
         ev["self_test"] = {"clean_problems": clean["problems"][:5], "planted_problems": planted["problems"][:5]}
         require(not clean["problems"] and any("LC_RPATH /opt/homebrew/lib" in x for x in planted["problems"]),
                 "self-test: the planted /opt/homebrew rpath wasn't caught", **ev)
+        # 5.1: the build-tree defaults under another prefix (same length, so the binary's layout is unchanged) aren't
+        # allowlisted
+        moved = d / "moved"
+        (moved / "server/bin").mkdir(parents=True)
+        shutil.copytree(PAYLOAD / "server/lib", moved / "server/lib")
+        raw = (PAYLOAD / "server/bin/authserver").read_bytes()
+        root_b = build_root.encode()
+        other = root_b[:-2] + (b"zz" if not root_b.endswith(b"zz") else b"yy")
+        (moved / "server/bin/authserver").write_bytes(raw.replace(root_b + b"/", other + b"/"))
+        other_hits = scan_payload(moved, allow)
+        ev["self_test"]["other_prefix_problems"] = other_hits["problems"][:5]
+        require(raw.count(root_b + b"/") >= 2
+                and any(other.decode() + "/vendor/azerothcore-wotlk" in x for x in other_hits["problems"])
+                and any(other.decode() + "/env/release/build/cmake" in x for x in other_hits["problems"]),
+                "self-test: the build-tree defaults under another prefix weren't caught", **ev)
     finally:
         shutil.rmtree(d, ignore_errors=True)
     return ev
@@ -451,6 +477,19 @@ def no_game_files(ctx):
         hits = game_hits(names)
         ev["assets"][a.name] = {"entries": len(names), "bytes": a.stat().st_size, "game_hits": hits[:20]}
     ev["zip_bytes"] = zips[0].stat().st_size
+    # release-first-launch: the zip's top level is Moonglade.app (payload inside), and a locally built zip says it's a
+    # local test build (5.4) in its name and in VERSION
+    zip_names = _archive_names(zips[0])
+    ev["zip_top_level"] = sorted({n.split("/")[0] for n in zip_names})
+    ev["zip_has_payload"] = "Moonglade.app/Contents/Resources/Moonglade/VERSION" in zip_names
+    require(ev["zip_top_level"] == ["Moonglade.app"] and ev["zip_has_payload"]
+            and "Moonglade.app/Contents/MacOS/Moonglade" in zip_names and "Moonglade.app/Contents/Info.plist" in zip_names,
+            "the zip's top level isn't Moonglade.app with the payload in Contents/Resources/Moonglade", **ev)
+    ver = ev["version"]
+    ci = os.environ.get("GITHUB_ACTIONS") == "true"
+    ev["build_label"] = ver.get("build")
+    require(ci or (zips[0].name.endswith(LOCAL_SUFFIX + ".zip") and ver.get("build") == LOCAL_LABEL),
+            "a locally built zip isn't labelled a local test build (file name and VERSION)", **ev)
     ev["zip_mb"] = round(ev["zip_bytes"] / 1e6, 1)
     require(all(v["entries"] > 0 for v in ev["assets"].values()), "an asset lists no entries", **ev)
     require(not any(v["game_hits"] for v in ev["assets"].values()), "game files in a release asset", **ev)

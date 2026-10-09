@@ -1,6 +1,7 @@
 """`hs run`: execute checks, write results.json + summary.md."""
 import fnmatch
 import json
+import os
 from pathlib import Path
 import platform
 import shutil
@@ -319,6 +320,9 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
     gui_ids = {c.id for c in gui_skips}
     bk_ids = {c.id for c in backups_skips}
     results = []
+    plan = ctx.get("release_bracket_plan")      # run-scoped (_run plans it from the whole run's selection)
+    br_start, br_end = (plan.get("start_check"), plan.get("end_check")) if plan else (None, None)
+    xlog = ctx.setdefault("exec_log", [])        # the run's actual lane-A execution sequence, across every execute
     for c in sorted([*checks, *slow_skips, *gui_skips, *backups_skips], key=lambda c: (c.order, c.id)):
         rec = {"id": c.id, "capability": c.capability, "description": c.doc}
         if c.id in skip_ids:
@@ -346,6 +350,8 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
             except PowerStop as e:
                 ctx["power_stop"] = {"message": str(e), "before_check": c.id, "pause": e.record}
                 break
+        if c.id == br_start and "start" not in (ctx.get("release_bracket") or {}):
+            _bracket_fingerprint(ctx, "start", c.id, ensure)
         t0 = time.time()
         try:
             ensure(c.stack, ctx, c.profile)
@@ -362,9 +368,89 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
         rec["duration_s"] = round(time.time() - t0, 2)
         if ctx.get("lane_timeline") is not None:          # second-stack: two-lane runs record when each check ran
             ctx["lane_timeline"][c.id] = {"start": t0, "end": time.time(), "lane": P.LANE}
+        xlog.append({"id": c.id, "start": t0, "end": time.time(), "lane": P.LANE})
         say(f"{rec['status'].upper():5} {c.id} ({rec['duration_s']}s){'  ' + rec.get('message', '') if rec['status'] != 'pass' else ''}")
         results.append(rec)
+        br = ctx.get("release_bracket")
+        if br is not None and "start" in br and "end" not in br:
+            br["ran"].append(c.id)
+            if c.id == br_end:
+                _bracket_fingerprint(ctx, "end", c.id, ensure)
+            else:
+                _bracket_save(ctx)
     return results
+
+
+PDU_ID = "release.player_data_untouched"
+
+
+BRACKET_PREFIXES = ("release.", "firstlaunch.")
+BRACKET_DIR = P.OUT / "release-bracket"         # one state file per run id (release.player_data_untouched)
+BRACKET_KEEP_S = 7 * 86400
+
+
+def release_bracket_plan(checks, run_id: str | None, state_dir: Path | None = None) -> dict | None:
+    """release.player_data_untouched brackets every release.*/firstlaunch.* check of the WHOLE run (not of one
+    execute call: a two-lane run calls execute once per segment, and the check sits in a later segment than the
+    checks it brackets). `checks` is the run's whole selection. The start fingerprint is taken right before the first
+    of them in (order, id) sequence, the end right after the last; with none of them, the start is taken right before
+    the check itself and there is no end. The state (fingerprints and what ran between them) is kept in ctx and
+    persisted, keyed by the run id, under the run's output dir. None when the check isn't in this run."""
+    ids = [c.id for c in sorted(checks, key=lambda c: (c.order, c.id))]
+    if PDU_ID not in ids:
+        return None
+    inner = [i for i in ids if i.startswith(BRACKET_PREFIXES) and i != PDU_ID]
+    rid = run_id or f"pid{os.getpid()}-{int(time.time())}"
+    return {"run_id": rid, "inner": inner, "start_check": inner[0] if inner else PDU_ID,
+            "end_check": inner[-1] if inner else None, "state_file": str(Path(state_dir or BRACKET_DIR) / f"{rid}.json")}
+
+
+def _prune_bracket_states(d: Path, keep: str) -> None:
+    try:
+        for f in d.glob("*.json"):
+            if f.name != keep and time.time() - f.stat().st_mtime > BRACKET_KEEP_S:
+                f.unlink()
+    except OSError:
+        pass
+
+
+def _bracket_save(ctx: dict) -> None:
+    """Persist ctx["release_bracket"] to the run's state file (atomic). An IO error is recorded in ctx; the check
+    then fails (it reads the file)."""
+    plan, br = ctx.get("release_bracket_plan"), ctx.get("release_bracket")
+    if not plan or br is None:
+        return
+    f = Path(plan["state_file"])
+    try:
+        f.parent.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"run_id": plan["run_id"], "plan": plan,
+                                   **br}, default=str))
+        tmp.replace(f)
+    except OSError as e:
+        br["save_error"] = f"{type(e).__name__}: {e}"
+
+
+def _bracket_fingerprint(ctx: dict, which: str, cid: str, ensure) -> None:
+    """The bracket's start (lane A brought down first, outside any check's timing: its world/auth servers change the
+    databases by themselves) or end fingerprint into ctx["release_bracket"], marked in the run's execution log and
+    persisted. Errors are recorded; the check fails."""
+    from .checks.release_runtime_checks import player_data_fingerprint
+    br = ctx.setdefault("release_bracket", {"ran": []})
+    br[f"{which}_check"] = cid
+    try:
+        if which == "start":
+            ensure("down", ctx, None)
+        br[which] = player_data_fingerprint()
+    except Exception as e:  # noqa: BLE001  (the check fails on an erroneous record)
+        br[which] = {"error": f"{type(e).__name__}: {e}"}
+    xlog = ctx.setdefault("exec_log", [])
+    br[f"{which}_log_index"] = len(xlog)          # the fingerprint sits between exec_log[i-1] and exec_log[i]
+    xlog.append({"bracket": which, "at": time.time(), "check": cid})
+    if which == "start":
+        _prune_bracket_states(Path(ctx["release_bracket_plan"]["state_file"]).parent,
+                              Path(ctx["release_bracket_plan"]["state_file"]).name)
+    _bracket_save(ctx)
 
 
 def backups_tier_s(records: list[dict], reg: dict | None = None) -> float:
@@ -606,6 +692,9 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
            "player_marker_sha256_start": player_marker_sha(),
            # save-backups: the player's env/backups/ must be byte-identical at the end (backups.player_untouched)
            "player_backups_fingerprint_start": backups.fingerprint(backups.PLAYER_ROOT)}
+    # release-first-launch: release.player_data_untouched's bracket, planned over the whole run (every lane-A segment)
+    ctx["run_id"] = ((orphans or {}).get("run") or {}).get("id")
+    ctx["release_bracket_plan"] = release_bracket_plan(selected, ctx["run_id"])
     # easy-setup (F28): the player's play client build must be untouched at the end (client.player_client_not_rebuilt)
     from . import clientbuild
     try:
