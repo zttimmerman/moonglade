@@ -296,12 +296,25 @@ def verify_icon(png_path: Path, icns_path: Path, regenerate: bool = True, meta: 
     return ev
 
 
-def icon_counterexamples(png_path: Path) -> dict:
+def old_layout_logo(ring: dict | None) -> bytes:
+    """The logo on the old transparent layout (borderless ring, ICON_DIAMETER px on the canvas). With the ring
+    app.icon's regeneration just measured, only the cut is redone (no second ring detection)."""
+    if not ring:
+        return I.load_logo(diameter=I.ICON_DIAMETER)
+    tmp = Path(tempfile.mkdtemp(prefix="hs-icon-old-"))
+    try:
+        sw = json.loads(I.META_OUT.read_text())["source_size"][0]
+        return I.cut_logo(I.SOURCE, tmp, ring, sw, I.ICON_DIAMETER)[0]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def icon_counterexamples(png_path: Path, ring: dict | None = None) -> dict:
     """app.icon's counterexamples, each judged by tile_report with the committed tile record: the logo on the old
     transparent layout (the borderless ring, 824 px on 1024) and the committed icon with its tile painted white."""
     t = tile_record()
     w, h, px = I.read_png(png_path.read_bytes())
-    old = I.load_logo(diameter=I.ICON_DIAMETER)
+    old = old_layout_logo(ring)
     white = bytearray(px)
     for i in range(0, len(white), 4):
         if white[i + 3] and not is_gold(list(white[i:i + 4])):
@@ -321,7 +334,7 @@ def app_icon(ctx):
     rounded corners) opaque navy, the centre opaque, the gold ring at the recorded scale; re-running the generator
     reproduces the committed PNG pixel for pixel. Counterexamples: the old transparent layout and a white tile fail."""
     ev = verify_icon(I.PNG_OUT, I.ICNS_OUT)
-    ev["counterexamples"] = ce = icon_counterexamples(I.PNG_OUT)
+    ev["counterexamples"] = ce = icon_counterexamples(I.PNG_OUT, (ev.get("regenerated") or {}).get("ring_source_px"))
     require(all(not v["ok"] for v in ce.values()), "a counterexample icon passed the tile test", **ev)
     return ev
 

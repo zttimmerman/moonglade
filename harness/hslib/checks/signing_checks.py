@@ -975,11 +975,12 @@ def open_instructions(ctx):
     d = _scratch("open")
     try:
         results = {}
+        w0 = d / "signed"
+        app0 = fixture_app(w0)
+        r = run_sign(w0, _clean_env())
+        require(r["rc"] == 0, "signing the fixture app failed", sign=r, **ev)
         for tag, line in (("documented", ONE_LINER), ("without_r", ONE_LINER.replace("-dr", "-d"))):
-            w = d / tag
-            app = fixture_app(w)
-            r = run_sign(w, _clean_env())
-            require(r["rc"] == 0, "signing the fixture app failed", sign=r, **ev)
+            app = _clone(app0, d / tag)
             for p in [app, *app.rglob("*")]:
                 if not p.is_symlink():
                     subprocess.run(["/usr/bin/xattr", "-w", QUARANTINE, _quarantine_value(), str(p)], check=True)
