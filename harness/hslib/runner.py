@@ -617,6 +617,13 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     # report.client_pristine compares at the end
     from .checks.pristine_checks import start_record
     pristine_start = start_record()
+    # release-first-launch: the dev player's data at the start (release.player_data_untouched compares at the end)
+    if any(c.id == "release.player_data_untouched" for c in selected):
+        from .checks.release_runtime_checks import player_data_fingerprint
+        try:
+            ctx["release_player_data_start"] = player_data_fingerprint()
+        except Exception as e:  # noqa: BLE001  (the check fails on an erroneous start record)
+            ctx["release_player_data_start"] = {"error": f"{type(e).__name__}: {e}"}
     if rule is not None:
         log(f"GUI rule: {'GUI checks run' if gui_changed(rule) else 'GUI checks skipped by design'} "
             f"(changed GUI paths: {rule['changed_gui_paths']}{'; ' + rule['error'] if rule['error'] else ''})")

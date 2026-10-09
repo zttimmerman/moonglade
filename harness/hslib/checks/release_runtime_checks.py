@@ -34,6 +34,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 
@@ -849,11 +850,9 @@ def stack_from_payload(ctx):
 
 
 # ================================================================================================ app_readonly, app_moved
-# Scope note (builder a, 2026-10-08): first launch (tasks 3.x) and the release play loop with the stand-in client
-# (release.play_standin) aren't built yet, so these two checks exercise what release mode has today: the resolver and
-# the release stack (database first start, servers, shutdown) from a read-only volume and from a moved app. The
-# scenarios' "first launch runs headless" and "stand-in play loop reaches ready" parts are to be added to them when
-# those exist (tasks 3.5 and 4.2).
+# Both run first launch and/or the release play loop through the release app itself (the launcher binary run
+# directly with the test hook: no LaunchServices, so no per-copy TCC prompt; see design "As built", TCC), with the
+# stand-in client (firstlaunch_checks.app_play) and the sandbox profile above.
 
 PROBLEM_LINES = re.compile(r"read-only file system|permission denied|operation not permitted|\berofs\b|\beacces\b",
                            re.I)
@@ -895,56 +894,24 @@ def problem_lines(*files: Path) -> list[str]:
     return out
 
 
-def stack_cycle(app: Path, home: Path, d: Path, prof: Path, log: Path, tag: str) -> dict:
-    """Release `up --profile m0` then `down` with APP `app` and HOME `home` (scratch ports); evidence of both."""
-    env = release_env(home, HS_RELEASE_PORTS=json.dumps(SCRATCH_PORTS), TMPDIR=str(d / "tmp") + "/",
-                      PATH="/usr/bin:/bin:/usr/sbin:/sbin")
-    (d / "tmp").mkdir(exist_ok=True)
-    up = run_release(app, ["up", "--profile", "m0"], env, prof, d, 2400, log)
-    info = up["json"] or {}
-    world = _proc_info(lambda a: a[:1] == [str(app / "server/bin/worldserver")])
-    mysqld = _proc_info(lambda a: f"--defaults-file={home / 'my.cnf'}" in a)
-    down = run_release(app, ["down"], env, prof, d, 300, log)
-    dj = down["json"] or {}
-    return {"tag": tag, "up_rc": up["rc"], "up_s": up["s"], "first_run": info.get("first_run"),
-            "worldserver": info.get("worldserver"), "mysqld": info.get("mysqld"),
-            "initialized": "initializing repo-local MySQL datadir" in log.read_text(errors="replace").split(
-                f"==== ")[-2] if log.exists() else None,
-            "world_exe": [x["exe"] for x in world], "mysqld_exe": [x["exe"] for x in mysqld],
-            "down_rc": down["rc"], "graceful": (dj.get("worldserver") or {}).get("graceful") is True
-            and dj.get("graceful") is True, "remaining": dj.get("remaining"),
-            "up_tail": up["stdout_tail"][-300:] if up["rc"] != 0 else None}
-
-
-def _cycle_ok(c: dict, app: Path) -> bool:
-    return (c["up_rc"] == 0 and c["worldserver"] == "started" and c["down_rc"] == 0 and c["graceful"]
-            and not c["remaining"] and c["world_exe"] == [str(app / "server/bin/worldserver")]
-            and c["mysqld_exe"] == [str(app / "mysql/bin/mysqld")])
-
-
-def _home_prep(d: Path) -> Path:
-    home = d / "h"
-    home.mkdir()
-    subprocess.run(["/bin/cp", "-c", "-R", str(P.CLIENT_DATA), str(home / "client-data")], check=True)
-    return home
-
-
 @check("release.app_readonly", order=14, capability=CAP, stack="down", tier="slow")
 def app_readonly(ctx):
-    """Moonglade.app on a read-only disk image at a path with spaces: release mode sets up and runs the stack from it
-    with a scratch HOME (database first start, m0, graceful shutdown), no log line reports a read-only or permission
-    error, and the image's contents hash the same before and after. Counterexample: writing into the app from the
-    image fails and that failure is caught by the same log scan. (First launch + the stand-in play loop: see the scope
-    note above.)"""
+    """Moonglade.app on a read-only disk image (hdiutil attach -readonly) at a path with spaces and a scratch HOME,
+    under the no-Homebrew sandbox: the app's first launch runs headless (test hook, scripted pick of client/, loopback
+    downloads) through every step, its Play goes on to the play loop with the stand-in client, which reaches ready
+    and quits; the servers ran from the image, no log line reports a read-only or permission error, and the image's
+    contents hash the same before and after. Counterexample: writing into the app on the image fails and that failure
+    is caught by the same log scan."""
+    from .firstlaunch_checks import FL_CACHE, LoopbackServer, _cleanup, app_play, ensure_cache, play_ok
     healed = heal_scratch()
     from .release_checks import _need_payload
-    ev: dict = {"healed": healed, "started": time.time(), "scope": "stack only until first launch / play_standin exist (tasks 3.x)"}
+    ev: dict = {"healed": healed, "started": time.time()}
     _need_payload(ctx)
+    ensure_cache()
     d = SCRATCH_ROOT / f"ro-{os.getpid()}"
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True)
     mnt = d / "Read Only Disk"
-    log = d / "release.log"
     attached = False
     try:
         stage = d / "stage"
@@ -962,28 +929,40 @@ def app_readonly(ctx):
         require(r.returncode == 0, "hdiutil attach -readonly failed", **ev, out=(r.stdout + r.stderr)[-400:])
         attached = True
         ev["image_s"] = round(time.time() - t0, 1)
-        app = mnt / "Moonglade.app" / "Contents" / "Resources" / "Moonglade"
+        bundle = mnt / "Moonglade.app"
+        app = bundle / "Contents" / "Resources" / "Moonglade"
         mount_info = subprocess.run(["/sbin/mount"], capture_output=True, text=True).stdout
         ev["mount"] = [l for l in mount_info.splitlines() if str(mnt) in l]
         require(ev["mount"] and "read-only" in ev["mount"][0], "the image isn't mounted read-only", **ev)
         before = tree_hash(mnt)
-        home = _home_prep(d)
+        home = d / "h"
         prof = d / "release.sb"
         prof.write_text(sandbox_profile(d))
-        c = stack_cycle(app, home, d, prof, log, "read-only image")
-        ev["cycle"] = c
+        with LoopbackServer(FL_CACHE) as srv:
+            run = app_play(bundle, home, d, "ro", pick=f"{P.CLIENT};play", sandbox=prof, timeout=2400,
+                           extra_env={P.RELEASE_DOWNLOAD_BASE_ENV: srv.base})
+        ev["app"] = {k: v for k, v in run.items() if k != "_events"}
         after = tree_hash(mnt)
         ev["image_hash"] = {"before": before, "after": after}
-        probs = problem_lines(log, home / "logs")
+        probs = problem_lines(home / "logs")
         ev["problem_lines"] = probs[:10]
-        require(_cycle_ok(c, app) and c["first_run"] is True, "the stack didn't run from the read-only image", **ev)
+        steps = [s for s, st in run["firstlaunch_steps"] if st == "done"]
+        require(steps == ["preflight", "client", "data", "wine", "database", "playclient", "defaults"]
+                and any(w[0] == "done" for w in run["setup_windows"]),
+                "first launch didn't run every step from the read-only image", **ev)
+        pp = play_ok(run)
+        require(not pp, f"the play loop from the read-only image didn't reach ready and stop cleanly: {pp}", **ev)
+        require([x["exe"] for x in run["while_ready"]["mysqld"]] == [str(app / "mysql/bin/mysqld")]
+                and [x["exe"] for x in run["while_ready"]["worldserver"]] == [str(app / "server/bin/worldserver")],
+                "the servers didn't run from the image", **ev)
         require(not probs, "a log line reports a read-only or permission error", **ev)
         require(before == after and before["entries"] > 1000, "the image's contents changed", **ev)
         # counterexample: a write into the app on the image fails, and the log scan catches it
         ce_log = d / "ce.log"
-        subprocess.run([str(app / "python/bin/python3"), "-I", "-B", "-c",
-                        f"open({str(app / 'written-by-moonglade')!r}, 'w')"], stdout=open(ce_log, "w"),
-                       stderr=subprocess.STDOUT, timeout=60)
+        with open(ce_log, "w") as fh:
+            subprocess.run([str(app / "python/bin/python3"), "-I", "-B", "-c",
+                            f"open({str(app / 'written-by-moonglade')!r}, 'w')"], stdout=fh,
+                           stderr=subprocess.STDOUT, timeout=60)
         ev["counterexample"] = problem_lines(ce_log)[:2]
         require(ev["counterexample"], "counterexample: a write into the read-only app wasn't caught", **ev)
     finally:
@@ -994,61 +973,456 @@ def app_readonly(ctx):
                 pass
         if attached:
             subprocess.run(["/usr/bin/hdiutil", "detach", "-force", str(mnt)], capture_output=True, timeout=120)
+        _cleanup(d)
+    return ev
+
+
+@check("release.app_moved", order=17, capability=CAP, stack="down", tier="slow")
+def app_moved(ctx):
+    """The run's shared HOME (first launch completed from the app at one path): the app is moved to a second path
+    and opened again (test hook, stand-in client): no first-launch window, the play loop reaches ready and stops
+    cleanly, the servers run from the new APP with the same HOME (rendered confs name the new APP's sql/), and
+    nothing is written inside the app (its tree hashes the same). Counterexample: the payload's Python without -B
+    writes __pycache__ into the app, and the hash comparison sees it."""
+    from .firstlaunch_checks import _FIXTURE, app_play, fixture, play_ok
+    healed = heal_scratch()
+    fx = fixture(ctx)
+    ev: dict = {"healed": healed, "started": time.time(), "fixture": fx}
+    d, home, bundle1 = Path(fx["d"]), Path(fx["home"]), Path(fx["bundle"])
+    h1 = tree_hash(bundle1)
+    bundle2 = d / f"Moved Here {int(time.time()) % 10000}" / "Moonglade.app"
+    bundle2.parent.mkdir()
+    os.rename(bundle1, bundle2)
+    _FIXTURE["bundle"] = str(bundle2)                 # later users of the shared HOME follow the move
+    app2 = bundle2 / "Contents" / "Resources" / "Moonglade"
+    prof = d / "release.sb"
+    prof.write_text(sandbox_profile(d))
+    run = app_play(bundle2, home, d, "moved", sandbox=prof)
+    h2 = tree_hash(bundle2)
+    conf = (home / "etc/worldserver.conf").read_text()
+    paths_used = [x["exe"] for v in run["while_ready"].values() for x in v]
+    ev |= {"moved_from": str(bundle1), "moved_to": str(bundle2), "app": {k: v for k, v in run.items() if k != "_events"},
+           "app_hash": {"before": h1, "after": h2}, "paths_used": paths_used,
+           "conf_source_dir": (re.search(r'^SourceDirectory\s*=\s*"(.*)"', conf, re.M) or [None, None])[1],
+           "conf_data_dir": (re.search(r'^DataDir\s*=\s*"(.*)"', conf, re.M) or [None, None])[1]}
+    require(not run["setup_windows"] and not run["firstlaunch_steps"], "the moved app ran first launch again", **ev)
+    pp = play_ok(run)
+    require(not pp, f"the play loop from the moved app didn't reach ready and stop cleanly: {pp}", **ev)
+    require(len(paths_used) == 3 and all(_under(x, app2) for x in paths_used),
+            "the servers didn't run from the new APP", **ev)
+    require(ev["conf_source_dir"] == str(app2 / "sql") and _under(ev["conf_data_dir"], home),
+            "the confs don't follow the moved app with the same HOME", **ev)
+    require(h1 == h2, "something was written inside the app", **ev)
+    # counterexample: without -B the payload's Python writes __pycache__ into the app, and the hash sees it
+    subprocess.run([str(app2 / "python/bin/python3"), "-I", "-c", "import hslib.paths"], capture_output=True,
+                   env=release_env(home), cwd=d, timeout=60)
+    h3 = tree_hash(bundle2)
+    ev["counterexample"] = {"hash_changed": h3 != h2, "entries_added": h3["entries"] - h2["entries"]}
+    for x in sorted(app2.rglob("__pycache__"), reverse=True):        # keep the shared app clean for later checks
+        shutil.rmtree(x, ignore_errors=True)
+    require(h3 != h2, "counterexample: a write inside the app wasn't seen", **ev)
+    return ev
+
+
+# ================================================================================================ play_standin
+
+def dump_distrib(f: Path) -> str | None:
+    """The "Distrib x.y.z, for <os>" of a mysqldump .sql.gz (its first line)."""
+    r = subprocess.run(["/usr/bin/gzip", "-dc", str(f)], capture_output=True, timeout=120)
+    first = r.stdout.split(b"\n", 1)[0].decode("utf-8", "replace")
+    m = re.search(r"Distrib (\S+), for (\S+)", first)
+    return f"{m.group(1)} {m.group(2)}" if m else None
+
+
+def payload_distrib(app: Path) -> str | None:
+    out = subprocess.run([str(app / "mysql/bin/mysqldump"), "--version"], capture_output=True, text=True).stdout
+    m = re.search(r"Ver (\S+) for (\S+)", out)
+    return f"{m.group(1)}, {m.group(2)}".replace(",", "") if m else None
+
+
+@check("release.play_standin", order=16, capability=CAP, stack="down", tier="slow")
+def play_standin(ctx):
+    """The run's shared set-up HOME, scratch ports, the no-Homebrew sandbox: the release app's play loop with the
+    stand-in client reaches ready (servers from the payload), the stand-in exits, the stack stops gracefully, a backup
+    appears in HOME's backups made by the payload's mysqldump (its dump header) and holding the PLAYER account the
+    loop created in the scratch databases, and settings.json and player.json are in HOME. Counterexample: the same
+    "made by the payload's mysqldump" test on a dump made by Homebrew's mysqldump (the dev player's newest backup,
+    only read) fails."""
+    from .firstlaunch_checks import app_play, fixture, play_ok
+    healed = heal_scratch()
+    fx = fixture(ctx)
+    ev: dict = {"healed": healed, "started": time.time(), "fixture": fx}
+    d, home, bundle = Path(fx["d"]), Path(fx["home"]), Path(fx["bundle"])
+    app = bundle / "Contents/Resources/Moonglade"
+    bk = home / "backups"
+    before = sorted(x.name for x in bk.iterdir()) if bk.is_dir() else []
+    prof = d / "release.sb"
+    prof.write_text(sandbox_profile(d))
+    run = app_play(bundle, home, d, "standin", sandbox=prof)
+    after = sorted(x.name for x in bk.iterdir()) if bk.is_dir() else []
+    new = [x for x in after if x not in before and not x.startswith(".")]
+    want = payload_distrib(app)
+    got = {f.name: dump_distrib(f) for f in sorted((bk / new[-1]).glob("*.sql.gz"))} if new else {}
+    pl = run["play_last"]
+    acct = (pl.get("account") or {})
+    in_dump = None
+    if new and (bk / new[-1] / "auth.sql.gz").is_file():
+        txt = subprocess.run(["/usr/bin/gzip", "-dc", str(bk / new[-1] / "auth.sql.gz")], capture_output=True,
+                             timeout=120).stdout
+        in_dump = f"'{acct.get('account')}'".encode() in txt
+    ev |= {"app": {k: v for k, v in run.items() if k != "_events"}, "backups_new": new, "dump_distrib": got,
+           "payload_mysqldump": want, "account": {k: acct.get(k) for k in ("kind", "account", "file", "file_created")},
+           "account_in_auth_dump": in_dump,
+           "home_files": {n: (home / n).is_file() for n in ("settings.json", "player.json")},
+           "player_json_mode": oct((home / "player.json").stat().st_mode & 0o777) if (home / "player.json").exists()
+           else None}
+    pp = play_ok(run)
+    require(not pp, f"the play loop didn't reach ready and stop cleanly: {pp}", **ev)
+    require([x["exe"] for x in run["while_ready"]["mysqld"]] == [str(app / "mysql/bin/mysqld")],
+            "the running mysqld isn't the payload's", **ev)
+    require(new and (pl.get("backup") or {}).get("ok") is True, "no backup appeared in HOME's backups", **ev)
+    require(got and want and all(v == want for v in got.values()), "the backup wasn't made by the payload's mysqldump",
+            **ev)
+    require(acct.get("kind") == "player" and _under(acct.get("file"), home) and in_dump,
+            "the PLAYER account wasn't created in the scratch databases (with its file in HOME)", **ev)
+    require(all(ev["home_files"].values()), "settings.json / player.json aren't in HOME", **ev)
+    # counterexample: a Homebrew mysqldump dump fails the same test (read-only look at the dev player's newest backup)
+    dev = sorted((P.PLAYER_BACKUPS).glob("*/auth.sql.gz"))
+    if dev:
+        other = dump_distrib(dev[-1])
+        ev["counterexample_homebrew_dump"] = {"distrib": other, "passes": other == want}
+        require(other != want, "counterexample: a Homebrew-made dump passed the payload test", **ev)
+    else:
+        ev["counterexample_homebrew_dump"] = "no dev backup to compare (nothing to read)"
+    return ev
+
+
+# ================================================================================================ client_smoke
+
+SMOKE_SRC = r"""
+import json, sys, time
+from pathlib import Path
+from hslib import paths as P, launch as L
+client = Path(sys.argv[1])
+L.select_client(client)
+ev = {"client": str(L.client_dir()), "wine": str(L.WINE), "prefix_dir": str(P.WINEPREFIX)}
+try:
+    ev["prefix"] = L.ensure_prefix()
+    t0 = time.time()
+    proc = L.start_client()
+    win = None
+    while time.time() - t0 < 120:
+        win = L.client_window()
+        if win or (proc.poll() is not None and not L.prefix_processes()):
+            break
+        time.sleep(1)
+    ev["window"] = win
+    ev["window_after_s"] = round(time.time() - t0, 1)
+    ev["wow"] = [{"pid": p["pid"], "cmd": p["cmd"][-80:]} for p in L.wow_processes()]
+except Exception as e:
+    ev["error"] = f"{type(e).__name__}: {e}"
+ev["stop"] = L.stop_prefix()
+ev["remaining"] = L.prefix_processes()
+print(json.dumps(ev, default=str))
+"""
+
+
+def _smoke(app: Path, home: Path, client: Path, d: Path) -> dict:
+    env = release_env(home, PATH="/usr/bin:/bin:/usr/sbin:/sbin", TMPDIR=str(d / "tmp") + "/")
+    (d / "tmp").mkdir(exist_ok=True)
+    r = subprocess.run([str(app / "python/bin/python3"), "-I", "-B", "-c", SMOKE_SRC, str(client),
+                        P.RELEASE_TEST_FLAG], capture_output=True, text=True, env=env, cwd=d, timeout=600)
+    try:
+        out = json.loads(r.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        out = {"rc": r.returncode, "stdout": r.stdout[-500:], "stderr": r.stderr[-800:]}
+    return out
+
+
+@check("release.client_smoke", order=16, capability=CAP, stack="down", tier="slow", gui=True)
+def client_smoke(ctx):
+    """The run's shared set-up HOME (first launch from client/): HOME's play client Wow.exe started under HOME's
+    Wine runtime and prefix (the harness's client launch: launch.start_client, release mode) shows its first window,
+    then the prefix is stopped with no Wine or Wow.exe process left. Counterexample: a scratch "client" folder with
+    no Wow.exe shows no window, which the check sees."""
+    from .firstlaunch_checks import fixture
+    healed = heal_scratch()
+    fx = fixture(ctx)
+    ev: dict = {"healed": healed, "started": time.time(), "fixture": fx}
+    d, home, bundle = Path(fx["d"]), Path(fx["home"]), Path(fx["bundle"])
+    app = bundle / "Contents/Resources/Moonglade"
+    play_client = home / "client-play"
+    out = _smoke(app, home, play_client, d)
+    ev["smoke"] = out
+    left = _proc_info(lambda a: any(str(home) in x for x in a))
+    ev["remaining_after"] = [{"pid": x["pid"], "argv": x["argv"][:2]} for x in left]
+    require(out.get("client") == str(play_client) and _under(out.get("wine"), home)
+            and out.get("prefix_dir") == str(home / "wine/prefix"),
+            "the smoke didn't use HOME's play client, Wine runtime and prefix", **ev)
+    require(out.get("window") and out.get("wow"), "Wow.exe showed no window", **ev)
+    require(not out.get("remaining") and not left, "Wine / Wow.exe processes remain", **ev)
+    # counterexample: no Wow.exe -> no window
+    empty = d / "no-client"
+    empty.mkdir(exist_ok=True)
+    cx = _smoke(app, home, empty, d)
+    ev["counterexample_no_wow"] = {k: cx.get(k) for k in ("window", "error", "remaining", "window_after_s")}
+    shutil.rmtree(empty, ignore_errors=True)
+    require(not cx.get("window"), "counterexample: a folder without Wow.exe showed a window", **ev)
+    return ev
+
+
+# ================================================================================================ player_data_untouched
+
+PLAYER_ROWS_SQL = ("SELECT id, username, HEX(salt), HEX(verifier), joindate, last_login, last_ip, locked, expansion "
+                   "FROM acore_auth.account WHERE username = '{name}';"
+                   "SELECT * FROM acore_characters.characters WHERE account = "
+                   "(SELECT id FROM acore_auth.account WHERE username = '{name}') ORDER BY guid;"
+                   "SELECT ci.* FROM acore_characters.character_inventory ci JOIN acore_characters.characters c "
+                   "ON c.guid = ci.guid WHERE c.account = (SELECT id FROM acore_auth.account WHERE username = "
+                   "'{name}') ORDER BY ci.guid, ci.bag, ci.slot;")
+
+
+def _player_name(player_json: Path) -> str | None:
+    try:
+        return str(json.loads(player_json.read_text())["account"]).upper()
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+
+
+def player_db_fingerprint(name: str | None, datadir: Path, mysqld: Path, mysql: Path, base: Path,
+                          live_port: int | None) -> dict:
+    """SHA-256 of the PLAYER account's auth row and its characters (+ inventory): from the live lane-A mysqld when
+    it is up (a read-only SELECT), else from a throwaway socket-only mysqld on an APFS clone of the datadir (the
+    datadir itself is never opened). Fail-closed: an error is recorded as such, never as "unchanged"."""
+    import hashlib
+    if not name:
+        return {"player": None}
+    if not name.replace("_", "").isalnum():
+        return {"error": "unexpected account name"}
+    sql = PLAYER_ROWS_SQL.format(name=name)
+    ev: dict = {"player": name}
+
+    def run(args):
+        r = subprocess.run([str(mysql), "--no-defaults", *args, "--batch", "--skip-column-names", "-e", sql],
+                           capture_output=True, text=True, timeout=120)
+        return r.returncode, r.stdout, r.stderr[-300:]
+    if live_port is not None:
+        rc, out, err = run(["--protocol=TCP", "-h127.0.0.1", f"-P{live_port}", f"-u{P.DB_USER}", f"-p{P.DB_PASS}"])
+        ev["via"] = "live mysqld (SELECT)"
+    else:
+        if not (datadir / "acore_auth").is_dir():
+            return ev | {"via": "datadir", "error": f"no acore_auth in {datadir}"}
+        t = Path(tempfile.mkdtemp(prefix="pdu-", dir="/tmp"))
+        proc = None
+        try:
+            subprocess.run(["/bin/cp", "-cR", str(datadir), str(t / "data")], check=True, capture_output=True)
+            for f in (t / "data").glob("*.pid"):
+                f.unlink()
+            for f in (t / "data").glob("*.sock*"):
+                f.unlink()
+            sock = t / "s"
+            cnf = t / "my.cnf"
+            cnf.write_text(f"[mysqld]\nbasedir={base}\ndatadir={t / 'data'}\nsocket={sock}\npid-file={t / 'm.pid'}\n"
+                           f"log-error={t / 'err.log'}\nskip-networking\nmysqlx=OFF\nperformance_schema=OFF\n"
+                           "disable-log-bin\ninnodb_buffer_pool_size=128M\n")
+            proc = subprocess.Popen([str(mysqld), f"--defaults-file={cnf}"], stdin=subprocess.DEVNULL,
+                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+            t0 = time.time()
+            rc, out, err = 1, "", "mysqld didn't start on the clone"
+            while time.time() - t0 < 180 and proc.poll() is None:
+                if sock.exists():
+                    rc, out, err = run([f"--socket={sock}", "-uroot"])
+                    if rc == 0 or "Access denied" in err:
+                        break
+                time.sleep(1)
+            if rc != 0 and "Access denied" in err:
+                rc, out, err = run([f"--socket={sock}", f"-u{P.DB_USER}", f"-p{P.DB_PASS}"])
+            ev["via"] = "throwaway mysqld on a clone of the datadir"
+        finally:
+            if proc is not None and proc.poll() is None:
+                proc.terminate()
+                try:
+                    proc.wait(timeout=120)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+            shutil.rmtree(t, ignore_errors=True)
+    if rc != 0:
+        return ev | {"error": err}
+    return ev | {"rows": out.count("\n"), "sha256": hashlib.sha256(out.encode()).hexdigest()}
+
+
+def _file_fp(f: Path):
+    import hashlib
+    if not f.exists():
+        return None
+    return {"sha256": hashlib.sha256(f.read_bytes()).hexdigest(), "mtime_ns": f.stat().st_mtime_ns}
+
+
+def player_data_fingerprint(roots: dict | None = None) -> dict:
+    """The dev player's data (scenario "Player fingerprints unchanged"): env/backups, env/player.json,
+    env/settings.json, env/client-play (clientbuild.fingerprint), the client/ manifest, the PLAYER's rows in the live
+    acore_auth / acore_characters, and the real ~/Library/Application Support/Moonglade (existence + listing).
+    `roots` overrides the locations (the counterexample's scratch copy)."""
+    from .. import backups, clientbuild, stack
+    r = roots or {"backups": P.PLAYER_BACKUPS, "player_json": P.PLAYER_FILE, "settings_json": P.SETTINGS_FILE,
+                  "client_play": P.PLAYER_PLAY_CLIENT, "client_manifest": P.CLIENT_MANIFEST,
+                  "datadir": P.MYSQL_DATA, "real_home": P.RELEASE_HOME_DEFAULT}
+    real = Path(r["real_home"])
+    out = {"backups": backups.fingerprint(Path(r["backups"])),
+           "player_json": _file_fp(Path(r["player_json"])), "settings_json": _file_fp(Path(r["settings_json"])),
+           "client_play": clientbuild.fingerprint(Path(r["client_play"])) if Path(r["client_play"]).exists() else None,
+           "client_manifest": _file_fp(Path(r["client_manifest"])),
+           "real_home": ({"exists": True, "listing": sorted(x.name for x in real.iterdir()),
+                          "mtime_ns": real.stat().st_mtime_ns} if real.exists() else {"exists": False})}
+    live = P.MYSQL_PORT if (roots is None and stack.port_open(P.MYSQL_PORT)) else None
+    out["db"] = player_db_fingerprint(_player_name(Path(r["player_json"])), Path(r["datadir"]), P.MYSQLD, P.MYSQL,
+                                      P.MYSQL_BASE, live)
+    return out
+
+
+def fp_differences(a: dict, b: dict) -> list[str]:
+    out = []
+    for k in sorted(set(a) | set(b)):
+        if k == "db":
+            da, db_ = a.get(k) or {}, b.get(k) or {}
+            if "error" in da or "error" in db_:
+                out.append(f"db: can't compare ({da.get('error') or db_.get('error')})")
+            elif da.get("sha256") != db_.get("sha256") or da.get("player") != db_.get("player"):
+                out.append("db: the PLAYER's rows differ")
+        elif a.get(k) != b.get(k):
+            out.append(k)
+    return out
+
+
+@check("release.player_data_untouched", order=998, capability=CAP, stack="down", tier="full")
+def player_data_untouched(ctx):
+    """After every release.* and firstlaunch.* check of the run: env/backups, env/player.json, env/settings.json,
+    env/client-play, the client/ manifest, the PLAYER's rows in the live acore_auth / acore_characters and the real
+    ~/Library/Application Support/Moonglade are as the runner recorded them at the start of the run. Counterexample:
+    the same comparison on a scratch copy of the player files sees one changed byte in its player.json."""
+    start = (ctx or {}).get("release_player_data_start", "missing")
+    ev: dict = {"start": start}
+    require(isinstance(start, dict) and "error" not in start,
+            "the runner didn't record the player's data at the start of the run", **ev)
+    now = player_data_fingerprint()
+    diff = fp_differences(start, now)
+    ev |= {"now_db": now.get("db"), "start_db": start.get("db"), "real_home": now.get("real_home"),
+           "differences": diff}
+    require(start["db"].get("sha256") or start["db"].get("player") is None,
+            "the PLAYER's rows couldn't be read at the start", **ev)
+    require(not diff, f"the dev player's data changed: {diff}", **ev)
+    # counterexample: a scratch copy of the player files, one byte of its player.json changed
+    d = scratch_dir("pdu")
+    try:
+        (d / "backups").mkdir()
+        (d / "backups" / "x").write_text("b")
+        pj = d / "player.json"
+        pj.write_text(json.dumps({"account": "NOSUCHPLAYER", "password": "x"}))
+        roots = {"backups": d / "backups", "player_json": pj, "settings_json": d / "settings.json",
+                 "client_play": d / "client-play", "client_manifest": d / "m.json", "datadir": d / "nodata",
+                 "real_home": d / "real"}
+        a = player_data_fingerprint(roots)
+        pj.write_text(json.dumps({"account": "NOSUCHPLAYER", "password": "y"}))
+        b = player_data_fingerprint(roots)
+        ev["counterexample"] = fp_differences(a, b)
+        require("player_json" in ev["counterexample"], "counterexample: a changed player.json wasn't seen", **ev)
+    finally:
         shutil.rmtree(d, ignore_errors=True)
     return ev
 
 
-@check("release.app_moved", order=14, capability=CAP, stack="down", tier="slow")
-def app_moved(ctx):
-    """Set up a scratch HOME from the app at one path (database first start), move the app to a second path, and run
-    again: no new setup (the datadir is reused, no initialisation), every server runs from the new APP with the same
-    HOME, and neither run writes anything inside APP (its tree hashes the same). Counterexample: the payload's Python
-    without -B writes __pycache__ into the app, and the hash comparison sees it. (First launch + the stand-in play
-    loop: see the scope note above.)"""
-    healed = heal_scratch()
-    from .release_checks import _need_payload
-    ev: dict = {"healed": healed, "started": time.time(), "scope": "stack only until first launch / play_standin exist (tasks 3.x)"}
-    _need_payload(ctx)
-    d = SCRATCH_ROOT / f"mv-{os.getpid()}"
-    shutil.rmtree(d, ignore_errors=True)
-    d.mkdir(parents=True)
-    log = d / "release.log"
+# ================================================================================================ readline_stub (5.5)
+
+STUB_DIR = P.ROOT / "tools" / "release" / "readline-stub"
+STUB_PRE_FIX = "52238f5"            # the last commit whose stub read lines through stdio (task 5.5 counterexample)
+STUB_TEST_MAIN = r'''
+#include "readline/readline.h"
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+static int hook(void) { return 0; }
+static double now(void) { struct timespec t; clock_gettime(CLOCK_MONOTONIC, &t); return t.tv_sec + t.tv_nsec / 1e9; }
+int main(void) {
+    rl_event_hook = hook;
+    double t0 = now();
+    for (int i = 0; i < 4; i++) {
+        char *l = readline("");
+        if (!l) { printf("EOF %.3f\n", now() - t0); fflush(stdout); return 0; }
+        printf("LINE %s %.3f\n", l, now() - t0); fflush(stdout); free(l);
+    }
+    return 0;
+}
+'''
+
+
+def _stub_program(src: str, out: Path) -> Path:
+    """`src` (readline.c text) + the test main, compiled against the stub's header into `out`."""
+    out.mkdir(parents=True, exist_ok=True)
+    (out / "readline.c").write_text(src)
+    (out / "main.c").write_text(STUB_TEST_MAIN)
+    sdk = subprocess.run(["/usr/bin/xcrun", "--show-sdk-path"], capture_output=True, text=True).stdout.strip()
+    exe = out / "t"
+    r = subprocess.run(["/usr/bin/clang", "-isysroot", sdk, "-O2", "-Wall", "-Wextra", "-Werror", "-I",
+                        str(STUB_DIR / "include"), str(out / "readline.c"), str(out / "main.c"), "-o", str(exe)],
+                       capture_output=True, text=True, env=os.environ | {"TMPDIR": str(out) + "/"})
+    if r.returncode != 0:
+        raise RuntimeError(f"compiling the stub test failed: {(r.stderr or r.stdout)[-600:]}")
+    return exe
+
+
+def _stub_piped(exe: Path, hold_s: float = 2.0) -> dict:
+    """Two lines in ONE write, the pipe held open `hold_s`, then "third" without a newline and EOF. When each line
+    came back (seconds after the write) and whether it came before the pipe was closed."""
+    import select
+    proc = subprocess.Popen([str(exe)], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
+    t0 = time.time()
+    os.write(proc.stdin.fileno(), b"first\nsecond\n")
+    got, buf, closed_at = [], b"", None
+    fd = proc.stdout.fileno()
+    while time.time() - t0 < 10:
+        if closed_at is None and time.time() - t0 >= hold_s:
+            os.write(proc.stdin.fileno(), b"third")
+            proc.stdin.close()
+            closed_at = round(time.time() - t0, 3)
+        r, _, _ = select.select([fd], [], [], 0.05)
+        if r:
+            b = os.read(fd, 4096)
+            if not b:
+                break
+            buf += b
+            *lines, buf = buf.split(b"\n")
+            for x in lines:
+                got.append({"line": x.decode(), "at": round(time.time() - t0, 3)})
+    proc.kill()
+    proc.wait()
+    return {"lines": got, "closed_at": closed_at}
+
+
+def _stub_ok(res: dict) -> bool:
+    ls = res["lines"]
+    names = [x["line"].split(" ")[1] if x["line"].startswith("LINE ") else x["line"].split(" ")[0] for x in ls]
+    return (names == ["first", "second", "third", "EOF"] and res["closed_at"] is not None
+            and all(x["at"] < 1.0 and x["at"] < res["closed_at"] for x in ls[:2]))
+
+
+@check("release.readline_stub", order=14, capability=CAP, stack="any", tier="quick")
+def readline_stub(ctx):
+    """tools/release/readline-stub (the release servers' console input, task 5.5): two lines arriving in one read
+    both come back at once (well under 1 s, while the pipe is still open), a last line without a newline comes back
+    at EOF, then EOF. Counterexample: the stub as of 52238f5 (lines read through stdio) leaves the second line waiting
+    until the pipe closes."""
+    ev: dict = {"started": time.time()}
+    d = scratch_dir("rl")
     try:
-        app1 = release_fixture_app(d)
-        bundle1 = app1.parents[2]
-        home = _home_prep(d)
-        prof = d / "release.sb"
-        prof.write_text(sandbox_profile(d))
-        h0 = tree_hash(bundle1)
-        c1 = stack_cycle(app1, home, d, prof, log, "first path")
-        h1 = tree_hash(bundle1)
-        bundle2 = d / "Moved Here" / "Moonglade.app"
-        bundle2.parent.mkdir()
-        os.rename(bundle1, bundle2)
-        app2 = bundle2 / "Contents" / "Resources" / "Moonglade"
-        c2 = stack_cycle(app2, home, d, prof, log, "after the move")
-        h2 = tree_hash(bundle2)
-        conf = (home / "etc/worldserver.conf").read_text()
-        ev |= {"first": c1, "moved": c2, "app_hash": {"before": h0, "after_first": h1, "after_move": h2},
-               "conf_source_dir": (re.search(r'^SourceDirectory\s*=\s*"(.*)"', conf, re.M) or [None, None])[1],
-               "home_entries": sorted(x.name for x in home.iterdir())}
-        require(_cycle_ok(c1, app1) and c1["first_run"] is True, "the first run didn't set up and run", **ev)
-        require(_cycle_ok(c2, app2), "the stack didn't run from the moved app", **ev)
-        require(c2["first_run"] is False and c2["initialized"] is False,
-                "the moved app set the databases up again", **ev)
-        require(ev["conf_source_dir"] == str(app2 / "sql"), "the confs don't follow the moved app", **ev)
-        require(h0 == h1 == h2, "something was written inside the app", **ev)
-        # counterexample: without -B the payload's Python writes __pycache__ into the app, and the hash sees it
-        subprocess.run([str(app2 / "python/bin/python3"), "-I", "-c", "import hslib.paths"], capture_output=True,
-                       env=release_env(home), cwd=d, timeout=60)
-        h3 = tree_hash(bundle2)
-        ev["counterexample"] = {"hash_changed": h3 != h2, "entries_added": h3["entries"] - h2["entries"]}
-        require(h3 != h2, "counterexample: a write inside the app wasn't seen", **ev)
+        now = _stub_piped(_stub_program((STUB_DIR / "readline.c").read_text(), d / "now"))
+        ev["now"] = now
+        require(_stub_ok(now), "the stub didn't return both piped lines at once, then the last line and EOF", **ev)
+        old = subprocess.run(["git", "-C", str(P.ROOT), "show", f"{STUB_PRE_FIX}:tools/release/readline-stub/readline.c"],
+                             capture_output=True, text=True)
+        require(old.returncode == 0, "couldn't read the pre-fix stub from git", **ev, git=old.stderr[-300:])
+        before = _stub_piped(_stub_program(old.stdout, d / "old"))
+        ev["counterexample_pre_fix"] = before
+        require(not _stub_ok(before), "counterexample: the pre-fix stub passed the piped two-line test", **ev)
     finally:
-        for pinfo in _proc_info(lambda a: any(str(d) in x for x in a)):
-            try:
-                os.kill(pinfo["pid"], 9)
-            except ProcessLookupError:
-                pass
         shutil.rmtree(d, ignore_errors=True)
     return ev

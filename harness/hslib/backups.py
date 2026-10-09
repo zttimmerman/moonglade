@@ -105,6 +105,10 @@ def plan(args, environ=None) -> dict:
     if knobs:
         raise Refused(f"{sorted(knobs)[0]} is set: that's a test switch for the harness, not for playing. Unset it "
                       "and run ./play again.")
+    if P.MODE == "release" and P.release_switch(P.RELEASE_HOME_ENV, env):
+        # release-first-launch: a scratch HOME (test switch, honoured only with the test flag inside a live harness
+        # run) is the run's own, and so is its backups folder: a test-shaped run backs up there as a player's would
+        return {"root": PLAYER_ROOT, "test": True, "knobs": {}, "why": "release scratch HOME (test switch)"}
     signs = play.harness_signs(args, env)
     if signs:
         return {"root": None, "test": True, "knobs": {}, "why": "not a genuine player launch: " + ", ".join(signs)}

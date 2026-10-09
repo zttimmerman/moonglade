@@ -108,7 +108,8 @@ ERRORS = {
                     "The game in {name} is in {langs}. Moonglade needs " + NEEDED + " (US English, enUS). No files "
                     "were changed. Choose an English 3.3.5a game folder."),
     "cant_read_folder": ("Moonglade isn't allowed to read that folder",
-                         "macOS didn't let Moonglade read {path}. No files were changed. To allow it, open System "
+                         "macOS didn't let Moonglade read {path}, so it can't check that it holds " + NEEDED + ". "
+                         "No files were changed. To allow it, open System "
                          "Settings > Privacy & Security > Files and Folders and turn on that folder for Moonglade "
                          "(or move the game folder somewhere else, like your home folder), then choose it again."),
     "source_damaged": ("Your game files are damaged",
@@ -462,7 +463,7 @@ def _download_refusal(e: BaseException, what: str, step: str) -> Refusal:
     from .downloads import DownloadError
     cause = e if isinstance(e, DownloadError) else (e.__cause__ or e)
     if isinstance(cause, DownloadError) and cause.kind == "damaged":
-        return Refusal("download_damaged", str(cause), cause.evidence, what=what)
+        return Refusal("download_damaged", str(cause), cause.evidence, what=what[:1].upper() + what[1:])
     net = (urllib.error.URLError, ConnectionError, TimeoutError, http.client.HTTPException)
     if isinstance(cause, net) or isinstance(e, net):
         return Refusal("download_failed", f"{type(cause).__name__}: {cause}", {}, what=what)
