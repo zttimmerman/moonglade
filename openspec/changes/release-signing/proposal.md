@@ -38,3 +38,8 @@ Prebuilt releases, part 3 of 3 (STATUS "Next", Zach 2026-10-07/08; split in `rel
 ## Open questions
 1. The approved navy mockup (exact navy, logo scale) isn't in the repo or the session records. Task 3.1 recovers it from Zach or proposes values and shows him a preview before anything ships (the human-verify scenario).
 2. Whether ad-hoc + hardened runtime needs an entitlement that Developer ID doesn't (library validation can behave differently without a Team ID). Task 2.2 measures ad hoc locally; the first Developer ID workflow run proves the other side (the smoke runs on the signed app before notarization, so a wrong set fails the run before anything is published).
+
+## Zach's decisions (2026-10-08)
+- Bundle id: `io.github.zttimmerman.moonglade` (approved).
+- Info.plist copyright line: removed entirely (approved).
+- Signing mode: start `ad-hoc` (free); `developer-id` stays built and is switched on later if Zach joins the Apple Developer Program.
