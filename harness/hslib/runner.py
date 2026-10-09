@@ -18,6 +18,8 @@ from .util import keep_awake, log
 SLOW_SKIP_MSG = "slow tier, not run in a full run"
 # harness-reporting "GUI tier": what a full run records for a gui-marked check when no GUI path changed
 GUI_SKIP_MSG = "gui tier, not run in a full run (no GUI path changed)"
+# release-signing: a ci_only check outside the release workflow (GITHUB_ACTIONS != true) reports this skip, never a pass
+CI_ONLY_SKIP_MSG = "not applicable: CI-only (judges a release-workflow run; local builds are never Developer ID signed)"
 # The GUI path rule: a change touching any GUI input runs the gui checks in full runs. launcher-fixes (F26, verifier
 # 2026-10-05): dependency-based. The GUI inputs are the non-Python files below plus the transitive in-repo import
 # closure of GUI_ROOTS (the gui checks and their shared app session, and the code that session runs: the launcher
@@ -236,7 +238,16 @@ def tolerated_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
     if (rec["status"] == "skip" and meta.get("tier") == "full" and c is not None and c.tier == "slow"
             and rec["id"] in meta.get("slow_tier_skipped", []) and rec.get("message") == SLOW_SKIP_MSG):
         return True
-    return is_gui_skip(rec, meta, reg) or is_backups_skip(rec, meta, reg)
+    return is_gui_skip(rec, meta, reg) or is_backups_skip(rec, meta, reg) or is_ci_only_skip(rec, meta, reg)
+
+
+def is_ci_only_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
+    """release-signing: a ci_only check's "not applicable" skip on a run outside the release workflow (meta.ci is
+    False). Only checks the registry marks ci_only, only with CI_ONLY_SKIP_MSG; in CI the check must pass."""
+    reg = REGISTRY if reg is None else reg
+    c = reg.get(rec["id"])
+    return (rec["status"] == "skip" and c is not None and c.ci_only and meta.get("ci") is False
+            and rec.get("message") == CI_ONLY_SKIP_MSG)
 
 
 def is_backups_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
@@ -360,7 +371,7 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
         except CheckFail as e:
             rec |= {"status": "fail", "message": str(e), "evidence": e.evidence}
         except CheckSkip as e:
-            rec |= {"status": "skip", "message": str(e), "evidence": {"skip_reason": str(e)}}
+            rec |= {"status": "skip", "message": str(e), "evidence": {"skip_reason": str(e), **e.evidence}}
         except Exception as e:  # noqa: BLE001
             excerpt = getattr(e, "log_excerpt", "")
             rec |= {"status": "error", "message": f"{type(e).__name__}: {e}",
@@ -403,6 +414,18 @@ def release_bracket_plan(checks, run_id: str | None, state_dir: Path | None = No
     rid = run_id or f"pid{os.getpid()}-{int(time.time())}"
     return {"run_id": rid, "inner": inner, "start_check": inner[0] if inner else PDU_ID,
             "end_check": inner[-1] if inner else None, "state_file": str(Path(state_dir or BRACKET_DIR) / f"{rid}.json")}
+
+
+def bracket_intruders(checks) -> list[str]:
+    """Checks that aren't release.*/firstlaunch.* (or are release.player_data_untouched) but sort, by (order, id),
+    between the first and the last release.*/firstlaunch.* check of `checks` (pass the whole registry): in a run that
+    selects them with the bracketed checks they would run inside the bracket and fail it (release-signing verifier
+    cycle 1: signing.* at order 13). Keep the bracket strict: register such checks outside its order range."""
+    ids = [c.id for c in sorted(checks, key=lambda c: (c.order, c.id))]
+    inner = [n for n, i in enumerate(ids) if i.startswith(BRACKET_PREFIXES) and i != PDU_ID]
+    if not inner:
+        return []
+    return [i for i in ids[inner[0]:inner[-1] + 1] if not i.startswith(BRACKET_PREFIXES) or i == PDU_ID]
 
 
 def _prune_bracket_states(d: Path, keep: str) -> None:
@@ -643,6 +666,26 @@ def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full
         runreg.finish(rec)
 
 
+def filter_refusal(reg: dict, tier: str, only: list[str] | None, selected: list) -> str | None:
+    """A filtered run that would check nothing is refused, never reported as a pass (release-signing verifier cycle
+    1: `--only 'a,b'` matched nothing and exited 0). Refused: a glob matching no registered check and no post-run
+    report (a comma list is one glob: pass --only once per glob), or a filter under which this tier executes no
+    check and no post-run report. None to go ahead."""
+    if not only:
+        return None
+    from .checks.reporting import POST_IDS
+    known = list(reg) + list(POST_IDS)
+    dead = [g for g in only if not any(fnmatch.fnmatch(i, g) for i in known)]
+    if dead:
+        hint = " (a comma list is one glob; pass --only once per glob)" if any("," in g for g in dead) else ""
+        return f"refusing the run: --only {', '.join(repr(g) for g in dead)} matches no check{hint}"
+    if not selected and not any(fnmatch.fnmatch(i, g) for i in POST_IDS for g in only):
+        other = sorted({reg[i].tier for i in reg if any(fnmatch.fnmatch(i, g) for g in only)})
+        return (f"refusing the run: the filter {only} selects no check to execute in tier {tier} "
+                f"(its checks are tier {', '.join(other)}{'; use --tier ' + other[-1] if other else ''})")
+    return None
+
+
 # power-guard: the run tiers whose checks are guarded (quick is short and runs on builders' laps)
 POWER_GUARDED_TIERS = ("full", "slow", "gui")
 
@@ -670,6 +713,10 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     selected = select(reg, tier, only, {c.id for c in gui_skips} | {c.id for c in bk_skips})
     slow_skips = slow_tier_skips(reg, tier, only, referenced_ids())
     full = is_full_run(tier, only)
+    refuse = filter_refusal(reg, tier, only, selected)
+    if refuse:
+        log(refuse)
+        return 2
     P.OUT.mkdir(parents=True, exist_ok=True)
     du = shutil.disk_usage(P.ROOT)
     meta = {
@@ -678,6 +725,7 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
         "gui_tier_skipped": [c.id for c in gui_skips], "gui_rule": rule,
         "backups_tier_skipped": [c.id for c in bk_skips], "backups_rule": bk_rule,
         "keep_awake": awake, "gui_preflight": preflight, "orphans": orphans,
+        "ci": _os.environ.get("GITHUB_ACTIONS") == "true",
         "filter": only or [], "host": {"platform": platform.platform(), "machine": platform.machine(),
                                       "python": platform.python_version(), "disk_free_gb": round(du.free / 2**30, 1)},
     }

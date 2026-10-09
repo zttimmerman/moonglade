@@ -22,6 +22,7 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tempfile
 import time
 from datetime import datetime
@@ -92,97 +93,372 @@ def _near_white(r: int, g: int, b: int) -> bool:
     return min(r, g, b) >= 215 and max(r, g, b) - min(r, g, b) <= 30
 
 
-def transparency_report(w: int, h: int, px: bytes) -> dict:
-    """The THEN of "Icon is the logo on a transparent background", measured on one decoded RGBA image.
-    The ring's outer radius R is found from colour, independently of the alpha channel: the farthest pixel from the
-    image centre that is opaque (alpha >= 128) and not near-white. Then: corners alpha 0; centre alpha 255; every
-    pixel farther than R + 1.5 px has alpha 0; no near-white pixel with alpha >= 32 at or beyond R - 3 (a white
-    surround or halo); and the disc inside R - 2 is fully opaque."""
-    cx, cy = w / 2, h / 2
-    R = 0.0
+# release-signing: the navy tile. Every geometry number comes from AppIcon.json's `tile` record (body, position,
+# corner radius, shape, gradient, shadow reach, logo diameter), never from this file, so switching the corner shape
+# is a generator parameter change plus a regeneration. The check knows two corner kinds by the record's `shape`:
+# "circular" (circular arcs, the approved mockup) is exact; "continuous" (Apple's continuous-curvature corners) is
+# judged by an envelope: the shape lies inside the circular rounded square of the same radius (to within 1 px at
+# the diagonal) and contains the circular one of 1.3 × the radius (its corners start curving ~1.21 × the radius
+# from the body corner, design.md 6 "As built"). Samples sit TILE_INSET px inside the inner bound; "outside" means
+# beyond the outer bound plus the recorded shadow band.
+TILE_INSET = 6.0              # px inside the tile's (inner-bound) edge where the edge ring is sampled
+NAVY_TOLERANCE = 18.0         # Euclidean RGB distance from the recorded gradient at that height (the glow adds ~8)
+EDGE_SAMPLES_PER_SIDE = 3
+RING_ANGLES = 16
+RING_PROBE_PX = 6.0           # the gold ring is sampled this far inside its recorded outer edge, navy as far outside
+
+
+def tile_record(meta: dict | None = None) -> dict:
+    meta = meta if meta is not None else json.loads(I.META_OUT.read_text())
+    t = dict(meta["tile"])
+    t["canvas"] = meta["canvas"]
+    shape = str(t.get("shape", "")).lower()
+    t["kind"] = "continuous" if "continuous" in shape else "circular" if "circular" in shape else None
+    return t
+
+
+def _rr_sdf(x: float, y: float, x0: float, y0: float, size: float, r: float) -> float:
+    """Signed distance to a circular-arc rounded square (negative inside)."""
+    c, inner = size / 2, size / 2 - r
+    qx, qy = abs(x - x0 - c) - inner, abs(y - y0 - c) - inner
+    return math.hypot(max(qx, 0.0), max(qy, 0.0)) + min(max(qx, qy), 0.0) - r
+
+
+def tile_bounds(t: dict, n: int) -> dict:
+    """Outer and inner bound (x0, y0, size, radius) of the recorded tile, scaled to an n-px image."""
+    k = n / t["canvas"]
+    x0, y0, size, r = t["x0_px"] * k, t["y0_px"] * k, t["body_px"] * k, t["corner_radius_px"] * k
+    if t["kind"] == "circular":
+        return {"outer": (x0, y0, size, r), "outer_slack": 0.0, "inner": (x0, y0, size, r)}
+    if t["kind"] == "continuous":
+        return {"outer": (x0, y0, size, r), "outer_slack": 1.0 * k, "inner": (x0, y0, size, min(size / 2, 1.3 * r))}
+    raise ValueError(f"unknown tile shape {t.get('shape')!r}")
+
+
+def tile_edge_points(t: dict, n: int) -> list[tuple[str, float, float]]:
+    """Points TILE_INSET px inside the tile's inner bound: EDGE_SAMPLES_PER_SIDE on each straight side and one on
+    each rounded corner's diagonal. Continuous image coordinates (pixel i spans [i, i+1))."""
+    k = n / t["canvas"]
+    x0, y0, size, r = tile_bounds(t, n)["inner"]
+    m = TILE_INSET * k
+    pts = []
+    straight = size - 2 * r
+    for i in range(EDGE_SAMPLES_PER_SIDE):
+        f = r + straight * (i + 1) / (EDGE_SAMPLES_PER_SIDE + 1)
+        pts += [(f"top{i}", x0 + f, y0 + m), (f"bottom{i}", x0 + f, y0 + size - m),
+                (f"left{i}", x0 + m, y0 + f), (f"right{i}", x0 + size - m, y0 + f)]
+    d = (r - m) / math.sqrt(2)
+    for name, cx, cy, sx, sy in (("corner_tl", x0 + r, y0 + r, -1, -1), ("corner_tr", x0 + size - r, y0 + r, 1, -1),
+                                 ("corner_bl", x0 + r, y0 + size - r, -1, 1),
+                                 ("corner_br", x0 + size - r, y0 + size - r, 1, 1)):
+        pts.append((name, cx + sx * d, cy + sy * d))
+    return pts
+
+
+def ring_points(t: dict, n: int) -> list[tuple[str, float, float, bool]]:
+    """(name, x, y, gold?) RING_PROBE_PX inside (gold) and outside (navy) the logo's recorded outer edge."""
+    k = n / t["canvas"]
+    R, c = t["logo_diameter_px"] / 2 * k, n / 2
+    out = []
+    for i in range(RING_ANGLES):
+        a = 2 * math.pi * i / RING_ANGLES
+        for gold, rr in ((True, R - RING_PROBE_PX * k), (False, R + RING_PROBE_PX * k)):
+            out.append((f"{'in' if gold else 'out'}{i}", c + rr * math.cos(a), c + rr * math.sin(a), gold))
+    return out
+
+
+def expected_navy(t: dict, y: float, n: int) -> tuple[float, float, float]:
+    tt = y / n
+    top, bot = t["fill"]["top_rgb"], t["fill"]["bottom_rgb"]
+    return tuple(top[c] + (bot[c] - top[c]) * tt for c in range(3))
+
+
+def is_navy(t: dict, px: list, y: float, n: int) -> bool:
+    e = expected_navy(t, y, n)
+    return px[3] == 255 and math.dist(px[:3], e) <= NAVY_TOLERANCE and px[2] > px[0]
+
+
+def is_gold(px: list) -> bool:
+    """Gold or its dark-brown rim (warm: red well above blue), never navy or white."""
+    r, g, b, a = px
+    return a == 255 and r - b >= 60 and r > g > b
+
+
+def _px(img: bytes, w: int, x: float, y: float) -> list:
+    i = (int(y) * w + int(x)) * 4
+    return list(img[i:i + 4])
+
+
+def tile_report(w: int, h: int, px: bytes, t: dict) -> dict:
+    """The THEN of "Icon is the logo on a navy tile" on one decoded RGBA image, geometry from the `tile` record:
+    canvas corners alpha 0; every pixel outside the tile and its recorded shadow band alpha 0; the edge ring (straight
+    sides and the four rounded corners, just inside the edge) opaque and navy; the centre opaque; the gold ring at the
+    recorded scale (gold just inside its recorded edge, navy just outside)."""
+    rep: dict = {"size": [w, h], "tile_kind": t.get("kind"), "problems": []}
+    probs = rep["problems"]
+    if w != h:
+        probs.append("not square")
+        rep["ok"] = False
+        return rep
+    try:
+        bd = tile_bounds(t, w)
+    except ValueError as e:
+        probs.append(str(e))
+        rep["ok"] = False
+        return rep
+    k = w / t["canvas"]
+    band = (t["shadow"]["reach_px"] + t["shadow"]["dy_px"]) * k + bd["outer_slack"] + 1.0
+    x0, y0, size, r = bd["outer"]
+    outside_nonzero, samples = 0, []
     for y in range(h):
         row = y * w * 4
         for x in range(w):
-            i = row + x * 4
-            if px[i + 3] >= 128 and not _near_white(px[i], px[i + 1], px[i + 2]):
-                d = math.hypot(x + 0.5 - cx, y + 0.5 - cy)
-                if d > R:
-                    R = d
-    outside_nonzero = halo = inside_holes = transparent = 0
-    samples: dict = {"outside_nonzero": [], "halo": [], "inside_holes": []}
-    for y in range(h):
-        row = y * w * 4
-        for x in range(w):
-            i = row + x * 4
-            a = px[i + 3]
-            d = math.hypot(x + 0.5 - cx, y + 0.5 - cy)
-            transparent += a == 0
-            if d > R + 1.5 and a != 0:
+            a = px[row + x * 4 + 3]
+            if a and _rr_sdf(x + 0.5, y + 0.5, x0, y0, size, r) > band:
                 outside_nonzero += 1
-                if len(samples["outside_nonzero"]) < 5:
-                    samples["outside_nonzero"].append([x, y, list(px[i:i + 4])])
-            if d >= R - 3 and a >= 32 and _near_white(px[i], px[i + 1], px[i + 2]):
-                halo += 1
-                if len(samples["halo"]) < 5:
-                    samples["halo"].append([x, y, list(px[i:i + 4])])
-            if d < R - 2 and a != 255:
-                inside_holes += 1
-                if len(samples["inside_holes"]) < 5:
-                    samples["inside_holes"].append([x, y, list(px[i:i + 4])])
+                if len(samples) < 5:
+                    samples.append([x, y, a])
+    rep["outside_band_px"] = round(band, 1)
+    rep["outside_nonzero_alpha"] = outside_nonzero
+    rep["outside_samples"] = samples
+    if outside_nonzero:
+        probs.append(f"{outside_nonzero} pixel(s) outside the tile and its shadow band aren't transparent")
     corners = {f"{x},{y}": px[(y * w + x) * 4 + 3] for x, y in ((0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1))}
-    centre_alpha = px[(h // 2 * w + w // 2) * 4 + 3]
-    rep = {"size": [w, h], "ring_radius_from_colour_px": round(R, 2), "corner_alpha": corners,
-           "centre_alpha": centre_alpha, "outside_ring_nonzero_alpha": outside_nonzero,
-           "near_white_at_or_outside_ring": halo, "inside_disc_not_opaque": inside_holes,
-           "transparent_fraction": round(transparent / (w * h), 4), "samples": samples}
-    rep["ok"] = (all(a == 0 for a in corners.values()) and centre_alpha == 255 and outside_nonzero == 0
-                 and halo == 0 and inside_holes == 0 and 0.25 * w <= R < 0.5 * w)
+    rep["corner_alpha"] = corners
+    if any(corners.values()):
+        probs.append("a canvas corner isn't transparent")
+    edge, bad = {}, []
+    for name, x, y in tile_edge_points(t, w):
+        v = _px(px, w, x, y)
+        edge[name] = v + [round(math.dist(v[:3], expected_navy(t, y, w)), 1)]
+        if not is_navy(t, v, y, w):
+            bad.append(name)
+    rep["edge_samples"] = edge
+    if bad:
+        probs.append(f"edge samples not opaque navy: {bad}")
+    centre = _px(px, w, w / 2, h / 2)
+    rep["centre"] = centre
+    if centre[3] != 255:
+        probs.append("the centre isn't opaque")
+    ring = {name: (_px(px, w, x, y), gold) for name, x, y, gold in ring_points(t, w)}
+    rep["ring_samples"] = {k_: v[0] for k_, v in ring.items()}
+    not_gold = [k_ for k_, (v, gold) in ring.items() if gold and not is_gold(v)]
+    not_navy = [k_ for k_, (v, gold) in ring.items() if not gold and (is_gold(v) or v[3] != 255)]
+    if not_gold:
+        probs.append(f"no gold just inside the recorded logo edge at {not_gold}")
+    if not_navy:
+        probs.append(f"gold or transparent just outside the recorded logo edge at {not_navy}")
+    rep["ok"] = not probs
     return rep
 
 
-def verify_icon(png_path: Path, icns_path: Path, regenerate: bool = True) -> dict:
+def verify_icon(png_path: Path, icns_path: Path, regenerate: bool = True, meta: dict | None = None) -> dict:
     """Evidence for app.icon; raises CheckFail on the first unmet clause."""
     ev: dict = {"png": str(png_path), "icns": str(icns_path)}
     require(png_path.is_file() and icns_path.is_file(), "icon files missing", **ev)
+    t = tile_record(meta)
+    ev["tile_record"] = t
+    require(t["kind"] is not None, f"AppIcon.json's tile shape {t.get('shape')!r} is unknown to the check", **ev)
     data = icns_path.read_bytes()
     sizes = icns_sizes(data)
     ev["icns_sizes"] = sizes
-    bad = {t: s for t, s in sizes.items() if s["actual"] != [s["expected"], s["expected"]]}
+    bad = {t_: s for t_, s in sizes.items() if s["actual"] != [s["expected"], s["expected"]]}
     require(not bad, f"icns lacks standard sizes or has wrong dimensions: {sorted(bad)}", **ev)
     w, h, px = I.read_png(I.icns_entries(data)["ic10"])
-    ev["icns_1024"] = transparency_report(w, h, px)
-    require(ev["icns_1024"]["ok"], "the .icns 1024 px image isn't the logo on a transparent background", **ev)
+    ev["icns_1024"] = tile_report(w, h, px, t)
+    require(ev["icns_1024"]["ok"], f"the .icns 1024 px image isn't the logo on the navy tile: "
+            f"{ev['icns_1024']['problems']}", **ev)
     w2, h2, px2 = I.read_png(png_path.read_bytes())
-    ev["png"] = transparency_report(w2, h2, px2)
+    ev["png"] = tile_report(w2, h2, px2, t)
     require(ev["png"]["ok"] and (w2, h2) == (1024, 1024),
-            "the cleaned PNG isn't a 1024 px logo on a transparent background", **ev)
+            f"the PNG isn't a 1024 px logo on the navy tile: {ev['png']['problems']}", **ev)
     if regenerate:
         tmp = Path(tempfile.mkdtemp(prefix="hs-icon-regen-"))
         try:
             require(I.SOURCE.is_file(), f"logo source {I.SOURCE} is missing, so reproducibility can't be shown", **ev)
-            meta = I.generate(out_dir=tmp)
+            meta2 = I.generate(out_dir=tmp)
             committed_meta = json.loads(I.META_OUT.read_text()) if I.META_OUT.exists() else {}
             rw, rh, rpx = I.read_png((tmp / I.PNG_OUT.name).read_bytes())
             diff = sum(1 for i in range(0, len(rpx), 4) if rpx[i:i + 4] != px2[i:i + 4]) if len(rpx) == len(px2) else -1
-            ev["regenerated"] = {"dir": str(tmp), "ring_source_px": meta["ring_source_px"],
-                                 "source_sha256": meta["source_sha256"],
+            ev["regenerated"] = {"dir": str(tmp), "ring_source_px": meta2["ring_source_px"],
+                                 "source_sha256": meta2["source_sha256"],
                                  "committed_source_sha256": committed_meta.get("source_sha256"),
+                                 "tile_record_same": meta2.get("tile") == committed_meta.get("tile"),
                                  "pixels_differing": diff,
                                  "png_bytes_identical": (tmp / I.PNG_OUT.name).read_bytes() == png_path.read_bytes()}
-            require(meta["source_sha256"] == committed_meta.get("source_sha256"),
+            require(meta2["source_sha256"] == committed_meta.get("source_sha256"),
                     "the local logo source differs from the one the committed icon was made from", **ev)
+            require(ev["regenerated"]["tile_record_same"], "the generator's tile record differs from the committed one",
+                    **ev)
             require((rw, rh) == (w2, h2) and diff == 0, "re-running the generator doesn't reproduce the committed PNG", **ev)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
     return ev
 
 
+def old_layout_logo(ring: dict | None) -> bytes:
+    """The logo on the old transparent layout (borderless ring, ICON_DIAMETER px on the canvas). With the ring
+    app.icon's regeneration just measured, only the cut is redone (no second ring detection)."""
+    if not ring:
+        return I.load_logo(diameter=I.ICON_DIAMETER)
+    tmp = Path(tempfile.mkdtemp(prefix="hs-icon-old-"))
+    try:
+        sw = json.loads(I.META_OUT.read_text())["source_size"][0]
+        return I.cut_logo(I.SOURCE, tmp, ring, sw, I.ICON_DIAMETER)[0]
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+def icon_counterexamples(png_path: Path, ring: dict | None = None) -> dict:
+    """app.icon's counterexamples, each judged by tile_report with the committed tile record: the logo on the old
+    transparent layout (the borderless ring, 824 px on 1024) and the committed icon with its tile painted white."""
+    t = tile_record()
+    w, h, px = I.read_png(png_path.read_bytes())
+    old = old_layout_logo(ring)
+    white = bytearray(px)
+    for i in range(0, len(white), 4):
+        if white[i + 3] and not is_gold(list(white[i:i + 4])):
+            white[i:i + 3] = b"\xff\xff\xff"
+    out = {}
+    for name, img in (("old_transparent_layout", old), ("white_tile", bytes(white))):
+        rep = tile_report(I.CANVAS, I.CANVAS, img, t)
+        out[name] = {"ok": rep["ok"], "problems": rep["problems"][:4]}
+    return out
+
+
 @check("app.icon", order=380, capability=CAP, stack="any", tier="quick")
 def app_icon(ctx):
-    """branding/AppIcon.icns has every standard size 16-1024 px (incl. @2x); its 1024 px image and the cleaned PNG have
-    transparent corners and surround (alpha 0 beyond the ring), an opaque centre and no near-white surround or halo;
-    re-running the generator on the logo source reproduces the committed PNG pixel for pixel."""
-    return verify_icon(I.PNG_OUT, I.ICNS_OUT)
+    """branding/AppIcon.icns has every standard size 16-1024 px (incl. @2x); its 1024 px image and the PNG are the
+    logo on the navy tile, judged with the geometry in AppIcon.json's `tile` record: canvas corners and everything
+    outside the tile and its recorded shadow band alpha 0, a ring of points just inside the tile's edge (sides and
+    rounded corners) opaque navy, the centre opaque, the gold ring at the recorded scale; re-running the generator
+    reproduces the committed PNG pixel for pixel. Counterexamples: the old transparent layout and a white tile fail."""
+    ev = verify_icon(I.PNG_OUT, I.ICNS_OUT)
+    ev["counterexamples"] = ce = icon_counterexamples(I.PNG_OUT, (ev.get("regenerated") or {}).get("ring_source_px"))
+    require(all(not v["ok"] for v in ce.values()), "a counterexample icon passed the tile test", **ev)
+    return ev
+
+
+# ---------------------------------------------------------------- one icon everywhere (release-signing)
+
+def pl_of(app: Path) -> dict:
+    return plistlib.loads((app / "Contents" / "Info.plist").read_bytes())
+
+
+def bundle_icon(app: Path) -> Path:
+    name = str(pl_of(app).get("CFBundleIconFile", ""))
+    return app / "Contents" / "Resources" / (name if name.endswith(".icns") else name + ".icns")
+
+
+def icns_1024(path: Path) -> tuple[int, int, bytes]:
+    return I.read_png(I.icns_entries(Path(path).read_bytes())["ic10"])
+
+
+def dock_env_for(app_bundle: Path | None) -> dict:
+    """launch.dock_env() as an app run of `app_bundle` (HS_FROM_APP=1, HS_APP_BUNDLE) or, with None, as a terminal
+    run; the process environment is restored afterwards."""
+    keys = (launch.FROM_APP_ENV, launch.APP_BUNDLE_ENV)
+    saved = {k: os.environ.get(k) for k in keys}
+    try:
+        for k in keys:
+            os.environ.pop(k, None)
+        if app_bundle is not None:
+            os.environ[launch.FROM_APP_ENV] = "1"
+            os.environ[launch.APP_BUNDLE_ENV] = str(app_bundle)
+        return launch.dock_env()
+    finally:
+        for k, v in saved.items():
+            if v is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = v
+
+
+def release_wrapped_app(d: Path) -> Path:
+    """release.py's app wrapper (wrap_app) run on a scratch payload (bin/Moonglade stand-in + branding/ as the payload
+    carries it): the release app's icon as packaging puts it there, without packaging."""
+    pl = d / "payload"
+    (pl / "bin").mkdir(parents=True)
+    (pl / "bin" / "Moonglade").write_bytes(b"stand-in launcher (never run)\n")
+    shutil.copytree(P.ROOT / "branding", pl / "branding")
+    app = d / "Moonglade.app"
+    code = ("import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import release; "
+            "release.wrap_app(Path(sys.argv[2]), Path(sys.argv[3]))")
+    r = subprocess.run([sys.executable, "-I", "-c", code, str(P.ROOT / "tools" / "release"), str(pl), str(app)],
+                       capture_output=True, text=True, cwd=d, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError(f"release.py wrap_app failed: {r.stderr[-600:]}")
+    return app
+
+
+def same_icon(path: Path, ref: bytes, t: dict) -> dict:
+    """Decode `path` at 1024 px: identical to `ref` (branding/AppIcon.png's pixels)? Plus its tile-edge samples."""
+    try:
+        w, h, px = icns_1024(path)
+    except (OSError, KeyError, I.IconError) as e:
+        return {"path": str(path), "ok": False, "error": f"{type(e).__name__}: {e}"}
+    edge = {n_: _px(px, w, x, y) for n_, x, y in tile_edge_points(t, w)}
+    navy = all(is_navy(t, v, next(y for m, _, y in tile_edge_points(t, w) if m == n_), w) for n_, v in edge.items())
+    diff = sum(1 for i in range(0, len(px), 4) if px[i:i + 4] != ref[i:i + 4]) if len(px) == len(ref) else -1
+    return {"path": str(path), "size": [w, h], "pixels_differing": diff, "edge_navy": navy,
+            "ok": (w, h) == (1024, 1024) and diff == 0 and navy}
+
+
+@check("app.icon_everywhere", order=382, capability=CAP, stack="any", tier="quick")
+def icon_everywhere(ctx):
+    """The dev app's and the release app's icon files (CFBundleIconFile; the release app's from this run's packaging
+    or, when this run packaged none, from release.py's app wrapper on a scratch app) and the HSDOCK_ICON that
+    launch.dock_env() gives a dev app run, a dev terminal run and a release app run all decode at 1024 px to the
+    pixels of branding/AppIcon.png, with navy tile-edge samples. Counterexample: an app run whose bundle icon is the
+    logo on a transparent surround fails."""
+    from .release_runtime_checks import NEW_APP
+    t = tile_record()
+    _, _, ref = I.read_png(I.PNG_OUT.read_bytes())
+    ev: dict = {"reference": str(I.PNG_OUT)}
+    if not (A.APP / "Contents" / "Info.plist").is_file():
+        build_app(ev)
+    d = Path(tempfile.mkdtemp(prefix="hs-icon-everywhere-", dir=P.RUN if P.RUN.is_dir() else None))
+    try:
+        packaged = ctx.get("release_package") and (NEW_APP / "Contents" / "Info.plist").is_file() \
+            and ctx["release_package"].get("rc") == 0
+        rel = NEW_APP if packaged else release_wrapped_app(d / "wrapped")
+        ev["release_app"] = {"path": str(rel), "from": "this run's packaging" if packaged else "release.py wrap_app"}
+        envs = {"dev_app_run": dock_env_for(A.APP), "dev_terminal_run": dock_env_for(None),
+                "release_app_run": dock_env_for(rel)}
+        ev["dock_env_icons"] = {k: v.get("HSDOCK_ICON") for k, v in envs.items()}
+        files = {"dev_app_bundle_icon": bundle_icon(A.APP), "release_app_bundle_icon": bundle_icon(rel),
+                 **{f"{k}_HSDOCK_ICON": Path(v) for k, v in ev["dock_env_icons"].items() if v}}
+        require(all(ev["dock_env_icons"].values()), "a dock environment has no HSDOCK_ICON", **ev)
+        require(ev["dock_env_icons"]["dev_app_run"] == str(bundle_icon(A.APP))
+                and ev["dock_env_icons"]["release_app_run"] == str(bundle_icon(rel)),
+                "an app run's HSDOCK_ICON isn't its own bundle's icon", **ev)
+        decoded: dict = {}                                # each distinct file decoded once
+        ev["decoded"] = {k: decoded.setdefault(str(p), same_icon(p, ref, t)) if str(p) not in decoded
+                         else decoded[str(p)] for k, p in files.items()}
+        bad = [k for k, v in ev["decoded"].items() if not v["ok"]]
+        require(not bad, f"icon files that aren't the navy-tile icon: {bad}", **ev)
+        # counterexample: an app run whose bundle icon is the logo on a transparent surround
+        ce = d / "ce" / "Moonglade.app" / "Contents" / "Resources"
+        ce.mkdir(parents=True)
+        (ce.parent / "Info.plist").write_bytes(plistlib.dumps({"CFBundleIconFile": "AppIcon"}))
+        iconset = d / "ce" / "AppIcon.iconset"
+        iconset.mkdir()
+        clear = bytearray(ref)                            # the logo kept, everything else transparent
+        for i in range(0, len(clear), 4):
+            if not is_gold(list(clear[i:i + 4])):
+                clear[i:i + 4] = b"\0\0\0\0"
+        I.write_png(iconset / next(k for k, v in I.ICONSET.items() if v == I.CANVAS), I.CANVAS, I.CANVAS, bytes(clear))
+        subprocess.run(["/usr/bin/iconutil", "-c", "icns", str(iconset), "-o", str(ce / "AppIcon.icns")], check=True,
+                       capture_output=True)
+        ce_env = dock_env_for(ce.parents[1])
+        ev["counterexample"] = {"HSDOCK_ICON": ce_env.get("HSDOCK_ICON"),
+                                **same_icon(Path(ce_env.get("HSDOCK_ICON", "")), ref, t)}
+        require(ce_env.get("HSDOCK_ICON") == str(ce / "AppIcon.icns") and not ev["counterexample"]["ok"]
+                and not ev["counterexample"].get("edge_navy"),
+                "counterexample: a transparent-surround HSDOCK_ICON passed", **ev)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    return ev
 
 
 # ---------------------------------------------------------------- bundle
@@ -224,6 +500,8 @@ def verify_bundle(app: Path, ev: dict) -> None:
             "the plist doesn't name an executable that exists and is executable", **ev)
     require(pl.get("CFBundleIdentifier") == A.BUNDLE_ID, "the plist doesn't carry the bundle identifier", **ev)
     require(pl.get("CFBundlePackageType") == "APPL", "the plist isn't an application bundle (CFBundlePackageType)", **ev)
+    ev["redistribution_wording"] = redistribution_wording(pl)
+    require(not ev["redistribution_wording"], "the plist carries \"redistribution\" wording (release-signing)", **ev)
     require(icon_name and ev["icon_matches_branding"], "the plist's icon isn't the committed AppIcon.icns", **ev)
     repo_rec = (contents / "Resources" / "repo-path").read_text().strip() if (contents / "Resources" / "repo-path").exists() else None
     ev["repo_path_record"] = repo_rec
@@ -237,6 +515,25 @@ def verify_bundle(app: Path, ev: dict) -> None:
     require(v.returncode == 0, "codesign --verify --deep --strict fails", **ev)
     require("Signature=adhoc" in d.stderr, "the bundle isn't ad-hoc signed", **ev)
     verify_names(app, pl, ev)
+
+
+def redistribution_wording(pl) -> list[str]:
+    """Every plist key or value (nested) containing "redistribut", any case (release-signing: none allowed)."""
+    hits = []
+
+    def walk(v, path):
+        if isinstance(v, dict):
+            for k, x in v.items():
+                if re.search(r"(?i)redistribut", str(k)):
+                    hits.append(f"{path}{k}")
+                walk(x, f"{path}{k}.")
+        elif isinstance(v, (list, tuple)):
+            for i, x in enumerate(v):
+                walk(x, f"{path}{i}.")
+        elif re.search(r"(?i)redistribut", str(v)):
+            hits.append(f"{path.rstrip('.')}={v}")
+    walk(pl, "")
+    return hits
 
 
 def repo_roots() -> list[str]:
@@ -385,7 +682,8 @@ def bundle_valid(ctx):
     """From a clean checkout with the committed branding assets, `harness/hs app` (run under a sandbox profile that
     denies and logs every file write outside the repo) builds dist/Moonglade.app: plutil -lint passes; the plist
     names the executable (present, executable), the bundle identifier and the icon; codesign --verify --deep --strict
-    passes on an ad-hoc signature; and no write outside the repo was attempted. rename-moonglade: CFBundleName and
+    passes on an ad-hoc signature; no plist key or value says "redistribut" (release-signing; counterexample: the
+    old "not for redistribution" line is caught); and no write outside the repo was attempted. rename-moonglade: CFBundleName and
     CFBundleDisplayName are Moonglade, the id is local.moonglade.app, the designated requirement is
     `identifier "local.moonglade.app"`, and the launcher/plist/shim carry no old-name text. (The opened-app half of
     the scenario is app.names_running: it puts windows on screen, so it's a gui check, not quick.)"""
@@ -444,6 +742,10 @@ def bundle_valid(ctx):
         require(A.APP.is_dir(), "dist/Moonglade.app doesn't exist after the build", **ev)
         verify_bundle(A.APP, ev)
         ev["build_window_started"] = t0.isoformat()
+        # release-signing counterexample: the plist line the dev app used to carry is caught by the same test
+        ev["counterexample_old_copyright_line"] = redistribution_wording(
+            {**pl_of(A.APP), "NSHumanReadableCopyright": "Personal project; not for redistribution."})
+        require(ev["counterexample_old_copyright_line"], "counterexample: the old copyright line wasn't caught", **ev)
         return ev
     finally:
         shutil.rmtree(work, ignore_errors=True)

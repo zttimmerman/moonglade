@@ -13,7 +13,10 @@
 //   HSDOCK_TOKEN   this repo's path: the object of our distributed notifications, so only this repo's game reacts
 //   HSDOCK_TEST    1 = test-only hooks (only with ./play's --client-cmd stand-in): the "minimise" notification and
 //                  HSDOCK_TEST_FLICKER_MS (let Wine's Regular through, switch to accessory N ms later: a deliberate
-//                  Dock-icon flash, the counterexample for app.single_dock_icon)
+//                  Dock-icon flash, the counterexample for app.single_dock_icon) and HSDOCK_TEST_ICON_SAMPLES
+//                  ("fx,fy;fx,fy;...", fractions of the image from its top-left): after loading HSDOCK_ICON, log the
+//                  loaded image's size and the straight-alpha RGBA at those points (release-signing 3.2;
+//                  app.dock_icon_rendered). Normal runs log only what they always logged.
 //
 // What it does, once AppKit and Wine's Mac driver are loaded (nothing before; non-GUI Wine processes are untouched):
 //   - -[NSApplication setActivationPolicy:]: Regular -> Accessory when HSDOCK_POLICY=accessory; on the first call
@@ -142,6 +145,70 @@ static void startObserving(void) {
     hslog(@"listening for %@%s (token %@)", kReopen, testMode() ? " and the test minimise notification" : "", token);
 }
 
+// ------------------------------------------------------------------ test mode: what the loaded icon looks like
+
+// The bitmap behind the loaded icon: its largest NSBitmapImageRep, else one made from the CGImage AppKit would draw
+// at 1024 pt (an .icns may load as non-bitmap reps).
+static id largestBitmap(id image, const char **how) {
+    Class bmpClass = objc_getClass("NSBitmapImageRep");
+    NSArray *reps = ((id (*)(id, SEL))objc_msgSend)(image, sel_registerName("representations"));
+    id best = nil;
+    long bestW = 0;
+    for (id r in reps) {
+        if (![r isKindOfClass:bmpClass]) continue;
+        long w = ((long (*)(id, SEL))objc_msgSend)(r, sel_registerName("pixelsWide"));
+        if (w > bestW) { best = r; bestW = w; }
+    }
+    if (best) { *how = "bitmap rep"; return best; }
+    NSRect rect = NSMakeRect(0, 0, 1024, 1024);
+    void *cg = ((void *(*)(id, SEL, NSRect *, id, id))objc_msgSend)(image,
+                   sel_registerName("CGImageForProposedRect:context:hints:"), &rect, nil, nil);
+    if (!cg) return nil;
+    *how = "CGImage";
+    return ((id (*)(id, SEL, void *))objc_msgSend)(((id (*)(id, SEL))objc_msgSend)((id)bmpClass, sel_registerName("alloc")),
+                                                   sel_registerName("initWithCGImage:"), cg);
+}
+
+static void logIconSamples(id image, const char *path) {
+    const char *how = "?";
+    id rep = largestBitmap(image, &how);
+    if (!rep) { hslog(@"icon test: no bitmap for %s", path); return; }
+    long w = ((long (*)(id, SEL))objc_msgSend)(rep, sel_registerName("pixelsWide"));
+    long h = ((long (*)(id, SEL))objc_msgSend)(rep, sel_registerName("pixelsHigh"));
+    long spp = ((long (*)(id, SEL))objc_msgSend)(rep, sel_registerName("samplesPerPixel"));
+    long bps = ((long (*)(id, SEL))objc_msgSend)(rep, sel_registerName("bitsPerSample"));
+    BOOL hasAlpha = ((BOOL (*)(id, SEL))objc_msgSend)(rep, sel_registerName("hasAlpha"));
+    unsigned long fmt = ((unsigned long (*)(id, SEL))objc_msgSend)(rep, sel_registerName("bitmapFormat"));
+    BOOL alphaFirst = (fmt & 1UL) != 0, nonPremul = (fmt & 2UL) != 0;     // NSBitmapFormatAlphaFirst / ...Nonpremultiplied
+    NSMutableString *out = [NSMutableString string];
+    NSArray *pts = [@(env("HSDOCK_TEST_ICON_SAMPLES")) componentsSeparatedByString:@";"];
+    for (NSString *pt in pts) {
+        NSArray *xy = [pt componentsSeparatedByString:@","];
+        if (xy.count != 2) continue;
+        double fx = [xy[0] doubleValue], fy = [xy[1] doubleValue];
+        long x = (long)(fx * w), y = (long)(fy * h);
+        if (x < 0) x = 0;
+        if (y < 0) y = 0;
+        if (x >= w) x = w - 1;
+        if (y >= h) y = h - 1;
+        NSUInteger px[8] = {0};
+        if (spp < 1 || spp > 8) break;
+        ((void (*)(id, SEL, NSUInteger *, long, long))objc_msgSend)(rep, sel_registerName("getPixel:atX:y:"), px, x, y);
+        double sc = bps > 8 ? (double)(1UL << (bps - 8)) : 1.0;
+        double v[4] = {0, 0, 0, 255};
+        int ci = (hasAlpha && alphaFirst) ? 1 : 0;
+        for (int c = 0; c < 3 && ci + c < spp; c++) v[c] = px[ci + c] / sc;
+        if (spp == 1 || spp == 2) v[1] = v[2] = v[0];                   // grey
+        if (hasAlpha) v[3] = px[alphaFirst ? 0 : spp - 1] / sc;
+        if (hasAlpha && !nonPremul && v[3] > 0)
+            for (int c = 0; c < 3; c++) v[c] = v[c] * 255.0 / v[3];
+        [out appendFormat:@" %@=%ld,%ld,%ld,%ld", pt, lround(fmin(255, v[0])), lround(fmin(255, v[1])),
+                          lround(fmin(255, v[2])), lround(v[3])];
+    }
+    hslog(@"icon test: loaded %s size=%ldx%ld via=%s spp=%ld bps=%ld alpha=%d first=%d premultiplied=%d samples:%@",
+          path, w, h, how, spp, bps, hasAlpha, alphaFirst, hasAlpha && !nonPremul, out);
+}
+
 // ------------------------------------------------------------------ swizzles
 
 static BOOL hs_setPolicy(id self, SEL _cmd, long policy) {
@@ -173,6 +240,7 @@ static void hs_setIcon(id self, SEL _cmd, id image) {
         iconImage = ((id (*)(id, SEL, id))objc_msgSend)(((id (*)(id, SEL))objc_msgSend)((id)imgClass, sel_registerName("alloc")),
                                                          sel_registerName("initWithContentsOfFile:"), @(path));
         if (!iconImage) hslog(@"icon: couldn't load %s", path);
+        else if (testMode() && env("HSDOCK_TEST_ICON_SAMPLES")) logIconSamples(iconImage, path);
     }
     id use = iconImage ?: image;
     ((void (*)(id, SEL, id))orig_setIcon)(self, _cmd, use);

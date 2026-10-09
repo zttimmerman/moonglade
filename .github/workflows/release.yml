@@ -1,7 +1,13 @@
-# Prebuilt release (openspec/changes/release-build). Runs only when a version tag is pushed to the PUBLIC repo, on
-# GitHub-hosted macOS arm64 runners (ADR-0012: no self-hosted runners; public repos get free macOS minutes). It builds
-# the payload with tools/release/package.sh, smoke-tests it with Homebrew moved aside, then creates a draft release
-# with the zip, the source assets and SHA256SUMS. Zach publishes the draft by hand.
+# Prebuilt release (openspec/changes/release-build, release-signing). Runs only when a version tag is pushed to the
+# PUBLIC repo, on GitHub-hosted macOS arm64 runners (ADR-0012: no self-hosted runners; public repos get free macOS
+# minutes). Never on pull requests, so repo secrets never reach a fork's code. It builds the app with
+# tools/release/package.sh, signs it in the mode set by tools/release/signing.json, smoke-tests the signed app with
+# Homebrew moved aside, zips it, and in developer-id mode notarizes, staples and re-zips it, then creates a draft
+# release with the zip, the source assets, SHA256SUMS and the mode's notes. Zach publishes the draft by hand.
+#
+# Secrets (developer-id only; every step that references one runs only in that mode): MOONGLADE_DEVID_P12_BASE64,
+# MOONGLADE_DEVID_P12_PASSWORD, MOONGLADE_DEVID_IDENTITY, MOONGLADE_TEAM_ID, MOONGLADE_NOTARY_KEY_P8_BASE64,
+# MOONGLADE_NOTARY_KEY_ID, MOONGLADE_NOTARY_ISSUER_ID.
 name: release
 
 on:
@@ -29,6 +35,38 @@ jobs:
       - name: Check out the tag
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
 
+      - name: Read the signing mode
+        id: mode
+        run: |
+          mode=$(/usr/bin/python3 -I -c 'import json; print(json.load(open("tools/release/signing.json"))["mode"])')
+          case "${mode}" in
+            ad-hoc|developer-id) ;;
+            *) echo "::error::tools/release/signing.json: unknown mode '${mode}' (allowed: ad-hoc, developer-id)"; exit 1 ;;
+          esac
+          echo "signing mode: ${mode}"
+          echo "mode=${mode}" >> "${GITHUB_OUTPUT}"
+
+      - name: Check the Developer ID secrets
+        if: ${{ steps.mode.outputs.mode == 'developer-id' }}
+        env:
+          MOONGLADE_DEVID_P12_BASE64: ${{ secrets.MOONGLADE_DEVID_P12_BASE64 }}
+          MOONGLADE_DEVID_P12_PASSWORD: ${{ secrets.MOONGLADE_DEVID_P12_PASSWORD }}
+          MOONGLADE_DEVID_IDENTITY: ${{ secrets.MOONGLADE_DEVID_IDENTITY }}
+          MOONGLADE_TEAM_ID: ${{ secrets.MOONGLADE_TEAM_ID }}
+          MOONGLADE_NOTARY_KEY_P8_BASE64: ${{ secrets.MOONGLADE_NOTARY_KEY_P8_BASE64 }}
+          MOONGLADE_NOTARY_KEY_ID: ${{ secrets.MOONGLADE_NOTARY_KEY_ID }}
+          MOONGLADE_NOTARY_ISSUER_ID: ${{ secrets.MOONGLADE_NOTARY_ISSUER_ID }}
+        run: |
+          missing=""
+          for n in MOONGLADE_DEVID_P12_BASE64 MOONGLADE_DEVID_P12_PASSWORD MOONGLADE_DEVID_IDENTITY MOONGLADE_TEAM_ID \
+                   MOONGLADE_NOTARY_KEY_P8_BASE64 MOONGLADE_NOTARY_KEY_ID MOONGLADE_NOTARY_ISSUER_ID; do
+            if [ -z "${!n:-}" ]; then missing="${missing} ${n}"; fi
+          done
+          if [ -n "${missing}" ]; then
+            echo "::error::developer-id mode needs these repo secrets, missing:${missing}"
+            exit 1
+          fi
+
       - name: Install build dependencies (runner only)
         run: brew install boost openssl@3 ccache cmake zstd
 
@@ -47,21 +85,54 @@ jobs:
 
       - name: Package
         run: >
-          tools/release/package.sh all --sync-vendor --ignore-power
+          tools/release/package.sh clean fetch build payload --sync-vendor --ignore-power
           --version "${GITHUB_REF_NAME}" --record env/release/record.json
 
-      - name: Download size under 200 MB
+      - name: Sign (ad hoc)
+        if: ${{ steps.mode.outputs.mode == 'ad-hoc' }}
+        run: >
+          tools/release/package.sh sign --ignore-power
+          --version "${GITHUB_REF_NAME}" --record env/release/record-sign.json
+
+      - name: Import the Developer ID certificate into a temporary keychain
+        if: ${{ steps.mode.outputs.mode == 'developer-id' }}
+        env:
+          MOONGLADE_DEVID_P12_BASE64: ${{ secrets.MOONGLADE_DEVID_P12_BASE64 }}
+          MOONGLADE_DEVID_P12_PASSWORD: ${{ secrets.MOONGLADE_DEVID_P12_PASSWORD }}
         run: |
-          size=$(stat -f %z env/release/out/Moonglade-"${GITHUB_REF_NAME}"-macos-arm64.zip)
-          echo "zip: ${size} bytes"
-          test "${size}" -lt 200000000
+          umask 077
+          kc="${RUNNER_TEMP}/moonglade-signing.keychain-db"
+          kcpw="$(/usr/bin/uuidgen)$(/usr/bin/uuidgen)"
+          echo "::add-mask::${kcpw}"
+          security create-keychain -p "${kcpw}" "${kc}"
+          security set-keychain-settings -lut 21600 "${kc}"
+          security unlock-keychain -p "${kcpw}" "${kc}"
+          printf '%s' "${MOONGLADE_DEVID_P12_BASE64}" | /usr/bin/base64 --decode > "${RUNNER_TEMP}/moonglade-devid.p12"
+          security import "${RUNNER_TEMP}/moonglade-devid.p12" -k "${kc}" -f pkcs12 \
+            -P "${MOONGLADE_DEVID_P12_PASSWORD}" -T /usr/bin/codesign
+          rm -f "${RUNNER_TEMP}/moonglade-devid.p12"
+          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "${kcpw}" "${kc}" > /dev/null
+          security list-keychains -d user -s "${kc}" $(security list-keychains -d user | tr -d '"')
+          echo "MOONGLADE_KEYCHAIN=${kc}" >> "${GITHUB_ENV}"
+
+      - name: Sign (Developer ID)
+        if: ${{ steps.mode.outputs.mode == 'developer-id' }}
+        env:
+          MOONGLADE_DEVID_IDENTITY: ${{ secrets.MOONGLADE_DEVID_IDENTITY }}
+          MOONGLADE_TEAM_ID: ${{ secrets.MOONGLADE_TEAM_ID }}
+          MOONGLADE_NOTARY_KEY_P8_BASE64: ${{ secrets.MOONGLADE_NOTARY_KEY_P8_BASE64 }}
+          MOONGLADE_NOTARY_KEY_ID: ${{ secrets.MOONGLADE_NOTARY_KEY_ID }}
+          MOONGLADE_NOTARY_ISSUER_ID: ${{ secrets.MOONGLADE_NOTARY_ISSUER_ID }}
+        run: >
+          tools/release/package.sh sign --ignore-power
+          --version "${GITHUB_REF_NAME}" --record env/release/record-sign.json
 
       - name: Move Homebrew aside
         run: sudo mv /opt/homebrew /opt/homebrew.aside
 
-      - name: Smoke test without Homebrew
+      - name: Smoke test the signed app without Homebrew
         run: >
-          env/release/payload/Moonglade.app/Contents/Resources/Moonglade/python/bin/python3 -I tools/release/smoke.py
+          env/release/payload/Moonglade.app/Contents/Resources/Moonglade/python/bin/python3 -I -B tools/release/smoke.py
           --payload env/release/payload/Moonglade.app/Contents/Resources/Moonglade --scratch "env/release/smoke"
           --sandbox --deny-write "${GITHUB_WORKSPACE}" --json env/release/smoke.json
 
@@ -69,24 +140,77 @@ jobs:
         if: always()
         run: if [ -d /opt/homebrew.aside ]; then sudo mv /opt/homebrew.aside /opt/homebrew; fi
 
+      - name: Zip and source assets
+        run: >
+          tools/release/package.sh assets --ignore-power
+          --version "${GITHUB_REF_NAME}" --record env/release/record-assets.json
+
+      - name: Notarize, staple and zip again
+        if: ${{ steps.mode.outputs.mode == 'developer-id' }}
+        env:
+          MOONGLADE_DEVID_IDENTITY: ${{ secrets.MOONGLADE_DEVID_IDENTITY }}
+          MOONGLADE_TEAM_ID: ${{ secrets.MOONGLADE_TEAM_ID }}
+          MOONGLADE_NOTARY_KEY_P8_BASE64: ${{ secrets.MOONGLADE_NOTARY_KEY_P8_BASE64 }}
+          MOONGLADE_NOTARY_KEY_ID: ${{ secrets.MOONGLADE_NOTARY_KEY_ID }}
+          MOONGLADE_NOTARY_ISSUER_ID: ${{ secrets.MOONGLADE_NOTARY_ISSUER_ID }}
+        run: >
+          tools/release/package.sh notarize --ignore-power
+          --version "${GITHUB_REF_NAME}" --record env/release/record-notarize.json
+
+      - name: Gatekeeper on a fresh unzip
+        if: ${{ steps.mode.outputs.mode == 'developer-id' }}
+        run: |
+          d="${RUNNER_TEMP}/gatekeeper"
+          rm -rf "${d}" && mkdir -p "${d}"
+          /usr/bin/ditto -x -k env/release/out/Moonglade-"${GITHUB_REF_NAME}"-macos-arm64.zip "${d}"
+          set +e
+          out=$(/usr/sbin/spctl --assess --type execute -vv "${d}/Moonglade.app" 2>&1); rc=$?
+          set -e
+          printf '%s\n' "${out}" | tee env/release/build/spctl.txt
+          test "${rc}" -eq 0
+          printf '%s\n' "${out}" | grep -q "accepted"
+          printf '%s\n' "${out}" | grep -q "source=Notarized Developer ID"
+
+      - name: Check the notarized release (signing.notarized)
+        if: ${{ steps.mode.outputs.mode == 'developer-id' }}
+        run: >
+          /usr/bin/python3 -I harness/hslib/notarycheck.py --build env/release/build --out env/release/out
+          --smoke env/release/smoke.json
+
+      - name: Download size under 200 MB
+        run: |
+          size=$(stat -f %z env/release/out/Moonglade-"${GITHUB_REF_NAME}"-macos-arm64.zip)
+          echo "zip: ${size} bytes"
+          test "${size}" -lt 200000000
+
+      - name: Remove the temporary keychain and decoded files
+        if: ${{ always() && steps.mode.outputs.mode == 'developer-id' }}
+        run: |
+          if [ -n "${MOONGLADE_KEYCHAIN:-}" ]; then security delete-keychain "${MOONGLADE_KEYCHAIN}" || true; fi
+          rm -rf "${RUNNER_TEMP}/moonglade-devid.p12" "${RUNNER_TEMP}"/notary-* "${RUNNER_TEMP}/gatekeeper"
+
       - name: Keep the records
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: release-records
           path: |
-            env/release/record.json
+            env/release/record*.json
             env/release/smoke.json
             env/release/build/build.log
             env/release/build/gate.json
+            env/release/build/oracle.json
+            env/release/build/sign.json
+            env/release/build/notarize.json
+            env/release/build/notary-log.json
+            env/release/build/spctl.txt
           if-no-files-found: warn
 
       - name: Create the draft release
         env:
           GH_TOKEN: ${{ github.token }}
+          SIGNING_MODE: ${{ steps.mode.outputs.mode }}
         run: >
           gh release create "${GITHUB_REF_NAME}" env/release/out/*
           --draft --verify-tag --title "Moonglade ${GITHUB_REF_NAME}"
-          --notes "Prebuilt Moonglade for Apple Silicon Macs. Bring your own World of Warcraft 3.3.5a client;
-          no game files are included. Source for everything in the zip is attached (see SOURCES.json); verify
-          downloads with SHA256SUMS."
+          --notes-file "tools/release/notes/${SIGNING_MODE}.md"
