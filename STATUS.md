@@ -25,6 +25,8 @@ _Updated 2026-10-09 04:05 (release-first-launch verifier cycle 2 FAIL on one che
 
 **Follow-up from B31 (easy-setup product question):** a friend's first launch probably shows the realm list (no `realmName` yet) and the client's first-start hardware detection may override the resolution launcher-fixes writes (`hwDetect`). Check on the bootstrap path after merge; fold into power guard or prebuilt releases. Also: results of any world-entry check can depend on Mac uptime (idle logout).
 
+**release-signing 3.3 (2026-10-09 11:32):** dev app rebuilt once (navy icon, copyright line gone; designated requirement unchanged). macOS asked for no permission again: no TCC prompt in the tccd log through the next LaunchServices app run (app.dock_icon_rendered, ~11:53).
+
 **Decisions pending from Zach:** none blocking. Later: the patch ADR for the in-client front menu (step 2); light vs true save files; F-items as they come up.
 
 **Compaction hooks (PR #8):** `.claude/settings.json` runs `.claude/hooks/session-context.sh` on compact/clear/resume (injects this handoff + a context-survival checklist) and `precompact-check.sh` before compaction (warns if a change/* branch is newer than this handoff). (The temporary settings.local.json was removed once main was merged into the M2 branch.) Mac sleep: Zach set `pmset disablesleep 1` on 2026-10-03, so a closed lid no longer stalls runs; undo with `sudo pmset -a disablesleep 0`.

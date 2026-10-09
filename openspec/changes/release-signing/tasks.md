@@ -10,10 +10,10 @@
 
 ## 3. Icon and Info.plist
 - [x] 3.1 Get the approved navy and logo scale from Zach's mockup (ask the orchestrator; else propose values) and the template's corner radius (record the source or flag it); `icon.py` tile stage with `AppIcon.json` `tile` record; regenerate `branding/AppIcon.{png,icns,json}`; preview sheet (16-1024 px, light and dark) for Zach
-- [ ] 3.2 Shim test-mode icon sampling (`HSDOCK_ICON_SAMPLES` → logged RGBA); `launch.dock_env()` unchanged unless a check shows a path not using `branding/`
-- [ ] 3.3 Drop the dev plist's `NSHumanReadableCopyright` line; rebuild the dev app once (note in STATUS whether macOS asked for any permission again)
+- [x] 3.2 Shim test-mode icon sampling (`HSDOCK_ICON_SAMPLES` → logged RGBA); `launch.dock_env()` unchanged unless a check shows a path not using `branding/`
+- [x] 3.3 Drop the dev plist's `NSHumanReadableCopyright` line; rebuild the dev app once (note in STATUS whether macOS asked for any permission again)
 
 ## 4. Checks and docs
-- [ ] 4.1 `signing.mode_setting`, `signing.bundle_layout`, `signing.adhoc_signature`, `signing.entitlements_needed`, `signing.gatekeeper_adhoc`, `signing.stable_identity`, `signing.seal_survives_use`, `signing.open_instructions`, `signing.notarized` (CI-only; not applicable locally), each with a counterexample (the notarized one: a record with an issue in the notary log fails it)
-- [ ] 4.2 `app.icon` rewritten for the tile (counterexamples: old transparent layout, white tile), `app.bundle_valid` tightened (plist wording), `app.icon_everywhere`, `app.dock_icon_rendered` (counterexample: transparent-surround `HSDOCK_ICON`)
-- [ ] 4.3 `tools/release/notes/{ad-hoc,developer-id}.md`; `docs/setup.md` "Using a release" → "Opening it the first time" (both modes, the one-liner, "once per version", what ad hoc can't do in plain words); design.md "As built"
+- [x] 4.1 `signing.mode_setting`, `signing.bundle_layout`, `signing.adhoc_signature`, `signing.entitlements_needed`, `signing.gatekeeper_adhoc`, `signing.stable_identity`, `signing.seal_survives_use`, `signing.open_instructions`, `signing.notarized` (CI-only; not applicable locally), each with a counterexample (the notarized one: a record with an issue in the notary log fails it)
+- [x] 4.2 `app.icon` rewritten for the tile (counterexamples: old transparent layout, white tile), `app.bundle_valid` tightened (plist wording), `app.icon_everywhere`, `app.dock_icon_rendered` (counterexample: transparent-surround `HSDOCK_ICON`)
+- [x] 4.3 `tools/release/notes/{ad-hoc,developer-id}.md`; `docs/setup.md` "Using a release" → "Opening it the first time" (both modes, the one-liner, "once per version", what ad hoc can't do in plain words); design.md "As built"
