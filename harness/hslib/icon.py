@@ -26,10 +26,12 @@ How the ring is found (nothing about its position or size is hardcoded):
    (`logo_diameter()`), and the ring is centred on the 1024 canvas.
 
 The tile (render_tile; the "Approved navy tile" in release-signing design.md, recovered from the mockup Zach picked
-on 2026-10-08): Apple's macOS icon-grid body (TILE_BODY = 824 px square on the 1024 canvas, centred), corner radius
-body × TILE_RADIUS_FRAC as circular arcs, a vertical navy gradient with a soft centred glow, a drop shadow, and the
-ring scaled to int(body × LOGO_SCALE) / CANVAS of its borderless size (the mockup scaled the whole 824-on-1024
-borderless icon to that many px). Blurs follow Pillow's GaussianBlur (three extended box passes) in floats.
+on 2026-10-08, with the outline Zach picked on 2026-10-09, openspec change icon-corner-c, option C): macOS 26's
+app-icon shape, a TILE_BODY = 832 px square centred on the 1024 canvas with continuous-curvature corners of radius
+TILE_RADIUS = 216 px (continuous_inset; rasterised by corner_mask), a vertical navy gradient with a soft centred glow,
+a drop shadow, and the ring scaled to int(LOGO_REF_BODY × LOGO_SCALE) / CANVAS of its borderless size (the mockup
+scaled the whole 824-on-1024 borderless icon to that many px; the logo kept that size when the outline changed).
+Blurs follow Pillow's GaussianBlur (three extended box passes) in floats.
 
 Deterministic: same source + same macOS tools → identical pixels (the PNG is written with filter 0 and zlib level 9,
 no timestamps or metadata). `app.icon` re-runs this into a temp dir and compares the decoded pixels.
@@ -44,6 +46,7 @@ import struct
 import subprocess
 import tempfile
 import zlib
+from bisect import bisect_left
 from itertools import accumulate
 from pathlib import Path
 
@@ -58,8 +61,12 @@ META_OUT = BRANDING / "AppIcon.json"
 CANVAS = 1024
 ICON_DIAMETER = 824            # Apple macOS icon grid: 824×824 body on a 1024 canvas (the borderless ring's size)
 # approved navy tile (release-signing design.md "Approved navy tile"); per CANVAS unless noted
-TILE_BODY = 824                # tile square, centred (Apple's grid body)
-TILE_RADIUS_FRAC = 0.225       # corner radius = body × this, circular arcs (approved); Apple's shapes: design.md 6
+# outline: macOS 26's app-icon shape, option C (icon-corner-c): matplotlib issue 31895 (comment by iccir) measured the
+# system mask at 208 px with corner radius 54 on a 256 px canvas = 832 / 216 on 1024 (release-signing design.md 6)
+TILE_SHAPE = "continuous"      # "continuous" (continuous_inset) or "circular" (circular arcs; counterexamples only)
+TILE_BODY = 832                # tile square, centred
+TILE_RADIUS = 216.0            # corner radius (the cornerRadius Core Animation would be given)
+LOGO_REF_BODY = 824            # the logo's size reference: the approved mockup's tile body (logo unchanged by option C)
 TILE_TOP_RGB = (28, 38, 62)    # gradient at t = y/canvas = 0 ...
 TILE_BOTTOM_RGB = (18, 24, 38)  # ... and at t = 1
 GLOW_BOX = (0.2, 0.2, 0.8, 0.8)  # glow disc's bounding box, fractions of the canvas
@@ -199,7 +206,7 @@ def _sips(*args) -> None:
 # ---------------------------------------------------------------- ring detection
 
 def _deficit_sampler(w: int, h: int, rgb: bytes):
-    d = bytes(255 - min(rgb[i], rgb[i + 1], rgb[i + 2]) for i in range(0, len(rgb), 3))
+    d = bytes(map(min, rgb[0::3], rgb[1::3], rgb[2::3])).translate(bytes(range(255, -1, -1)))  # 255 - min(R, G, B)
 
     def at(x: float, y: float) -> float:
         x0, y0 = int(math.floor(x)), int(math.floor(y))
@@ -322,35 +329,132 @@ def box_blur(plane: list[float], w: int, h: int, sigma: float, passes: int = 3) 
     return [cols[x][y] for y in range(h) for x in range(w)]
 
 
-def rounded_rect_coverage(n: int, x0: float, y0: float, size: float, radius: float) -> list[float]:
-    """Coverage (0..1) of each pixel of an n×n canvas by a circular-arc rounded square: a 1 px analytic ramp on the
-    signed distance to its edge (pixel i spans [i, i+1))."""
-    cx, cy = x0 + size / 2, y0 + size / 2
-    inner = size / 2 - radius
+# Continuous-curvature corner ("squircle" corner) of a rounded square, in units of the corner radius r, for the
+# top-right corner: (u, v) = (distance in from the vertical side, distance down from the top side); the corner runs
+# from (EXT, 0) on the top side to (0, EXT) on the vertical side as three cubic Béziers, and r is first limited to
+# body / 2 / EXT. Source: the published reverse engineering of Apple's continuous rounded rectangle, "Drawing Code for
+# iOS 7 Rounded Rectangles" (PaintCode/PixelCut, 2013-11-18, https://www.paintcodeapp.com/news/code-for-ios-7-rounded-
+# rectangles): EXT = 1.52866483, the limit, every control point below and the middle curve. One difference, read from
+# Core Animation itself: on macOS 26 a CALayer with cornerCurve = continuous, rendered into a PDF context
+# (renderInContext), emits exactly these curves except that the first and last curves end at the middle curve's ends,
+# (0.63149399, 0.07491100) and its mirror, where the 2013 code ends them at (0.66993427, 0.06549600) and adds a short
+# line (icon-corner-c design "As built"). The constants below are Core Animation's; app.icon compares the raster with
+# a Core Animation rendering.
+CONTINUOUS_EXT = 1.52866483
+CONTINUOUS_CORNER = (
+    ((1.52866483, 0.0), (1.08849323, 0.0), (0.86840689, 0.0), (0.63149399, 0.07491100)),
+    ((0.63149399, 0.07491100), (0.37282392, 0.16905899), (0.16906013, 0.37282401), (0.07491100, 0.63149399)),
+    ((0.07491100, 0.63149399), (0.0, 0.86840689), (0.0, 1.08849323), (0.0, 1.52866483)),
+)
+CORNER_STEPS = 1024            # points per cubic when the corner is flattened (chord error < 1e-5 r)
+MASK_SUBROWS = 16              # vertical samples per pixel row; coverage along each sample row is exact
+
+
+def _continuous_profile() -> tuple[list[float], list[float]]:
+    """The corner flattened to a polyline: (v, u) lists in units of r, v increasing (every curve is monotone)."""
+    vs, us = [], []
+    for p0, p1, p2, p3 in CONTINUOUS_CORNER:
+        for i in range(0 if not vs else 1, CORNER_STEPS + 1):
+            t = i / CORNER_STEPS
+            s = 1 - t
+            a, b, c, d = s * s * s, 3 * s * s * t, 3 * s * t * t, t * t * t
+            vs.append(a * p0[1] + b * p1[1] + c * p2[1] + d * p3[1])
+            us.append(a * p0[0] + b * p1[0] + c * p2[0] + d * p3[0])
+    return vs, us
+
+
+_PROFILE = _continuous_profile()
+
+
+def corner_inset(shape: str, size: float, radius: float):
+    """f(v) -> how far the outline is in from the vertical side at depth v (px) below the horizontal side, for a
+    rounded square of side `size` whose corners are `shape` ("continuous" or "circular") with radius `radius`; 0 on
+    the straight parts. Depths beyond size/2 mirror (the caller folds them)."""
+    if shape == "circular":
+        r = min(radius, size / 2)
+
+        def circ(v: float) -> float:
+            if v >= r:
+                return 0.0
+            w = r - v
+            return r - math.sqrt(max(0.0, r * r - w * w))
+        return circ
+    if shape != "continuous":
+        raise IconError(f"unknown corner shape {shape!r}")
+    r = min(radius, size / 2 / CONTINUOUS_EXT)
+    vs, us = _PROFILE
+    reach = vs[-1] * r
+
+    def cont(v: float) -> float:
+        if v >= reach:
+            return 0.0
+        q = v / r
+        i = bisect_left(vs, q)
+        if i == 0:
+            return us[0] * r
+        v0, v1 = vs[i - 1], vs[i]
+        f = (q - v0) / (v1 - v0) if v1 > v0 else 0.0
+        return (us[i - 1] + (us[i] - us[i - 1]) * f) * r
+    return cont
+
+
+def corner_mask(n: int, x0: float, y0: float, size: float, radius: float, shape: str = TILE_SHAPE) -> list[float]:
+    """Coverage (0..1) of each pixel of an n×n canvas by a rounded square (x0, y0, size) with `shape` corners.
+    Pixel i spans [i, i+1). Each row is sampled at MASK_SUBROWS evenly spaced heights; on each sample row the shape is
+    one interval, whose exact overlap with each pixel is added. Pure Python floats, so the same on every macOS."""
+    inset = corner_inset(shape, size, radius)
+    x1, y1 = x0 + size, y0 + size
     out = [0.0] * (n * n)
-    for y in range(n):
-        qy = abs(y + 0.5 - cy) - inner
-        if qy - radius >= 0.5:
+    sub = MASK_SUBROWS
+    for y in range(max(0, int(math.floor(y0))), min(n, int(math.ceil(y1)))):
+        spans = []
+        for k in range(sub):
+            yy = y + (k + 0.5) / sub
+            if y0 <= yy <= y1:
+                d = inset(min(yy - y0, y1 - yy))
+                a, b = max(0.0, x0 + d), min(float(n), x1 - d)
+                if b > a:
+                    spans.append((a, b))
+        if not spans:
             continue
-        for x in range(n):
-            qx = abs(x + 0.5 - cx) - inner
-            sd = math.hypot(max(qx, 0.0), max(qy, 0.0)) + min(max(qx, qy), 0.0) - radius
-            if sd < 0.5:
-                out[y * n + x] = 1.0 if sd <= -0.5 else 0.5 - sd
+        lo = int(math.floor(min(a for a, _ in spans)))
+        hi = min(n, int(math.ceil(max(b for _, b in spans))))
+        full_lo = int(math.ceil(max(a for a, _ in spans))) if len(spans) == sub else hi
+        full_hi = int(math.floor(min(b for _, b in spans))) if len(spans) == sub else hi
+        row = [0.0] * (hi - lo)
+        for x in range(lo, hi):
+            if full_lo <= x < full_hi:
+                row[x - lo] = 1.0
+                continue
+            c = 0.0
+            for a, b in spans:
+                o = min(b, x + 1.0) - max(a, float(x))
+                if o > 0:
+                    c += o
+            row[x - lo] = c / sub
+        out[y * n + lo:y * n + hi] = row
     return out
 
 
 def tile_geometry(n: int = CANVAS) -> dict:
-    """The tile's body (Apple's 824/1024 grid body, centred) and approved corner radius on an n×n canvas."""
-    body = n * TILE_BODY / CANVAS
-    return {"canvas": n, "body": body, "x0": (n - body) / 2, "y0": (n - body) / 2,
-            "corner_radius": body * TILE_RADIUS_FRAC}
+    """The tile on an n×n canvas: its shape, body (TILE_BODY on CANVAS, centred) and corner radius."""
+    k = n / CANVAS
+    body = TILE_BODY * k
+    return {"canvas": n, "shape": TILE_SHAPE, "body": body, "x0": (n - body) / 2, "y0": (n - body) / 2,
+            "corner_radius": TILE_RADIUS * k}
+
+
+def tile_mask(n: int = CANVAS) -> list[float]:
+    """The tile's coverage on an n×n canvas (corner_mask with tile_geometry)."""
+    g = tile_geometry(n)
+    return corner_mask(n, g["x0"], g["y0"], g["body"], g["corner_radius"], g["shape"])
 
 
 def logo_diameter(n: int = CANVAS) -> float:
     """The ring's diameter on the tile. The mockup scaled the whole borderless icon (ring ICON_DIAMETER px across a
-    CANVAS-px canvas) to int(body × LOGO_SCALE) px; the ring is cut straight to that size here (one resample)."""
-    return ICON_DIAMETER * int(tile_geometry(n)["body"] * LOGO_SCALE) / CANVAS
+    CANVAS-px canvas) to int(LOGO_REF_BODY × LOGO_SCALE) px; the ring is cut straight to that size here (one
+    resample). Option C kept the logo at that size (Zach's preview), so it doesn't follow TILE_BODY."""
+    return ICON_DIAMETER * int(n * LOGO_REF_BODY / CANVAS * LOGO_SCALE) / CANVAS
 
 
 def render_tile(logo: bytes, n: int = CANVAS, mask: list[float] | None = None) -> bytes:
@@ -362,10 +466,9 @@ def render_tile(logo: bytes, n: int = CANVAS, mask: list[float] | None = None) -
     tile (vertical gradient TILE_TOP_RGB → TILE_BOTTOM_RGB, t = y/n, with a glow: GLOW_RGBA's colour at up to its
     alpha over a centred disc of GLOW_BOX blurred GLOW_BLUR_FRAC × n), logo. The mockup's shadow numbers are per
     512 px and scale with n."""
-    g = tile_geometry(n)
     k = n / 512
     if mask is None:
-        mask = rounded_rect_coverage(n, g["x0"], g["y0"], g["body"], g["corner_radius"])
+        mask = tile_mask(n)
     dy = round(SHADOW_DY_512 * k)
     shadow = box_blur([0.0] * (dy * n) + mask[:n * n - dy * n], n, n, SHADOW_BLUR_512 * k)
     gr, gc = (GLOW_BOX[2] - GLOW_BOX[0]) * n / 2, n / 2
@@ -488,9 +591,13 @@ def generate(source: Path = SOURCE, out_dir: Path | None = None) -> dict:
                 "canvas": CANVAS,
                 "icon_circle_canvas_px": {"cx": round(lg["cx"], 3), "cy": round(lg["cy"], 3), "r": round(lg["r"], 3)},
                 "tile": {"source_sha256": src_sha,
-                         "shape": "rounded square, circular-arc corners (approved mockup)",
+                         "shape": ("rounded square, continuous-curvature corners (Core Animation cornerCurve = "
+                                   "continuous; macOS 26 app-icon shape, option C)" if geo["shape"] == "continuous"
+                                   else f"rounded square, {geo['shape']} corners"),
+                         "shape_kind": geo["shape"], "corner_curve_ext": CONTINUOUS_EXT,
                          "body_px": geo["body"], "x0_px": geo["x0"], "y0_px": geo["y0"],
-                         "corner_radius_px": round(geo["corner_radius"], 3), "corner_radius_frac": TILE_RADIUS_FRAC,
+                         "corner_radius_px": round(geo["corner_radius"], 3),
+                         "corner_radius_frac": round(geo["corner_radius"] / geo["body"], 6),
                          "fill": {"kind": "vertical gradient, t = y / canvas", "top_rgb": list(TILE_TOP_RGB),
                                   "bottom_rgb": list(TILE_BOTTOM_RGB)},
                          "glow": {"disc_box_frac": list(GLOW_BOX), "rgba": list(GLOW_RGBA),
@@ -498,7 +605,8 @@ def generate(source: Path = SOURCE, out_dir: Path | None = None) -> dict:
                          "shadow": {"blur_sigma_px": sh_sigma, "alpha": SHADOW_ALPHA,
                                     "dy_px": round(SHADOW_DY_512 * CANVAS / 512),
                                     "reach_px": blur_reach(sh_sigma)},
-                         "logo_scale": LOGO_SCALE, "logo_canvas_px": int(geo["body"] * LOGO_SCALE),
+                         "logo_scale": LOGO_SCALE, "logo_ref_body_px": LOGO_REF_BODY,
+                         "logo_canvas_px": int(LOGO_REF_BODY * LOGO_SCALE),
                          "logo_diameter_px": round(logo_diameter(), 3)},
                 "params": {"EDGE_DEFICIT": EDGE_DEFICIT, "RAYS": RAYS, "RAY_STEP": RAY_STEP, "RUN": RUN,
                            "OUTLIER_PX": OUTLIER_PX, "INSET_SRC_PX": INSET_SRC_PX, "ICON_DIAMETER": ICON_DIAMETER},

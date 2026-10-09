@@ -40,12 +40,14 @@
   },
   "tile": {
     "source_sha256": "c1fd3dd969d9a010ac24cf3b556701e59cabf1a43d933325a8bae9f14260edd7",
-    "shape": "rounded square, circular-arc corners (approved mockup)",
-    "body_px": 824.0,
-    "x0_px": 100.0,
-    "y0_px": 100.0,
-    "corner_radius_px": 185.4,
-    "corner_radius_frac": 0.225,
+    "shape": "rounded square, continuous-curvature corners (Core Animation cornerCurve = continuous; macOS 26 app-icon shape, option C)",
+    "shape_kind": "continuous",
+    "corner_curve_ext": 1.52866483,
+    "body_px": 832.0,
+    "x0_px": 96.0,
+    "y0_px": 96.0,
+    "corner_radius_px": 216.0,
+    "corner_radius_frac": 0.259615,
     "fill": {
       "kind": "vertical gradient, t = y / canvas",
       "top_rgb": [
@@ -81,6 +83,7 @@
       "reach_px": 60
     },
     "logo_scale": 0.86,
+    "logo_ref_body_px": 824,
     "logo_canvas_px": 708,
     "logo_diameter_px": 569.719
   },
@@ -93,6 +96,6 @@
     "INSET_SRC_PX": 8.0,
     "ICON_DIAMETER": 824
   },
-  "png_sha256": "ae5231310eba12ba9bcd0cdce53a6d1c6f515fd05e574e7483351b1036120591",
-  "icns_sha256": "80a8a2f14867a1e92bf7a3ab5389109e27e2dda461660d8271bf75af6b23ab67"
+  "png_sha256": "e25ffbc233fabaac0257f0b72b5830e0dccd6086b54dfdc2825b68316cdd52eb",
+  "icns_sha256": "6a86919f51ed80c8d80560f974aec3ea9552bda3d0faa19863aeeebf38ed73a6"
 }
