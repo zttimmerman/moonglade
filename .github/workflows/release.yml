@@ -171,6 +171,12 @@ jobs:
           printf '%s\n' "${out}" | grep -q "accepted"
           printf '%s\n' "${out}" | grep -q "source=Notarized Developer ID"
 
+      - name: Check the notarized release (signing.notarized)
+        if: ${{ steps.mode.outputs.mode == 'developer-id' }}
+        run: >
+          /usr/bin/python3 -I harness/hslib/notarycheck.py --build env/release/build --out env/release/out
+          --smoke env/release/smoke.json
+
       - name: Download size under 200 MB
         run: |
           size=$(stat -f %z env/release/out/Moonglade-"${GITHUB_REF_NAME}"-macos-arm64.zip)

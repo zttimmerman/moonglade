@@ -18,6 +18,8 @@ from .util import keep_awake, log
 SLOW_SKIP_MSG = "slow tier, not run in a full run"
 # harness-reporting "GUI tier": what a full run records for a gui-marked check when no GUI path changed
 GUI_SKIP_MSG = "gui tier, not run in a full run (no GUI path changed)"
+# release-signing: a ci_only check outside the release workflow (GITHUB_ACTIONS != true) reports this skip, never a pass
+CI_ONLY_SKIP_MSG = "not applicable: CI-only (judges a release-workflow run; local builds are never Developer ID signed)"
 # The GUI path rule: a change touching any GUI input runs the gui checks in full runs. launcher-fixes (F26, verifier
 # 2026-10-05): dependency-based. The GUI inputs are the non-Python files below plus the transitive in-repo import
 # closure of GUI_ROOTS (the gui checks and their shared app session, and the code that session runs: the launcher
@@ -236,7 +238,16 @@ def tolerated_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
     if (rec["status"] == "skip" and meta.get("tier") == "full" and c is not None and c.tier == "slow"
             and rec["id"] in meta.get("slow_tier_skipped", []) and rec.get("message") == SLOW_SKIP_MSG):
         return True
-    return is_gui_skip(rec, meta, reg) or is_backups_skip(rec, meta, reg)
+    return is_gui_skip(rec, meta, reg) or is_backups_skip(rec, meta, reg) or is_ci_only_skip(rec, meta, reg)
+
+
+def is_ci_only_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
+    """release-signing: a ci_only check's "not applicable" skip on a run outside the release workflow (meta.ci is
+    False). Only checks the registry marks ci_only, only with CI_ONLY_SKIP_MSG; in CI the check must pass."""
+    reg = REGISTRY if reg is None else reg
+    c = reg.get(rec["id"])
+    return (rec["status"] == "skip" and c is not None and c.ci_only and meta.get("ci") is False
+            and rec.get("message") == CI_ONLY_SKIP_MSG)
 
 
 def is_backups_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
@@ -360,7 +371,7 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
         except CheckFail as e:
             rec |= {"status": "fail", "message": str(e), "evidence": e.evidence}
         except CheckSkip as e:
-            rec |= {"status": "skip", "message": str(e), "evidence": {"skip_reason": str(e)}}
+            rec |= {"status": "skip", "message": str(e), "evidence": {"skip_reason": str(e), **e.evidence}}
         except Exception as e:  # noqa: BLE001
             excerpt = getattr(e, "log_excerpt", "")
             rec |= {"status": "error", "message": f"{type(e).__name__}: {e}",
@@ -678,6 +689,7 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
         "gui_tier_skipped": [c.id for c in gui_skips], "gui_rule": rule,
         "backups_tier_skipped": [c.id for c in bk_skips], "backups_rule": bk_rule,
         "keep_awake": awake, "gui_preflight": preflight, "orphans": orphans,
+        "ci": _os.environ.get("GITHUB_ACTIONS") == "true",
         "filter": only or [], "host": {"platform": platform.platform(), "machine": platform.machine(),
                                       "python": platform.python_version(), "disk_free_gb": round(du.free / 2**30, 1)},
     }

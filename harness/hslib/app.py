@@ -93,7 +93,6 @@ def info_plist() -> dict:
         "LSApplicationCategoryType": "public.app-category.role-playing-games",
         "LSMinimumSystemVersion": host_version(),
         "NSHighResolutionCapable": True,
-        "NSHumanReadableCopyright": "Personal project; not for redistribution.",
     }
 
 

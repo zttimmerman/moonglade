@@ -119,6 +119,17 @@ Double-click `dist/Moonglade.app` (or drag it to the Dock), or run `./play` in a
 
 A release is a ready-made `Moonglade.app`: no Terminal, Homebrew or Xcode tools. You still bring your own Windows **3.3.5a (build 12340) enUS** game, as a folder or a zip.
 
+### Opening it the first time
+
+Download the zip, unzip it (double-click) and move `Moonglade.app` to Applications. No game files are included: you bring your own game. What happens when you open it depends on how the release was signed; its release notes say which.
+
+- **Most releases (not registered with Apple):** macOS can't check apps that aren't registered with Apple, so it refuses the first open and says it can't verify Moonglade. Click Done. Then go to System Settings → Privacy & Security, scroll down and click **Open Anyway**, then confirm (your Mac may ask for your password). Moonglade opens, and from then on it opens normally. You do this once for each new version: macOS treats every new download as new. Prefer Terminal? After moving Moonglade to Applications, this line does the same as Open Anyway: `xattr -dr com.apple.quarantine /Applications/Moonglade.app` (it removes the "downloaded from the internet" mark from Moonglade only).
+- **Releases registered with Apple (notarized):** macOS asks once whether to open an app downloaded from the internet; click Open.
+
+What an unregistered release can't do, in plain words: Apple hasn't scanned it, so macOS can't vouch for it, and you approve each new version yourself (above). Moonglade asks for one permission at most, to read the game folder you pick (often in Downloads or Documents); macOS remembers that answer across new versions.
+
+### What the first open does
+
 **The first time you open it**, Moonglade checks this Mac (Apple Silicon, macOS 26.2 or newer, Rosetta) and the free space, then asks for your game folder. It only reads that folder, never changes it, and copies what it needs. Then it downloads the world's maps (1.2 GB) and the part that runs the Windows game (64 MB), creates your game world, and prepares the game. On the dev Mac this took two minutes in all (most of it creating the game world); a slower disk or connection takes longer. If you close the window or something goes wrong, the next open continues where it stopped. When it says it's done, you can delete the folder you gave it: Moonglade keeps its own copy. Later opens go straight to the game.
 
 **Disk:** setup needs free space for your game (about 18 GB) plus about 8.6 GB for everything else, so about 27 GB free with an 18 GB game. If your game folder is on the same disk, Moonglade's copy shares its storage with it until you delete your folder, so the copy itself takes almost no extra space at first.

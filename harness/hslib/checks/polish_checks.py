@@ -17,6 +17,7 @@ import ast
 import json
 import os
 import re
+import shutil
 import statistics
 import subprocess
 import tempfile
@@ -330,6 +331,141 @@ def wait_front(pid: int, timeout: float) -> tuple[float | None, list]:
     return None, seen
 
 
+# ---------------------------------------------------------------- the loaded Dock icon (release-signing 3.2)
+
+ICON_SAMPLES_ENV = "HSDOCK_TEST_ICON_SAMPLES"   # a shim test knob: only reaches a --client-cmd stand-in (play.py)
+ICON_LINE = re.compile(r"icon test: loaded (?P<path>.*) size=(?P<w>\d+)x(?P<h>\d+) via=(?P<via>\S+) .*samples:(?P<s>.*)$")
+
+
+def icon_sample_points() -> list[tuple[str, float, float, str]]:
+    """(name, fx, fy, expect) from AppIcon.json's tile record: the tile-edge ring ("navy"), a canvas corner and a
+    point between the canvas edge and the shadow band ("transparent"), the centre ("opaque")."""
+    from .app_checks import tile_edge_points, tile_record
+    t = tile_record()
+    n = t["canvas"]
+    pts = [(name, x / n, y / n, "navy") for name, x, y in tile_edge_points(t, n)]
+    pts += [("canvas_corner", 0.0, 0.0, "transparent"), ("margin", 2.5 / n, 0.5, "transparent"),
+            ("centre", 0.5, 0.5, "opaque")]
+    return pts
+
+
+def icon_sample_spec() -> str:
+    return ";".join(f"{fx!r},{fy!r}" for _, fx, fy, _ in icon_sample_points())
+
+
+def parse_icon_lines(lines: list[str]) -> list[dict]:
+    out = []
+    for l in lines:
+        m = ICON_LINE.search(l)
+        if not m:
+            continue
+        samples = {}
+        for part in m.group("s").split():
+            k, _, v = part.partition("=")
+            try:
+                samples[k] = [int(x) for x in v.split(",")]
+            except ValueError:
+                samples[k] = None
+        pid = re.search(r" pid=(\d+) ", l)
+        out.append({"pid": int(pid.group(1)) if pid else None, "path": m.group("path"),
+                    "size": [int(m.group("w")), int(m.group("h"))], "via": m.group("via"), "samples": samples})
+    return out
+
+
+def judge_icon_samples(rec: dict) -> dict:
+    """Each sampled point against what the tile record says it must be."""
+    from .app_checks import expected_navy, is_navy, tile_record
+    t = tile_record()
+    out, bad = {}, []
+    for name, fx, fy, want in icon_sample_points():
+        v = rec["samples"].get(f"{fx!r},{fy!r}")
+        if v is None or len(v) != 4:
+            ok = False
+        elif want == "navy":
+            ok = is_navy(t, v, fy * t["canvas"], t["canvas"])
+        elif want == "transparent":
+            ok = v[3] == 0
+        else:
+            ok = v[3] == 255
+        out[name] = {"want": want, "rgba": v, "ok": ok,
+                     **({"navy_expected": [round(c) for c in expected_navy(t, fy * t["canvas"], t["canvas"])]}
+                        if want == "navy" else {})}
+        if not ok:
+            bad.append(name)
+    return {"points": out, "bad": bad, "ok": not bad and rec["size"] == [1024, 1024]}
+
+
+def shim_icon_run(icon: Path, d: Path, timeout: float = 90) -> dict:
+    """Counterexample run of the shim without the app or the stack: Wine's notepad under the dev runtime and prefix,
+    with the shim, HSDOCK_ICON = `icon`, test mode and the sample points, logging to a scratch file. Returns the
+    parsed icon lines; the prefix is stopped afterwards."""
+    before = launch.prefix_processes()
+    require(not before, "GIVEN not met: Wine processes are running in the prefix", prefix_processes=before)
+    log = d / "dockshim.log"
+    launch.ensure_prefix()
+    env = launch.wine_env() | {"DYLD_INSERT_LIBRARIES": dockshim.ensure_built(), "HSDOCK_POLICY": "regular",
+                               "HSDOCK_NAME": "Moonglade", "HSDOCK_ICON": str(icon), "HSDOCK_LOG": str(log),
+                               "HSDOCK_TOKEN": f"{launch.DOCK_TOKEN}#icon-test", "HSDOCK_TEST": "1",
+                               ICON_SAMPLES_ENV: icon_sample_spec()}
+    t0 = time.time()
+    p = subprocess.Popen([str(launch.WINE), "notepad.exe"], cwd=d, env=env, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, start_new_session=True)
+    lines: list[str] = []
+    try:
+        while time.time() - t0 < timeout:
+            lines = log.read_text(errors="replace").splitlines() if log.exists() else []
+            if parse_icon_lines(lines):
+                break
+            time.sleep(0.5)
+    finally:
+        stop = launch.stop_prefix()
+        try:
+            p.wait(timeout=30)
+        except subprocess.TimeoutExpired:
+            p.kill()
+    return {"icon": str(icon), "seconds": round(time.time() - t0, 1), "log": lines[-12:], "stop": stop,
+            "icon_lines": parse_icon_lines(lines), "remaining": launch.prefix_processes()}
+
+
+@check("app.dock_icon_rendered", order=398, capability=CAP_APP, stack="down", tier="slow", gui=True)
+def dock_icon_rendered(ctx):
+    """The shared app run (dev app, notepad stand-in under the shim, test mode): the shim log of this run (newer than
+    its start) has, for the stand-in's pid, the icon it loaded for setApplicationIconImage: (the app bundle's
+    AppIcon.icns, 1024 px) and the colours sampled from the loaded image at the points AppIcon.json's tile record
+    gives: tile edge and rounded corners navy, canvas corner and margin transparent, centre opaque. Counterexample: the
+    shim run with HSDOCK_ICON pointing at the logo on a transparent surround logs non-navy edge samples and fails."""
+    from .app_checks import bundle_icon
+    from .. import icon as I
+    ev = _session("app")
+    recs = [r for r in parse_icon_lines(ev.get("shim_log") or []) if r["pid"] == ev.get("notepad_pid")]
+    out: dict = {"t_start": ev.get("t_start"), "notepad_pid": ev.get("notepad_pid"), "icon_lines": recs,
+                 "expected_icon": str(bundle_icon(A.APP))}
+    require(recs, "the shim log of this run has no loaded-icon line for the stand-in", **out,
+            shim_log=(ev.get("shim_log") or [])[-12:])
+    out["judged"] = j = judge_icon_samples(recs[-1])
+    require(recs[-1]["path"] == out["expected_icon"], "the shim loaded another icon than the app bundle's", **out)
+    require(j["ok"], f"the loaded icon's samples aren't the navy tile: {j['bad']}", **out)
+    d = Path(tempfile.mkdtemp(prefix="hs-dockicon-", dir=P.RUN))
+    try:
+        iconset = d / "AppIcon.iconset"
+        iconset.mkdir()
+        I.write_png(iconset / "icon_512x512@2x.png", I.CANVAS, I.CANVAS, I.load_logo(diameter=I.ICON_DIAMETER))
+        subprocess.run(["/usr/bin/iconutil", "-c", "icns", str(iconset), "-o", str(d / "transparent.icns")],
+                       check=True, capture_output=True)
+        ce = shim_icon_run(d / "transparent.icns", d)
+        out["counterexample"] = ce
+        ce_recs = ce["icon_lines"]
+        out["counterexample_judged"] = cj = judge_icon_samples(ce_recs[-1]) if ce_recs else None
+        require(ce_recs and ce_recs[-1]["path"] == str(d / "transparent.icns"),
+                "counterexample: the shim logged no loaded icon for the transparent-surround icon", **out)
+        require(not cj["ok"] and any(x.startswith(("top", "bottom", "left", "right", "corner_")) for x in cj["bad"]),
+                "counterexample: a transparent-surround icon passed as the navy tile", **out)
+        require(not ce["remaining"], "the counterexample run left Wine processes", **out)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    return out
+
+
 # ---------------------------------------------------------------- the app session (stack down, population, notepad)
 
 _SESSIONS: dict = {}
@@ -366,7 +502,8 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
             wins.start()
         dbs.start()
         ev["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat),
-                              env={"HS_PROFILE": profile, "HS_SETTINGS": str(sfile), **(env or {})})
+                              env={"HS_PROFILE": profile, "HS_SETTINGS": str(sfile),
+                                   ICON_SAMPLES_ENV: icon_sample_spec(), **(env or {})})
         require(ev["open"]["rc"] == 0, "`open` failed to launch the app", **ev)
         if focus:                                    # launcher-fixes: a Dock/Finder click while it's still loading
             ev["loading_reopen"] = _loading_reopen(hook, s, sfile, profile, env, wins)

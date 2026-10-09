@@ -11,7 +11,9 @@ class CheckFail(Exception):
 
 
 class CheckSkip(Exception):
-    pass
+    def __init__(self, msg: str = "", evidence: dict | None = None):
+        super().__init__(msg)
+        self.evidence = evidence or {}
 
 
 @dataclass
@@ -27,6 +29,8 @@ class Check:
     profile: str | None = None    # config profile a stack="up" check needs (None = config.DEFAULT_PROFILE)
     gui: bool = False             # needs exclusive screen focus (harness-reporting "GUI tier"); see runner.gui_tier_skips
     backups: bool = False         # save backups end to end (harness-reporting "Backups tier"); see runner.backups_tier_skips
+    ci_only: bool = False         # judges a release-workflow run only (release-signing signing.notarized): outside CI
+                                  # it may only skip with runner.CI_ONLY_SKIP_MSG ("not applicable"), never pass
 
 
 # Tiers in inclusion order: `--tier X` runs every check whose tier is X or earlier in this tuple.
@@ -51,7 +55,7 @@ REGISTRY: dict[str, Check] = {}
 
 
 def check(id: str, order: int, capability: str, stack: str = "any", tier: str | None = None,
-          profile: str | None = None, gui: bool = False, backups: bool = False):
+          profile: str | None = None, gui: bool = False, backups: bool = False, ci_only: bool = False):
     """Register a check. Every check should pass `tier=` explicitly; omitting it defaults to "quick" but is
     recorded as undeclared, which report.tiers_declared fails. `profile` (config.PROFILES) is the config profile a
     stack="up" check needs; the runner restarts a stack running with another one. `gui=True` marks a check that needs
@@ -62,7 +66,7 @@ def check(id: str, order: int, capability: str, stack: str = "any", tier: str | 
         if id in REGISTRY:
             raise RuntimeError(f"duplicate check id {id}")
         REGISTRY[id] = Check(id, fn, order, capability, stack, (fn.__doc__ or "").strip(),
-                             tier if tier is not None else "quick", tier is not None, profile, gui, backups)
+                             tier if tier is not None else "quick", tier is not None, profile, gui, backups, ci_only)
         return fn
     return deco
 
