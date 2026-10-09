@@ -1,0 +1,40 @@
+## Why
+Prebuilt releases, part 3 of 3 (STATUS "Next", Zach 2026-10-07/08; split in `release-build`'s proposal). `release-first-launch` made a `Moonglade.app` a friend can set up and play from, but its bundle isn't signed (only the Mach-O files inside are, ad hoc, file by file), its bundle id is a placeholder (`local.moonglade.release`), and macOS treats it as an unknown app: on a friend's Mac the download is refused by Gatekeeper with no explanation. Three small items Zach folded in on 2026-10-08 also belong here, so the app is re-signed (and macOS asks for permissions again) only once: the dark navy icon tile everywhere, including the running game's Dock icon, and removing the dev app's Info.plist line "Personal project; not for redistribution."
+
+## What Changes
+- **Signing mode, one checked-in line** (`tools/release/signing.json`, `{"mode": "ad-hoc"}`). Both modes are fully designed; Zach picks (see "Choices for Zach").
+  - `ad-hoc` (default, free): every Mach-O in the app and then the bundle itself are signed ad hoc with the hardened runtime and the checked-in entitlements. Friends approve the app once per version in System Settings → Privacy & Security → Open Anyway; the release notes and `docs/setup.md` say so in plain language, with the optional Terminal one-liner that clears the download flag. Needs no secrets.
+  - `developer-id` (Apple Developer Program, $99/yr): the same signing with Zach's Developer ID Application certificate and a secure timestamp, then notarization with `notarytool` in the release workflow (credentials from repo secrets), stapling, and a zip of the stapled app. Missing secrets fail the workflow before anything is built or uploaded.
+- **Final bundle id** `io.github.zttimmerman.moonglade` (reverse DNS of the GitHub account the source is published under), distinct from the dev app's `local.moonglade.app` so their privacy grants never mix. **Layout:** the payload stays at `Contents/Resources/Moonglade/`; every Mach-O in it is signed on its own, inside out (design 2 gives the reasons and the prepared fallback if notarization objects).
+- **Stable identity:** ad-hoc releases pin the designated requirement to the bundle id (like the dev app), so the one privacy grant first launch needs survives updates; Developer ID releases keep Apple's default requirement (team + id), which survives updates by design. What ad hoc can't do is written down (design 4).
+- **Navy icon tile everywhere:** `harness/hs icon` renders Zach's logo, a bit larger, on a dark navy macOS rounded-square tile. The dev app, the release app and the running game's Dock icon (`HSDOCK_ICON`) all use that one icon. Checks compare decoded pixels and tile colours, not file names. Zach sees a preview before it ships.
+- **Info.plist:** the dev app's "Personal project; not for redistribution." line is removed (the release plist never had it); neither plist may carry such a line.
+- **Workflow:** `.github/workflows/release.yml` signs before the no-Homebrew smoke test (so the smoke runs the hardened, signed app), and in `developer-id` mode notarizes, staples, re-zips and refreshes `SHA256SUMS` before creating the draft. The draft's notes carry the plain-language "how to open it" text for the active mode.
+
+## Capabilities
+### New Capabilities
+- `release-signing`: the signing mode, the release app's identity and layout, ad-hoc and Developer ID signing, notarization, and the "how to open it" instructions.
+
+### Modified Capabilities
+- `mac-app`: "App bundle with the project icon" is replaced by "App bundle with the navy-tile icon" (logo on a dark navy tile, Zach 2026-10-08; REMOVED + ADDED because OpenSpec won't let a MODIFIED block drop the old "transparent background" scenario; see Spec-change log); its Info.plist may not carry a "not for redistribution" line; a new requirement says the same icon is used everywhere, including the running game's Dock icon.
+
+## Impact
+- `tools/release/release.py` (new `sign` and `notarize` steps; bundle id; the zip is made from the signed or stapled app), new `tools/release/signing.json`, `tools/release/entitlements/*.plist`, `tools/release/sign.py`.
+- `.github/workflows/release.yml` (mode step, sign before smoke, Developer ID keychain + notarize + staple steps behind the mode, release notes per mode).
+- `harness/hslib/icon.py` (tile), `branding/AppIcon.{png,icns,json}` (regenerated), `harness/hslib/app.py` (plist line), `harness/app/dockshim.m` (test-mode log of the loaded icon's sampled pixels), `harness/hslib/checks/app_checks.py` (`app.icon` rewritten for the tile, `app.bundle_valid` tightened), new `harness/hslib/checks/signing_checks.py`.
+- `docs/setup.md` ("Using a release": opening it the first time), `tools/release/notes/*.md` (release-note text per mode).
+- Dev app: rebuilt once (new icon and plist). Its designated requirement (`identifier "local.moonglade.app"`) is unchanged, so its existing privacy grants should carry over; if macOS asks again it asks once.
+- No game data values change (§7 not engaged). No client binary change. No Homebrew change.
+
+## Choices for Zach (plain language)
+1. **Free or $99/yr.** Free ("ad-hoc"): the first time a friend opens each new version, macOS says it can't check the app; they go to System Settings → Privacy & Security, click "Open Anyway" and confirm (or paste one Terminal line). Paid ("Developer ID"): Apple scans each release and macOS opens it after a single normal "downloaded from the internet" question. Everything is built for both; switching later is one line plus adding the secrets. Recommendation: start free while it's friends only; switch if the extra step trips people up.
+2. **The app's permanent name for macOS** (bundle id) `io.github.zttimmerman.moonglade`. Once friends use it, changing it makes macOS treat it as a different app (permissions asked again). If the repo will move to an organisation or a domain, say so before the first release.
+3. **Copyright line.** Proposed: no copyright line at all (macOS doesn't need one). Alternative: a neutral "Free software (GPL-2.0-or-later). No game files included."
+
+## Spec-change log
+- 2026-10-08 (decision, Zach 2026-10-08, memory "app icon decision"): `mac-app` "App bundle with the project icon" (with its scenario "Icon is the logo on a transparent background") is replaced by "App bundle with the navy-tile icon", whose icon scenario "Icon is the logo on a navy tile" asks for a dark navy rounded-square tile with the logo a bit larger. Not a loosening: the check stays pixel-based and becomes stricter in one way (the tile must be opaque navy to its rounded edge, the corners outside the tile transparent, and the generator must still reproduce the committed PNG); the transparent-surround assertion is replaced because Zach chose a different icon (macOS 26 puts non-conforming icons on a grey/white plate).
+- 2026-10-08 (tightening): `mac-app` "Bundle is valid and signed" (carried into the new requirement) additionally requires that the Info.plist carries no "redistribution" wording.
+
+## Open questions
+1. The approved navy mockup (exact navy, logo scale) isn't in the repo or the session records. Task 3.1 recovers it from Zach or proposes values and shows him a preview before anything ships (the human-verify scenario).
+2. Whether ad-hoc + hardened runtime needs an entitlement that Developer ID doesn't (library validation can behave differently without a Team ID). Task 2.2 measures ad hoc locally; the first Developer ID workflow run proves the other side (the smoke runs on the signed app before notarization, so a wrong set fails the run before anything is published).
