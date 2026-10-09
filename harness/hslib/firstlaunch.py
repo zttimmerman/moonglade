@@ -60,11 +60,12 @@ SOCKET_MAX = 103                                  # sockaddr_un.sun_path is 104 
 EXPECTED_BUILD = "3.3.5.12340"
 NEEDED = "World of Warcraft 3.3.5a (build 12340), in English"
 
-# The fixed part of the disk need (design 4 "Disk check"), bytes. Sizes from docs/setup.md "Disk" (measured with `du`
-# by a fresh bootstrap on the dev Mac, 2026-10-07): server data unpacked 3.1 GB + its zip while unpacking 1.2 GB;
-# databases 1.4 GB; Wine runtime + prefix 0.7 GB; plus 2 GB headroom = 8.4 GB. Task 4.1 re-measures these on a scratch
-# HOME and replaces them (cited in design.md "Measurements"). The play client is an APFS clone of HOME/client (~0).
-FIXED_BYTES = {"data": 4_300_000_000, "database": 1_400_000_000, "wine": 700_000_000}
+# The fixed part of the disk need (design 4 "Disk check"; measured, design.md "Measurements", task 4.1), bytes, from
+# `du` of a scratch HOME set up by first launch on the dev Mac (2026-10-08, firstlaunch.flow / second_open_plays):
+# server data unpacked 3.29 GB + its zip while unpacking 1.20 GB -> 4.5 GB; databases 1.20 GB after the first start
+# and a play session -> 1.25 GB; Wine runtime 0.41 GB + the prefix the first play creates 0.36 GB -> 0.8 GB; plus 2 GB
+# headroom (backups are ~27 MB each, 10 kept). The play client is an APFS clone of HOME/client (~0).
+FIXED_BYTES = {"data": 4_500_000_000, "database": 1_250_000_000, "wine": 800_000_000}
 HEADROOM_BYTES = 2_000_000_000
 PROGRESS_EVERY_S = 0.25
 
