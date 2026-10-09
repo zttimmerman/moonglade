@@ -97,3 +97,12 @@ Sources used below (Apple documentation, read 2026-10-08):
 - `signing.mode_setting` (quick; fixture app, no packaging), `signing.bundle_layout` (slow; shares `release-build`'s per-run packaging), `signing.adhoc_signature` (slow; same), `signing.entitlements_needed` (full; re-signs scratch copies and runs the named flows), `signing.gatekeeper_adhoc` (slow), `signing.stable_identity` (slow; a second small build with a changed launcher byte, no full packaging), `signing.seal_survives_use` (slow; after the first-launch fixture's runs, order after them), `signing.open_instructions` (quick), `signing.notarized` (CI-only; locally "not applicable", never PASS).
 - `app.icon` (quick, rewritten for the tile), `app.bundle_valid` (tightened), `app.icon_everywhere` (quick), `app.dock_icon_rendered` (slow, GUI; stand-in client).
 - Every `[human-verify]` scenario is reviewed at the next human gate: Zach's icon preview (before shipping), a friend opening an ad-hoc release, a friend opening a Developer ID release (only if Zach picks it).
+
+## Approved navy tile (orchestrator, 2026-10-08; recovered from the mockup Zach chose)
+Zach picked "Dark navy tile" from a 4-way mockup (white / navy / black / borderless) rendered from `branding/AppIcon.png`. Its parameters, per N×N canvas (N = 1024 for the master):
+- Tile body: `N*824/1024` square, centred; corner radius `body*0.225` (rounded rectangle; replace with Apple's template squircle only if the preview still matches, and show Zach both).
+- Fill: vertical gradient, top → bottom, RGB `(28,38,62)` → `(18,24,38)` (i.e. `(28-10t, 38-14t, 62-24t)`, t = y/N).
+- Glow: ellipse over `[0.2N, 0.2N, 0.8N, 0.8N]`, RGBA `(90,120,170,110)`, Gaussian blur radius `0.08N`, composited over the gradient.
+- Shadow: tile mask blurred 10 px (at N=512; scale with N), alpha ×0.35, offset 6 px down (scale with N).
+- Logo: `branding/AppIcon.png` scaled to `body*0.86`, Lanczos, centred.
+Task 3.1 renders this, shows Zach a preview on light and dark Docks, and records his OK.
