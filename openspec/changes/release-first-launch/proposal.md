@@ -25,6 +25,10 @@ Prebuilt releases, part 2 of 3 (STATUS "Next", Zach 2026-10-07; split in `releas
 - No game data values change (§7 not engaged).
 
 ## Spec-change log
+- 2026-10-08 (clarification, orchestrator decision 1): "no characters" in the safe database reset means no *player* characters. Every first start creates the AI players' own characters on their `rndbot*` accounts (playerbots.conf.dist `RandomBotAccountPrefix`), so an interrupted first start always has some; they don't count, and a character whose account is missing counts as a player's. The count is taken on an APFS clone of the datadir by a throwaway mysqld, never on the datadir itself. The requirement text and the "datadir with characters" scenario's GIVEN now say "player's character". Not a loosening: what a player made is still never reset.
+- 2026-10-08 (clarification, orchestrator decision 2): the disk check runs in two places. Before the folder pick it checks room for the fixed part (the client's size isn't known yet); right after the pick, before anything is copied, it checks the full need (client size + fixed part). The requirement text says so; the scenarios are unchanged.
+- 2026-10-08 (clarification, orchestrator decision 3): Moonglade's copy of the friend's client in HOME (`HOME/client`) keeps its write protection in release, like the dev `client/`. Removing Moonglade is documented in `docs/setup.md` ("Using a release"): Finder asks to confirm deleting locked items, or one Terminal line lifts the protection first. No spec text changes.
+- 2026-10-08 (builder c, wording): the "can't read the folder" message now also says what Moonglade needs (3.3.5a, build 12340, English), as the "wrong clients are refused" requirement asks of every refusal; the "download damaged" message starts with a capital letter.
 
 ## Open questions resolved (orchestrator, 2026-10-08)
 1. A zip of the client is accepted as well as a folder (same as `./bootstrap`).

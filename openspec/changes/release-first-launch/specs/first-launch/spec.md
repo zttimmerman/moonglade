@@ -46,7 +46,7 @@ First launch SHALL refuse, before copying anything, a folder or zip without `Wow
 - Check: `firstlaunch.client_refusals`
 
 ### Requirement: The Mac and the disk are checked up front
-Before asking for the client, first launch SHALL check Apple Silicon, macOS 26.2 or newer (the Wine runtime's minimum, `bootstrap.MIN_MACOS`), Rosetta, nothing of Moonglade running, and that HOME's volume has room for the whole setup: the given client's size plus the measured fixed part (server data, its download, databases, Wine, headroom; measured in task 4.1 and cited in design.md). It SHALL NOT install anything system-wide; when Rosetta is missing it SHALL say how to install it.
+Before asking for the client, first launch SHALL check Apple Silicon, macOS 26.2 or newer (the Wine runtime's minimum, `bootstrap.MIN_MACOS`), Rosetta, nothing of Moonglade running, and that HOME's volume has room for the measured fixed part (server data, its download, databases, Wine, headroom; measured in task 4.1 and cited in design.md). Right after the client is chosen, and before anything is copied, it SHALL check that the volume has room for the whole setup: the given client's size plus that fixed part. It SHALL NOT install anything system-wide; when Rosetta is missing it SHALL say how to install it.
 
 #### Scenario: Each preflight problem stops before writing
 - **GIVEN** injected facts (test switch): an Intel Mac, macOS 26.1, no Rosetta, Moonglade already running, and free space 1 GB below the need
@@ -82,7 +82,7 @@ The Wine runtime and server data SHALL be downloaded from their `fork.lock` pins
 - Check: `firstlaunch.downloads`
 
 ### Requirement: First launch is resumable and kill-safe
-Killing first launch at any point SHALL leave nothing the next launch counts as done unless it is complete and verified, and the next launch SHALL continue and finish. A MySQL datadir is reset only when first launch created it in an unfinished attempt and it has no characters; otherwise first launch stops and says so.
+Killing first launch at any point SHALL leave nothing the next launch counts as done unless it is complete and verified, and the next launch SHALL continue and finish. A MySQL datadir is reset only when first launch created it in an unfinished attempt and it has no player characters (the AI players' own characters, on their `rndbot*` accounts, don't count; the count is taken on a clone of the datadir, never on the datadir itself); otherwise first launch stops and says so.
 
 #### Scenario: Kill at each phase, then resume
 - **GIVEN** a scratch HOME
@@ -91,7 +91,7 @@ Killing first launch at any point SHALL leave nothing the next launch counts as 
 - Check: `firstlaunch.kill_resume`
 
 #### Scenario: A datadir with characters is never reset (counterexample)
-- **GIVEN** a scratch HOME whose database step isn't marked done but whose `acore_characters` has a character
+- **GIVEN** a scratch HOME whose database step isn't marked done but whose `acore_characters` has a player's character (not on an AI player's `rndbot*` account)
 - **WHEN** first launch reaches the database step
 - **THEN** it stops with a plain message, and the datadir's files are unchanged
 - Check: `firstlaunch.kill_resume`

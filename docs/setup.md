@@ -115,6 +115,36 @@ Double-click `dist/Moonglade.app` (or drag it to the Dock), or run `./play` in a
 - The login screen shows the Moonglade menu. Press **Continue** (or Enter) and you're in. Create a character at character select as usual.
 - Quitting the game shuts everything down. `./play` prints `All stopped.`
 
+## Using a release
+
+A release is a ready-made `Moonglade.app`: no Terminal, Homebrew or Xcode tools. You still bring your own Windows **3.3.5a (build 12340) enUS** game, as a folder or a zip.
+
+**The first time you open it**, Moonglade checks this Mac (Apple Silicon, macOS 26.2 or newer, Rosetta) and the free space, then asks for your game folder. It only reads that folder, never changes it, and copies what it needs. Then it downloads the world's maps (1.2 GB) and the part that runs the Windows game (64 MB), creates your game world, and prepares the game. On the dev Mac this took two minutes in all (most of it creating the game world); a slower disk or connection takes longer. If you close the window or something goes wrong, the next open continues where it stopped. When it says it's done, you can delete the folder you gave it: Moonglade keeps its own copy. Later opens go straight to the game.
+
+**Disk:** setup needs free space for your game (about 18 GB) plus about 8.6 GB for everything else, so about 27 GB free with an 18 GB game. If your game folder is on the same disk, Moonglade's copy shares its storage with it until you delete your folder, so the copy itself takes almost no extra space at first.
+
+**What goes where.** The app holds only Moonglade itself and is never written to, so you can keep it anywhere and move it later. Everything Moonglade makes lives in one folder, `~/Library/Application Support/Moonglade` (in Finder: Go > Go to Folder…, then paste that path):
+
+| In that folder | What |
+|---|---|
+| `client/` | Moonglade's copy of your game (write-protected, like the folder you gave it) |
+| `client-play/` | the game Moonglade starts (built from `client/`; shares its storage) |
+| `client-data/` | the world's maps the game world reads |
+| `mysql/` | your game world: characters, the AI players, everything you've done |
+| `backups/` | automatic save backups (the last 10) |
+| `wine/` | the part that runs the Windows game on this Mac |
+| `player.json` | your login (account `PLAYER` and its password) |
+| `settings.json` | Moonglade's settings |
+| `logs/`, `run/`, `tmp/`, `etc/`, `downloads/`, `home.json` | logs and Moonglade's own bookkeeping |
+
+**Removing everything.** Quit Moonglade first. Drag `Moonglade.app` to the Trash. Then delete the `Moonglade` folder in `~/Library/Application Support`. This deletes your characters and save backups too. Finder asks you to confirm because Moonglade's copy of your game is locked (so nothing changes it by accident); confirm and empty the Trash. Or, in Terminal, this one line unlocks the folder and removes it:
+
+```
+chflags -R nouchg ~/Library/Application\ Support/Moonglade && chmod -R u+w ~/Library/Application\ Support/Moonglade && rm -rf ~/Library/Application\ Support/Moonglade
+```
+
+Measured on the dev Mac (2026-10-08, three first launches on a scratch copy of this folder): `client/` and `client-play/` 17.9 GB each but shared with your game folder until you delete it, `client-data/` 3.3 GB, `mysql/` 1.2 GB, `wine/` 0.8 GB, each save backup about 27 MB. With your game folder on the same disk, setup used about 5 GB of free space. Details: `openspec/changes/release-first-launch/design.md`, "Measurements".
+
 ## 4. Optional
 
 **Run the harness:** `harness/hs run --tier quick` (about 2 min). See the README's Development section for the tiers. The harness uses its own accounts (`HSTEST`, `HSCOMP`, `HS_GM`) and never touches `PLAYER`.
