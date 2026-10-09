@@ -1651,6 +1651,13 @@ def player_data_untouched(ctx):
     plan = ctx.get("release_bracket_plan")
     state, err = _load_state(plan["state_file"]) if plan else (None, None)
     probs, info = bracket_verdict(plan, state, ctx.get("exec_log") or [], ctx.get("lane_b_window"), ctx.get("run_id"))
+    from ..registry import REGISTRY
+    from ..runner import bracket_intruders
+    intruders = bracket_intruders(REGISTRY.values())      # the whole registry, whatever this run selected
+    info["registry_intruders"] = intruders
+    if intruders:
+        probs.append(f"checks registered inside the bracket's (order, id) range would run inside it in a full run: "
+                     f"{intruders}")
     st = state or {}
     ev: dict = {"bracket": info | {"state_file": (plan or {}).get("state_file"), "state_error": err,
                                    "start_check": st.get("start_check"), "end_check": st.get("end_check")},
@@ -1696,6 +1703,17 @@ def _bracket_counterexamples() -> dict:
                                         log_dev, None, "R")[0]
     out["lane_b_overlap"] = bracket_verdict(plan, state, log_full, {"started": 15.0, "finished": 90.0}, "R")[0]
     out["no_plan_but_ran"] = bracket_verdict({"run_id": "R", "inner": []}, {"run_id": "R"}, log_full[:1] + log_full[2:4] + [log_full[-1]], None, "R")[0]
+    # the registry guard (runner.bracket_intruders): a non-bracket check ordered between release checks is named
+    from types import SimpleNamespace as NS
+    from ..runner import bracket_intruders
+    reg_ok = [NS(id="release.pins", order=13), NS(id="firstlaunch.preflight", order=15), NS(id="signing.x", order=18),
+              NS(id="build.pin_enforced", order=10), NS(id=PDU_ID, order=998)]
+    out["registry_clean"] = bracket_intruders(reg_ok)
+    out["registry_intruder"] = bracket_intruders(reg_ok + [NS(id="signing.y", order=13)])
+    out["registry_pdu_inside"] = bracket_intruders(reg_ok + [NS(id="release.zz", order=999)])
+    require(out["registry_clean"] == [] and out["registry_intruder"] == ["signing.y"]
+            and out["registry_pdu_inside"] == ["signing.x", PDU_ID],
+            "bracket counterexample: the registry guard doesn't name exactly the checks ordered inside", **out)
     require(out["complete"] == [], "bracket counterexample: a complete bracket was refused", **out)
     require(any("end fingerprint is missing" in p for p in out["end_missing"]), "bracket counterexample: a missing end "
             "wasn't caught", **out)

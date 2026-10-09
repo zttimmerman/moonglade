@@ -118,6 +118,21 @@ def missing_credentials(env: EnvReader) -> list[str]:
     return [k for k in DEVID_CREDENTIALS if env.get(k) is None]
 
 
+def preflight(config: Path, env: EnvReader) -> str:
+    """The mode, or SignError: an unknown/missing mode; developer-id without every credential (names only, never
+    values) or outside the release workflow. release.py runs it before any step of a run that signs."""
+    mode = read_mode(config)
+    if mode == "developer-id":
+        missing = missing_credentials(env)
+        if missing:
+            raise SignError("developer-id signing needs these credentials, missing from the environment: "
+                            + ", ".join(missing) + f" (mode set in {config})")
+        if env.get("GITHUB_ACTIONS") != "true":
+            raise SignError("developer-id signing runs only in the release workflow (GITHUB_ACTIONS=true); "
+                            "local builds use ad-hoc")
+    return mode
+
+
 # ---------------------------------------------------------------------------------------------- inspecting
 
 def _run(cmd, *, check=True, env=None) -> subprocess.CompletedProcess:
@@ -432,16 +447,8 @@ def verify_app(app: Path, mode: str, oracle: dict, signed: dict, env: EnvReader)
 def sign(app: Path, build: Path, config: Path, oracle_record: Path, env: EnvReader | None = None) -> dict:
     """The `sign` step. Order: mode, (developer-id) credentials then CI-only, then sign inside out and verify."""
     env = env or EnvReader()
-    mode = read_mode(config)
+    mode = preflight(config, env)
     rec: dict = {"mode": mode, "config": str(config), "app": str(app)}
-    if mode == "developer-id":
-        missing = missing_credentials(env)
-        if missing:
-            raise SignError("developer-id signing needs these credentials, missing from the environment: "
-                            + ", ".join(missing) + f" (mode set in {config})")
-        if env.get("GITHUB_ACTIONS") != "true":
-            raise SignError("developer-id signing runs only in the release workflow (GITHUB_ACTIONS=true); "
-                            "local builds use ad-hoc")
     if not (app / "Contents/Info.plist").is_file():
         raise SignError(f"no app at {app}; run the payload step first")
     (build / "sign.json").unlink(missing_ok=True)        # only a signing that verified leaves a record

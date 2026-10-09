@@ -12,7 +12,10 @@ signing.mode_setting      (quick) a fixture app shaped like the release app (lau
                           an always() step, notarize/staple/re-zip before the draft, notes from the mode's file).
                           Counterexamples: developer-id with every credential set but outside CI is refused; with one
                           credential set the message names only the others; mutated workflows (sign after the smoke,
-                          a secret in an unconditional step, no always() cleanup, fixed notes) are caught.
+                          a secret in an unconditional step, no always() cleanup, fixed notes, no notarycheck step,
+                          smoke without -B, smoke on the unsigned install tree, a hard-coded mode or mode output) are
+                          caught; `release.py all` with an unknown mode or developer-id without credentials refuses
+                          before its first step.
 signing.bundle_layout     (slow) the packaged app's Info.plist (bundle id, executable, no "redistribut" wording) and
                           every file's place (Mach-O only in Contents/MacOS or the payload's code folders; code
                           locations hold only Mach-O; Contents/MacOS only the launcher). Counterexamples on scratch
@@ -29,11 +32,13 @@ signing.gatekeeper_adhoc  (slow) spctl on a quarantined clone: rejected, no nota
                           Counterexample: the same test on an Apple-signed system app fails.
 signing.stable_identity   (slow) the packaged app and a clone with a changed launcher byte and VERSION, re-signed by
                           sign.py, both satisfy the first's identifier-only requirement; another identifier doesn't.
-signing.seal_survives_use (slow, order 18: after the first-launch fixture's users) the fixture app still verifies and
-                          equals packaging's bundle-files.json. Counterexample: a __pycache__ in a clone fails.
+signing.seal_survives_use (slow) after the first-launch fixture's users (every signing.* check sits at ORDER 18,
+                          outside the release bracket), the fixture app still verifies and equals packaging's
+                          bundle-files.json. Counterexample: a __pycache__ in a clone fails.
 signing.open_instructions (quick) setup.md / release notes wording, and the documented xattr one-liner on a
                           quarantined ad-hoc fixture. Counterexamples: notes without "Open Anyway"; xattr without -r.
-signing.notarized         (slow, CI-only) harness/hslib/notarycheck.py over the release workflow's records; outside CI
+signing.notarized         (slow, CI-only) the runner's CI-only skip tolerance self-test (ci_only_skip_selftest), then
+                          harness/hslib/notarycheck.py over the release workflow's records; outside CI
                           only its self-test runs and the check reports not applicable (runner.CI_ONLY_SKIP_MSG).
 """
 from __future__ import annotations
@@ -53,6 +58,9 @@ from .. import paths as P
 from ..registry import check, require
 
 CAP = "release-signing"
+# After every release.*/firstlaunch.* check (orders 13-17) and before build.clean (20): release.player_data_untouched
+# brackets those exactly, so no other check may sort between them (runner.bracket_intruders; verifier cycle 1)
+ORDER = 18
 TOOLS = P.ROOT / "tools" / "release"
 RELEASE_PY = TOOLS / "release.py"
 SIGNING_JSON = TOOLS / "signing.json"
@@ -141,19 +149,41 @@ def fixture_app(work: Path) -> Path:
     return app
 
 
-def run_sign(work: Path, env: dict, config: Path | None = None) -> dict:
+def fixture_clone(template: Path, work: Path) -> Path:
+    """A copy (APFS clone) of a fixture_app() at <work>/payload/Moonglade.app (one compile per check run)."""
+    app = work / "payload" / "Moonglade.app"
+    app.parent.mkdir(parents=True, exist_ok=True)
+    subprocess.run(["/bin/cp", "-c", "-R", str(template), str(app)], check=True)
+    return app
+
+
+ALL_TIMEOUT = 30         # `release.py all` must refuse at once; past this it is running steps (a failure)
+
+
+def run_sign(work: Path, env: dict, config: Path | None = None, step: str = "sign") -> dict:
     rec = work / "record.json"
     rec.unlink(missing_ok=True)
-    args = [sys.executable, "-I", str(RELEASE_PY), "sign", "--work", str(work), "--ignore-power", "--record", str(rec)]
+    args = [sys.executable, "-I", str(RELEASE_PY), step, "--work", str(work), "--ignore-power", "--record", str(rec)]
     if config is not None:
         args += ["--signing-config", str(config)]
-    r = subprocess.run(args, capture_output=True, text=True, env=env, cwd=P.ROOT, timeout=SIGN_TIMEOUT)
+    # own process group: on a timeout the whole tree goes (a regressed `all` would be fetching or compiling)
+    pr = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, env=env, cwd=P.ROOT,
+                          start_new_session=True)
+    tmo = SIGN_TIMEOUT if step == "sign" else ALL_TIMEOUT
+    try:
+        out, err = pr.communicate(timeout=tmo)
+    except subprocess.TimeoutExpired:
+        os.killpg(pr.pid, 9)
+        out, err = pr.communicate()
+        err = f"(timed out after {tmo} s; process group killed) " + (err or "")
+    r = subprocess.CompletedProcess(args, pr.returncode, out or "", err or "")
     sj = work / "build" / "sign.json"
     try:
         sign_rec = json.loads(sj.read_text()) if sj.is_file() else None
     except ValueError:
         sign_rec = "unreadable"
-    return {"rc": r.returncode, "stderr": r.stderr[-1500:], "stdout": r.stdout[-400:], "sign": sign_rec}
+    return {"rc": r.returncode, "stderr": r.stderr[-1500:], "stdout": r.stdout[-400:],
+            "steps_started": re.findall(r"\] step (\w+)", r.stdout or ""), "sign": sign_rec}
 
 
 def refused_untouched(work: Path, app: Path, fp0: dict, r: dict) -> list[str]:
@@ -201,6 +231,26 @@ def workflow_steps(text: str) -> list[dict]:
     return steps
 
 
+SIGNED_PAYLOAD = "env/release/payload/Moonglade.app/Contents/Resources/Moonglade"
+MODE_READ = re.compile(r"""^mode=\$\(/usr/bin/python3 -I -c 'import json; print\(json\.load\(open\("tools/release/signing\.json"\)\)\["mode"\]\)'\)$""")
+MODE_OUT = 'echo "mode=${mode}" >> "${GITHUB_OUTPUT}"'
+
+
+def mode_step_problems(body: str) -> list[str]:
+    """The mode step's output comes only from tools/release/signing.json: one assignment of `mode`, the file read
+    (MODE_READ), and one write to GITHUB_OUTPUT, `mode=${mode}`. A hard-coded mode (in the assignment, a second
+    assignment, or the output line) fails even when an error message still names the file."""
+    lines = [l.strip() for l in body.splitlines()]
+    probs = []
+    assigns = [l for l in lines if re.match(r"^(export\s+|local\s+|readonly\s+)?mode=", l)]
+    if len(assigns) != 1 or not MODE_READ.match(assigns[0]):
+        probs.append(f"the mode step doesn't set mode only from tools/release/signing.json ({assigns})")
+    outs = [l for l in lines if "GITHUB_OUTPUT" in l]
+    if outs != [MODE_OUT]:
+        probs.append(f"the mode step's output isn't exactly {MODE_OUT!r} ({outs})")
+    return probs
+
+
 def workflow_problems(text: str) -> tuple[list[str], dict]:
     steps = workflow_steps(text)
     ev = {"steps": [s["name"] for s in steps]}
@@ -241,8 +291,15 @@ def workflow_problems(text: str) -> tuple[list[str], dict]:
             probs.append("a sign step isn't between packaging and the smoke")
         if not all(n < aside_i for n in sign_is):
             probs.append("signing happens after Homebrew is moved aside")
-    if smoke_i is not None and "env/release/payload/Moonglade.app/Contents/Resources/Moonglade" not in steps[smoke_i]["body"]:
-        probs.append("the smoke doesn't run the packaged (signed) app's payload")
+    if smoke_i is not None:
+        sb = " ".join(steps[smoke_i]["body"].split())          # the folded `run: >` command as one line
+        payloads = re.findall(r"--payload[\s=]+(\S+)", sb)
+        if [x.strip("\"'") for x in payloads] != [SIGNED_PAYLOAD]:
+            probs.append(f"the smoke's --payload isn't exactly the packaged (signed) app's payload ({payloads})")
+        if not re.search(r"(^|\s)" + re.escape(SIGNED_PAYLOAD) + r"/python/bin/python3 -I -B tools/release/smoke\.py\s", sb):
+            probs.append("the smoke doesn't run on the packaged (signed) app's own Python")
+    if mode_i is not None:
+        probs += mode_step_problems(steps[mode_i]["body"])
     if smoke_i is not None and not re.search(r"python3 -I -B ", steps[smoke_i]["body"]):
         probs.append("the smoke runs the signed app's Python without -B (it would write __pycache__ into the sealed app)")
     if None not in (mode_i, secret_i, pkg_i) and not (mode_i < secret_i < pkg_i):
@@ -304,12 +361,18 @@ def workflow_mutations(text: str) -> dict[str, str]:
     # 4. fixed release notes
     out["fixed_notes"] = re.sub(r'--notes-file "tools/release/notes/\$\{SIGNING_MODE\}\.md"',
                                 '--notes "Prebuilt Moonglade."', text, count=1)
+    # 7. the smoke pointed at the unsigned install tree (verifier cycle 1)
+    out["smoke_unsigned_payload"] = text.replace(f"--payload {SIGNED_PAYLOAD} ", "--payload env/release/build/install ", 1)
+    # 8. the mode hard-coded in the assignment (the error echo still names tools/release/signing.json)
+    out["mode_hardcoded"] = re.sub(r"(?m)^(\s*)mode=\$\(/usr/bin/python3 [^\n]*$", r"\1mode=ad-hoc", text, count=1)
+    # 9. the mode output hard-coded
+    out["mode_output_hardcoded"] = text.replace(MODE_OUT, 'echo "mode=ad-hoc" >> "${GITHUB_OUTPUT}"', 1)
     return out
 
 
 # ================================================================================================ mode_setting
 
-@check("signing.mode_setting", order=13, capability=CAP, stack="any", tier="quick")
+@check("signing.mode_setting", order=ORDER, capability=CAP, stack="any", tier="quick")
 def mode_setting(ctx):
     """The sign step follows tools/release/signing.json: ad-hoc signs a fixture with no secrets; developer-id without
     credentials, unknown/missing modes and a config outside the allowed folders are refused before signing; the
@@ -321,8 +384,9 @@ def mode_setting(ctx):
         checked_in = json.loads(SIGNING_JSON.read_text())
         ev["checked_in"] = checked_in
         require(checked_in == {"mode": "ad-hoc"}, "tools/release/signing.json isn't the one-line ad-hoc setting", **ev)
+        template = fixture_app(d / "template")
         w = d / "adhoc"
-        app = fixture_app(w)
+        app = fixture_clone(template, w)
         env = _clean_env()
         ev["env_signing_keys"] = sorted(k for k in env if k.startswith("MOONGLADE_"))
         r = run_sign(w, env)
@@ -343,16 +407,24 @@ def mode_setting(ctx):
 
         # --- refusals: each on a fresh fixture, which must stay byte-identical
         def refusal(tag: str, cfg: dict | None, env_extra: dict, cfg_path: Path | None = None,
-                    write_cfg: bool = True) -> dict:
+                    write_cfg: bool = True, step: str = "sign") -> dict:
             wd = d / tag
-            a = fixture_app(wd)
+            a = fixture_clone(template, wd)
             fp0 = _tree_fp(a)
             cp = cfg_path or (wd / "signing.json")
             if cfg is not None and write_cfg:
                 cp.write_text(json.dumps(cfg) + "\n")
-            rr = run_sign(wd, _clean_env(**env_extra), cp)
-            return {"rc": rr["rc"], "stderr": rr["stderr"][-700:], "problems": refused_untouched(wd, a, fp0, rr),
-                    "config": str(cp)}
+            before = sorted(x.name for x in wd.iterdir())
+            rr = run_sign(wd, _clean_env(**env_extra), cp, step)
+            probs = refused_untouched(wd, a, fp0, rr)
+            if step == "all":     # refused before any step: no step started, nothing new in the work dir
+                ran = rr["steps_started"]
+                if ran:
+                    probs.append(f"steps ran before the refusal: {ran}")
+                new = sorted(set(x.name for x in wd.iterdir()) - set(before) - {"record.json"})
+                if new:
+                    probs.append(f"the work dir gained {new}")
+            return {"rc": rr["rc"], "stderr": rr["stderr"][-700:], "problems": probs, "config": str(cp), "step": step}
         ev["devid_no_creds"] = rr = refusal("devid", {"mode": "developer-id"}, {})
         require(not rr["problems"], f"developer-id without credentials: {rr['problems']}", **ev)
         missing = [n for n in DEVID_NAMES if n not in rr["stderr"]]
@@ -376,6 +448,16 @@ def mode_setting(ctx):
             require(not rr["problems"], f"{tag}: {rr['problems']}", **ev)
             require(rr["config"] in rr["stderr"] and '"ad-hoc"' in rr["stderr"] and '"developer-id"' in rr["stderr"],
                     f"{tag}: the message doesn't name the file and the allowed modes", **ev)
+        # `release.py all` refuses an unknown mode, and developer-id without credentials, before clean/fetch/build
+        # (verifier cycle 1: it used to run those first)
+        ev["all_typo"] = rr = refusal("alltypo", {"mode": "adhoc-typo"}, {}, step="all")
+        require(not rr["problems"] and "unknown mode" in rr["stderr"],
+                f"release.py all with an unknown mode: {rr['problems'] or 'no unknown-mode message'}", **ev)
+        ev["all_devid"] = rr = refusal("alldevid", {"mode": "developer-id"}, {"MOONGLADE_TEAM_ID": "TEAMFIXTURE"},
+                                       step="all")
+        require(not rr["problems"] and all(n in rr["stderr"] for n in DEVID_NAMES if n != "MOONGLADE_TEAM_ID")
+                and "TEAMFIXTURE" not in rr["stderr"],
+                f"release.py all, developer-id without credentials: {rr['problems'] or 'message'}", **ev)
         # a config outside env/release/ and harness/out/ is refused (never read)
         ev["outside"] = rr = refusal("outside", None, {}, cfg_path=P.ROOT / "docs" / "signing.json", write_cfg=False)
         require(not rr["problems"] and "only a file under env/release/ or harness/out/" in rr["stderr"],
@@ -390,7 +472,7 @@ def mode_setting(ctx):
         for name, mutated in workflow_mutations(text).items():
             caught[name] = workflow_problems(mutated)[0][:3] if mutated != text else ["(mutation didn't apply)"]
         ev["workflow"]["counterexamples"] = caught
-        require(len(caught) == 6 and all(v and v != ["(mutation didn't apply)"] for v in caught.values()),
+        require(len(caught) == 9 and all(v and v != ["(mutation didn't apply)"] for v in caught.values()),
                 "a mutated workflow wasn't caught", **ev)
     finally:
         shutil.rmtree(d, ignore_errors=True)
@@ -451,7 +533,7 @@ def _clone(app: Path, d: Path) -> Path:
     return dst
 
 
-@check("signing.bundle_layout", order=13, capability=CAP, stack="any", tier="slow")
+@check("signing.bundle_layout", order=ORDER, capability=CAP, stack="any", tier="slow")
 def bundle_layout(ctx):
     """Bundle id io.github.zttimmerman.moonglade, executable Moonglade, every Mach-O in an allowed place, code
     locations Mach-O only, no redistribution wording; planted counterexamples fail."""
@@ -548,7 +630,7 @@ def signature_problems(app: Path, oracle: dict) -> tuple[list[str], dict]:
     return probs, {"bundle": b, "files": files}
 
 
-@check("signing.adhoc_signature", order=13, capability=CAP, stack="any", tier="slow")
+@check("signing.adhoc_signature", order=ORDER, capability=CAP, stack="any", tier="slow")
 def adhoc_signature(ctx):
     """Every signature in the packaged ad-hoc app verifies, with the runtime flag and the role's exact entitlements;
     Oracle's files keep Oracle's signature and recorded cdhash; the bundle's requirement is pinned; a flipped byte in
@@ -645,7 +727,7 @@ def run_smoke(app: Path, d: Path, tag: str) -> dict:
                       if "version" in str(s.get("step"))]}
 
 
-@check("signing.entitlements_needed", order=13, capability=CAP, stack="any", tier="slow")
+@check("signing.entitlements_needed", order=ORDER, capability=CAP, stack="any", tier="slow")
 def entitlements_needed(ctx):
     """For every key in tools/release/entitlements/*.plist, a scratch clone of this run's packaged app has that
     role's executables re-signed without it and the flow its design.md entry names (the release smoke) runs from the
@@ -716,7 +798,7 @@ def gatekeeper_verdict(out: str, rc: int) -> dict:
             "ok": rc != 0 and "rejected" in out and not accepted_src}
 
 
-@check("signing.gatekeeper_adhoc", order=13, capability=CAP, stack="any", tier="slow")
+@check("signing.gatekeeper_adhoc", order=ORDER, capability=CAP, stack="any", tier="slow")
 def gatekeeper_adhoc(ctx):
     """A clonefile copy of this run's packaged ad-hoc app with a com.apple.quarantine attribute (never opened, so no
     dialog): `spctl --assess --type execute -vv` exits nonzero with "rejected" and names no notarization or Developer
@@ -771,7 +853,7 @@ def _string_offset(data: bytes) -> int:
     return i
 
 
-@check("signing.stable_identity", order=13, capability=CAP, stack="any", tier="slow")
+@check("signing.stable_identity", order=ORDER, capability=CAP, stack="any", tier="slow")
 def stable_identity(ctx):
     """Two ad-hoc release apps with different code hashes (this run's packaged app, and a clone with a changed
     launcher byte and a different VERSION re-signed by the sign step) both satisfy the first one's designated
@@ -859,7 +941,7 @@ def seal_problems(bundle: Path, recorded: dict) -> tuple[list[str], dict]:
                    "changed": changed[:10], "verify": v.stderr.decode(errors="replace").strip()[-300:]}
 
 
-@check("signing.seal_survives_use", order=18, capability=CAP, stack="down", tier="slow")
+@check("signing.seal_survives_use", order=ORDER, capability=CAP, stack="down", tier="slow")
 def seal_survives_use(ctx):
     """The run's shared first-launch fixture app, after first launch, the stand-in play loop and a backup ran from it
     (run here if the run's earlier checks didn't): the bundle verifies (--deep --strict), every payload Mach-O verifies
@@ -951,7 +1033,7 @@ def run_one_liner(line: str, app: Path) -> dict:
     return {"argv": [*argv[:-1], "<scratch app>"], "rc": r.returncode, "err": r.stderr.strip()[-200:]}
 
 
-@check("signing.open_instructions", order=13, capability=CAP, stack="any", tier="quick")
+@check("signing.open_instructions", order=ORDER, capability=CAP, stack="any", tier="quick")
 def open_instructions(ctx):
     """docs/setup.md ("Opening it the first time") and tools/release/notes/{ad-hoc,developer-id}.md: the ad-hoc text
     names Privacy & Security, "Open Anyway", "each new version" and the exact one-liner; the Developer ID text doesn't
@@ -1003,7 +1085,40 @@ def open_instructions(ctx):
 
 # ================================================================================================ notarized (CI-only)
 
-@check("signing.notarized", order=13, capability=CAP, stack="any", tier="slow", ci_only=True)
+def ci_only_skip_selftest() -> dict:
+    """The runner's ci_only tolerance on synthetic records and a synthetic registry (verifier cycle 1): the "not
+    applicable" skip is tolerated (run_ok and report.full_run's verdict) only for a ci_only check, outside CI
+    (meta.ci False), with exactly runner.CI_ONLY_SKIP_MSG. A non-ci_only id with that message, a changed message,
+    meta.ci true and meta.ci missing must each fail. {"ok", "cases"}."""
+    from ..registry import Check
+    from ..runner import CI_ONLY_SKIP_MSG, run_ok, tolerated_skip
+    from .reporting import full_run_record
+    reg = {"selftest.ci_only": Check("selftest.ci_only", lambda c: None, 1, "t", tier="slow", tier_declared=True,
+                                     ci_only=True),
+           "selftest.plain": Check("selftest.plain", lambda c: None, 1, "t", tier="slow", tier_declared=True)}
+    base = {"tier": "slow", "full_run": True, "filter": [], "slow_tier_skipped": [], "gui_tier_skipped": [],
+            "backups_tier_skipped": []}
+    cases = {   # name: (id, message, meta.ci, expected tolerated)
+        "ci_only_outside_ci_exact": ("selftest.ci_only", CI_ONLY_SKIP_MSG, False, True),
+        "not_ci_only_exact": ("selftest.plain", CI_ONLY_SKIP_MSG, False, False),
+        "ci_only_changed_message": ("selftest.ci_only", CI_ONLY_SKIP_MSG + " ", False, False),
+        "ci_only_in_ci": ("selftest.ci_only", CI_ONLY_SKIP_MSG, True, False),
+        "ci_only_ci_unknown": ("selftest.ci_only", CI_ONLY_SKIP_MSG, None, False),
+    }
+    out, ok = {}, True
+    for name, (cid, msg, ci, want) in cases.items():
+        meta = base | ({} if ci is None else {"ci": ci})
+        rec = {"id": cid, "capability": "t", "status": "skip", "message": msg, "evidence": {"x": 1}}
+        doc = {"meta": meta, "checks": [rec]}
+        fr = full_run_record(doc, {cid}, [], reg)
+        got = {"tolerated": tolerated_skip(rec, meta, reg), "run_ok": run_ok(doc, reg), "full_run": fr["status"]}
+        good = got == {"tolerated": want, "run_ok": want, "full_run": "pass" if want else "fail"}
+        ok &= good
+        out[name] = {"expected_tolerated": want, **got, "ok": good}
+    return {"ok": ok, "cases": out}
+
+
+@check("signing.notarized", order=ORDER, capability=CAP, stack="any", tier="slow", ci_only=True)
 def notarized(ctx):
     """CI-only (developer-id mode, the release workflow on the runner; also run there directly as
     `harness/hslib/notarycheck.py`): every signed Mach-O has the team's Developer ID authority, a secure timestamp and
@@ -1014,14 +1129,17 @@ def notarized(ctx):
     from .. import notarycheck as N
     from ..registry import CheckSkip
     from ..runner import CI_ONLY_SKIP_MSG
+    tol = ci_only_skip_selftest()
+    require(tol["ok"], "the runner's ci_only skip tolerance is wrong (see ci_only_tolerance)", ci_only_tolerance=tol)
     if os.environ.get("GITHUB_ACTIONS") == "true":
         probs, ev = N.problems(BUILD, WORK / "out", WORK / "smoke.json")
-        require(not probs, f"not a clean notarized release: {probs}", **ev)
-        return ev
+        require(not probs, f"not a clean notarized release: {probs}", ci_only_tolerance=tol, **ev)
+        return ev | {"ci_only_tolerance": tol}
     d = _scratch("notary")
     try:
         st = N.self_test(d)
     finally:
         shutil.rmtree(d, ignore_errors=True)
     require(st["ok"], "the notarization judgement's self-test failed (it can't tell a bad record set)", self_test=st)
-    raise CheckSkip(CI_ONLY_SKIP_MSG, {"self_test": st, "mode": json.loads(SIGNING_JSON.read_text()).get("mode")})
+    raise CheckSkip(CI_ONLY_SKIP_MSG, {"self_test": st, "ci_only_tolerance": tol,
+                                       "mode": json.loads(SIGNING_JSON.read_text()).get("mode")})

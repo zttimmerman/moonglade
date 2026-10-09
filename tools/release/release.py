@@ -750,6 +750,7 @@ def step_notarize(c: Ctx) -> dict:
 STEPS = {"clean": step_clean, "fetch": step_fetch, "build": step_build, "payload": step_payload, "sign": step_sign,
          "assets": step_assets, "notarize": step_notarize}
 ALL = ("clean", "fetch", "build", "payload", "sign", "assets", "notarize")
+SIGNING_STEPS = ("sign", "assets", "notarize")      # steps that depend on the signing mode
 
 
 def main(argv=None) -> int:
@@ -776,6 +777,12 @@ def main(argv=None) -> int:
     try:
         c = Ctx(a)
         rec["ctx"] = c.record()
+        if any(s in SIGNING_STEPS for s in steps):
+            # release-signing: the mode (and, when this run signs, developer-id's credential presence and CI) is
+            # checked before any step runs, so `all` with a bad setting refuses before clean/fetch/build/payload.
+            # Only names are ever printed. (CI's later assets/notarize-only runs check the mode alone.)
+            rec["signing_preflight"] = {"mode": SG.preflight(c.signing_config, SG.EnvReader()) if "sign" in steps
+                                        else SG.read_mode(c.signing_config)}
         for s in steps:
             log(f"step {s}")
             ts = time.time()

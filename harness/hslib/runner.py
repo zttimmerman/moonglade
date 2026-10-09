@@ -416,6 +416,18 @@ def release_bracket_plan(checks, run_id: str | None, state_dir: Path | None = No
             "end_check": inner[-1] if inner else None, "state_file": str(Path(state_dir or BRACKET_DIR) / f"{rid}.json")}
 
 
+def bracket_intruders(checks) -> list[str]:
+    """Checks that aren't release.*/firstlaunch.* (or are release.player_data_untouched) but sort, by (order, id),
+    between the first and the last release.*/firstlaunch.* check of `checks` (pass the whole registry): in a run that
+    selects them with the bracketed checks they would run inside the bracket and fail it (release-signing verifier
+    cycle 1: signing.* at order 13). Keep the bracket strict: register such checks outside its order range."""
+    ids = [c.id for c in sorted(checks, key=lambda c: (c.order, c.id))]
+    inner = [n for n, i in enumerate(ids) if i.startswith(BRACKET_PREFIXES) and i != PDU_ID]
+    if not inner:
+        return []
+    return [i for i in ids[inner[0]:inner[-1] + 1] if not i.startswith(BRACKET_PREFIXES) or i == PDU_ID]
+
+
 def _prune_bracket_states(d: Path, keep: str) -> None:
     try:
         for f in d.glob("*.json"):
@@ -654,6 +666,26 @@ def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full
         runreg.finish(rec)
 
 
+def filter_refusal(reg: dict, tier: str, only: list[str] | None, selected: list) -> str | None:
+    """A filtered run that would check nothing is refused, never reported as a pass (release-signing verifier cycle
+    1: `--only 'a,b'` matched nothing and exited 0). Refused: a glob matching no registered check and no post-run
+    report (a comma list is one glob: pass --only once per glob), or a filter under which this tier executes no
+    check and no post-run report. None to go ahead."""
+    if not only:
+        return None
+    from .checks.reporting import POST_IDS
+    known = list(reg) + list(POST_IDS)
+    dead = [g for g in only if not any(fnmatch.fnmatch(i, g) for i in known)]
+    if dead:
+        hint = " (a comma list is one glob; pass --only once per glob)" if any("," in g for g in dead) else ""
+        return f"refusing the run: --only {', '.join(repr(g) for g in dead)} matches no check{hint}"
+    if not selected and not any(fnmatch.fnmatch(i, g) for i in POST_IDS for g in only):
+        other = sorted({reg[i].tier for i in reg if any(fnmatch.fnmatch(i, g) for g in only)})
+        return (f"refusing the run: the filter {only} selects no check to execute in tier {tier} "
+                f"(its checks are tier {', '.join(other)}{'; use --tier ' + other[-1] if other else ''})")
+    return None
+
+
 # power-guard: the run tiers whose checks are guarded (quick is short and runs on builders' laps)
 POWER_GUARDED_TIERS = ("full", "slow", "gui")
 
@@ -681,6 +713,10 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     selected = select(reg, tier, only, {c.id for c in gui_skips} | {c.id for c in bk_skips})
     slow_skips = slow_tier_skips(reg, tier, only, referenced_ids())
     full = is_full_run(tier, only)
+    refuse = filter_refusal(reg, tier, only, selected)
+    if refuse:
+        log(refuse)
+        return 2
     P.OUT.mkdir(parents=True, exist_ok=True)
     du = shutil.disk_usage(P.ROOT)
     meta = {
