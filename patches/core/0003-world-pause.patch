@@ -1,0 +1,311 @@
+diff --git a/src/server/game/Entities/Player/Player.cpp b/src/server/game/Entities/Player/Player.cpp
+index 489450092..a2b3b84f3 100644
+--- a/src/server/game/Entities/Player/Player.cpp
++++ b/src/server/game/Entities/Player/Player.cpp
+@@ -16708,19 +16708,21 @@ bool Player::IsSummonAsSpectator() const
+ bool Player::HasSpellCooldown(uint32 spell_id) const
+ {
+     SpellCooldowns::const_iterator itr = m_spellCooldowns.find(spell_id);
+-    return itr != m_spellCooldowns.end() && itr->second.end > getMSTime();
++    return itr != m_spellCooldowns.end() && itr->second.end > uint32(GameTime::GetGameTimeMS().count());
+ }
+ 
+ bool Player::HasSpellItemCooldown(uint32 spell_id, uint32 itemid) const
+ {
+     SpellCooldowns::const_iterator itr = m_spellCooldowns.find(spell_id);
+-    return itr != m_spellCooldowns.end() && itr->second.end > getMSTime() && itr->second.itemid == itemid;
++    return itr != m_spellCooldowns.end() && itr->second.end > uint32(GameTime::GetGameTimeMS().count())
++        && itr->second.itemid == itemid;
+ }
+ 
+ uint32 Player::GetSpellCooldownDelay(uint32 spell_id) const
+ {
+     SpellCooldowns::const_iterator itr = m_spellCooldowns.find(spell_id);
+-    return uint32(itr != m_spellCooldowns.end() && itr->second.end > getMSTime() ? itr->second.end - getMSTime() : 0);
++    uint32 now = uint32(GameTime::GetGameTimeMS().count());
++    return uint32(itr != m_spellCooldowns.end() && itr->second.end > now ? itr->second.end - now : 0);
+ }
+ 
+ std::string Player::GetDebugInfo() const
+diff --git a/src/server/game/Maps/Map.cpp b/src/server/game/Maps/Map.cpp
+index 5018bc442..9b99729f1 100644
+--- a/src/server/game/Maps/Map.cpp
++++ b/src/server/game/Maps/Map.cpp
+@@ -45,6 +45,7 @@
+ #include "VMapMgr2.h"
+ #include "Weather.h"
+ #include "WeatherMgr.h"
++#include "WorldPause.h"
+ 
+ #define MAP_INVALID_ZONE        0xFFFFFFFF
+ 
+@@ -435,6 +436,24 @@ void Map::UpdatePlayerZoneStats(uint32 oldZone, uint32 newZone)
+ 
+ void Map::Update(const uint32 t_diff, const uint32 s_diff, bool  /*thread*/)
+ {
++    // Moonglade world pause (ADR-0013): only the players' map-thread packets are processed. No Player::Update (so
++    // playerbots make no decisions), no creature, respawn, script or weather update.
++    if (WorldPause::IsTickPaused())
++    {
++        for (m_mapRefIter = m_mapRefMgr.begin(); m_mapRefIter != m_mapRefMgr.end(); ++m_mapRefIter)
++        {
++            Player* player = m_mapRefIter->GetSource();
++            if (player && player->IsInWorld())
++            {
++                WorldSession* session = player->GetSession();
++                MapSessionFilter updater(session);
++                session->Update(s_diff, updater);
++            }
++        }
++        SendObjectUpdates();
++        return;
++    }
++
+     if (t_diff)
+         _mapCollisionData.GetDynamicTree().update(t_diff);
+ 
+diff --git a/src/server/game/Time/GameTime.cpp b/src/server/game/Time/GameTime.cpp
+index 123b4402a..d7e839ab0 100644
+--- a/src/server/game/Time/GameTime.cpp
++++ b/src/server/game/Time/GameTime.cpp
+@@ -17,6 +17,48 @@
+ 
+ #include "GameTime.h"
+ #include "Timer.h"
++#include "WorldPause.h"
++#include <atomic>
++
++namespace WorldPause
++{
++    namespace
++    {
++        std::atomic<bool> Requested{false};
++        std::atomic<bool> TickPaused{false};
++        std::atomic<int64> PausedTotalMS{0};    // finished pauses only; the running one is added in GetPausedTotal()
++        std::atomic<int64> PauseStartMS{-1};    // GetTimeMS() when the running pause stopped the clock, -1 if none
++    }
++
++    void SetPaused(bool paused)
++    {
++        Requested.store(paused);
++    }
++
++    bool IsPaused()
++    {
++        return Requested.load();
++    }
++
++    bool IsTickPaused()
++    {
++        return TickPaused.load();
++    }
++
++    bool BeginTick()
++    {
++        bool paused = Requested.load();
++        TickPaused.store(paused);
++        return paused;
++    }
++
++    Milliseconds GetPausedTotal()
++    {
++        int64 start = PauseStartMS.load();
++        int64 running = start >= 0 ? GetTimeMS().count() - start : 0;
++        return Milliseconds(PausedTotalMS.load() + running);
++    }
++}
+ 
+ namespace GameTime
+ {
+@@ -62,9 +104,26 @@ namespace GameTime
+ 
+     void UpdateGameTimers()
+     {
+-        GameTime = GetEpochTime();
+-        GameMSTime = GetTimeMS();
+-        GameTimeSystemPoint = system_clock::now();
+-        GameTimeSteadyPoint = steady_clock::now();
++        // Moonglade world pause (ADR-0013): while the tick is paused the game clock stands still; afterwards it runs
++        // behind the wall clock by the total paused time, so every GameTime-based timer resumes where it stopped.
++        int64 nowMS = GetTimeMS().count();
++        if (WorldPause::IsTickPaused())
++        {
++            if (WorldPause::PauseStartMS.load() < 0)
++                WorldPause::PauseStartMS.store(nowMS);
++            return;
++        }
++
++        if (int64 start = WorldPause::PauseStartMS.load(); start >= 0)
++        {
++            WorldPause::PausedTotalMS.fetch_add(nowMS - start);
++            WorldPause::PauseStartMS.store(-1);
++        }
++
++        Milliseconds offset(WorldPause::PausedTotalMS.load());
++        GameTimeSystemPoint = system_clock::now() - offset;
++        GameTime = duration_cast<Seconds>(GameTimeSystemPoint.time_since_epoch());
++        GameMSTime = Milliseconds(nowMS) - offset;
++        GameTimeSteadyPoint = steady_clock::now() - offset;
+     }
+ }
+diff --git a/src/server/game/Time/WorldPause.h b/src/server/game/Time/WorldPause.h
+new file mode 100644
+index 000000000..b370500a5
+--- /dev/null
++++ b/src/server/game/Time/WorldPause.h
+@@ -0,0 +1,48 @@
++/*
++ * This file is part of the AzerothCore Project. See AUTHORS file for Copyright information
++ *
++ * This program is free software; you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation; either version 2 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful, but WITHOUT
++ * ANY WARRANTY; without even the implied warranty of MERCHANTABILITY or
++ * FITNESS FOR A PARTICULAR PURPOSE. See the GNU General Public License for
++ * more details.
++ *
++ * You should have received a copy of the GNU General Public License along
++ * with this program. If not, see <http://www.gnu.org/licenses/>.
++ */
++
++#ifndef __WORLDPAUSE_H
++#define __WORLDPAUSE_H
++
++#include "Define.h"
++#include "Duration.h"
++
++/// Moonglade (patches/core/0003-world-pause.patch, ADR-0013): a whole-world pause switch for a single-player server.
++/// While the world is paused, World::Update gives the simulation (maps, battlegrounds, LFG, outdoor PvP, world state,
++/// battlefields and the world/playerbot script hooks) zero elapsed time, Map::Update only processes its players'
++/// packets (no Player::Update), and GameTime stops; sessions, the database keep-alive, query callbacks and CLI/SOAP
++/// keep real time. The switch takes effect at the start of the next world tick. Policy (who may pause, rooting,
++/// resyncing the client) lives in a module. Kept out of World.h and GameTime.h so the patch rebuilds few files.
++namespace WorldPause
++{
++    /// Request a pause (true) or a resume (false). Any thread; applied at the start of the next world tick.
++    AC_GAME_API void SetPaused(bool paused);
++
++    /// The requested state.
++    AC_GAME_API bool IsPaused();
++
++    /// The state of the current world tick (sampled once by World::Update before anything else runs).
++    AC_GAME_API bool IsTickPaused();
++
++    /// World thread only: sample the requested state for this tick. Returns IsTickPaused().
++    bool BeginTick();
++
++    /// Total time the game clock has been stopped since the server started (the current pause included).
++    AC_GAME_API Milliseconds GetPausedTotal();
++}
++
++#endif
+diff --git a/src/server/game/World/World.cpp b/src/server/game/World/World.cpp
+index 8b56af6d9..7887d5502 100644
+--- a/src/server/game/World/World.cpp
++++ b/src/server/game/World/World.cpp
+@@ -98,6 +98,7 @@
+ #include "WhoListCacheMgr.h"
+ #include "WorldGlobals.h"
+ #include "WorldPacket.h"
++#include "WorldPause.h"
+ #include "WorldSession.h"
+ #include "WorldSessionMgr.h"
+ #include "WorldState.h"
+@@ -1120,6 +1121,11 @@ void World::Update(uint32 diff)
+ {
+     METRIC_TIMER("world_update_time_total");
+ 
++    // Moonglade world pause (ADR-0013): sampled once per tick. While paused the simulation gets zero elapsed time
++    // and the game clock stands still; sessions, timers below, query callbacks and CLI/SOAP keep real time.
++    bool const paused = WorldPause::BeginTick();
++    uint32 const simDiff = paused ? 0 : diff;
++
+     ///- Update the game time and check for shutdown time
+     _UpdateGameTime();
+     Seconds currentGameTime = GameTime::GetGameTime();
+@@ -1198,7 +1204,7 @@ void World::Update(uint32 diff)
+         ResetGuildCap();
+     }
+ 
+-    sScriptMgr->OnPlayerbotUpdate(diff);
++    sScriptMgr->OnPlayerbotUpdate(simDiff);
+ 
+     {
+         // pussywizard: handle expired auctions, auctions expired when realm was offline are also handled here (not during loading when many required things aren't loaded yet)
+@@ -1235,13 +1241,13 @@ void World::Update(uint32 diff)
+ 
+     {
+         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Update LFG 0"));
+-        sLFGMgr->Update(diff, 0); // pussywizard: remove obsolete stuff before finding compatibility during map update
++        sLFGMgr->Update(simDiff, 0); // pussywizard: remove obsolete stuff before finding compatibility during map update
+     }
+ 
+     {
+         ///- Update objects when the timer has passed (maps, transport, creatures, ...)
+         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Update maps"));
+-        sMapMgr->Update(diff);
++        sMapMgr->Update(simDiff);
+     }
+ 
+     if (getBoolConfig(CONFIG_AUTOBROADCAST))
+@@ -1256,27 +1262,27 @@ void World::Update(uint32 diff)
+ 
+     {
+         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Update battlegrounds"));
+-        sBattlegroundMgr->Update(diff);
++        sBattlegroundMgr->Update(simDiff);
+     }
+ 
+     {
+         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Update outdoor pvp"));
+-        sOutdoorPvPMgr->Update(diff);
++        sOutdoorPvPMgr->Update(simDiff);
+     }
+ 
+     {
+         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Update worldstate"));
+-        sWorldState->Update(diff);
++        sWorldState->Update(simDiff);
+     }
+ 
+     {
+         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Update battlefields"));
+-        sBattlefieldMgr->Update(diff);
++        sBattlefieldMgr->Update(simDiff);
+     }
+ 
+     {
+         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Update LFG 2"));
+-        sLFGMgr->Update(diff, 2); // pussywizard: handle created proposals
++        sLFGMgr->Update(simDiff, 2); // pussywizard: handle created proposals
+     }
+ 
+     {
+@@ -1342,7 +1348,7 @@ void World::Update(uint32 diff)
+ 
+     {
+         METRIC_TIMER("world_update_time", METRIC_TAG("type", "Update world scripts"));
+-        sScriptMgr->OnWorldUpdate(diff);
++        sScriptMgr->OnWorldUpdate(simDiff);
+     }
+ 
+     if (sToCloud9Sidecar->ClusterModeEnabled())
+@@ -1480,10 +1486,13 @@ namespace Acore
+ void World::_UpdateGameTime()
+ {
+     ///- update the time
+-    Seconds lastGameTime = GameTime::GetGameTime();
++    // Moonglade world pause (ADR-0013): the shutdown countdown uses the wall clock, so it still runs while paused
++    static Seconds lastWallTime = GetEpochTime();
+     GameTime::UpdateGameTimers();
+ 
+-    Seconds elapsed = GameTime::GetGameTime() - lastGameTime;
++    Seconds const wallTime = GetEpochTime();
++    Seconds elapsed = wallTime - lastWallTime;
++    lastWallTime = wallTime;
+ 
+     ///- if there is a shutdown timer
+     if (!IsStopped() && _shutdownTimer > 0 && elapsed > 0s)

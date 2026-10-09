@@ -1,6 +1,6 @@
 ## Interface: 30300
 ## Title: Moonglade
-## Notes: Moonglade game wording (Exit to Menu and friends).
+## Notes: Moonglade game wording (Exit to Menu and friends) and the game menu's pause.
 ## Author: Moonglade
 ## Version: 1
 ## SavedVariables: MoongladeTest

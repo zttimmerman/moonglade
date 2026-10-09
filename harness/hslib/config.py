@@ -14,7 +14,10 @@ from . import paths as P
 #               every key below is explained there, with the playerbots.conf.dist line it comes from).
 #   wotlk       m0 with vanilla mode OFF (EraProfile.Enable = 0, mod-era-profile): stock WotLK values, for the
 #               era-profile toggle checks and counterexamples (openspec/changes/m3-vanilla-mode).
-# A profile may carry an "era" section: overrides for mod_era_profile.conf. No profile but `wotlk` sets one, so the
+#   pause-off   m0 with true pause turned off (Moonglade.Pause.Enable = 0, mod-moonglade), for pause.disabled_noop
+#               (openspec/changes/true-pause).
+# A profile may carry an "era" section: overrides for mod_era_profile.conf, and a "moonglade" section for
+# mod_moonglade.conf. No profile but `wotlk` sets an era section, so the
 # default (vanilla mode on) comes from the module's .conf.dist (era-profile "Default is vanilla mode").
 # Select one with `hs up --profile NAME`, `HS_PROFILE=NAME` (also read by `./play` and `hs launch`), or in code
 # `stack.up(profile=NAME)`. Checks declare `@check(..., profile=NAME)`; the runner restarts a running stack that
@@ -79,8 +82,11 @@ PROFILES: dict[str, dict[str, dict[str, str]]] = {
     "population": _population(POPULATION_N),
 }
 PROFILES["wotlk"] = {**PROFILES["m0"], "era": {"EraProfile.Enable": "0"}}
+# true-pause (pause.disabled_noop): m0 with pausing turned off (mod-moonglade Moonglade.Pause.Enable = 0)
+PROFILES["pause-off"] = {**PROFILES["m0"], "moonglade": {"Moonglade.Pause.Enable": "0"}}
 
 ERA_CONF = "mod_era_profile.conf"     # modules/mod-era-profile/conf/mod_era_profile.conf.dist, installed to etc/modules
+MOONGLADE_CONF = "mod_moonglade.conf"  # modules/mod-moonglade/conf/mod_moonglade.conf.dist, installed to etc/modules
 
 
 def overrides(name: str, population_n: int | None = None) -> dict[str, dict[str, str]]:
@@ -171,7 +177,7 @@ def _unquote(v: str) -> str:
     return v[1:-1] if len(v) >= 2 and v[0] == v[-1] == '"' else v
 
 
-MODULE_SECTIONS = {"playerbots": "playerbots.conf.dist", "era": ERA_CONF + ".dist"}
+MODULE_SECTIONS = {"playerbots": "playerbots.conf.dist", "era": ERA_CONF + ".dist", "moonglade": MOONGLADE_CONF + ".dist"}
 
 
 def module_overrides(prof: dict) -> dict[str, dict[str, str]]:
@@ -180,7 +186,8 @@ def module_overrides(prof: dict) -> dict[str, dict[str, str]]:
                                      # command server binds 0.0.0.0 with no address option
                                      # (PlayerbotCommandServer.cpp:62); off in every profile.
                                      "AiPlayerbot.CommandServerPort": "0"},
-            ERA_CONF + ".dist": dict(prof.get("era", {}))}
+            ERA_CONF + ".dist": dict(prof.get("era", {})),
+            MOONGLADE_CONF + ".dist": dict(prof.get("moonglade", {}))}
 
 
 def module_env(prof: dict, mods: Path) -> dict[str, str]:
