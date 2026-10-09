@@ -319,6 +319,7 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
     gui_ids = {c.id for c in gui_skips}
     bk_ids = {c.id for c in backups_skips}
     results = []
+    br_start, br_end = _release_bracket(checks)
     for c in sorted([*checks, *slow_skips, *gui_skips, *backups_skips], key=lambda c: (c.order, c.id)):
         rec = {"id": c.id, "capability": c.capability, "description": c.doc}
         if c.id in skip_ids:
@@ -346,6 +347,8 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
             except PowerStop as e:
                 ctx["power_stop"] = {"message": str(e), "before_check": c.id, "pause": e.record}
                 break
+        if c.id == br_start:
+            _bracket_fingerprint(ctx, "start", c.id, ensure)
         t0 = time.time()
         try:
             ensure(c.stack, ctx, c.profile)
@@ -364,7 +367,41 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
             ctx["lane_timeline"][c.id] = {"start": t0, "end": time.time(), "lane": P.LANE}
         say(f"{rec['status'].upper():5} {c.id} ({rec['duration_s']}s){'  ' + rec.get('message', '') if rec['status'] != 'pass' else ''}")
         results.append(rec)
+        br = ctx.get("release_bracket")
+        if br is not None and "end" not in br:
+            br["ran"].append(c.id)
+            if c.id == br_end:
+                _bracket_fingerprint(ctx, "end", c.id, ensure)
     return results
+
+
+PDU_ID = "release.player_data_untouched"
+
+
+def _release_bracket(checks) -> tuple[str | None, str | None]:
+    """release.player_data_untouched brackets every release.*/firstlaunch.* check of the run: the dev player's data
+    is fingerprinted right before the first of them and right after the last (in the run's (order, id) sequence,
+    where they are contiguous; the check verifies that nothing else ran in between). Without any of them, the start
+    fingerprint is taken right before the check itself. (None, None) when the check isn't in this run."""
+    ids = [c.id for c in sorted(checks, key=lambda c: (c.order, c.id))]
+    if PDU_ID not in ids:
+        return None, None
+    inner = [i for i in ids if i.startswith(("release.", "firstlaunch.")) and i != PDU_ID]
+    return (inner[0], inner[-1]) if inner else (PDU_ID, None)
+
+
+def _bracket_fingerprint(ctx: dict, which: str, cid: str, ensure) -> None:
+    """The bracket's start (lane A brought down first, outside any check's timing: its world/auth servers change the
+    databases by themselves) or end fingerprint into ctx["release_bracket"]. Errors are recorded; the check fails."""
+    from .checks.release_runtime_checks import player_data_fingerprint
+    br = ctx.setdefault("release_bracket", {"ran": []})
+    br[f"{which}_check"] = cid
+    try:
+        if which == "start":
+            ensure("down", ctx, None)
+        br[which] = player_data_fingerprint()
+    except Exception as e:  # noqa: BLE001  (the check fails on an erroneous record)
+        br[which] = {"error": f"{type(e).__name__}: {e}"}
 
 
 def backups_tier_s(records: list[dict], reg: dict | None = None) -> float:
@@ -617,13 +654,6 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     # report.client_pristine compares at the end
     from .checks.pristine_checks import start_record
     pristine_start = start_record()
-    # release-first-launch: the dev player's data at the start (release.player_data_untouched compares at the end)
-    if any(c.id == "release.player_data_untouched" for c in selected):
-        from .checks.release_runtime_checks import player_data_fingerprint
-        try:
-            ctx["release_player_data_start"] = player_data_fingerprint()
-        except Exception as e:  # noqa: BLE001  (the check fails on an erroneous start record)
-            ctx["release_player_data_start"] = {"error": f"{type(e).__name__}: {e}"}
     if rule is not None:
         log(f"GUI rule: {'GUI checks run' if gui_changed(rule) else 'GUI checks skipped by design'} "
             f"(changed GUI paths: {rule['changed_gui_paths']}{'; ' + rule['error'] if rule['error'] else ''})")

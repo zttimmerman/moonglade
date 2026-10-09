@@ -13,8 +13,11 @@ release.mode_resolution        (quick) dev: the full resolver table (every name 
                                planted P.ENV line is found by the scan; the switch without the test flag isn't honoured.
 release.test_switches_refused  (quick) each release test switch, without the test flag or outside a live harness run,
                                is refused (naming it) by ./play, harness/hs, the payload's `-m hslib.play`/`-m hslib`,
-                               the dev app and a release app (test hook), which start and write nothing. Counterexample:
-                               with the flag inside this harness run the switch is honoured.
+                               the dev app and a release app (test hook; launcher binaries run directly, never `open`),
+                               which start and write nothing; with the hook and the flag but a run id that isn't live,
+                               the release app's window (first-launch or play-loop error) names the switch in plain
+                               words and only logs are written. Counterexample: with the flag inside this harness run
+                               the switch is honoured.
 release.stack_from_payload     (slow) a scratch copy of the packaged Moonglade.app, a scratch HOME and scratch ports,
                                under sandbox-exec (no /opt/homebrew, /usr/local, or the repo's vendor/ server/ build/
                                data/ env/ except env/release and the run registry; writes only to the scratch):
@@ -50,7 +53,6 @@ RELEASE_WORK = P.ENV / "release"
 NEW_APP = RELEASE_WORK / "payload" / "Moonglade.app"
 NEW_PAYLOAD = NEW_APP / "Contents" / "Resources" / "Moonglade"
 OLD_PAYLOAD = RELEASE_WORK / "payload" / "Moonglade"       # release-build's layout, before release-first-launch
-OPEN = "/usr/bin/open"
 SANDBOX_EXEC = "/usr/bin/sandbox-exec"
 SCRATCH_PORTS = {"mysql": 13327, "auth": 13744, "world": 18105, "soap": 17898}
 
@@ -190,13 +192,113 @@ def _outside_run(env: dict) -> dict:
     return {k: v for k, v in env.items() if k not in ("HS_HARNESS_RUN", "HS_HARNESS_RUN_ID")}
 
 
+# ------------------------------------------------------------------------------------------- disk images (app_readonly)
+
+def attached_images() -> list[dict]:
+    """Every attached disk image: {"image": image-path, "devs": whole-disk dev entries, "mounts": mount points}
+    (hdiutil info -plist). An image stays listed under its original path after its file is deleted."""
+    r = subprocess.run(["/usr/bin/hdiutil", "info", "-plist"], capture_output=True, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError(f"hdiutil info failed: {r.stderr.decode(errors='replace')[-300:]}")
+    out = []
+    for img in plistlib.loads(r.stdout).get("images", []):
+        ents = img.get("system-entities", [])
+        out.append({"image": img.get("image-path", ""),
+                    "devs": sorted({e["dev-entry"] for e in ents if re.fullmatch(r"/dev/disk\d+", e.get("dev-entry", ""))}),
+                    "mounts": [e["mount-point"] for e in ents if e.get("mount-point")]})
+    return out
+
+
+def _real(p) -> str:
+    return os.path.realpath(str(p))
+
+
+def detach_image(image: Path) -> list[str]:
+    """Detach every device of `image` (by its image-path; mounted or not). Returns the devices detached."""
+    done = []
+    for img in attached_images():
+        if _real(img["image"]) != _real(image):
+            continue
+        for dev in img["devs"]:
+            r = subprocess.run(["/usr/bin/hdiutil", "detach", "-force", dev], capture_output=True, text=True,
+                               timeout=120)
+            if r.returncode == 0:
+                done.append(dev)
+    return done
+
+
+ATTACH_RETRY_S = (5, 15, 30)
+
+
+def attach_readonly(dmg: Path, mnt: Path, run=None) -> dict:
+    """`hdiutil attach -readonly` with retries: a "Resource temporarily unavailable" (EAGAIN) answer is retried with
+    backoff (ATTACH_RETRY_S). After every attempt that didn't succeed, every device of this image is detached (hdiutil
+    can report a failure and still leave the image attached, unmounted: seen 2026-10-09). `run` replaces
+    subprocess.run (the counterexample's simulated failure). Returns {"ok", "attempts": [...], "detached": [...]}."""
+    run = run or subprocess.run
+    cmd = ["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-noautoopen", "-noverify", "-mountpoint",
+           str(mnt), str(dmg)]
+    out: dict = {"ok": False, "attempts": [], "detached": []}
+    for i in range(len(ATTACH_RETRY_S) + 1):
+        t0 = time.time()
+        r = run(cmd, capture_output=True, text=True, timeout=300)
+        text = ((r.stdout or "") + (r.stderr or "")).strip()
+        out["attempts"].append({"rc": r.returncode, "s": round(time.time() - t0, 1), "out": text[-300:]})
+        if r.returncode == 0:
+            out["ok"] = True
+            return out
+        out["detached"] += detach_image(dmg)
+        if "temporarily unavailable" not in text.lower() or i == len(ATTACH_RETRY_S):
+            break
+        time.sleep(ATTACH_RETRY_S[i])
+    return out
+
+
+def _scratch_owner_alive(folder_name: str) -> bool:
+    from .. import procs
+    pid = folder_name.rsplit("-", 1)[-1]
+    if not pid.isdigit():
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return not procs.is_zombie(int(pid))
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+
+
+def heal_images() -> list[str]:
+    """Detach every attached image whose image-path is under harness/out/release-scratch/ and whose scratch folder is
+    gone or belongs to a run that is no longer alive (a killed or failed app_readonly; the folder may already be
+    deleted while the image stays attached)."""
+    root = _real(SCRATCH_ROOT)
+    out = []
+    for img in attached_images():
+        ip = _real(img["image"])
+        if not ip.startswith(root + os.sep):
+            continue
+        folder = Path(root) / Path(ip).relative_to(root).parts[0]
+        if folder.is_dir() and _scratch_owner_alive(folder.name):
+            continue
+        for dev in img["devs"]:
+            r = subprocess.run(["/usr/bin/hdiutil", "detach", "-force", dev], capture_output=True, text=True,
+                               timeout=120)
+            if r.returncode == 0:
+                out.append(f"{dev} ({img['image']})")
+    return out
+
+
 def heal_scratch() -> dict:
-    """Kill-safety: a killed earlier run leaves scratch folders (and their mysqld/servers, a mounted image) under
+    """Kill-safety: a killed earlier run leaves scratch folders (and their mysqld/servers, an attached image) under
     harness/out/release-scratch/<tag>-<pid>. Every folder whose run pid is gone is cleaned: processes whose argv names
-    it are killed, images mounted inside it detached, the folder removed. Folders of live runs are left alone."""
+    it are killed, the folder removed. Every attached image whose image-path is under release-scratch/ is detached
+    when its folder is gone or its run isn't alive (heal_images; by image-path, so an image whose folder was already
+    deleted is found too). Folders and images of live runs are left alone."""
     from .. import procs
     out = {"killed": [], "detached": [], "removed": []}
     if not SCRATCH_ROOT.is_dir():
+        out["detached"] += heal_images()
         return out
     stale = []
     for x in SCRATCH_ROOT.iterdir():
@@ -220,12 +322,7 @@ def heal_scratch() -> dict:
                     out["killed"].append(pid)
                 except ProcessLookupError:
                     pass
-        info = subprocess.run(["/usr/bin/hdiutil", "info"], capture_output=True, text=True).stdout
-        for line in info.splitlines():
-            if str(x) in line and "\t" in line:
-                mp = line.split("\t")[-1].strip()
-                subprocess.run(["/usr/bin/hdiutil", "detach", "-force", mp], capture_output=True, timeout=120)
-                out["detached"].append(mp)
+        out["detached"] += heal_images()        # the folder's run is gone: its images (mounted or not) go too
         from .. import pristine
         try:
             pristine.unlock(x)              # a scratch HOME's client copy is write-protected (first launch)
@@ -233,6 +330,7 @@ def heal_scratch() -> dict:
             pass
         shutil.rmtree(x, ignore_errors=True)
         out["removed"].append(x.name)
+    out["detached"] += heal_images()        # images whose scratch folder is already gone
     return out
 
 
@@ -504,23 +602,13 @@ def _hook_events(path: Path) -> list[dict]:
         return []
 
 
-def open_with_hook(bundle: Path, hook: Path, env: dict, args: list[str], timeout: float = 30) -> dict:
-    """`open -n` the app with the test hook and `env` (--env), wait for its exit event."""
-    cmd = [OPEN, "-n", "--env", f"HS_APP_TEST_HOOK={hook}", *[x for k, v in env.items() for x in ("--env", f"{k}={v}")],
-           str(bundle), "--args", *args]
-    r = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
-    t0 = time.time()
-    while time.time() - t0 < timeout:
-        evs = _hook_events(hook)
-        if any(e.get("kind") == "exit" for e in evs):
-            break
-        time.sleep(0.25)
-    return {"open_rc": r.returncode, "open_out": (r.stdout + r.stderr).strip()[-300:], "events": _hook_events(hook)}
-
-
-def exec_with_hook(bundle: Path, hook: Path, env: dict, args: list[str], timeout: float = 60) -> dict:
-    """Run the app's launcher binary directly with the test hook (no LaunchServices); stopped after `timeout`."""
+def exec_with_hook(bundle: Path, hook: Path, env: dict, args: list[str], timeout: float = 60,
+                   outside_run: bool = False) -> dict:
+    """Run the app's launcher binary directly with the test hook (no LaunchServices, so no per-copy privacy prompt);
+    stopped after `timeout`. outside_run=True leaves this harness run's markers (HS_HARNESS_RUN/_ID) out."""
     full = _clean_env(HS_APP_TEST_HOOK=str(hook), **env)
+    if outside_run:
+        full = _outside_run(full)
     proc = subprocess.Popen([str(bundle / "Contents/MacOS/Moonglade"), *args], env=full, stdin=subprocess.DEVNULL,
                             stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
     try:
@@ -575,29 +663,66 @@ def test_switches_refused(ctx):
                 ev["cases"].append({"switch": name, "entry": label, "ok": ok, **r})
                 if not ok:
                     bad.append(f"{label} with {name}")
-            # the apps (test hook): a release app without the flag (and, for HS_RELEASE_HOME, with the flag but a
-            # HOME outside the scratch rule), and the dev app dist/Moonglade.app
-            app_cases = [("release app (test hook, no flag)", bundle, {name: val}, [])]
+            # the apps (test hook; the launcher binary run directly, never through LaunchServices): a release app
+            # without the flag, with the flag outside a harness run, (for HS_RELEASE_HOME) with the flag but a HOME
+            # outside the scratch rule, and the dev app dist/Moonglade.app: each refuses at startup
+            sh = {} if name == P.RELEASE_HOME_ENV else {P.RELEASE_HOME_ENV: str(d / "home-refused")}
+            app_cases = [("release app (test hook, no flag)", bundle, {name: val}, [], False),
+                         ("release app (test hook, flag, outside a harness run)", bundle, {name: val, **sh},
+                          [P.RELEASE_TEST_FLAG], True)]
             if name == P.RELEASE_HOME_ENV:
                 app_cases.append(("release app (test hook, flag, HOME outside .../harness/out/release-scratch/)",
-                                  bundle, {name: str(d.parent.parent / "not-scratch-home")}, [P.RELEASE_TEST_FLAG]))
+                                  bundle, {name: str(d.parent.parent / "not-scratch-home")}, [P.RELEASE_TEST_FLAG],
+                                  False))
+            else:
+                app_cases.append(("release app (test hook, flag, no scratch HOME)", bundle, {name: val},
+                                  [P.RELEASE_TEST_FLAG], False))
             if dev_app_ok:
-                app_cases.append(("dev app (test hook)", A.APP, {name: val}, []))
-            for label, target, env, args in app_cases:
+                app_cases.append(("dev app (test hook)", A.APP, {name: val}, [], False))
+            for label, target, env, args, outside in app_cases:
                 hook = d / f"hook-{len(ev['cases'])}.jsonl"
-                res = open_with_hook(target, hook, env, args)
+                res = exec_with_hook(target, hook, env, args, timeout=30, outside_run=outside)
                 refused = [e for e in res["events"] if e.get("kind") == "refused"]
                 ex = [e for e in res["events"] if e.get("kind") == "exit"]
-                ok = (bool(refused) and name in refused[0].get("switches", []) and bool(ex) and ex[-1].get("code") == 2
-                      and not any(e.get("kind") in ("status", "stage", "detail") for e in res["events"]))
+                ok = (bool(refused) and name in refused[0].get("switches", []) and name in refused[0].get("text", "")
+                      and bool(ex) and ex[-1].get("code") == 2 and res["rc"] == 2
+                      and not any(e.get("kind") in ("status", "stage", "detail", "setup_window")
+                                  for e in res["events"]))
                 ev["cases"].append({"switch": name, "entry": label, "ok": ok, "events": res["events"][:3],
-                                    "open_rc": res["open_rc"]})
+                                    "rc": res["rc"]})
                 if not ok:
                     bad.append(f"{label} with {name}")
+            # the release app with the hook, the flag, a scratch HOME and a harness run id that isn't live: the app
+            # passes the switches on, the payload's Python refuses them, and the window names them in plain words
+            # (first-launch window for a HOME not set up, the play loop's error for a set-up one); only logs written
+            for where in ("setup", "play"):
+                ch = d / f"stale-{where}-{len(ev['cases'])}"
+                if where == "play":
+                    ch.mkdir(parents=True)
+                    (ch / "home.json").write_text(json.dumps({"layout": P.HOME_LAYOUT_VERSION,
+                                                              "first_launch": {"complete": True}}) + "\n")
+                env = {**{name: val}, P.RELEASE_HOME_ENV: str(ch), "HS_HARNESS_RUN": "1",
+                       "HS_HARNESS_RUN_ID": "1-0", P.HARNESS_RUN_REGISTRY_ENV: str(P.RUN_REGISTRY)}
+                hook = d / f"hook-{len(ev['cases'])}.jsonl"
+                res = exec_with_hook(bundle, hook, env, [P.RELEASE_TEST_FLAG], timeout=60)
+                evs = res["events"]
+                shown = [e for e in evs if (e.get("kind") == "setup_window" and e.get("state") == "error")
+                         or (e.get("kind") == "dialog" and e.get("id") == "test_switch_refused")]
+                text = (shown[-1].get("text") or "") if shown else ""
+                left = sorted(str(x.relative_to(ch)) for x in ch.rglob("*")) if ch.exists() else []
+                allowed = {"home.json"} if where == "play" else set()
+                ok = (bool(shown) and shown[-1].get("title") == "Moonglade can't start" and name in text
+                      and "test setting" in text and "refused" in text and res["rc"] not in (0, "timeout")
+                      and not any(e.get("kind") in ("stage", "firstlaunch") for e in evs)
+                      and all(x in allowed or x == "logs" or x.startswith("logs/") for x in left))
+                ev["cases"].append({"switch": name, "entry": f"release app (test hook, flag, run id not live; {where})",
+                                    "ok": ok, "rc": res["rc"], "shown": shown[-1:], "home_after": left})
+                if not ok:
+                    bad.append(f"release app, run id not live ({where}) with {name}")
         ev["dev_app_tested"] = dev_app_ok
         ev["refused_cases"] = sum(1 for c in ev["cases"] if c["ok"])
         ev["failed_cases"] = bad
-        ev["scratch_home_created"] = (d / "home-refused").exists()
+        ev["scratch_home_created"] = (d / "home-refused").exists()      # every refusal above is before any write
         ev["stack_after"] = {k: v for k, v in stack.stack_processes().items() if v}
         ev["real_home"] = {"before": real_before, "after": real_home_state()}
         require(dev_app_ok, "dist/Moonglade.app isn't current (harness/hs app); the dev app case can't run", **ev)
@@ -696,6 +821,36 @@ def _proc_info(pred) -> list[dict]:
     return out
 
 
+class SqlFileWatch:
+    """Polls (lsof) the .sql files open in the processes whose executable is `exe` while the block runs: the DB
+    updater holds each file it applies open as the mysql client's input (StartProcess)."""
+
+    def __init__(self, exe: Path, every: float = 0.3):
+        import threading
+        self.exe, self.every, self.files, self.polls = str(exe), every, set(), 0
+        self._stop = threading.Event()
+        self._t = threading.Thread(target=self._run, daemon=True)
+
+    def _run(self):
+        from .. import procs
+        while not self._stop.is_set():
+            pids = [str(pid) for pid, argv in procs.argv_table() if argv[:1] == [self.exe]]
+            if pids:
+                r = subprocess.run(["/usr/sbin/lsof", "-nP", "-Fn", "-p", ",".join(pids)], capture_output=True,
+                                   text=True, timeout=30)
+                self.polls += 1
+                self.files |= {x[1:] for x in r.stdout.splitlines() if x.startswith("n") and x.endswith(".sql")}
+            self._stop.wait(self.every)
+
+    def __enter__(self):
+        self._t.start()
+        return self
+
+    def __exit__(self, *a):
+        self._stop.set()
+        self._t.join(timeout=60)
+
+
 def run_release(app: Path, args: list[str], env: dict, prof: Path, cwd: Path, timeout: int, log: Path) -> dict:
     t0 = time.time()
     with open(log, "a") as fh:
@@ -748,7 +903,8 @@ def stack_from_payload(ctx):
         (d / "tmp").mkdir()
         env = release_env(home, HS_RELEASE_PORTS=json.dumps(ports), TMPDIR=str(d / "tmp") + "/",
                           PATH="/usr/bin:/bin:/usr/sbin:/sbin")
-        up = run_release(app, ["up", "--profile", "m0"], env, prof, d, 2400, log)
+        with SqlFileWatch(app / "server/bin/worldserver") as watch:
+            up = run_release(app, ["up", "--profile", "m0"], env, prof, d, 2400, log)
         ev["up"] = {k: up[k] for k in ("rc", "s", "stdout_tail")}
         info = up["json"] or {}
         ev["up_info"] = {k: info.get(k) for k in ("first_run", "profile", "mysqld", "authserver", "worldserver",
@@ -790,6 +946,20 @@ def stack_from_payload(ctx):
                 "SourceDirectory / MySQLExecutable aren't the payload's", **ev)
         require(ev["updater"]["populated"] >= 3 and ev["updater"]["applying_lines"] > 0
                 and ev["updater"]["dead_refs"] == 0, "the updater didn't populate the databases cleanly", **ev)
+        # the files the updater applied: AzerothCore's updater logs only file names (DBUpdater.cpp ">> Applying
+        # '<name>'", StartProcess's argument trace is off for it: secure=true), so the check reads the .sql files the
+        # worldserver had open (lsof, polled during `up`) and checks each "Applying" name against them
+        sql_root = str(app / "sql") + "/"
+        applied = re.findall(r">> Applying '([^']+)'", wlog)
+        seen = sorted(watch.files)
+        ev["updater"]["sql_files_open"] = {"count": len(seen), "polls": watch.polls, "sample": seen[:5],
+                                           "outside_app_sql": [f for f in seen if not f.startswith(sql_root)][:5],
+                                           "applying_names": len(applied),
+                                           "applying_names_seen_open": len({Path(f).name for f in seen}
+                                                                           & set(applied))}
+        require(seen and not ev["updater"]["sql_files_open"]["outside_app_sql"]
+                and ev["updater"]["sql_files_open"]["applying_names_seen_open"] > 0,
+                "the DB updater didn't apply .sql files from the payload's sql/ (as its log names them)", **ev)
         # m0's random-bot count, set only through AC_* (the payload has no readable module conf: cwd HOME/run)
         n_acc = _q(app, f"SELECT COUNT(*) FROM account WHERE username LIKE '{'RNDBOT'}%'", ports["mysql"])
         ev["m0"] = {"AC_AI_PLAYERBOT_MAX_RANDOM_BOTS": ws_env.get("AC_AI_PLAYERBOT_MAX_RANDOM_BOTS"),
@@ -914,22 +1084,21 @@ def app_readonly(ctx):
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True)
     mnt = d / "Read Only Disk"
-    attached = False
+    dmg = d / "Moonglade.dmg"
     try:
         stage = d / "stage"
         stage.mkdir()
         subprocess.run(["/bin/cp", "-c", "-R", str(NEW_APP), str(stage / "Moonglade.app")], check=True)
-        dmg = d / "Moonglade.dmg"
         t0 = time.time()
         r = subprocess.run(["/usr/bin/hdiutil", "create", "-quiet", "-srcfolder", str(stage), "-volname", "Moonglade RO",
                             "-format", "UDRO", "-fs", "APFS", str(dmg)], capture_output=True, text=True, timeout=900)
         require(r.returncode == 0, "hdiutil create failed", **ev, out=(r.stdout + r.stderr)[-400:])
         shutil.rmtree(stage)
         mnt.mkdir()
-        r = subprocess.run(["/usr/bin/hdiutil", "attach", "-readonly", "-nobrowse", "-noautoopen", "-mountpoint",
-                            str(mnt), str(dmg)], capture_output=True, text=True, timeout=300)
-        require(r.returncode == 0, "hdiutil attach -readonly failed", **ev, out=(r.stdout + r.stderr)[-400:])
-        attached = True
+        att = attach_readonly(dmg, mnt)
+        ev["attach"] = att
+        require(att["ok"], "hdiutil attach -readonly failed (after retries)", **ev,
+                still_attached=[i for i in attached_images() if _real(i["image"]) == _real(dmg)])
         ev["image_s"] = round(time.time() - t0, 1)
         bundle = mnt / "Moonglade.app"
         app = bundle / "Contents" / "Resources" / "Moonglade"
@@ -957,6 +1126,17 @@ def app_readonly(ctx):
         require([x["exe"] for x in run["while_ready"]["mysqld"]] == [str(app / "mysql/bin/mysqld")]
                 and [x["exe"] for x in run["while_ready"]["worldserver"]] == [str(app / "server/bin/worldserver")],
                 "the servers didn't run from the image", **ev)
+        # the done screen's Play button started the play loop (the scripted pick answers "play" on the done screen)
+        evs = run["_events"]
+        i_play = next((i for i, e in enumerate(evs) if e.get("kind") == "setup_button" and e.get("button") == "play"
+                       and e.get("state") == "done"), None)
+        i_stage = next((i for i, e in enumerate(evs) if e.get("kind") == "stage"), None)
+        app_log = (home / "logs" / "app.log").read_text(errors="replace") if (home / "logs/app.log").is_file() else ""
+        fl_exit, loop_at = app_log.find("first launch exited with 0"), app_log.find("play loop pid")
+        ev["play_button"] = {"button_event": i_play, "first_stage_event": i_stage, "first_launch_exit_at": fl_exit,
+                             "play_loop_line_at": loop_at}
+        require(i_play is not None and i_stage is not None and i_play < i_stage and 0 <= fl_exit < loop_at,
+                "the done screen's Play button didn't start the play loop", **ev)
         require(not probs, "a log line reports a read-only or permission error", **ev)
         require(before == after and before["entries"] > 1000, "the image's contents changed", **ev)
         # counterexample: a write into the app on the image fails, and the log scan catches it
@@ -973,10 +1153,80 @@ def app_readonly(ctx):
                 os.kill(pinfo["pid"], 9)
             except ProcessLookupError:
                 pass
-        if attached:
-            subprocess.run(["/usr/bin/hdiutil", "detach", "-force", str(mnt)], capture_output=True, timeout=120)
+        ev["detached_at_end"] = detach_image(dmg)        # by image-path: mounted or not, whatever attach said
         _cleanup(d)
+    ev["images_left"] = [i["image"] for i in attached_images() if _real(i["image"]).startswith(_real(d))]
+    require(not ev["images_left"], "a scratch image is still attached after the check", **ev)
+    ev["counterexample_attach_failure"] = attach_failure_counterexample()
     return ev
+
+
+def attach_failure_counterexample() -> dict:
+    """A small scratch image whose `hdiutil attach` really attaches it but is reported as EAGAIN (the 2026-10-09
+    verifier case): attach_readonly retries and detaches after each "failed" attempt, so nothing stays attached; and
+    an image left attached (unmounted) whose scratch folder is then deleted is detached by heal_scratch."""
+    d = SCRATCH_ROOT / f"ax-{os.getpid()}"
+    shutil.rmtree(d, ignore_errors=True)
+    d.mkdir(parents=True)
+    ev: dict = {}
+    try:
+        (d / "src").mkdir()
+        (d / "src" / "f").write_text("x")
+        dmg = d / "small.dmg"
+        r = subprocess.run(["/usr/bin/hdiutil", "create", "-quiet", "-srcfolder", str(d / "src"), "-format", "UDRO",
+                            "-fs", "APFS", str(dmg)], capture_output=True, text=True, timeout=300)
+        require(r.returncode == 0, "counterexample: hdiutil create failed", out=(r.stdout + r.stderr)[-300:])
+        calls = []
+
+        def fake_run(cmd, **kw):                     # attaches for real, then answers like the flaky hdiutil did
+            real = subprocess.run(cmd, **kw)
+            calls.append(real.returncode)
+            return subprocess.CompletedProcess(cmd, 1, "", "hdiutil: attach failed - Resource temporarily unavailable")
+        mnt = d / "mnt"
+        mnt.mkdir()
+        old = globals()["ATTACH_RETRY_S"]
+        globals()["ATTACH_RETRY_S"] = (1, 1)
+        try:
+            att = attach_readonly(dmg, mnt, run=fake_run)
+        finally:
+            globals()["ATTACH_RETRY_S"] = old
+        left = [i for i in attached_images() if _real(i["image"]) == _real(dmg)]
+        ev["simulated"] = {"real_attach_rcs": calls, "result_ok": att["ok"], "attempts": len(att["attempts"]),
+                           "detached": att["detached"], "still_attached": left}
+        require(calls and all(c == 0 for c in calls) and not att["ok"] and len(att["attempts"]) == 3
+                and len(att["detached"]) >= 3 and not left,
+                "counterexample: a reported attach failure left the image attached (or wasn't retried)", **ev)
+        # heal: attached without a mount point, folder deleted (as the verifier saw), owner pid gone
+        ghost = SCRATCH_ROOT / f"ghost-{_dead_pid()}"
+        ghost.mkdir()
+        g = ghost / "g.dmg"
+        shutil.copy2(dmg, g)
+        r = subprocess.run(["/usr/bin/hdiutil", "attach", "-readonly", "-nomount", "-noverify", str(g)],
+                           capture_output=True, text=True, timeout=300)
+        shutil.rmtree(ghost)
+        before = [i["image"] for i in attached_images() if _real(i["image"]) == _real(g)]
+        healed = heal_scratch()
+        after = [i["image"] for i in attached_images() if _real(i["image"]) == _real(g)]
+        ev["heal"] = {"attach_rc": r.returncode, "attached_before": before, "healed": healed["detached"],
+                      "attached_after": after}
+        require(r.returncode == 0 and before and not after,
+                "counterexample: heal_scratch didn't detach an image whose scratch folder is gone", **ev)
+    finally:
+        detach_image(d / "small.dmg")
+        shutil.rmtree(d, ignore_errors=True)
+    return ev
+
+
+def _dead_pid() -> int:
+    pid = 99999
+    while True:
+        try:
+            os.kill(pid, 0)
+        except ProcessLookupError:
+            return pid
+        except PermissionError:
+            pass
+        pid -= 1
 
 
 @check("release.app_moved", order=17, capability=CAP, stack="down", tier="slow")
@@ -1175,13 +1425,72 @@ def client_smoke(ctx):
 
 # ================================================================================================ player_data_untouched
 
-PLAYER_ROWS_SQL = ("SELECT id, username, HEX(salt), HEX(verifier), joindate, last_login, last_ip, locked, expansion "
-                   "FROM acore_auth.account WHERE username = '{name}';"
-                   "SELECT * FROM acore_characters.characters WHERE account = "
-                   "(SELECT id FROM acore_auth.account WHERE username = '{name}') ORDER BY guid;"
-                   "SELECT ci.* FROM acore_characters.character_inventory ci JOIN acore_characters.characters c "
-                   "ON c.guid = ci.guid WHERE c.account = (SELECT id FROM acore_auth.account WHERE username = "
-                   "'{name}') ORDER BY ci.guid, ci.bag, ci.slot;")
+# The live databases' fingerprint (scenario "Player fingerprints unchanged"): CHECKSUM TABLE of every table of
+# acore_auth and acore_characters when lane A's mysqld is up (read-only), else their datadir files (with the shared
+# InnoDB files that hold changes not yet written into a table's own file). Never a write, never a mysqld on the live
+# datadir. Lane A's world/auth servers change these tables by themselves, so a fingerprint taken while they run is
+# an error (fail-closed), not a value.
+FP_SCHEMAS = ("acore_auth", "acore_characters")
+FP_SHARED = ("ibdata1", "undo_*", "#innodb_redo/*")
+
+
+def db_checksums(mysql: Path, conn: list[str], schemas=FP_SCHEMAS) -> dict:
+    """{"tables": {schema.table: checksum}} by CHECKSUM TABLE over every base table of `schemas`, or {"error"}."""
+    def q(sql):
+        r = subprocess.run([str(mysql), "--no-defaults", *conn, "--batch", "--skip-column-names", "-e", sql],
+                           capture_output=True, text=True, timeout=600)
+        return r.returncode, r.stdout, r.stderr.strip()[-300:]
+    rc, out, err = q("SELECT CONCAT('`', table_schema, '`.`', table_name, '`') FROM information_schema.tables WHERE "
+                     f"table_schema IN ({', '.join(repr(x) for x in schemas)}) AND table_type = 'BASE TABLE' "
+                     "ORDER BY table_schema, table_name")
+    names = [x for x in out.splitlines() if x.strip()]
+    if rc != 0 or not names:
+        return {"error": f"listing the tables failed: {err or 'no tables'}"}
+    rc, out, err = q("CHECKSUM TABLE " + ", ".join(names))
+    rows = dict(x.split("\t", 1) for x in out.splitlines() if "\t" in x)
+    if rc != 0 or len(rows) != len(names) or any(v in ("NULL", "") for v in rows.values()):
+        return {"error": f"CHECKSUM TABLE failed: {err or 'missing or NULL rows'}"}
+    return {"tables": rows}
+
+
+def datadir_files(datadir: Path, schemas=FP_SCHEMAS) -> dict:
+    """{relative path: [size, mtime_ns, sha256]} of the schemas' folders and the shared InnoDB files."""
+    from ..backups import sha256_file
+    files = [f for sc in schemas for f in sorted((datadir / sc).rglob("*")) if f.is_file()]
+    files += [f for pat in FP_SHARED for f in sorted(datadir.glob(pat)) if f.is_file()]
+    out = {}
+    for f in files:
+        st = f.stat()
+        out[str(f.relative_to(datadir))] = [st.st_size, st.st_mtime_ns, sha256_file(f)]
+    return out
+
+
+def live_db_fingerprint() -> dict:
+    """Lane A's acore_auth and acore_characters (the player's save): CHECKSUM TABLE through lane A's mysqld when it is
+    up, else the datadir files. Fail-closed: anything it can't read is an "error"."""
+    import hashlib
+    from .. import stack
+    L = P.layout("a")
+    st = stack.stack_processes("a")
+    if st["worldserver"] or st["authserver"]:
+        return {"error": f"lane A's servers are running ({st}); their tables change by themselves"}
+    try:
+        if st["mysqld"] or stack.port_open(L["ports"]["mysql"]):
+            got = db_checksums(P.MYSQL, ["--protocol=TCP", "-h127.0.0.1", f"-P{L['ports']['mysql']}",
+                                         f"-u{P.DB_USER}", f"-p{P.DB_PASS}"])
+            if "error" in got:
+                return got | {"via": "CHECKSUM TABLE (lane A's mysqld)"}
+            return {"via": "CHECKSUM TABLE (lane A's mysqld)", "tables": len(got["tables"]),
+                    "sha256": hashlib.sha256(json.dumps(got["tables"], sort_keys=True).encode()).hexdigest(),
+                    "values": got["tables"]}
+        datadir = Path(L["mysql_data"])
+        if not all((datadir / sc).is_dir() for sc in FP_SCHEMAS):
+            return {"via": "datadir files", "error": f"no {FP_SCHEMAS} under {datadir}"}
+        files = datadir_files(datadir)
+        return {"via": "datadir files (lane A's mysqld is down)", "files": len(files),
+                "sha256": hashlib.sha256(json.dumps(files, sort_keys=True).encode()).hexdigest(), "values": files}
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"error": f"{type(e).__name__}: {e}"}
 
 
 def _player_name(player_json: Path) -> str | None:
@@ -1191,68 +1500,6 @@ def _player_name(player_json: Path) -> str | None:
         return None
 
 
-def player_db_fingerprint(name: str | None, datadir: Path, mysqld: Path, mysql: Path, base: Path,
-                          live_port: int | None) -> dict:
-    """SHA-256 of the PLAYER account's auth row and its characters (+ inventory): from the live lane-A mysqld when
-    it is up (a read-only SELECT), else from a throwaway socket-only mysqld on an APFS clone of the datadir (the
-    datadir itself is never opened). Fail-closed: an error is recorded as such, never as "unchanged"."""
-    import hashlib
-    if not name:
-        return {"player": None}
-    if not name.replace("_", "").isalnum():
-        return {"error": "unexpected account name"}
-    sql = PLAYER_ROWS_SQL.format(name=name)
-    ev: dict = {"player": name}
-
-    def run(args):
-        r = subprocess.run([str(mysql), "--no-defaults", *args, "--batch", "--skip-column-names", "-e", sql],
-                           capture_output=True, text=True, timeout=120)
-        return r.returncode, r.stdout, r.stderr[-300:]
-    if live_port is not None:
-        rc, out, err = run(["--protocol=TCP", "-h127.0.0.1", f"-P{live_port}", f"-u{P.DB_USER}", f"-p{P.DB_PASS}"])
-        ev["via"] = "live mysqld (SELECT)"
-    else:
-        if not (datadir / "acore_auth").is_dir():
-            return ev | {"via": "datadir", "error": f"no acore_auth in {datadir}"}
-        t = Path(tempfile.mkdtemp(prefix="pdu-", dir="/tmp"))
-        proc = None
-        try:
-            subprocess.run(["/bin/cp", "-cR", str(datadir), str(t / "data")], check=True, capture_output=True)
-            for f in (t / "data").glob("*.pid"):
-                f.unlink()
-            for f in (t / "data").glob("*.sock*"):
-                f.unlink()
-            sock = t / "s"
-            cnf = t / "my.cnf"
-            cnf.write_text(f"[mysqld]\nbasedir={base}\ndatadir={t / 'data'}\nsocket={sock}\npid-file={t / 'm.pid'}\n"
-                           f"log-error={t / 'err.log'}\nskip-networking\nmysqlx=OFF\nperformance_schema=OFF\n"
-                           "disable-log-bin\ninnodb_buffer_pool_size=128M\n")
-            proc = subprocess.Popen([str(mysqld), f"--defaults-file={cnf}"], stdin=subprocess.DEVNULL,
-                                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
-            t0 = time.time()
-            rc, out, err = 1, "", "mysqld didn't start on the clone"
-            while time.time() - t0 < 180 and proc.poll() is None:
-                if sock.exists():
-                    rc, out, err = run([f"--socket={sock}", "-uroot"])
-                    if rc == 0 or "Access denied" in err:
-                        break
-                time.sleep(1)
-            if rc != 0 and "Access denied" in err:
-                rc, out, err = run([f"--socket={sock}", f"-u{P.DB_USER}", f"-p{P.DB_PASS}"])
-            ev["via"] = "throwaway mysqld on a clone of the datadir"
-        finally:
-            if proc is not None and proc.poll() is None:
-                proc.terminate()
-                try:
-                    proc.wait(timeout=120)
-                except subprocess.TimeoutExpired:
-                    proc.kill()
-            shutil.rmtree(t, ignore_errors=True)
-    if rc != 0:
-        return ev | {"error": err}
-    return ev | {"rows": out.count("\n"), "sha256": hashlib.sha256(out.encode()).hexdigest()}
-
-
 def _file_fp(f: Path):
     import hashlib
     if not f.exists():
@@ -1260,75 +1507,171 @@ def _file_fp(f: Path):
     return {"sha256": hashlib.sha256(f.read_bytes()).hexdigest(), "mtime_ns": f.stat().st_mtime_ns}
 
 
-def player_data_fingerprint(roots: dict | None = None) -> dict:
+def player_data_fingerprint(roots: dict | None = None, db=None) -> dict:
     """The dev player's data (scenario "Player fingerprints unchanged"): env/backups, env/player.json,
-    env/settings.json, env/client-play (clientbuild.fingerprint), the client/ manifest, the PLAYER's rows in the live
-    acore_auth / acore_characters, and the real ~/Library/Application Support/Moonglade (existence + listing).
-    `roots` overrides the locations (the counterexample's scratch copy)."""
-    from .. import backups, clientbuild, stack
+    env/settings.json, env/client-play (clientbuild.fingerprint), the client/ manifest, the live acore_auth and
+    acore_characters (live_db_fingerprint: CHECKSUM TABLE, or the datadir files when lane A's mysqld is down) and the
+    real ~/Library/Application Support/Moonglade (existence + listing). `roots` overrides the file locations and `db`
+    the database fingerprint function (the counterexample's scratch copies)."""
+    from .. import backups, clientbuild
     r = roots or {"backups": P.PLAYER_BACKUPS, "player_json": P.PLAYER_FILE, "settings_json": P.SETTINGS_FILE,
                   "client_play": P.PLAYER_PLAY_CLIENT, "client_manifest": P.CLIENT_MANIFEST,
-                  "datadir": P.MYSQL_DATA, "real_home": P.RELEASE_HOME_DEFAULT}
+                  "real_home": P.RELEASE_HOME_DEFAULT}
     real = Path(r["real_home"])
-    out = {"backups": backups.fingerprint(Path(r["backups"])),
+    out = {"at": time.time(), "backups": backups.fingerprint(Path(r["backups"])),
            "player_json": _file_fp(Path(r["player_json"])), "settings_json": _file_fp(Path(r["settings_json"])),
            "client_play": clientbuild.fingerprint(Path(r["client_play"])) if Path(r["client_play"]).exists() else None,
            "client_manifest": _file_fp(Path(r["client_manifest"])),
            "real_home": ({"exists": True, "listing": sorted(x.name for x in real.iterdir()),
                           "mtime_ns": real.stat().st_mtime_ns} if real.exists() else {"exists": False})}
-    live = P.MYSQL_PORT if (roots is None and stack.port_open(P.MYSQL_PORT)) else None
-    out["db"] = player_db_fingerprint(_player_name(Path(r["player_json"])), Path(r["datadir"]), P.MYSQLD, P.MYSQL,
-                                      P.MYSQL_BASE, live)
+    out["db"] = (db or live_db_fingerprint)()
     return out
 
 
 def fp_differences(a: dict, b: dict) -> list[str]:
     out = []
-    for k in sorted(set(a) | set(b)):
+    for k in sorted((set(a) | set(b)) - {"at"}):
         if k == "db":
             da, db_ = a.get(k) or {}, b.get(k) or {}
             if "error" in da or "error" in db_:
                 out.append(f"db: can't compare ({da.get('error') or db_.get('error')})")
-            elif da.get("sha256") != db_.get("sha256") or da.get("player") != db_.get("player"):
-                out.append("db: the PLAYER's rows differ")
+            elif da.get("via") != db_.get("via"):
+                out.append(f"db: read differently at the two ends ({da.get('via')} / {db_.get('via')}): lane A's "
+                           "mysqld was started or stopped in between")
+            elif da.get("sha256") != db_.get("sha256"):
+                va, vb = da.get("values") or {}, db_.get("values") or {}
+                out.append("db: changed: " + ", ".join(sorted(x for x in set(va) | set(vb) if va.get(x) != vb.get(x))[:8]))
         elif a.get(k) != b.get(k):
             out.append(k)
     return out
 
 
-@check("release.player_data_untouched", order=998, capability=CAP, stack="down", tier="full")
+def _slim_fp(fp) -> dict:
+    if not isinstance(fp, dict):
+        return fp
+    return {k: ({kk: vv for kk, vv in v.items() if kk != "values"} if k == "db" and isinstance(v, dict) else
+                (bool(v) if k in ("backups", "client_play") else v)) for k, v in fp.items()}
+
+
+BRACKET_PREFIXES = ("release.", "firstlaunch.")
+PDU_ID = "release.player_data_untouched"
+
+
+@check(PDU_ID, order=998, capability=CAP, stack="down", tier="full")
 def player_data_untouched(ctx):
-    """After every release.* and firstlaunch.* check of the run: env/backups, env/player.json, env/settings.json,
-    env/client-play, the client/ manifest, the PLAYER's rows in the live acore_auth / acore_characters and the real
-    ~/Library/Application Support/Moonglade are as the runner recorded them at the start of the run. Counterexample:
-    the same comparison on a scratch copy of the player files sees one changed byte in its player.json."""
-    start = (ctx or {}).get("release_player_data_start", "missing")
-    ev: dict = {"start": start}
+    """Bracketing every release.* and firstlaunch.* check of the run (the runner takes the fingerprint right before
+    the first of them, after bringing lane A down, and right after the last; no other check runs in between):
+    env/backups, env/player.json, env/settings.json, env/client-play, the client/ manifest, CHECKSUM TABLE of the
+    live acore_auth / acore_characters (their datadir files while lane A's mysqld is down) and the real
+    ~/Library/Application Support/Moonglade are unchanged. Counterexample: on an APFS clone of the live datadir (a
+    throwaway mysqld, never the live databases), a write to a row that isn't the PLAYER's changes both the CHECKSUM
+    TABLE and the datadir-file fingerprint, while the PLAYER's own rows are unchanged."""
+    br = (ctx or {}).get("release_bracket") or {}
+    start, end = br.get("start", "missing"), br.get("end")
+    ev: dict = {"bracket": {k: v for k, v in br.items() if k not in ("start", "end")}, "start": _slim_fp(start)}
     require(isinstance(start, dict) and "error" not in start,
-            "the runner didn't record the player's data at the start of the run", **ev)
-    now = player_data_fingerprint()
-    diff = fp_differences(start, now)
-    ev |= {"now_db": now.get("db"), "start_db": start.get("db"), "real_home": now.get("real_home"),
-           "differences": diff}
-    require(start["db"].get("sha256") or start["db"].get("player") is None,
-            "the PLAYER's rows couldn't be read at the start", **ev)
+            "the runner didn't record the player's data before the first release/firstlaunch check", **ev)
+    if end is None:                                  # no release/firstlaunch check ran: compare with now
+        end = player_data_fingerprint()
+        ev["end_taken"] = "now (no release.*/firstlaunch.* check ran in this run)"
+    ev["end"] = _slim_fp(end)
+    outside = [i for i in br.get("ran", []) if not i.startswith(BRACKET_PREFIXES) or i == PDU_ID]
+    require(not outside, f"checks other than release.*/firstlaunch.* ran inside the bracket: {outside}", **ev)
+    require("error" not in start["db"] and "error" not in end.get("db", {}),
+            "the live databases couldn't be fingerprinted", **ev)
+    diff = fp_differences(start, end)
+    ev["differences"] = diff
     require(not diff, f"the dev player's data changed: {diff}", **ev)
-    # counterexample: a scratch copy of the player files, one byte of its player.json changed
+    ev["counterexample"] = _pdu_counterexample()
+    return ev
+
+
+def _pdu_counterexample() -> dict:
+    """On a clone of lane A's datadir (cp -c; lane A's mysqld is down: the check's stack is "down"), with a throwaway
+    socket-only mysqld: the fingerprint before and after an UPDATE of one AI player's character (not the PLAYER's)
+    differs by CHECKSUM TABLE (characters) and, after a clean shutdown, by the datadir files (characters.ibd); the
+    PLAYER's account and characters rows (the old, weaker fingerprint) are the same. Plus: a changed player.json in
+    a scratch copy of the player files is seen."""
+    from .. import stack
+    L = P.layout("a")
+    ev: dict = {}
+    st = stack.stack_processes("a")
+    require(not any(st.values()), "counterexample: lane A isn't down, so its datadir can't be cloned", lane_a=st)
     d = scratch_dir("pdu")
+    proc = None
     try:
+        # one changed byte of player.json in a scratch copy of the player files is seen
         (d / "backups").mkdir()
         (d / "backups" / "x").write_text("b")
         pj = d / "player.json"
         pj.write_text(json.dumps({"account": "NOSUCHPLAYER", "password": "x"}))
         roots = {"backups": d / "backups", "player_json": pj, "settings_json": d / "settings.json",
-                 "client_play": d / "client-play", "client_manifest": d / "m.json", "datadir": d / "nodata",
-                 "real_home": d / "real"}
-        a = player_data_fingerprint(roots)
+                 "client_play": d / "client-play", "client_manifest": d / "m.json", "real_home": d / "real"}
+        a = player_data_fingerprint(roots, db=lambda: {"via": "none", "sha256": "-"})
         pj.write_text(json.dumps({"account": "NOSUCHPLAYER", "password": "y"}))
-        b = player_data_fingerprint(roots)
-        ev["counterexample"] = fp_differences(a, b)
-        require("player_json" in ev["counterexample"], "counterexample: a changed player.json wasn't seen", **ev)
+        b = player_data_fingerprint(roots, db=lambda: {"via": "none", "sha256": "-"})
+        ev["player_json"] = fp_differences(a, b)
+        require("player_json" in ev["player_json"], "counterexample: a changed player.json wasn't seen", **ev)
+        # the databases: a scratch clone of the live datadir
+        t = Path(tempfile.mkdtemp(prefix="pdu-", dir="/tmp"))          # short socket path
+        data = t / "data"
+        subprocess.run(["/bin/cp", "-cR", str(L["mysql_data"]), str(data)], check=True, capture_output=True)
+        for f in list(data.glob("*.pid")) + list(data.glob("*.sock*")):
+            f.unlink()
+        files0 = datadir_files(data)
+        sock = t / "s"
+        (t / "my.cnf").write_text(f"[mysqld]\nbasedir={P.MYSQL_BASE}\ndatadir={data}\nsocket={sock}\n"
+                                  f"pid-file={t / 'm.pid'}\nlog-error={t / 'err.log'}\nskip-networking\nmysqlx=OFF\n"
+                                  "performance_schema=OFF\ndisable-log-bin\ninnodb_buffer_pool_size=128M\n")
+        proc = subprocess.Popen([str(P.MYSQLD), f"--defaults-file={t / 'my.cnf'}"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, start_new_session=True)
+        conn = [f"--socket={sock}", "-uroot"]
+
+        def q(sql):
+            r = subprocess.run([str(P.MYSQL), "--no-defaults", *conn, "--batch", "--skip-column-names", "-e", sql],
+                               capture_output=True, text=True, timeout=120)
+            return r.returncode, (r.stdout if r.returncode == 0 else r.stderr).strip()
+        t0 = time.time()
+        while time.time() - t0 < 180 and proc.poll() is None:
+            if sock.exists():
+                rc, out = q("SELECT 1")
+                if rc == 0:
+                    break
+                if "Access denied" in out:
+                    conn = [f"--socket={sock}", f"-u{P.DB_USER}", f"-p{P.DB_PASS}"]
+            time.sleep(1)
+        player = _player_name(P.PLAYER_FILE) or "NOSUCHPLAYER"
+        require(player.replace("_", "").isalnum(), "counterexample: unexpected PLAYER account name")
+        player_sql = (f"SELECT id, username, HEX(salt), HEX(verifier), last_login FROM acore_auth.account WHERE "
+                      f"username = '{player}'; SELECT * FROM acore_characters.characters WHERE account = (SELECT id "
+                      f"FROM acore_auth.account WHERE username = '{player}') ORDER BY guid")
+        rc_p0, p0 = q(player_sql)
+        k0 = db_checksums(P.MYSQL, conn)
+        rc, target = q("SELECT c.guid FROM acore_characters.characters c JOIN acore_auth.account a ON a.id = c.account "
+                       f"WHERE a.username <> '{player}' ORDER BY c.guid LIMIT 1")
+        require(rc == 0 and target.isdigit(), "counterexample: no non-PLAYER character in the clone", **ev, out=target)
+        rc, out = q(f"UPDATE acore_characters.characters SET money = money + 1 WHERE guid = {target}")
+        k1 = db_checksums(P.MYSQL, conn)
+        rc_p1, p1 = q(player_sql)
+        subprocess.run([str(P.MYSQLADMIN), "--no-defaults", *conn, "shutdown"], capture_output=True, timeout=120)
+        proc.wait(timeout=120)
+        files1 = datadir_files(data)
+        kd = sorted(x for x in set(k0.get("tables", {})) | set(k1.get("tables", {}))
+                    if k0.get("tables", {}).get(x) != k1.get("tables", {}).get(x))
+        fd = sorted(x for x in set(files0) | set(files1) if files0.get(x) != files1.get(x))
+        ev["database"] = {"updated_guid": int(target), "update_rc": rc, "checksum_tables": len(k0.get("tables", {})),
+                          "checksum_changed": kd, "files_changed": fd[:10],
+                          "player_rows_same": rc_p0 == 0 and rc_p1 == 0 and p0 == p1}
+        require(rc == 0 and "error" not in k0 and "error" not in k1 and kd == ["acore_characters.characters"]
+                and "acore_characters/characters.ibd" in fd and ev["database"]["player_rows_same"],
+                "counterexample: a write to a non-PLAYER row wasn't seen by CHECKSUM TABLE and the datadir files "
+                "(or the PLAYER's rows changed)", **ev)
     finally:
+        if proc is not None and proc.poll() is None:
+            proc.kill()
+            proc.wait()
+        if "t" in locals():
+            shutil.rmtree(t, ignore_errors=True)
         shutil.rmtree(d, ignore_errors=True)
     return ev
 

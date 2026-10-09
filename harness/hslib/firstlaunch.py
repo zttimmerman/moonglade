@@ -26,7 +26,9 @@ Writes: nothing in HOME but logs/ until preflight has passed (HOME/logs/first-la
 this output); then home.json (layout version, attempts, steps done, the client source, the database attempt record)
 and each step's outputs. Kill-safe: done() never trusts a marker alone, partial files (.part, .hs-part, .unpack) are
 removed or redone by the next run, servers a killed run left behind are stopped at the next start, and an unfinished
-database is moved aside (never deleted) only when this setup created it and it has no characters.
+database is moved aside (never deleted) only when this setup created it and it has no player characters (the AI
+players' own don't count); only the newest set-aside folder is kept (prune_unfinished: an older one goes only when it
+has no player characters, counted on its clone).
 
 Test switches (release only, honoured with --allow-test-release inside a live harness run; paths.firstlaunch_test()):
 $HS_FIRSTLAUNCH_TEST = {"arch", "macos", "rosetta", "running", "free_bytes" (injected Mac facts), "corrupt_copy"
@@ -598,11 +600,12 @@ def _stop_probes() -> list[int]:
     return killed
 
 
-def _characters_in_datadir() -> tuple[int | None, str]:
-    """(number of player characters, how it was found) in the existing HOME/mysql; None when it can't be told
-    (fail-closed: the caller then keeps the datadir). The datadir itself is never opened: its APFS clone in HOME/tmp
-    is, by a throwaway mysqld (socket only, no network), which is stopped and removed afterwards."""
-    if not (P.MYSQL_DATA / "acore_characters").exists():
+def _characters_in_datadir(datadir: Path | None = None) -> tuple[int | None, str]:
+    """(number of player characters, how it was found) in `datadir` (default the existing HOME/mysql); None when it
+    can't be told (fail-closed: the caller then keeps the datadir). The datadir itself is never opened: its APFS clone
+    in HOME/tmp is, by a throwaway mysqld (socket only, no network), which is stopped and removed afterwards."""
+    datadir = P.MYSQL_DATA if datadir is None else datadir
+    if not (datadir / "acore_characters").exists():
         return 0, "no acore_characters database folder"
     from . import stack
     _stop_probes()
@@ -611,7 +614,7 @@ def _characters_in_datadir() -> tuple[int | None, str]:
     proc = None
     try:
         d.mkdir(parents=True)
-        r = subprocess.run(["/bin/cp", "-cR", str(P.MYSQL_DATA), str(d / "data")], capture_output=True, text=True)
+        r = subprocess.run(["/bin/cp", "-cR", str(datadir), str(d / "data")], capture_output=True, text=True)
         if r.returncode != 0:
             return None, f"couldn't clone the datadir: {r.stderr.strip()[-300:]}"
         for f in (d / "data").glob("*.pid"):
@@ -661,6 +664,24 @@ def _characters_in_datadir() -> tuple[int | None, str]:
         shutil.rmtree(d, ignore_errors=True)
 
 
+def prune_unfinished(keep: Path) -> dict:
+    """Set-aside datadirs (mysql.unfinished-*) don't pile up: only the newest (`keep`) stays. An older one is removed
+    only when the same rule as the reset says it is safe: no player characters, counted on its clone by a throwaway
+    mysqld. One that holds a player character, or can't be counted, is never removed."""
+    out: dict = {"kept": [keep.name], "removed": [], "kept_player_data": []}
+    for x in sorted(P.MYSQL_DATA.parent.glob("mysql.unfinished-*")):
+        if x == keep or not x.is_dir() or x.is_symlink():
+            continue
+        n, how = _characters_in_datadir(x)
+        if n == 0:
+            shutil.rmtree(x)
+            out["removed"].append({"name": x.name, "how": how})
+            say(f"   An older unfinished game world without player characters was removed: {x.name}")
+        else:
+            out["kept_player_data"].append({"name": x.name, "characters": n, "how": how})
+    return out
+
+
 class DatabaseStep(Step):
     id, label = "database", "Creating your game world (the first time takes 10-30 minutes)"
 
@@ -693,10 +714,14 @@ class DatabaseStep(Step):
         if n > 0:
             raise Refusal("database_kept", f"{path} holds {n} character(s)", ev, why="holds characters", path=path)
         aside = P.MYSQL_DATA.with_name(f"mysql.unfinished-{time.strftime('%Y%m%d-%H%M%S')}")
+        n_ = 1
+        while aside.exists():                       # two resets within one second
+            aside = P.MYSQL_DATA.with_name(f"mysql.unfinished-{time.strftime('%Y%m%d-%H%M%S')}-{n_}")
+            n_ += 1
         P.MYSQL_DATA.rename(aside)
         P.DB_MARKER.unlink(missing_ok=True)
         say(f"   An unfinished game world from an earlier attempt was moved aside to {aside}")
-        return ev | {"moved_aside_to": str(aside)}
+        return ev | {"moved_aside_to": str(aside), "pruned": prune_unfinished(aside)}
 
     def run(self, ctx):
         from . import stack

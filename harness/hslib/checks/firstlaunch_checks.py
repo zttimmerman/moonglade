@@ -28,6 +28,7 @@ import functools
 import http.server
 import json
 import os
+import re
 import shutil
 import subprocess
 import threading
@@ -36,7 +37,7 @@ from pathlib import Path
 
 from .. import paths as P
 from ..registry import check, require
-from .release_runtime_checks import (NEW_APP, SCRATCH_PORTS, SCRATCH_ROOT, _clean_env, _hook_events, _proc_info,
+from .release_runtime_checks import (NEW_APP, SCRATCH_PORTS, SCRATCH_ROOT, _clean_env, _hook_events, _proc_info, _q,
                                      exec_with_hook, heal_scratch, quick_app, release_env, release_fixture_app)
 
 CAP = "first-launch"
@@ -274,11 +275,61 @@ def _client_check(home: Path) -> dict:
             "files": len(man["files"]), "wow": (man.get("wow_exe_version") or {}).get("file_version")}
 
 
+def home_end_state(home: Path) -> tuple[dict, list[str]]:
+    """A finished first launch's HOME (firstlaunch.flow's end-state checks, shared with kill_resume): the client copy
+    matches its record, the play client exists, server data and Wine runtime match their fork.lock pins, the four
+    databases have tables and the database marker names this HOME, the default settings are written, home.json
+    records completion and no partial file is left. Returns (state, problems)."""
+    from .. import clientbuild
+    cc = _client_check(home)
+    lock = P.fork_lock()
+    stamp = clientbuild.read_stamp(home / "client-play")
+    try:
+        cd_marker = json.loads((home / "client-data" / ".hs-client-data.json").read_text())
+    except (OSError, ValueError):
+        cd_marker = {}
+    wine_marker = (home / "wine/runtime/.hs-runtime-sha256").read_text().strip() \
+        if (home / "wine/runtime/.hs-runtime-sha256").exists() else None
+    try:
+        dbm = json.loads((home / ".hs-db-ready.json").read_text())
+    except (OSError, ValueError):
+        dbm = {}
+    dbs = {n: any((home / "mysql" / n).glob("*.ibd")) for n in ("acore_auth", "acore_world", "acore_characters",
+                                                                 "acore_playerbots")}
+    try:
+        settings = json.loads((home / "settings.json").read_text())
+    except (OSError, ValueError):
+        settings = {}
+    try:
+        homej = json.loads((home / "home.json").read_text())
+    except (OSError, ValueError):
+        homej = {}
+    st = {"client": cc, "play_client_stamp": bool(stamp), "client_data_sha": cd_marker.get("sha256"),
+          "wine_marker": wine_marker, "db_marker": dbm, "dbs": dbs, "settings": settings, "home_json": homej,
+          "leftover_parts": [str(p) for p in home.rglob("*") if p.name.endswith((".part", ".hs-part", ".unpack"))]}
+    probs = []
+    if not (cc.get("manifest") and not cc.get("mismatches") and cc.get("wow") == "3.3.5.12340"):
+        probs.append("HOME's client copy doesn't match its record")
+    if not (stamp and (home / "client-play/Wow.exe").is_file()):
+        probs.append("no play client in HOME")
+    if not (cd_marker.get("sha256") == lock["client_data_sha256"] and wine_marker == lock["wowsilicon_runtime_sha256"]):
+        probs.append("the server data / Wine runtime don't match their pins")
+    if not (all(dbs.values()) and dbm.get("home") == str(home)):
+        probs.append("the databases didn't pass the step's check")
+    if not (settings.get("world_size") and settings.get("client")):
+        probs.append("the default settings weren't written")
+    if (homej.get("first_launch") or {}).get("complete") is not True:
+        probs.append("home.json doesn't record completion")
+    if st["leftover_parts"]:
+        probs.append("partial files left in HOME")
+    return st, probs
+
+
 @check("firstlaunch.flow", order=15, capability=CAP, stack="down", tier="slow")
 def flow(ctx):
     """Fresh scratch HOME to ready through the release app's first-launch window (test hook, scripted pick of
     client/, loopback downloads); counterexample: a corrupted copy is never called deletable and is redone."""
-    from .. import clientbuild, pristine
+    from .. import pristine
     from .release_checks import _need_payload
     healed = heal_scratch()
     ev: dict = {"healed": healed, "started": time.time()}
@@ -333,39 +384,9 @@ def flow(ctx):
         require("can now delete" in (done_win.get("text") or "") and str(src) in done_win.get("text", ""),
                 "the done screen doesn't say the folder given can be deleted", **ev)
         # HOME's end state
-        cc = _client_check(home)
-        lock = P.fork_lock()
-        stamp = clientbuild.read_stamp(home / "client-play")
-        try:
-            cd_marker = json.loads((home / "client-data" / ".hs-client-data.json").read_text())
-        except (OSError, ValueError):
-            cd_marker = {}
-        wine_marker = (home / "wine/runtime/.hs-runtime-sha256").read_text().strip() \
-            if (home / "wine/runtime/.hs-runtime-sha256").exists() else None
-        try:
-            dbm = json.loads((home / ".hs-db-ready.json").read_text())
-        except (OSError, ValueError):
-            dbm = {}
-        dbs = {n: any((home / "mysql" / n).glob("*.ibd")) for n in ("acore_auth", "acore_world", "acore_characters",
-                                                                     "acore_playerbots")}
-        try:
-            settings = json.loads((home / "settings.json").read_text())
-        except (OSError, ValueError):
-            settings = {}
-        homej = json.loads((home / "home.json").read_text())
-        ev["home"] = {"client": cc, "play_client_stamp": bool(stamp), "client_data_sha": cd_marker.get("sha256"),
-                      "wine_marker": wine_marker, "db_marker": dbm, "dbs": dbs, "settings": settings,
-                      "home_json": homej, "leftover_parts": [str(p) for p in home.rglob("*")
-                                                             if p.name.endswith((".part", ".hs-part", ".unpack"))]}
-        require(cc.get("manifest") and not cc.get("mismatches") and cc.get("wow") == "3.3.5.12340",
-                "HOME's client copy doesn't match its record", **ev)
-        require(stamp and (home / "client-play/Wow.exe").is_file(), "no play client in HOME", **ev)
-        require(cd_marker.get("sha256") == lock["client_data_sha256"] and wine_marker == lock["wowsilicon_runtime_sha256"],
-                "the server data / Wine runtime don't match their pins", **ev)
-        require(all(dbs.values()) and dbm.get("home") == str(home), "the databases didn't pass the step's check", **ev)
-        require(settings.get("world_size") and settings.get("client"), "the default settings weren't written", **ev)
-        require((homej.get("first_launch") or {}).get("complete") is True, "home.json doesn't record completion", **ev)
-        require(not ev["home"]["leftover_parts"], "partial files left in HOME", **ev)
+        ev["home"], probs = home_end_state(home)
+        for why in probs:
+            require(False, why, **ev)
         require(not _proc_info(lambda a: any(str(d) in x for x in a)), "processes of the scratch HOME remain", **ev)
         ev["measure"] = measure_home(home, free_before)
         fp1 = pristine.fingerprint(src)
@@ -1104,7 +1125,9 @@ def datadir_fingerprint(root: Path) -> dict:
     return out
 
 
-DB_KILL_AFTER_S = 40
+# the AI players' own characters (firstlaunch.BOT_ACCOUNT_PREFIX accounts) in the first start's scratch databases
+BOT_CHARS_SQL = ("SELECT COUNT(*) FROM acore_characters.characters c JOIN acore_auth.account a ON a.id = c.account "
+                 "WHERE a.username LIKE 'rndbot%'")
 
 
 @check("firstlaunch.kill_resume", order=15, capability=CAP, stack="down", tier="slow")
@@ -1112,10 +1135,13 @@ def kill_resume(ctx):
     """First launch on a scratch HOME (packaged app, client/ as the source, loopback downloads) SIGKILLed with its
     children during the client copy (byte-copy path), then during the server-data download, the server-data unpack
     and the database setup, each time followed by a normal launch that continues from the killed step (finished steps
-    say "already done" and their outputs keep inode and mtime); the last launch finishes; no .part, .hs-part, unpack
-    or temp folder is left and the end state passes firstlaunch.flow's HOME checks (an unfinished datadir is moved
-    aside, never deleted). Counterexample (scenario 2): a player character added to that HOME's database (step marked
-    not done) makes the next launch stop with database_kept and leaves every datadir file unchanged."""
+    say "already done" and their outputs keep inode and mtime); the database kill comes once the AI players'
+    characters exist (rndbot* accounts), so the next launch counts them on a clone as 0 player characters, moves the
+    datadir aside and finishes; no .part, .hs-part, unpack or temp folder is left and the end state passes
+    firstlaunch.flow's HOME checks (home_end_state). Counterexample (scenario 2): a player character added to that
+    HOME's database (step marked not done) makes the next launch stop with database_kept and leaves every datadir
+    file unchanged. Then pruning: of the set-aside folders only the newest stays, an older one without player
+    characters is removed and one with a player's character is kept."""
     from .release_checks import _need_payload
     heal_scratch()
     _need_payload(ctx)
@@ -1133,15 +1159,23 @@ def kill_resume(ctx):
         prof.write_text(sandbox_profile(d))
         n_ev = lambda evs, step, what="progress": sum(1 for e in evs if e.get("event") == what   # noqa: E731
                                                       and e.get("step") == step)
-        seen_world: dict = {}
+        seen_world: dict = {"polls": 0}
 
         def db_mid(evs):
-            # well into the first start: the world server has run DB_KILL_AFTER_S (SQL import under way or done, the
-            # characters database exists), so the reset rule has a real datadir to count characters in
-            if any(e.get("event") == "phase" and str(e.get("phase", "")).startswith("world_") for e in evs):
-                seen_world.setdefault("t", time.time())
-            return "t" in seen_world and time.time() - seen_world["t"] >= DB_KILL_AFTER_S \
-                and (home / "mysql" / "acore_characters").is_dir()
+            # in the first start's bot setup: the world server runs and the AI players' own characters (on their
+            # rndbot* accounts) exist, so the killed datadir holds AI players' characters and no player's
+            # (spec-change log 1: the reset rule must ignore them); polled at most once a second on the scratch port
+            if not any(e.get("event") == "phase" and str(e.get("phase", "")).startswith("world_") for e in evs):
+                return False
+            if time.time() - seen_world.get("last", 0) < 1:
+                return False
+            seen_world["last"] = time.time()
+            seen_world["polls"] += 1
+            n = _q(app, BOT_CHARS_SQL, SCRATCH_PORTS["mysql"], "acore_characters")
+            if n is not None and n.isdigit() and int(n) > 0:
+                seen_world["bot_characters_at_kill"] = int(n)
+                return True
+            return False
         phases = [
             ("client copy", {"force_byte_copy": True}, lambda evs: n_ev(evs, "client") >= 3),
             ("server-data download", {}, lambda evs: n_ev(evs, "data") >= 3),
@@ -1186,7 +1220,11 @@ def kill_resume(ctx):
                 if "wine" in done_now:
                     idents.setdefault(str(home / "wine/runtime/.hs-runtime-sha256"),
                                       _ident(home / "wine/runtime/.hs-runtime-sha256"))
+        ev["db_kill"] = {k: v for k, v in seen_world.items() if k != "last"}
         last = ev["launches"][-1]
+        ev["end_state"], end_probs = home_end_state(home)
+        for why in end_probs:
+            require(False, f"end state: {why}", **ev)
         ev["end"] = {"client": _client_check(home), "leftovers": _leftovers(home),
                      "home": sorted(x.name for x in home.iterdir()),
                      "complete": (json.loads((home / "home.json").read_text()).get("first_launch") or {}).get("complete"),
@@ -1198,9 +1236,9 @@ def kill_resume(ctx):
                 "the end state isn't a finished setup", **ev)
         require(not ev["end"]["leftovers"], "partial files or temp folders were left", **ev)
         rs = last["reset"] or {}
-        require(rs.get("moved_aside_to") and rs.get("characters") == 0 and "character" in str(rs.get("how"))
-                and "no acore_characters" not in str(rs.get("how")),
-                "the killed database wasn't counted (on a clone) and moved aside", **ev)
+        m = re.match(r"(\d+) character\(s\), 0 not on the AI players' rndbot\* accounts", str(rs.get("how")))
+        require(rs.get("moved_aside_to") and rs.get("characters") == 0 and m and int(m.group(1)) > 0,
+                "the killed database (AI players' characters only) wasn't counted on a clone and moved aside", **ev)
         require(not _proc_info(lambda a: any(str(home) in x for x in a)), "processes of the scratch HOME remain", **ev)
         # counterexample: a player's character in a not-done database -> kept, files unchanged
         md = d / "m"
@@ -1226,6 +1264,39 @@ def kill_resume(ctx):
                                           "datadir_files": len(fp0), "changed": _fp_diff(fp0, fp1)}
         require(f.get("error_id") == "database_kept" and f.get("step") == "database" and fp0 == fp1,
                 "counterexample: a datadir with a player's character wasn't kept unchanged", **ev)
+        # set-aside folders don't pile up (fix round 1): only the newest stays; an older one goes only when it holds
+        # no player character (counted on its clone); one with a player's character is never removed
+        aside = Path(rs["moved_aside_to"])
+        older_bots = home / "mysql.unfinished-20000101-000000"        # AI players' characters only
+        older_player = home / "mysql.unfinished-20000101-000001"      # holds the player character 'Keepme'
+        subprocess.run(["/bin/cp", "-c", "-R", str(aside), str(older_bots)], check=True)
+        subprocess.run(["/bin/cp", "-c", "-R", str(home / "mysql"), str(older_player)], check=True)
+        md.mkdir()
+        proc, q, stop = _scratch_mysqld(app, home / "mysql", md)
+        try:
+            rc, out = q("DELETE FROM acore_characters.characters WHERE guid=990001; "
+                        "SELECT COUNT(*) FROM acore_characters.characters WHERE guid=990001")
+        finally:
+            stop()
+        shutil.rmtree(md, ignore_errors=True)
+        require(rc == 0 and out.strip().endswith("0"), "couldn't remove the character again", **ev, out=out[-300:])
+        r = run_engine(app, home, [], {P.RELEASE_PORTS_ENV: json.dumps(SCRATCH_PORTS), "TMPDIR": str(d / "tmp") + "/"},
+                       d, timeout=1200)
+        db_done = next((e.get("result") or {} for e in r["events"]
+                        if e.get("step") == "database" and e.get("state") == "done"), {})
+        reset = db_done.get("reset") or {}
+        pruned = reset.get("pruned") or {}
+        ev["prune"] = {"rc": r["rc"], "failed": (_failed(r["events"]) or {}).get("error_id"), "reset": reset,
+                       "left": sorted(x.name for x in home.glob("mysql.unfinished-*"))}
+        newest = Path(reset.get("moved_aside_to") or "/nonexistent").name
+        require(r["rc"] == 0 and sorted(x["name"] for x in pruned.get("removed", [])) == sorted([older_bots.name,
+                                                                                                  aside.name])
+                and [x["name"] for x in pruned.get("kept_player_data", [])] == [older_player.name]
+                and ev["prune"]["left"] == sorted([older_player.name, newest]),
+                "set-aside folders: the older ones without player characters weren't removed, or the one with a "
+                "player's character wasn't kept", **ev, tail=r["out_tail"])
+        ev["end_state_after_prune"], probs2 = home_end_state(home)
+        require(not probs2, f"end state after the second reset: {probs2}", **ev)
     finally:
         _cleanup(d)
     return ev

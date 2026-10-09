@@ -74,10 +74,12 @@
 //   a python3 from PATH, and PATH never names /opt/homebrew or /usr/local), and app.log / play-last.json live in HOME
 //   (~/Library/Application Support/Moonglade/logs and run). Dev mode (repo-path) is unchanged.
 // - Release test switches (HS_RELEASE_HOME, HS_RELEASE_PORTS, HS_RELEASE_DOWNLOAD_BASE, HS_FIRSTLAUNCH_TEST): passed to
-//   the play loop only with the test hook and --allow-test-release on the command line (the play loop then also needs
-//   a live harness run); otherwise the app refuses, naming them, and starts and writes nothing. HS_RELEASE_HOME must
-//   be below a .../harness/out/release-scratch/ folder. HS_APP_TEST_CLIENT_PICK is the app's own (the first-launch
-//   folder pick, honoured only with the test hook) and never reaches the play loop.
+//   the play loop only with the test hook, --allow-test-release on the command line, a scratch HOME (HS_RELEASE_HOME
+//   below a .../harness/out/release-scratch/ folder) and a harness run (HS_HARNESS_RUN=1 and a run id); otherwise the
+//   app refuses, naming them, and starts and writes nothing. The payload's Python then checks that the run is live;
+//   when it refuses, the window says so in plain words, naming the switches (switchRefusal).
+//   HS_APP_TEST_CLIENT_PICK is the app's own (the first-launch folder pick, honoured only with the test hook) and
+//   never reaches the play loop.
 //
 // First launch (release-first-launch design 4, task 3.5): a release app whose HOME isn't set up (home.json has no
 // first_launch.complete) shows the first-launch window instead of starting the game: the loading window's look plus a
@@ -134,6 +136,7 @@ static NSArray<NSString *> *ReleaseSwitches(void) {
 @property(strong) NSString *loopExe;             // dev: /bin/bash; release: the payload's python3
 @property(strong) NSArray<NSString *> *loopPrefix;   // dev: [<repo>/play]; release: [-I, -B, -m, hslib.play]
 @property(strong) NSString *clientPick;          // release, test hook only: the scripted first-launch folder pick
+@property(strong) NSArray *passedSwitches;       // release test switches passed on (test hook + flag + harness run)
 @property(strong) NSString *logPath;
 @property(strong) NSString *hookPath;
 @property(strong) NSTask *task;
@@ -528,16 +531,21 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
     NSMutableArray *set = [NSMutableArray array];
     for (NSString *k in [ReleaseSwitches() arrayByAddingObject:kClientPickEnv]) if ([penv[k] length]) [set addObject:k];
     NSString *scratch = penv[@"HS_RELEASE_HOME"];
-    BOOL scratchOK = !scratch.length || ([scratch isAbsolutePath]
-                                          && [scratch rangeOfString:@"/harness/out/release-scratch/"].location != NSNotFound);
-    if (set.count && !(self.releaseMode && [self testMode] && releaseFlag && scratchOK)) {
+    // a scratch HOME is required whenever a switch is passed on (so nothing, not even a log, reaches the real HOME)
+    BOOL scratchOK = scratch.length && [scratch isAbsolutePath]
+                     && [scratch rangeOfString:@"/harness/out/release-scratch/"].location != NSNotFound;
+    // inside a harness run (the payload's Python then checks that the run is live: paths.test_release_refusal)
+    BOOL inRun = [penv[@"HS_HARNESS_RUN"] isEqual:@"1"] && [penv[@"HS_HARNESS_RUN_ID"] length] > 0;
+    if (set.count && !(self.releaseMode && [self testMode] && releaseFlag && scratchOK && inRun)) {
         NSString *why = [NSString stringWithFormat:@"%@ %@ test-only (the harness's release checks) and %@ refused "
                          @"%@. Unset %@ and open Moonglade again.",
                          [set componentsJoinedByString:@", "], set.count == 1 ? @"is" : @"are",
                          set.count == 1 ? @"is" : @"are",
                          !self.releaseMode ? @"by the dev app"
-                         : !scratchOK ? @"unless HS_RELEASE_HOME is below .../harness/out/release-scratch/"
-                         : [NSString stringWithFormat:@"without the test hook and %@", kReleaseFlag],
+                         : !([self testMode] && releaseFlag)
+                             ? [NSString stringWithFormat:@"without the test hook and %@", kReleaseFlag]
+                         : !scratchOK ? @"unless HS_RELEASE_HOME is set below .../harness/out/release-scratch/"
+                         : @"outside a harness run",
                          set.count == 1 ? @"it" : @"them"];
         if ([self testMode]) {
             int fd = open(self.hookPath.fileSystemRepresentation, O_WRONLY | O_CREAT | O_APPEND, 0644);
@@ -559,6 +567,7 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
         }
         exit(2);                                        // nothing started, nothing written (no app.log either)
     }
+    if (set.count) self.passedSwitches = set;
     if (self.releaseMode) {
         char real[PATH_MAX];
         repo = realpath(payload.fileSystemRepresentation, real) ? [fm stringWithFileSystemRepresentation:real
@@ -812,6 +821,24 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
     return [parts componentsJoinedByString:@"\n\n"];
 }
 
+// The payload's Python refused the test switches this app passed on (test hook + flag, but the harness run isn't
+// live): a plain message naming them instead of a generic error. nil when that isn't what happened.
+- (NSString *)switchRefusal {
+    if (!self.passedSwitches.count) return nil;
+    BOOL refused = NO;
+    for (NSString *l in [self.outLines arrayByAddingObjectsFromArray:self.playLines])
+        if (([l rangeOfString:@"is a test switch"].location != NSNotFound
+             || [l rangeOfString:@"are test switches"].location != NSNotFound)
+            && [l rangeOfString:@"refused"].location != NSNotFound) { refused = YES; break; }
+    if (!refused) return nil;
+    BOOL one = self.passedSwitches.count == 1;
+    NSString *names = [self.passedSwitches componentsJoinedByString:@", "];
+    return [NSString stringWithFormat:@"%@ %@ for Moonglade's own tests and only %@ inside one of its test runs, so "
+            @"Moonglade refused %@ and didn't start anything. Nothing was changed. Unset %@ and open Moonglade again.",
+            names, one ? @"is a test setting" : @"are test settings", one ? @"works" : @"work", one ? @"it" : @"them",
+            names];
+}
+
 - (void)playExited:(NSTask *)task {
     [self.tailTimer invalidate];
     [self tail];
@@ -823,6 +850,13 @@ static NSDictionary<NSString *, NSString *> *kFriendlyStage(void) {
                        @"visible_before": @(self.statusWindow.visible), @"onscreen_before": @([self windowOnScreen])}];
     [self hideStatus];
     if (code == 0) [self finish:0];
+    NSString *refusal = [self switchRefusal];
+    if (refusal) {
+        [self errorDialog:@"test_switch_refused" title:@"Moonglade can't start" text:refusal
+                  details:[NSString stringWithFormat:@"%@\n\nThe full log is at:\n%@",
+                           [self problemFrom:@{} code:code], self.logPath]];
+        [self finish:code > 0 && code < 256 ? code : 1];
+    }
     if (code == 2) {                                    // play.py EXIT_BUSY: the single-instance lock is held
         [self dialog:@"already_running" title:@"Moonglade is already running"
                 text:@"The game is already open (or still starting). Use that window, or quit the game first."
@@ -1797,6 +1831,12 @@ static NSString *HSBytes(double b) {
                @"(“%@”): Moonglade keeps its own copy of the game. Press Play to start.", src]
             : @"Setup is done. Press Play to start.";
         [self setupShow:@"done" title:@"Moonglade is ready" text:text primary:@"Play" secondary:@"Quit"];
+        return;
+    }
+    NSString *refusal = code != 0 ? [self switchRefusal] : nil;
+    if (refusal) {
+        self.setupFailure = @{@"title": @"Moonglade can't start", @"message": refusal, @"choose_again": @NO};
+        [self setupShow:@"error" title:self.setupFailure[@"title"] text:refusal primary:@"Quit" secondary:nil];
         return;
     }
     if (code == 3 && self.setupNeedClient) {

@@ -136,6 +136,7 @@ A release is a ready-made `Moonglade.app`: no Terminal, Homebrew or Xcode tools.
 | `player.json` | your login (account `PLAYER` and its password) |
 | `settings.json` | Moonglade's settings |
 | `logs/`, `run/`, `tmp/`, `etc/`, `downloads/`, `home.json` | logs and Moonglade's own bookkeeping |
+| `mysql.unfinished-<date>` (only after an interrupted setup) | a game world from a setup that was stopped before it finished, set aside instead of deleted. Moonglade keeps only the newest one; it removes an older one only when it holds no characters of yours (the AI players' own don't count), and never one that does. You can delete it yourself once setup has finished. |
 
 **Removing everything.** Quit Moonglade first. Drag `Moonglade.app` to the Trash. Then delete the `Moonglade` folder in `~/Library/Application Support`. This deletes your characters and save backups too. Finder asks you to confirm because Moonglade's copy of your game is locked (so nothing changes it by accident); confirm and empty the Trash. Or, in Terminal, this one line unlocks the folder and removes it:
 
