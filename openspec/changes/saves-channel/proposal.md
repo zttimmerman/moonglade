@@ -22,4 +22,8 @@ If the live test shows A1 can't work, the builder stops and reports with evidenc
 - Live-test attempt notes, 2026-10-09: in enUS, `LOGIN_UNKNOWN_ACCOUNT` and `LOGIN_MALFORMED_ACCOUNT_NAME` have the same text. So "accepted" and "refused" must use codes whose texts are unique; the live check pins the table.
 
 ## Spec-change log
-(none yet)
+- 2026-10-09 (verifier note, clarification): "Status round trip" THEN. At our log level AzerothCore never logs logon challenges (`[AuthChallenge]` is DEBUG, `AuthSession.cpp:293`), so the original clause "the authserver's log shows no login attempt with an `HS` name" could never fail. The clause now also requires the client's `connection.log` to show that every control request went to the listener's port, and that the only 3724 connection is the later Continue. The Auth.log assertion is kept, and the check already asserted both. This is a tightening of what is proven, not a loosening.
+
+## Follow-ups (from the verifier)
+- Check whether the client stores the last account name (`HS<nonce>S`) in `WTF/Config.wtf` (`accountName`). If it does, `front-menu-saves` must restore or clear it.
+- Decide whether the listener should refuse builds other than 12340. Today a valid token with any build is accepted; that's harmless, since it's loopback-only and needs the nonce.

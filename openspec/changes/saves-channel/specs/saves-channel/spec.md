@@ -35,7 +35,7 @@ From the title menu, the glue SHALL send a control request by pointing `realmLis
   - the listener logs exactly one challenge with account `HS<nonce>S`, build 12340, from 127.0.0.1, within 5 s;
   - the glue records the "accepted" reply;
   - a screenshot during the request shows our overlay, not the stock Connecting or error dialog;
-  - the authserver's log shows no login attempt with an `HS` name
+  - no control-request connection reaches the login server's port (the client's `connection.log` shows each one going to the listener's port, and the only 3724 connection is the later Continue), and the authserver's log names no `HS` token
 - Check: `savesctl.live_roundtrip`
 
 #### Scenario: The reply-code table is pinned
