@@ -387,7 +387,7 @@ def quick_app(root: Path, with_launcher: bool = False) -> Path:
         (app / "Contents" / "MacOS").mkdir(parents=True)
         compile_launcher(app / "Contents" / "MacOS" / "Moonglade")
         with open(app / "Contents" / "Info.plist", "wb") as f:
-            plistlib.dump({"CFBundleExecutable": "Moonglade", "CFBundleIdentifier": "local.moonglade.release",
+            plistlib.dump({"CFBundleExecutable": "Moonglade", "CFBundleIdentifier": "io.github.zttimmerman.moonglade",
                            "CFBundleName": "Moonglade", "CFBundlePackageType": "APPL",
                            "CFBundleInfoDictionaryVersion": "6.0", "LSMinimumSystemVersion": "13.0"}, f)
     return pl

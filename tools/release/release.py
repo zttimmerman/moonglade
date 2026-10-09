@@ -1,7 +1,11 @@
 #!/usr/bin/env python3
 """Prebuilt-release packaging (openspec/changes/release-build). Driven by tools/release/package.sh.
 
-    release.py [options] STEP ...      STEP: clean fetch build payload assets | all (= clean fetch build payload assets)
+    release.py [options] STEP ...      STEP: clean fetch build payload sign assets notarize | all (= every step)
+
+Signing (openspec/changes/release-signing): `sign` signs the app in the mode set by tools/release/signing.json
+(ad-hoc by default; developer-id only in the release workflow) and `notarize` notarizes and staples it (developer-id;
+"not applicable" in ad-hoc). See tools/release/sign.py.
 
 Everything is written under env/release/ (work dir; --work, --cache and --out must stay inside it):
     env/release/cache/     pinned downloads (fork.lock release_*; harness/hslib/downloads.py verifies every byte)
@@ -9,9 +13,12 @@ Everything is written under env/release/ (work dir; --work, --cache and --out mu
     env/release/build/     the portable server build (cmake tree build/cmake, install build/install, readline stub)
     env/release/payload/Moonglade.app/   the release app (what the zip holds; release-first-launch design 2):
         Contents/MacOS/Moonglade          the prebuilt launcher (a copy of the payload's bin/Moonglade)
-        Contents/Info.plist               bundle id local.moonglade.release (release-signing picks the final one)
+        Contents/Info.plist               bundle id io.github.zttimmerman.moonglade (release-signing)
         Contents/Resources/AppIcon.icns   branding/AppIcon.icns
-        Contents/Resources/Moonglade/     the payload (below)
+        Contents/Resources/Moonglade/     the payload (below); every Mach-O in it signed on its own, inside out
+        Contents/_CodeSignature/          the bundle signature (sign step)
+    env/release/build/oracle.json         Oracle MySQL files' signatures (cdhashes) as recorded at payload
+    env/release/build/sign.json           the sign step's record (+ bundle-files.json: every file and its sha256)
     env/release/out/       the release assets: the zip, the source tarballs, SOURCES.json, SHA256SUMS
 
 A zip built anywhere but CI ($GITHUB_ACTIONS) carries this Mac's repo path in the server binaries (AzerothCore's
@@ -58,13 +65,14 @@ from hslib import downloads as D      # noqa: E402
 from hslib import paths as P          # noqa: E402
 from hslib import power               # noqa: E402
 import delocate                       # noqa: E402
+import sign as SG                     # noqa: E402
 
 RELEASE_DIR = ROOT / "env" / "release"
 DEPLOYMENT_TARGET = "26.0"
 PAYLOAD_NAME = "Moonglade"
 APP_NAME = "Moonglade.app"
 APP_PAYLOAD = Path("Contents") / "Resources" / PAYLOAD_NAME     # the payload's place inside the app
-RELEASE_BUNDLE_ID = "local.moonglade.release"                     # not the dev app's local.moonglade.app
+RELEASE_BUNDLE_ID = SG.BUNDLE_ID          # io.github.zttimmerman.moonglade; never the dev app's local.moonglade.app
 LOCAL_LABEL = "local test build, not for publishing"
 LOCAL_SUFFIX = "-local-test-build-not-for-publishing"
 MYSQL_KEEP_BIN = ("mysqld", "mysql", "mysqldump", "mysqladmin")   # mysqladmin: stack.mysql_down (release mode)
@@ -77,7 +85,10 @@ PY_PRUNE = ("include", "share", "lib/pkgconfig", "lib/libpython3.13.dylib", "lib
             "lib/python3.13/ensurepip", "lib/python3.13/site-packages/pip",
             "lib/python3.13/config-3.13-darwin")
 PY_PRUNE_GLOBS = ("lib/python3.13/lib-dynload/_tkinter*", "lib/python3.13/site-packages/pip-*", "bin/pip*",
-                  "bin/idle*", "bin/pydoc*", "bin/python3*-config", "lib/python3.13/turtle.py")
+                  "bin/idle*", "bin/pydoc*", "bin/python3*-config", "lib/python3.13/turtle.py",
+                  # the only Python extension module (the rest are built in); the harness never uses dbm, and under
+                  # the hardened runtime an ad-hoc process can't load it (library validation; release-signing 2.2)
+                  "lib/python3.13/lib-dynload/_dbm*")
 # repo paths (tracked files) the payload carries
 REPO_PARTS = ("harness", "play", "bootstrap", "patches", "client-mods", "branding", "fork.lock", "LICENSE", "NOTICE",
               "README.md")
@@ -139,10 +150,11 @@ class Ctx:
         self.version = a.version or default_version()
         self.guard = power.Guard("release packaging", "tools/release/package.sh", self.ignore_power, say=log)
         self.fetched: dict[str, Path] = {}
+        self.signing_config = SG.config_path(a.signing_config)
 
     def record(self) -> dict:
         return {"work": str(self.work), "cache": str(self.cache), "out": str(self.out), "version": self.version,
-                "build_root": str(self.build_root), "ci": self.ci,
+                "build_root": str(self.build_root), "ci": self.ci, "signing_config": str(self.signing_config),
                 "jobs": {"n": self.jobs, "why": self.jobs_why}}
 
 
@@ -497,9 +509,6 @@ def step_payload(c: Ctx) -> dict:
     (m / "bin").mkdir(parents=True)
     for n in MYSQL_KEEP_BIN:
         shutil.copy2(mysql / "bin" / n, m / "bin" / n)
-    for p in sorted((mysql / "bin").iterdir()):
-        if p.is_symlink() and p.name.endswith(".dylib"):
-            os.symlink(os.readlink(p), m / "bin" / p.name)
     (m / "lib").mkdir()
     # only the libraries the kept programs load (their @loader_path closure), not Kerberos/FIDO plugins' libraries
     need, todo = set(), [mysql / "bin" / n for n in MYSQL_KEEP_BIN]
@@ -520,6 +529,11 @@ def step_payload(c: Ctx) -> dict:
         if real.parent != (mysql / "lib").resolve():
             raise ReleaseError(f"Oracle MySQL: unexpected library location {real}")
         shutil.copy2(real, m / "lib" / real.name)
+    # Oracle's dylib links in bin/, only those pointing at a library we keep (a dangling link makes the bundle
+    # signature fail to verify: release-signing 2.1)
+    for p in sorted((mysql / "bin").iterdir()):
+        if p.is_symlink() and p.name.endswith(".dylib") and (m / "bin" / os.readlink(p)).is_file():
+            os.symlink(os.readlink(p), m / "bin" / p.name)
     for n in MYSQL_KEEP_SHARE:
         shutil.copytree(mysql / "share" / n, m / "share" / n)
     for n in ("LICENSE", "README"):
@@ -572,6 +586,11 @@ def step_payload(c: Ctx) -> dict:
     if g["problems"]:
         raise ReleaseError(f"forbidden paths in the payload ({len(g['problems'])}): {g['problems'][:8]}")
     rec["gate"] = {"macho_files": g["macho_files"], "allowlisted": len(g["allowlisted"])}
+    # Oracle's signatures as shipped (release-signing design 3): `sign` leaves these files alone; checks compare
+    oracle = SG.oracle_files(stage)
+    (c.build / "oracle.json").write_text(json.dumps(oracle, indent=2, sort_keys=True) + "\n")
+    rec["oracle_files"] = oracle
+    (c.build / "sign.json").unlink(missing_ok=True)        # a new app is unsigned until `sign` runs
     app = c.work / "payload.tmp" / APP_NAME
     rec["app"] = wrap_app(stage, app)
     if c.payload_parent.exists():
@@ -638,20 +657,57 @@ def git_archive(repo: Path, ref: str, prefix: str, dst: Path) -> None:
             raise ReleaseError(f"git archive {repo.name} {ref} failed")
 
 
+def step_sign(c: Ctx) -> dict:
+    """Sign the app in the checked-in mode (release-signing design 1, 3, 4); writes build/sign.json."""
+    try:
+        return SG.sign(c.app, c.build, c.signing_config, c.build / "oracle.json")
+    except SG.SignError as e:
+        raise ReleaseError(str(e)) from None
+
+
+def signed_now(c: Ctx) -> dict:
+    """This app's sign record, refusing an app that was never signed, was signed in another mode, or changed since."""
+    sj = c.build / "sign.json"
+    if not sj.is_file() or sj.stat().st_mtime < (c.payload / "VERSION").stat().st_mtime:
+        raise ReleaseError(f"the app isn't signed (no {sj} newer than the payload); run the sign step first")
+    rec = json.loads(sj.read_text())
+    mode = SG.read_mode(c.signing_config)
+    if rec.get("mode") != mode:
+        raise ReleaseError(f"the app was signed in {rec.get('mode')} mode but {c.signing_config} says {mode}; sign again")
+    now = SG.display(c.app).get("cdhash")
+    v = sh(["/usr/bin/codesign", "--verify", "--deep", "--strict", c.app], check=False)
+    if v.returncode != 0 or now != (rec.get("bundle") or {}).get("cdhash"):
+        raise ReleaseError(f"the app changed since it was signed (cdhash {now}, verify rc {v.returncode}); sign again")
+    return rec
+
+
+def zip_app(c: Ctx) -> Path:
+    z = c.out / zip_name(c)
+    z.unlink(missing_ok=True)
+    sh([*SG.DITTO_ZIP, c.app, z])
+    return z
+
+
+def write_sums(c: Ctx) -> None:
+    lines = [f"{sha256(p)}  {p.name}" for p in sorted(c.out.iterdir()) if p.is_file() and p.name != "SHA256SUMS"]
+    (c.out / "SHA256SUMS").write_text("\n".join(lines) + "\n")
+
+
 def step_assets(c: Ctx) -> dict:
     if not (c.payload / "VERSION").is_file():
         raise ReleaseError(f"no payload at {c.payload}; run the payload step first")
     if c.ci != (json.loads((c.payload / "VERSION").read_text()).get("build") == "ci"):
         raise ReleaseError("the payload's VERSION build label doesn't match this run (CI vs local); rebuild the payload")
+    signed = signed_now(c)
     c.guard.check("the assets step (zip + source tarballs)")
     trees = patched_trees(c)
     if c.out.exists():
         shutil.rmtree(c.out)
     c.out.mkdir(parents=True)
     assets: dict[str, dict] = {}
-    z = c.out / zip_name(c)
-    sh(["/usr/bin/ditto", "-c", "-k", "--keepParent", "--norsrc", "--noextattr", "--noqtn", c.app, z])
-    assets[z.name] = {"what": "Moonglade.app (macOS arm64)" + ("" if c.ci else f"; {LOCAL_LABEL}")}
+    z = zip_app(c)
+    assets[z.name] = {"what": "Moonglade.app (macOS arm64)" + ("" if c.ci else f"; {LOCAL_LABEL}"),
+                      "signing": signed["mode"], "notarized": False}
     # the Moonglade source at this commit (the tag in CI)
     head = sh(["git", "-C", ROOT, "rev-parse", "HEAD"]).stdout.strip()
     src = c.out / f"moonglade-{c.version}-source.tar.gz"
@@ -667,14 +723,33 @@ def step_assets(c: Ctx) -> dict:
     sh(["/bin/cp", "-c", ms, dst])          # APFS clone: no extra disk
     assets[dst.name] = {"what": "MySQL source for the bundled Oracle MySQL", "sha256": c.lock["release_mysql_source_sha256"]}
     (c.out / "SOURCES.json").write_text(json.dumps({"version": c.version, "assets": assets}, indent=2) + "\n")
-    lines = [f"{sha256(p)}  {p.name}" for p in sorted(c.out.iterdir()) if p.is_file() and p.name != "SHA256SUMS"]
-    (c.out / "SHA256SUMS").write_text("\n".join(lines) + "\n")
+    write_sums(c)
     sizes = {p.name: p.stat().st_size for p in sorted(c.out.iterdir())}
-    return {"out": str(c.out), "assets": sorted(sizes), "sizes": sizes, "zip": str(z)}
+    return {"out": str(c.out), "assets": sorted(sizes), "sizes": sizes, "zip": str(z), "signing": signed["mode"]}
 
 
-STEPS = {"clean": step_clean, "fetch": step_fetch, "build": step_build, "payload": step_payload, "assets": step_assets}
-ALL = ("clean", "fetch", "build", "payload", "assets")
+def step_notarize(c: Ctx) -> dict:
+    """developer-id: notarize the zip, staple the app, zip it again and refresh SOURCES.json / SHA256SUMS. ad-hoc: a
+    no-op recorded as not applicable."""
+    z = c.out / zip_name(c)
+
+    def rezip() -> dict:
+        signed_now(c)
+        zip_app(c)
+        src = json.loads((c.out / "SOURCES.json").read_text())
+        src["assets"][z.name].update({"notarized": True, "stapled": True})
+        (c.out / "SOURCES.json").write_text(json.dumps(src, indent=2) + "\n")
+        write_sums(c)
+        return {"zip": str(z), "sha256": sha256(z), "bytes": z.stat().st_size}
+    try:
+        return SG.notarize(c.app, z, c.build, c.signing_config, rezip)
+    except SG.SignError as e:
+        raise ReleaseError(str(e)) from None
+
+
+STEPS = {"clean": step_clean, "fetch": step_fetch, "build": step_build, "payload": step_payload, "sign": step_sign,
+         "assets": step_assets, "notarize": step_notarize}
+ALL = ("clean", "fetch", "build", "payload", "sign", "assets", "notarize")
 
 
 def main(argv=None) -> int:
@@ -688,6 +763,9 @@ def main(argv=None) -> int:
     ap.add_argument("--ignore-power", action="store_true", help="don't pause on low battery")
     ap.add_argument("--sync-vendor", action="store_true", help="CI: sync vendor/ to the pins first")
     ap.add_argument("--record", type=Path, help="write the run record (JSON) here")
+    ap.add_argument("--signing-config", type=Path, default=None,
+                    help="checks only: a scratch signing-mode file under env/release/ or harness/out/ "
+                         "(default tools/release/signing.json)")
     a = ap.parse_args(argv)
     steps = ALL if "all" in a.steps else tuple(s for s in ALL if s in a.steps)
     for sw in power.set_switches():
@@ -705,7 +783,7 @@ def main(argv=None) -> int:
             rec["steps"][s] = {"seconds": round(time.time() - ts), **(rec["steps"][s] or {})}
         rec["ok"] = True
         return 0
-    except (ReleaseError, delocate.DelocateError, power.JobsError) as e:
+    except (ReleaseError, delocate.DelocateError, power.JobsError, SG.SignError) as e:
         rec["error"] = str(e)
         print(f"release: FAILED: {e}", file=sys.stderr)
         return 1
