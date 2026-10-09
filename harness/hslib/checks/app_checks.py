@@ -210,14 +210,35 @@ def tile_report(w: int, h: int, px: bytes, t: dict) -> dict:
     band = (t["shadow"]["reach_px"] + t["shadow"]["dy_px"]) * k + bd["outer_slack"] + 1.0
     x0, y0, size, r = bd["outer"]
     outside_nonzero, samples = 0, []
+    alpha = px[3::4]
+    # per row, the pixels whose centre is within `band` of the outer rounded square (_rr_sdf <= band) form one run
+    # [lo, hi]: _rr_sdf <= band  <=>  qx <= sqrt((r + band)^2 - max(qy, 0)^2), qx = |x + 0.5 - cx| - inner
+    cx, cy, inner, rb = x0 + size / 2, y0 + size / 2, size / 2 - r, r + band
     for y in range(h):
-        row = y * w * 4
-        for x in range(w):
-            a = px[row + x * 4 + 3]
-            if a and _rr_sdf(x + 0.5, y + 0.5, x0, y0, size, r) > band:
-                outside_nonzero += 1
-                if len(samples) < 5:
-                    samples.append([x, y, a])
+        row = alpha[y * w:(y + 1) * w]
+        qy = max(abs(y + 0.5 - cy) - inner, 0.0)
+        if qy > rb:
+            lo, hi = w, w - 1                                  # the whole row is outside
+        else:
+            half = inner + math.sqrt(rb * rb - qy * qy)
+            lo, hi = max(0, math.ceil(cx - half - 0.5)), min(w - 1, math.floor(cx + half - 0.5))
+            while lo <= hi and _rr_sdf(lo + 0.5, y + 0.5, x0, y0, size, r) > band:
+                lo += 1                                        # float edge cases: the exact test decides
+            while hi >= lo and _rr_sdf(hi + 0.5, y + 0.5, x0, y0, size, r) > band:
+                hi -= 1
+            while lo > 0 and _rr_sdf(lo - 0.5, y + 0.5, x0, y0, size, r) <= band:
+                lo -= 1
+            while hi < w - 1 and _rr_sdf(hi + 1.5, y + 0.5, x0, y0, size, r) <= band:
+                hi += 1
+        outside = (row[:lo], row[hi + 1:]) if lo <= hi else (row,)
+        offs = (0, hi + 1) if lo <= hi else (0,)
+        for seg, off in zip(outside, offs):
+            nz = len(seg) - seg.count(0)
+            if nz:
+                outside_nonzero += nz
+                for x, a in enumerate(seg):
+                    if a and len(samples) < 5:
+                        samples.append([off + x, y, a])
     rep["outside_band_px"] = round(band, 1)
     rep["outside_nonzero_alpha"] = outside_nonzero
     rep["outside_samples"] = samples
@@ -296,6 +317,162 @@ def verify_icon(png_path: Path, icns_path: Path, regenerate: bool = True, meta: 
     return ev
 
 
+# icon-corner-c: "The tile has macOS 26's continuous-corner shape". The spec's literal values (not icon.py's constants,
+# so a wrong constant there fails); the sampling geometry still comes from the record.
+EXPECT_TILE = {"kind": "continuous", "body_px": 832.0, "x0_px": 96.0, "y0_px": 96.0, "corner_radius_px": 216.0,
+               "logo_diameter_px": 569.719}        # logo: Zach's preview, ICON_DIAMETER × int(824 × 0.86) / 1024
+CA_MEAN_MAX = 1.0             # generator mask vs Core Animation: mean |difference| over the canvas, in 1/255 ...
+CA_PIXEL_MAX = 64.0           # ... and at any pixel (anti-aliasing only)
+CAMASK = Path(I.__file__).with_name("camask.py")
+SHAPE_RAY_ANGLES = (0.0, 8.0, 22.5, 45.0, 67.5, 82.0, 90.0)   # degrees from the corner centre, top side → vertical side
+GAP_ALPHA_MAX = 128           # inside the circular outline but outside the continuous one: shadow only, never tile
+GAP_MIN_PX = 16               # the gap between the two outlines must hold at least this many whole pixels
+
+
+def record_masks(t: dict, n: int) -> dict:
+    """The generator's tile mask for the record's geometry and shape, and the circular-arc mask of the same body and
+    radius (the counterexample), both rendered by icon.corner_mask."""
+    k = n / t["canvas"]
+    x0, size, r = t["x0_px"] * k, t["body_px"] * k, t["corner_radius_px"] * k
+    return {"generator": I.corner_mask(n, x0, t["y0_px"] * k, size, r, t["kind"]),
+            "circular": I.corner_mask(n, x0, t["y0_px"] * k, size, r, "circular")}
+
+
+def core_animation_mask(t: dict, n: int) -> tuple[bytes | None, str]:
+    """Core Animation's cornerCurve = continuous rendering of the record's body and radius (hslib/camask.py, its own
+    process). (None, why) when Core Animation can't render it: the check then fails."""
+    k = n / t["canvas"]
+    try:
+        r = subprocess.run([sys.executable, "-I", str(CAMASK), str(n), repr(t["x0_px"] * k), repr(t["body_px"] * k),
+                            repr(t["corner_radius_px"] * k)], capture_output=True, timeout=60)
+    except (OSError, subprocess.TimeoutExpired) as e:
+        return None, f"{type(e).__name__}: {e}"
+    if r.returncode != 0 or len(r.stdout) != n * n:
+        return None, f"rc {r.returncode}, {len(r.stdout)} bytes, stderr {r.stderr.decode(errors='replace')[-300:]!r}"
+    return r.stdout, "ok"
+
+
+def mask_vs_reference(mask: list[float], ref: bytes) -> dict:
+    """Mean and max |mask × 255 - ref| over the canvas (in 1/255), with where the max is."""
+    total, worst, at = 0.0, -1.0, 0
+    for i, (m, c) in enumerate(zip(mask, ref)):
+        d = abs(m * 255.0 - c)
+        total += d
+        if d > worst:
+            worst, at = d, i
+    n = math.isqrt(len(ref))
+    mean = total / len(ref)
+    return {"mean": round(mean, 4), "max": round(worst, 2), "max_at": [at % n, at // n],
+            "ok": mean <= CA_MEAN_MAX and worst <= CA_PIXEL_MAX}
+
+
+def shape_probes(t: dict, n: int, masks: dict) -> dict:
+    """Pixels that tell the continuous outline from the circular one, from the two masks:
+    - `inside`: per corner, along rays from the corner's arc centre at SHAPE_RAY_ANGLES (45° = the diagonal; 0° and 90°
+      are the straight sides where the corner meets them), the outermost pixel the generator's mask covers fully: the
+      tile's own edge pixels, which must be opaque navy;
+    - `gap`: every pixel the circular-arc mask covers fully and the continuous one not at all (each at least ~0.5 px
+      from both outlines), which must not be tile."""
+    k = n / t["canvas"]
+    x0, y0, size, r = t["x0_px"] * k, t["y0_px"] * k, t["body_px"] * k, t["corner_radius_px"] * k
+    gen, circ = masks["generator"], masks["circular"]
+    inside = []
+    for cname, cx, cy, sx, sy in (("tl", x0 + r, y0 + r, -1, -1), ("tr", x0 + size - r, y0 + r, 1, -1),
+                                  ("bl", x0 + r, y0 + size - r, -1, 1), ("br", x0 + size - r, y0 + size - r, 1, 1)):
+        for ang in SHAPE_RAY_ANGLES:
+            a = math.radians(ang)
+            dx, dy = sx * math.sin(a), sy * math.cos(a)
+            last, s_ = None, 0.0
+            while s_ < 2 * r:
+                x, y = int(math.floor(cx + dx * s_)), int(math.floor(cy + dy * s_))
+                if not (0 <= x < n and 0 <= y < n) or gen[y * n + x] < 1.0:
+                    break
+                last, s_ = (x, y), s_ + 0.25
+            inside.append((f"{cname}{ang:g}", *(last or (-1, -1))))
+    gap = [(i % n, i // n) for i, (g, c) in enumerate(zip(gen, circ)) if c >= 1.0 and g <= 0.0]
+    return {"inside": inside, "gap": gap}
+
+
+def shape_report(w: int, h: int, px: bytes, t: dict, probes: dict) -> dict:
+    """The PNG's pixels at the shape probes: `inside` pixels opaque navy, `gap` pixels not tile (alpha <= GAP_ALPHA_MAX)."""
+    rep: dict = {"problems": []}
+    inside, bad_in = {}, []
+    for name, x, y in probes["inside"]:
+        v = _px(px, w, x, y) if x >= 0 else [0, 0, 0, 0]
+        inside[name] = [x, y] + v
+        if x < 0 or not is_navy(t, v, y + 0.5, w):
+            bad_in.append(name)
+    rep["inside_samples"] = inside
+    gap = probes["gap"]
+    gap_alpha = [px[(y * w + x) * 4 + 3] for x, y in gap]
+    tile_in_gap = [[x, y, a] for (x, y), a in zip(gap, gap_alpha) if a > GAP_ALPHA_MAX]
+    rep["gap_pixels"] = len(gap)
+    rep["gap_alpha_max"] = max(gap_alpha) if gap_alpha else None
+    rep["gap_tile_pixels"] = len(tile_in_gap)
+    rep["gap_tile_samples"] = tile_in_gap[:5]
+    if bad_in:
+        rep["problems"].append(f"edge pixels just inside the continuous outline aren't opaque navy: {bad_in}")
+    if len(gap) < GAP_MIN_PX:
+        rep["problems"].append(f"only {len(gap)} pixel(s) between the circular and the continuous outline")
+    if tile_in_gap:
+        rep["problems"].append(f"{len(tile_in_gap)} pixel(s) inside the circular outline but outside the continuous "
+                               f"one are tile (alpha > {GAP_ALPHA_MAX})")
+    rep["ok"] = not rep["problems"]
+    return rep
+
+
+def flat_tile(t: dict, n: int, mask: list[float], probes: dict) -> bytes:
+    """A counterexample image as shape_report sees it: at every probe pixel, the recorded navy gradient with `mask` as
+    its alpha (no logo, glow or shadow); the pixels shape_report never reads stay transparent."""
+    out = bytearray(n * n * 4)
+    for x, y in [(x, y) for _, x, y in probes["inside"] if x >= 0] + probes["gap"]:
+        a = round(mask[y * n + x] * 255)
+        if a:
+            out[(y * n + x) * 4:(y * n + x) * 4 + 4] = bytes((*(round(c) for c in expected_navy(t, y + 0.5, n)), a))
+    return bytes(out)
+
+
+def verify_shape(png_path: Path, ev: dict, meta: dict | None = None) -> dict:
+    """Evidence for "The tile has macOS 26's continuous-corner shape"; raises CheckFail on the first unmet clause."""
+    t = tile_record(meta)
+    n = t["canvas"]
+    sh: dict = {"expected": EXPECT_TILE}
+    ev["shape"] = sh
+    got = {"kind": t["kind"], **{k: t.get(k) for k in EXPECT_TILE if k != "kind"}}
+    sh["record"] = got
+    wrong = {k: got[k] for k, v in EXPECT_TILE.items()
+             if not (got[k] == v if isinstance(v, str) else isinstance(got[k], (int, float)) and abs(got[k] - v) < 1e-6)}
+    centred = abs(t["x0_px"] - (n - t["body_px"]) / 2) < 1e-6 and abs(t["y0_px"] - (n - t["body_px"]) / 2) < 1e-6
+    require(not wrong and centred and n == 1024,
+            f"AppIcon.json's tile record isn't the continuous 832 / 216 tile centred on 1024 with the preview's logo: "
+            f"{wrong or 'not centred'}", **ev)
+    masks = record_masks(t, n)
+    ref, why = core_animation_mask(t, n)
+    sh["core_animation"] = why
+    require(ref is not None, f"Core Animation couldn't render the reference outline: {why}", **ev)
+    sh["generator_vs_ca"] = mask_vs_reference(masks["generator"], ref)
+    sh["circular_vs_ca"] = mask_vs_reference(masks["circular"], ref)
+    require(sh["generator_vs_ca"]["ok"], f"the generator's mask differs from Core Animation's continuous corner by more "
+            f"than {CA_MEAN_MAX}/255 mean or {CA_PIXEL_MAX}/255 at a pixel", **ev)
+    require(not sh["circular_vs_ca"]["ok"], "counterexample: a circular-arc mask of the same radius matched Core "
+            "Animation's continuous corner", **ev)
+    probes = shape_probes(t, n, masks)
+    w, h, px = I.read_png(png_path.read_bytes())
+    require((w, h) == (n, n), f"the PNG is {w}x{h}, the record's canvas is {n}", **ev)
+    sh["png"] = shape_report(w, h, px, t, probes)
+    require(sh["png"]["ok"], f"the PNG's tile edge isn't the continuous outline: {sh['png']['problems']}", **ev)
+    # counterexamples: a tile with circular-arc corners of the same radius, and the previous tile (824, circular 185.4)
+    old_k = n / 1024
+    old = I.corner_mask(n, 100 * old_k, 100 * old_k, 824 * old_k, 185.4 * old_k, "circular")
+    sh["counterexamples"] = {}
+    for name, m in (("circular_216", masks["circular"]), ("old_824_185.4", old)):
+        rep = shape_report(n, n, flat_tile(t, n, m, probes), t, probes)
+        sh["counterexamples"][name] = {"ok": rep["ok"], "problems": rep["problems"][:3]}
+    require(not any(v["ok"] for v in sh["counterexamples"].values()),
+            "a counterexample tile passed the continuous-outline test", **ev)
+    return ev
+
+
 def old_layout_logo(ring: dict | None) -> bytes:
     """The logo on the old transparent layout (borderless ring, ICON_DIAMETER px on the canvas). With the ring
     app.icon's regeneration just measured, only the cut is redone (no second ring detection)."""
@@ -332,8 +509,14 @@ def app_icon(ctx):
     logo on the navy tile, judged with the geometry in AppIcon.json's `tile` record: canvas corners and everything
     outside the tile and its recorded shadow band alpha 0, a ring of points just inside the tile's edge (sides and
     rounded corners) opaque navy, the centre opaque, the gold ring at the recorded scale; re-running the generator
-    reproduces the committed PNG pixel for pixel. Counterexamples: the old transparent layout and a white tile fail."""
+    reproduces the committed PNG pixel for pixel. Counterexamples: the old transparent layout and a white tile fail.
+    icon-corner-c (verify_shape): the record names the continuous 832 / 216 tile centred on 1024 with the preview's logo;
+    the generator's mask matches Core Animation's cornerCurve = continuous rendering (≤ 1/255 mean, ≤ 64/255 at any
+    pixel) and a circular-arc mask of the same radius doesn't; the PNG's edge pixels just inside the continuous outline
+    (incl. the corners at 45°) are opaque navy and the pixels between the circular and the continuous outline aren't
+    tile. Counterexamples: tiles with circular 216 corners and the old 824 / 185.4 tile fail."""
     ev = verify_icon(I.PNG_OUT, I.ICNS_OUT)
+    verify_shape(I.PNG_OUT, ev)
     ev["counterexamples"] = ce = icon_counterexamples(I.PNG_OUT, (ev.get("regenerated") or {}).get("ring_source_px"))
     require(all(not v["ok"] for v in ce.values()), "a counterexample icon passed the tile test", **ev)
     return ev
