@@ -209,7 +209,32 @@ def _add_defaults(data: bytes, defaults: dict[str, str]) -> tuple[bytes, list[st
     return data, added
 
 
-def configure(client_dir: Path, defaults: dict[str, str] | None = None) -> dict:
+# front-menu-saves (saves-channel follow-up): a control request "logs in" with the account name HS<nonce><verb><arg>;
+# the client may keep it as its saved account name (accountName in Config.wtf). The glue restores the name after each
+# request; as a second guard, every start replaces a saved name that looks like a control token.
+# the token grammar of savesctl.py (HS + 6 hex nonce + a verb and its argument), nothing looser
+CONTROL_TOKEN_RE = re.compile(rb'^(\s*SET\s+accountName\s+")(HS[0-9A-Fa-f]{6}(?:S|L[0-9A-Fa-f][0-9]{2}))(".*)$',
+                              re.IGNORECASE)
+
+
+def heal_account_name(data: bytes, default_account: str | None) -> tuple[bytes, dict]:
+    """Replace a saved accountName that looks like a control token with `default_account` (or drop the line when
+    there is none). Every other line is kept byte-for-byte."""
+    out, healed = [], 0
+    for line in data.splitlines(keepends=True):
+        body = line.rstrip(b"\r\n")
+        m = CONTROL_TOKEN_RE.match(body)
+        if m and not (default_account and m.group(2).upper() == default_account.upper().encode("ascii")):
+            healed += 1
+            if default_account:
+                out.append(m.group(1) + default_account.upper().encode("ascii") + m.group(3) + line[len(body):])
+            continue
+        out.append(line)
+    return b"".join(out), {"account_name_healed": healed, "replaced_with": default_account.upper()
+                           if healed and default_account else None}
+
+
+def configure(client_dir: Path, defaults: dict[str, str] | None = None, default_account: str | None = None) -> dict:
     client_dir = Path(client_dir).expanduser()
     if not client_dir.is_dir():
         raise ClientConfigError(f"not a directory: {client_dir}")
@@ -236,6 +261,8 @@ def configure(client_dir: Path, defaults: dict[str, str] | None = None) -> dict:
     cfg = (_child_ci(wtf, "Config.wtf") if wtf.is_dir() else None) or (wtf / "Config.wtf")
     old = cfg.read_bytes() if cfg.exists() else b""
     new, detail = _update_config(old, CONFIG_KEYS)
+    new, heal = heal_account_name(new, default_account)
+    detail |= heal
     if defaults:
         new, detail["defaults_added"] = _add_defaults(new, defaults)
     changes.append({"kind": "Config.wtf", **_write_if_changed(cfg, new), **detail})

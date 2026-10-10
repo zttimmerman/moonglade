@@ -11,7 +11,7 @@ Estimates are builder-agent wall-clock hours, including build and harness time o
 
 ## 3. Launcher (run B)
 - [x] 3.1 `harness/hslib/charsaves.py`: read manifests, build `HS_SAVES` with a generation, refresh it in the chosen Q1 mechanism, map (generation, index) to (character, save), delete on request. `P.PLAYER_SAVES`. (1.5 h)
-- [ ] 3.2 `savesctl.py`: the `L` verb with its action (SOAP load + status poll, one at a time), build-12340 refusal. `play.py` wiring. `clientcfg` heals a token `accountName`. (1.5 h)
+- [x] 3.2 `savesctl.py`: the `L` verb with its action (SOAP load + status poll, one at a time), build-12340 refusal. `play.py` wiring. `clientcfg` heals a token `accountName`. (1.5 h)
 
 ## 4. Client (run B)
 - [ ] 4.1 Glue: character-screen Saves button and panel, confirm dialog, notice, `L` request (with the Q2 fallback if needed), `GetCharacterListUpdate()` after a load, `accountName` save/restore in `HSControl_Send`, and test actions for the GUI checks. (2.5 h)

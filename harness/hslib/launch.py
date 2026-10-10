@@ -501,7 +501,7 @@ def bots_label(b: dict) -> str:
     return f"AI players: {b['online'] if b.get('online') is not None else '?'} / {b.get('target') or '?'} online"
 
 
-def client_config_step(write_client_config: bool, say=log) -> dict:
+def client_config_step(write_client_config: bool, say=log, default_account: str | None = None) -> dict:
     """prepare()'s config step for the client being launched: realmlist + Config.wtf defaults (WINE_DEFAULTS).
     rename-moonglade cycle 2: with write_client_config False (./play's play.resolution_gate: a harness run against the
     player's own play client) nothing is written: not realmlist, not the Config.wtf defaults, not the resolution.
@@ -512,13 +512,14 @@ def client_config_step(write_client_config: bool, say=log) -> dict:
         skipped = {"skipped": "not a genuine player launch, and this is the player's own play client"}
         return {"client_config": skipped, "resolution": skipped}
     say("Pointing the game client at this computer (127.0.0.1)...")
-    cfg = configure(client_dir(), defaults=WINE_DEFAULTS)
+    cfg = configure(client_dir(), defaults=WINE_DEFAULTS, default_account=default_account)
     return {"client_config": {"changed_files": cfg["changed_files"],
                               "config_wtf": next(c for c in cfg["changes"] if c["kind"] == "Config.wtf")}}
 
 
 def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: str | None = None,
-            population_n: int | None = None, stages=None, write_client_config: bool = True) -> tuple[dict, dict]:
+            population_n: int | None = None, stages=None, write_client_config: bool = True,
+            default_account: str | None = None) -> tuple[dict, dict]:
     """Everything before starting the client, shared by `hs launch` and `./play`: stack up (if needed) →
     client-config (+ Wine defaults) → accounts → Wine prefix → binaries match the manifest. `accounts` makes
     sure the login exists (default: the harness fixtures, test account + character; `./play` passes its
@@ -557,7 +558,7 @@ def prepare(say=log, world_datadir: Path | None = None, accounts=None, profile: 
         ev["accounts"] = accounts()
     if stages:
         stages.start("game_setup")
-    ev |= client_config_step(write_client_config, say)
+    ev |= client_config_step(write_client_config, say, default_account)
     if write_client_config and is_play_client():   # launcher-fixes: a resolution matching the display, unless chosen
         from . import resolution
         try:

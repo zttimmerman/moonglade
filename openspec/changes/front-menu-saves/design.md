@@ -193,6 +193,15 @@ counter in `accountList` as `HSRN<n>|`, `HS_TEST.charselect_back`, the acts `csr
   - The world connection survived: Play right after it entered the world (`Login Character:[Hstester]` 20 s
     later, runs `q12b`–`q12g`). The client logs the failed fake login as `LOGIN_STATE_FAILED … DISCONNECTED` for the
     listener connection only.
+  - Caveat found in builder run A (`q32a`–`q32c`, 2026-10-10, with the real `L` verb): right after a *login*, the
+    client keeps its login-server connection open for a while at the character screen (`connection.log`: `GRUNT:
+    LOGIN_STATE_DISCONNECTED` 4 s, 13 s and 27 s after `COP_GET_CHARACTERS` in three runs). A control request sent
+    before that never leaves the client (only an empty `OPEN_STATUS_DIALOG CANCEL`; the listener saw no connection)
+    and ends in the 5 s timeout ("couldn't reach", class U). The same request sent after the disconnect was answered
+    in 0.3 s (`q32c`: `L101` accepted, the load done, and Play entered the world at the saved level 3 instead of 6).
+    Back from the world (Q2 above) the connection was already closed. So the glue (task 4.1) must treat U at the
+    character screen as "not yet": retry the unchanged request until the login connection has closed (a retry is
+    safe: nothing reached the launcher), with the overlay up, within an overall limit.
 - **Note (not a saves issue):** without a hardware key press after the client starts, every world entry ended at
   once with a client `CMSG_LOGOUT_REQUEST` (the 3.3.5a idle logout measured against Mac uptime,
   `checks/clientinput.py`). The prototype then sent one Shift press (`clientinput.press_shift`), as the world-entering
