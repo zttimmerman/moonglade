@@ -214,8 +214,8 @@ namespace MoongladeSaves
         return type == "float" || type == "double" || type == "decimal";
     }
 
-    /// SELECT list for a save-set table: every column as text. FLOAT/DOUBLE via DOUBLE, so positions are exact
-    /// (the shortest text that reads back as the same double, which is the stored float); binary as hex.
+    /// SELECT list for a save-set table (alias `t`): every column as text. FLOAT/DOUBLE via DOUBLE, so positions are
+    /// exact (the shortest text that reads back as the same double, which is the stored float); binary as hex.
     std::string SelectList(std::string const& table)
     {
         std::string out;
@@ -225,7 +225,7 @@ namespace MoongladeSaves
         {
             if (i)
                 out += ", ";
-            std::string c = "`" + cols[i] + "`";
+            std::string c = "`t`.`" + cols[i] + "`";
             if (IsHexType(types[i]))
                 out += "HEX(" + c + ")";
             else if (IsFloatType(types[i]))
@@ -690,22 +690,33 @@ namespace MoongladeSaves
         for (size_t ti = 0; ti < std::size(SAVE_SET); ++ti)
         {
             std::string table(SAVE_SET[ti].name);
-            std::string sql = "SELECT " + SelectList(table) + " FROM `" + table + "` WHERE "
-                + Where(SAVE_SET[ti].where, snap->guid);
+            // Fail closed: the core hands an empty result both for "no rows" and for a failed query, so every read
+            // returns at least one row: a one-row derived table LEFT JOINed with the table. A row whose table columns
+            // are all NULL is that marker (every save-set table has a NOT NULL key); no result at all is a failure,
+            // and a failed read fails the whole save (never a save with a table silently missing).
+            std::string sql = "SELECT 1, " + SelectList(table) + " FROM (SELECT 1 AS hs_one) AS hs LEFT JOIN `" + table
+                + "` AS t ON " + Where(SAVE_SET[ti].where, snap->guid);
             size_t ncols = g_columns[table].size();
             g_queries.AddCallback(CharacterDatabase.AsyncQuery(sql).WithCallback(
                 [snap, request, ti, ncols](QueryResult result)
             {
-                if (result)
+                if (!result)
+                    snap->failed = true;
+                else
                 {
                     do
                     {
                         Field* f = result->Fetch();
                         Row row;
                         row.reserve(ncols);
-                        for (size_t i = 0; i < ncols; ++i)
+                        bool any = false;
+                        for (size_t i = 1; i <= ncols; ++i)
+                        {
+                            any = any || !f[i].IsNull();
                             row.push_back(f[i].IsNull() ? std::nullopt : std::optional<std::string>(f[i].Get<std::string>()));
-                        snap->tables[ti].push_back(std::move(row));
+                        }
+                        if (any)
+                            snap->tables[ti].push_back(std::move(row));
                     } while (result->NextRow());
                 }
                 if (--snap->pending == 0)
