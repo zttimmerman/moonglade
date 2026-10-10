@@ -15,6 +15,7 @@ Estimates are agent-hours of builder work, including the from-empty builds they 
 - [ ] 2.1 **Pin and build integration** (3–4 h): fork.lock keys; `build.py` (clone, checkout, clean, link, `BUILD_PINS`, manifest); `bootstrap.py`; baseline; `tools/release` (THIRD_PARTY notice from the source header, source manifest, conf in payload, golden paths). `hs build --force-clean` green; `build.*`, `release.*`, `public.*` green.
 - [ ] 2.2 **Config** (1 h): `autobalance` section in `config.py` with the design.md §2 keys and reasons; `MODULE_SECTIONS` and lane B union; `AccountInstancesPerHour = 1000` in worldserver overrides; profiles `scaling-off` and `lockouts-stock`.
 - [ ] 2.3 **mod-moonglade `MoongladeDungeons`** (3 h): `OnPlayerCanEnterMap` fresh-after-clear (design.md §3), `IsBot()` skip confirmed for addclass and alt bots, `loginCheck` skip, config key `Moonglade.Dungeons.FreshAfterClear` (default 1) in `mod_moonglade.conf.dist`, a log line per reset.
+- [ ] 2.4 MoongladeDungeons: keep partial progress when the group breaks up, and bring stranded companions out of old copies (`lock.partial_kept_dismissed`, `lock.companion_unstuck`) (5–6 h)
 
 ## 3. Harness
 - [ ] 3.1 **`harness/hslib/dungeon.py` driver** (3 h): listed-dungeon table by LFG id, every fact by rule (design.md §6, with the rules as strings in evidence); enter/party/boss_info/completed_mask/kill helpers; GM-mode-off assertion.
@@ -26,4 +27,3 @@ Estimates are agent-hours of builder work, including the from-empty builds they 
 - [ ] 4.1 **design.md "As built"; player notes** (what scaling and fresh-after-clear do, how to turn each off) (1 h).
 
 **Total builder estimate: ~25–29 agent-hours.** Plus one verifier cycle (~1.5 h) and a full run.
-- [ ] 2.4 MoongladeDungeons: keep partial progress when the group breaks up, and bring stranded companions out of old copies (`lock.partial_kept_dismissed`, `lock.companion_unstuck`) (5–6 h)
