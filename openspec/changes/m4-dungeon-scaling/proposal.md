@@ -61,3 +61,6 @@ The set covers four level bands and both dungeons with and without mod-playerbot
 
 ## Spec-change log
 - (none yet)
+- 2026-10-10 (tightening, from prototype 1.1): new scenario "Dismissing companions keeps an unfinished dungeon" (`lock.partial_kept_dismissed`). Stock WotLK clears a player's non-permanent saves when the group breaks up (`Group.cpp:736` → `PlayerMisc.cpp:295`), so "unfinished keeps its progress" didn't hold once companions were dismissed.
+- 2026-10-10 (new requirement, from prototype 1.1): "Companions can follow you into a fresh dungeon" (`lock.companion_unstuck`). A pool companion that logged out inside an old copy came back into that copy and couldn't be summoned out.
+- 2026-10-10 (test method, from prototype 1.1): lockout checks give boss credit with `.damage <current health>`, not `.die` (no credit under `Die.Command.Mode=1`, `Unit.cpp:13554`). Dungeon checks that need level-3 GM commands use a separate level-3 harness account, never the companion account or PLAYER.

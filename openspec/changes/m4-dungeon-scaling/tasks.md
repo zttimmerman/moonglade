@@ -1,7 +1,7 @@
 Estimates are agent-hours of builder work, including the from-empty builds they trigger (~12–15 min each with ccache). The verifier cycle is separate (≤90 min per the hs-change-loop budget).
 
 ## 1. Prototype (riskiest assumption first) and ADR
-- [ ] 1.1 **Prototype, throwaway branch `spike/m4-dungeon`** (5–6 h). Stop and report if (a) or (b) fails.
+- [x] 1.1 **Prototype, throwaway branch `spike/m4-dungeon`** (5–6 h). Stop and report if (a) or (b) fails.
   - (a) mod-autobalance `1d707cb6` builds and boots with our core pin and the three core patches (0001–0003), and the worldserver log is clean.
   - (b) The headless probe gets into The Deadmines by GM teleport with `.gm off`, adds 4 addclass companions (prot warrior, holy priest, 2 dps), sets their specs and kills the first boss. Record the time, deaths and `completedEncounters` bit.
   - (c) The same character alone as a **selfbot** (`.playerbots bot self`) moves and fights headless. Record whether it follows splines, uses abilities and kills the first boss. If not, try the passive-master `attack` fallback (design.md §5).
@@ -26,3 +26,4 @@ Estimates are agent-hours of builder work, including the from-empty builds they 
 - [ ] 4.1 **design.md "As built"; player notes** (what scaling and fresh-after-clear do, how to turn each off) (1 h).
 
 **Total builder estimate: ~25–29 agent-hours.** Plus one verifier cycle (~1.5 h) and a full run.
+- [ ] 2.4 MoongladeDungeons: keep partial progress when the group breaks up, and bring stranded companions out of old copies (`lock.partial_kept_dismissed`, `lock.companion_unstuck`) (5–6 h)

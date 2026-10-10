@@ -24,6 +24,12 @@ When a player enters a 5-player dungeon (normal or heroic) while their saved cop
 - **THEN** it arrives in the same instance id, and the first encounter is still done
 - Check: `lock.partial_kept`
 
+#### Scenario: Dismissing companions keeps an unfinished dungeon
+- **GIVEN** a probe in a listed normal dungeon with companions, with one boss killed and the final boss alive
+- **WHEN** the probe leaves the dungeon, dismisses every companion (the group breaks up), and enters again alone
+- **THEN** it is in the same instance (same instance id), and the killed boss is still dead
+- Check: `lock.partial_kept_dismissed`
+
 #### Scenario: Finished heroic dungeon resets on re-entry (no daily lock)
 - **GIVEN** the probe character at level 80 with heroic difficulty selected, in Utgarde Keep (heroic), with every encounter done and the save marked by the core as a heroic bind
 - **WHEN** it leaves and enters again on the same server day
@@ -47,3 +53,12 @@ When a player enters a 5-player dungeon (normal or heroic) while their saved cop
 - **WHEN** Zach finishes a dungeon and goes back in
 - **THEN** he gets a fresh dungeon without any lockout message, and nothing about it feels like an MMO restriction
 - [human-verify] This is a feel check on the real client's messages and flow (for example, no "instance reset" spam). It is judged at the M4 human gate.
+
+### Requirement: Companions can follow you into a fresh dungeon
+A companion character that logged out inside an older copy of a dungeon SHALL be able to join the player's current copy, or the player outside, when summoned. It SHALL NOT be left stranded in the old copy.
+
+#### Scenario: A companion saved in an old copy joins the new one
+- **GIVEN** a pool companion that logged out inside an older instance of a listed dungeon, and a probe in a fresh instance of it
+- **WHEN** the probe brings that companion into its party and summons it
+- **THEN** within 30 s the companion is in the probe's instance (same instance id) and within 10 yd of the probe
+- Check: `lock.companion_unstuck`
