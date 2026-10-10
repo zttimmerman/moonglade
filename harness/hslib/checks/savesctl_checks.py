@@ -759,7 +759,7 @@ def heal_run() -> dict:
     return ev
 
 
-@check("savesctl.account_name_kept", order=404, capability=CAP, stack="down", tier="full", gui=True)
+@check("savesctl.account_name_kept", order=404, capability=CAP, stack="down", tier="full")
 def account_name_kept(ctx):
     """(1) A test run on the title menu, accountName = the test profile's account: two `ctl:S` requests, then Continue,
     the world, quit: WTF/Config.wtf afterwards has accountName = the test account and no HS... token anywhere in WTF/

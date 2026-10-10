@@ -39,7 +39,7 @@ GM_LEVEL = 3                     # SEC_ADMINISTRATOR: role 192, which alone link
 RACE_DWARF, CLASS_HUNTER = 3, 3  # SharedDefines.h enum Races / enum Classes
 LANG_ADDON = 0xFFFFFFFF          # SharedDefines.h Language::LANG_ADDON
 PREFIX = "MGSAVE"
-HEADER = P.ROOT / "modules" / "mod-moonglade" / "src" / "MoongladeSaves.h"
+HEADER = P.MODULES / "mod-moonglade" / "src" / "MoongladeSaves.h"
 START_TELE = "ElwynnForest"      # a game_tele row in the human start zone (fixtures.tele_row validates it)
 
 # probe packets (Opcodes.h) and their layouts (the WorldSession handlers named)
@@ -204,12 +204,12 @@ _SAFETY: dict = {}
 
 def safety_dump() -> dict:
     """Once per harness process, before the first load: mysqldump of the characters database into a run-scoped folder
-    env/tmp/saves-safety-<run>/ (never env/backups). Older saves-safety-* folders are removed, so only the latest
+    <lane tmp>/saves-safety-<run>/ (lane A: env/tmp; never env/backups). Older saves-safety-* folders are removed, so only the latest
     copy is kept. Returns {"path", "bytes"}; raises SavesError if the dump fails (no load runs without it)."""
     if _SAFETY:
         return _SAFETY
     run = os.environ.get("HS_RUN_ID") or f"pid{os.getpid()}-{int(time.time())}"
-    root = P.ENV / "tmp"
+    root = P.TMP                     # this lane's tmp (lane A: env/tmp)
     dest_dir = root / f"saves-safety-{re.sub(r'[^A-Za-z0-9_.-]', '_', run)}"
     dest_dir.mkdir(parents=True, exist_ok=True)
     dest = dest_dir / "acore_characters.sql.gz"
@@ -223,7 +223,7 @@ def safety_dump() -> dict:
     for old in root.glob("saves-safety-*"):
         if old != dest_dir:
             shutil.rmtree(old, ignore_errors=True)
-    _SAFETY.update({"path": str(dest.relative_to(P.ROOT)) if P.ROOT in dest.parents else str(dest),
+    _SAFETY.update({"path": str(dest),
                     "bytes": dest.stat().st_size})
     return _SAFETY
 

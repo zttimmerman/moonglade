@@ -207,33 +207,83 @@ counter in `accountList` as `HSRN<n>|`, `HS_TEST.charselect_back`, the acts `csr
   `checks/clientinput.py`). The prototype then sent one Shift press (`clientinput.press_shift`), as the world-entering
   checks do. The saves GUI checks must do the same.
 
-### As built so far (builder run A: tasks 2.1–2.4, 3.1–3.2)
-Where the code differs from the plan above, and why. The full "As built" comes with task 5.3.
-- **Snapshot reads (4):** not a `CharacterDatabaseQueryHolder` (a holder takes prepared statements only, and the core
-  has none for these column lists). After `SaveToDB` the world thread queues one `AsyncQuery` per save-set table back
-  to back on the same single FIFO worker, so the reads run right behind the commit with nothing of this character in
-  between. Each read is `SELECT 1, <columns> FROM (SELECT 1) hs LEFT JOIN <table> t ON <where>`: the core returns an
-  empty result both for "no rows" and for a failed query, and the join's marker row makes a failed read fail the
-  whole save (fail closed).
-- **Add-on verbs (5):** `LOAD` and `DELETE` take `<generation> <index>` from the last `LIST` (generation = 4 hex digits
-  of the sha256 of the list's ids; index 1 = newest), not a save id, because the spec's reply lines must not carry
-  save ids (`saves.list_wording`). A stale generation is refused ("The list of saves changed"). `LIST` lines:
-  `E\t<gen>\t<n>\t<kind>\t<when>\t<level>\t<zone>\t<label>`, then `END\t<gen>\t<count>`; results `OK|NO\t<verb>\t<text>`.
-- **Shared add-on parser (5):** `MoongladeAddon.{h,cpp}` owns `OnPlayerCanUseChat`; `MGPAUSE` and `MGSAVE` register by
-  prefix. A load is handled on the next world tick (`WorldScript::OnUpdate`), never inside the chat handler.
-- **Test switches (3, 9):** not an `HS_SAVES_TEST` environment variable but console-only GM commands, which the game
-  can't reach and which apply to characters of the test account (`HSTEST`) only: `.moonglade save test failafter <n>
-  | pause <s> | off`, and `.moonglade save interval <s>` (autosave interval until restart). The failing statement is
-  a read that errors (`ER_SUBQUERY_NO_1_ROW`): a missing-table, unknown-column or parse error makes the core abort the
-  worldserver (`MySQLConnection::_HandleMySQLErrno`).
-- **Commands:** `.moonglade save status [job]`, `tables`, `take <guid> [label]`, `load <guid> <id>`, `list <guid>`,
-  `interval`, `test`.
-- **Ids:** `YYYYMMDD-HHMMSS-<kind>[-n]` in UTC; `n` is one more than the highest of that second and kind, so an id freed
-  by rotation is never reused for a newer save.
-- **Autosave labels:** `Rested: …`, `Took a flight: …`, `Arrived: …` (`<Zone> · Level <n> · <Ddd HH:MM>`); triggers are
-  queued 1 s after the moment and skipped (logged, never queued again) inside the interval or when a save would be
-  refused. The login map is not an arrival (5 s after login).
-- **Listener (5):** connections are served on their own threads (at most 4) so a second `L` during a load is refused at
-  once; `Listener.validators["L"]` refuses a stale or unknown list entry before the action runs.
-- **HS_SAVES (6):** `{gen = "<hex>", chars = {{name, level, class, saves = {{idx, label, kind, when, level}}}}}` plus
-  `HS_SAVES_END = "<hex>"` last; at most 20 saves per character and 99 in all on the character screen.
+### As built (builder runs A–C, 2026-10-10)
+Where the code differs from the plan above, and why; then what was measured.
+
+**Server (mod-moonglade; `MoongladeSaves.{h,cpp}`, `MoongladeAddon.{h,cpp}`):**
+- **Save set (1):** declared once in `MoongladeSaves.h` (`SAVE_SET`, `REMOVED_ON_LOAD`, `KEPT`), from `PlayerDump.cpp`.
+  `KEPT` also holds `log_encounter` and `mail_server_template_items` (found by `saves.table_coverage`: a players
+  column and an item-entry column, neither a character's progress).
+- **Snapshot reads (4):** not a `CharacterDatabaseQueryHolder` (holders take prepared statements only). After
+  `SaveToDB` the world thread queues one `AsyncQuery` per save-set table back to back on the single FIFO worker. Each
+  read is `SELECT 1, <columns> FROM (SELECT 1) hs LEFT JOIN <table> t ON <where>`, so a failed query (the core hands
+  an empty result for both) fails the whole save instead of saving a table as empty.
+- **Ids (2):** `YYYYMMDD-HHMMSS-<kind>[-n]` in UTC; `n` is one more than the highest of that second and kind, so an id
+  freed by rotation is never reused for a newer save.
+- **Add-on channel (5):** `MoongladeAddon` owns `OnPlayerCanUseChat`; `MGPAUSE` and `MGSAVE` register by prefix. A
+  request is handled on the next world tick (`WorldScript::OnUpdate`), never inside the chat handler. `LOAD` and
+  `DELETE` take `<generation> <index>` from the last `LIST` (generation = 4 hex digits of the sha256 of the list's
+  ids), not a save id (spec-change log, 2026-10-10). Lines: `E\t<gen>\t<n>\t<kind>\t<when>\t<level>\t<zone>\t<label>`,
+  `END\t<gen>\t<count>`, `OK|NO\t<verb>\t<text>`.
+- **Commands:** `.moonglade save status [job] | tables | take <guid> [label] | load <guid> <id> | list <guid> | who
+  <guid>` (GM read-outs and the launcher's jobs), and console-only `interval <s>`, `trigger <guid> <moment>` and
+  `test failafter <n> | pause <s> | off`. The test switches replace the planned `HS_SAVES_TEST` environment variable:
+  the game can't reach the console, and they apply to the harness's test accounts (`HSTEST`, `HSSAVES`) only. The
+  failing statement is a read that errors (`ER_SUBQUERY_NO_1_ROW`): a missing-table, unknown-column or parse error makes
+  the core abort the worldserver (`MySQLConnection::_HandleMySQLErrno`).
+- **Refusals:** a load of another account's save says "That save belongs to another account." (distinct from another
+  character's).
+- **Autosaves (4):** labels `Rested: …`, `Took a flight: …`, `Arrived: …`; queued 1 s after the moment; skipped (logged,
+  never queued again) inside the interval or when a save would be refused; the map a character logs in to is not an
+  arrival (5 s after login).
+
+**Launcher (`charsaves.py`, `savesctl.py`, `play.py`, `clientcfg.py`):**
+- `HS_SAVES = {gen = "<hex>", chars = {{name, level, class, saves = {{idx, label, kind, when, level}}}}}` and
+  `HS_SAVES_END = "<hex>"` last; at most 20 saves per character and 99 in all. The store is polled every **0.25 s**
+  (not 1 s): measured, the glue screens load about 0.5 s after the world logout, and a quicksave taken just before
+  leaving the world was missed with a 1 s poll (run `saves-gui`, 04:02).
+- The listener serves each connection on its own thread (at most 4), so a second `L` during a load is refused at once;
+  `Listener.validators["L"]` refuses a stale or unknown list entry before the action runs.
+- `clientcfg.configure` heals a saved `accountName` that matches the control-token grammar exactly
+  (`HS<6 hex>(S|L<hex><2 digits>)`).
+
+**Character screen (`HSCharSaves.lua`, `HSFrontMenu.xml`):**
+- The Saves button sits next to Delete Character; the notice above the Play button. The Load confirm is the glue's own
+  frame (the stock `GlueDialog` is intercepted while a request is pending).
+- After a login the client keeps its login-server connection open for a while (measured 4–27 s); a request sent then
+  never leaves the client. The glue ends such an attempt after 3 s as "noconnect" and sends the load again every 2 s,
+  for up to 60 s, with "Loading your save…" on screen. In the GUI runs the load confirmed 40 s after the list took one
+  retry and 5.3 s in all.
+- The saved account name is put back after every control request; `S` is sent only from the title menu, `L` only
+  from the character screen.
+
+**In the game (`MoongladeSaves.lua`, `Bindings.xml`):**
+- Default keys **F6** (quicksave) and **F7** (quickload): the client's own `WTF\DefaultBindings.wtf` (`Data\patch-3.MPQ`)
+  binds F5 (`TARGETPARTYMEMBER4`) and F9 (`TOGGLEBAG2`); F6 and F7 are bound to nothing there. Set once while free.
+- The window keeps the world paused when opened from the game menu.
+
+**Checks (harness/hslib/saves.py, checks/saves_checks.py, checks/saves_gui_checks.py, savesctl_checks.py):**
+- The probe checks use their own test account `HSSAVES` (security 3: GM commands on itself, including the mailbox
+  permission for mailing an item, role 196) with a dwarf hunter (`Hssaver`, with a pet) and a human alt (`Hssavalt`).
+  The GUI checks use `HSTEST`. None touches `PLAYER`.
+- Before a run's first save or load: a `mysqldump` of the characters database into `env/tmp/saves-safety-<run>/` (only
+  the latest kept; path in the evidence) and a fingerprint of the PLAYER characters' save-set rows, compared by
+  `saves.player_untouched` at the end with `env/saves/<PLAYER>/` (fingerprinted by the runner at its start).
+- `saves.scope` takes its checksums with the world paused (`.moonglade pause on`), after showing two checksums without
+  a load agree; otherwise the AI players and respawns change tables in between.
+- `saves.player_untouched` and `saves.table_coverage` run in the full tier (the quick tier is at its budget).
+- GUI session: one real-client run, Shift pressed once (the idle logout), records read from `Config.wtf` while the run
+  goes on, screenshots kept in `harness/out/saves-gui/`. Like the other real-client sessions (savesctl.live_*,
+  client.wording_addon) the three checks are full tier, not `gui=True` (they need no exclusive screen focus).
+- The safety copy goes to this lane's tmp folder (`P.TMP`; lane A `env/tmp/`), as `release.mode_resolution` allows no
+  `P.ENV` paths outside paths.py.
+
+**Player notes for the human-verify scenario ("It feels like an Elder Scrolls save system"):**
+- In the game: Esc → Saves. Type a name (or leave it empty) → Save. F6 quicksaves, F7 quickloads (Key Bindings →
+  Moonglade to change them). Saving is refused in combat, while dead, falling, in a battleground or between places.
+- Loading in the game sends you to the character screen at once; the character list shows the loaded level. Press Play.
+- At the character screen: select a character → Saves → pick a save → Load → Load. Right after you start the game it
+  can take up to half a minute ("Loading your save…") before the load goes through.
+- Every load first saves your current state as "Before loading" (the last 3 are kept), so you can undo a load.
+- Things to judge: does a quickload feel quick and clear; is an alt untouched by a main's load; does the wording read
+  right; does anything say server, realm or account.
