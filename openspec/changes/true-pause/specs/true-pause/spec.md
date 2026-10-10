@@ -67,12 +67,12 @@ Pausing SHALL be refused on a flight path, boat or zeppelin, with a message to t
 - Check: `pause.disabled_noop`
 
 ### Requirement: Esc pauses in the real client
-In the play client, opening the game menu with Esc SHALL pause the world and closing it SHALL resume, with a visible "Paused" banner while paused. There is no separate pause key and no auto-pause on losing focus (Zach, 2026-10-09).
+In the play client, opening the game menu with Esc SHALL pause the world and closing it SHALL resume, with the world view dimmed behind the menu and a visible "Paused" banner while paused (Zach, 2026-10-09: the client keeps drawing idle animations and effects during a pause, so the dimming makes it read as paused). There is no separate pause key and no auto-pause on losing focus (Zach, 2026-10-09).
 
 #### Scenario: Esc pauses and resumes
 - **GIVEN** the play client in the world (test account)
 - **WHEN** Esc opens the game menu, then closes it
-- **THEN** the server reports paused while the menu is open (`.moonglade pause status`), the banner is visible in a screenshot, and the server reports running after the menu closes
+- **THEN** the server reports paused while the menu is open (`.moonglade pause status`), a screenshot shows the banner and the world view dimmed (the mean brightness of a screen region outside the menu and banner is clearly lower than the same region in a screenshot taken just before Esc), and after the menu closes the server reports running and that region's brightness is back to within a small tolerance of the pre-pause shot
 - Check: `client.pause_menu`
 
 #### Scenario: Resume looks right

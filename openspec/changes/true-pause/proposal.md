@@ -30,4 +30,4 @@ Zach wants a single-player feel: pressing Esc should stop the world the way a si
 - Daily resets, mail and the auction house slip by the total paused time. That's acceptable.
 
 ## Spec-change log
-(none yet)
+- 2026-10-09 (tightening, Zach): "Esc pauses in the real client" adds a dimmed world view behind the menu, and `client.pause_menu` asserts the dimming and its removal on resume. Reason: the client keeps drawing idle animations and effects while the server is paused; Zach asked for the pause to read clearly as paused. Truly freezing client animations is a separate backlog research item (would need a client patch, its own ADR and Zach's yes).
