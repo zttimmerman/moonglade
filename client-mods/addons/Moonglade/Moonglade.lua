@@ -58,17 +58,37 @@ local PAUSE_PREFIX = "MGPAUSE";
 local pauseHooks = { sent = {}, acks = {} };       -- the test hook's record (harness checks only)
 
 local DIM_ALPHA = 0.5;
+-- The dim covers every other piece of UI too (tutorial popups are HIGH, dialogs DIALOG): it is FULLSCREEN, and while it
+-- shows the game menu is lifted from DIALOG to FULLSCREEN_DIALOG (put back when the menu closes), so only the menu and
+-- the banner stay above it.
 local dim = CreateFrame("Frame", "MoongladePauseDim", UIParent);
-dim:SetFrameStrata("HIGH");                      -- under the game menu (DIALOG) and the banner (FULLSCREEN_DIALOG)
+dim:SetFrameStrata("FULLSCREEN");
 dim:SetAllPoints(UIParent);
 dim.tex = dim:CreateTexture(nil, "BACKGROUND");
 dim.tex:SetAllPoints(dim);
 dim.tex:SetTexture(0, 0, 0, DIM_ALPHA);
 dim:Hide();
 MOONGLADE_PAUSE_DIM = dim;
+local menuStrata;
+
+local function setDim(on)
+	if ( on ) then
+		if ( not menuStrata ) then
+			menuStrata = GameMenuFrame:GetFrameStrata();
+			GameMenuFrame:SetFrameStrata("FULLSCREEN_DIALOG");
+		end
+		dim:Show();
+	else
+		dim:Hide();
+		if ( menuStrata ) then
+			GameMenuFrame:SetFrameStrata(menuStrata);
+			menuStrata = nil;
+		end
+	end
+end
 
 local banner = CreateFrame("Frame", "MoongladePauseBanner", UIParent);
-banner:SetFrameStrata("FULLSCREEN_DIALOG");
+banner:SetFrameStrata("TOOLTIP");                -- above the dim and the lifted game menu
 banner:SetWidth(320);
 banner:SetHeight(72);
 banner:SetPoint("TOP", UIParent, "TOP", 0, -64);
@@ -88,7 +108,7 @@ local function askPause(on)
 		SendAddonMessage(PAUSE_PREFIX, on and "1" or "0", "WHISPER", me);
 		if ( #pauseHooks.sent < 20 ) then table.insert(pauseHooks.sent, on and "1" or "0"); end
 	end
-	if ( not on ) then banner:Hide(); dim:Hide(); end
+	if ( not on ) then banner:Hide(); setDim(false); end
 end
 
 GameMenuFrame:HookScript("OnShow", function() askPause(true); end);
@@ -103,12 +123,12 @@ pauseFrame:RegisterEvent("PLAYER_LEAVING_WORLD");
 pauseFrame:SetScript("OnEvent", function(self, event, prefix, message)
 	if ( event == "CHAT_MSG_ADDON" ) then
 		if ( prefix ~= PAUSE_PREFIX ) then return; end
-		if ( message == "paused" and GameMenuFrame:IsShown() ) then banner:Show(); dim:Show(); else banner:Hide(); dim:Hide(); end
+		if ( message == "paused" and GameMenuFrame:IsShown() ) then banner:Show(); setDim(true); else banner:Hide(); setDim(false); end
 		if ( #pauseHooks.acks < 20 ) then table.insert(pauseHooks.acks, message); end
 		if ( MoongladePauseTestAck ) then MoongladePauseTestAck(message); end
 	else
 		banner:Hide();
-		dim:Hide();
+		setDim(false);
 	end
 end);
 
@@ -139,7 +159,8 @@ local pauseTest = { shots = {} };
 local function pauseShot(tag)
 	Screenshot();
 	table.insert(pauseTest.shots, { tag = tag, at = format("%.2f", test.clock), banner = banner:IsVisible() and 1 or 0,
-	                                 dim = dim:IsVisible() and 1 or 0,
+	                                 dim = dim:IsVisible() and 1 or 0, menu_strata = GameMenuFrame:GetFrameStrata(),
+	                                 tutorial = (TutorialFrame and TutorialFrame:IsVisible()) and 1 or 0,
 	                                 menu = GameMenuFrame:IsShown() and 1 or 0, text = banner.text:GetText() });
 end
 

@@ -4,7 +4,9 @@ The pinned core WITHOUT patches/core/*, built from its own git worktree into its
 all under baseline/ (gitignored). The real vendor tree, build/ and server/ are never written by this module.
 
   baseline/src      git worktree of vendor/azerothcore-wotlk, detached at fork.lock core_sha, no patches applied;
-                    modules/ holds the same symlinks as the real build (mod-playerbots, modules/*)
+                    modules/ holds the same symlinks as the real build (mod-playerbots, modules/*), except the
+                    modules that need a core patch to compile (NEEDS_CORE_PATCH: they can't build against the
+                    unpatched core; the real build keeps them, and fails loudly if the patch is missing)
   baseline/build    cmake build dir (persistent: after the first build, reruns are incremental no-ops)
   baseline/server   cmake install prefix (bin/worldserver, etc/*.dist + confs rendered by config.write_all)
   baseline/logs, baseline/run, baseline/tmp   runtime files of the baseline worldserver
@@ -47,6 +49,12 @@ def _git(repo, *args, check=True):
     return r
 
 
+# Modules that only compile against the patched core (true-pause: MoongladePause.cpp includes game/Time/WorldPause.h,
+# which patches/core/0003-world-pause.patch adds). The baseline is the core without any patch, so they stay out of it;
+# nothing in them takes part in the login/logout race the baseline reproduces.
+NEEDS_CORE_PATCH = {"mod-moonglade": "0003-world-pause.patch (MoongladePause.cpp includes WorldPause.h)"}
+
+
 def sync_src() -> dict:
     """Put baseline/src at core_sha with a clean tree (no patches) and the expected module links."""
     sha = P.fork_lock()["core_sha"]
@@ -64,7 +72,8 @@ def sync_src() -> dict:
         _git(SRC, "clean", "-fdx", "-e", "/modules/")
         ev["worktree"] = "reset"
     mods = SRC / "modules"
-    links = build._expected_links()
+    links = {k: v for k, v in build._expected_links().items() if k not in NEEDS_CORE_PATCH}
+    ev["modules_excluded"] = {k: v for k, v in NEEDS_CORE_PATCH.items() if k in build._expected_links()}
     tracked = {l.split("/", 1)[1].split("/")[0] for l in _git(SRC, "ls-files", "modules").stdout.splitlines()}
     for e in sorted(mods.iterdir()):
         if e.name in tracked or (e.is_symlink() and e.name in links and os.readlink(e) == str(links[e.name])):
