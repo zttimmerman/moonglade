@@ -712,21 +712,22 @@ CMSG_AUCTION_SELL_ITEM = 0x256      # AuctionHouseHandler.cpp HandleAuctionSellI
                                     # per item (u64 guid, u32 count), u32 bid, u32 buyout, u32 minutes
 CMSG_ADD_FRIEND = 0x069             # SocialHandler.cpp HandleAddFriendOpcode: name, note
 AUCTION_MINUTES = 12 * 60           # AuctionHouseMgr.h MIN_AUCTION_TIME (12 h); the handler accepts 1x/2x/4x of it
-GAMEOBJECT_TYPE_MAILBOX = 19        # SharedDefines.h GameobjectTypes
 UNIT_NPC_FLAG_AUCTIONEER = 0x200000  # UnitDefines.h NPCFlags
-HIGHGUID_GAMEOBJECT = 0xF110        # ObjectGuid.h HighGuid::GameObject
 
 
 def who(guid: int) -> dict:
-    """`.moonglade save who`: the server's in-memory level, money, position, combat, dead, bot, quests (online only)."""
+    """`.moonglade save who`: the server's in-memory level, money, position, combat, dead, bot, resting, flying and
+    quests (online only)."""
     out = gm(f".moonglade save who {int(guid)}")
-    m = re.search(r"level (\d+) money (\d+) map (\d+) x (\S+) y (\S+) z (\S+) combat (\d) dead (\d) bot (\d) quests (\S+)", out)
+    m = re.search(r"level (\d+) money (\d+) map (\d+) x (\S+) y (\S+) z (\S+) combat (\d) dead (\d) bot (\d) "
+                  r"resting (\d) flying (\d) quests (\S+)", out)
     if not m:
         return {"online": False, "raw": out}
-    q = {} if m.group(10) == "-" else {int(a): int(b) for a, b in (x.split(":") for x in m.group(10).split(","))}
+    q = {} if m.group(12) == "-" else {int(a): int(b) for a, b in (x.split(":") for x in m.group(12).split(","))}
     return {"online": True, "level": int(m.group(1)), "money": int(m.group(2)), "map": int(m.group(3)),
             "x": float(m.group(4)), "y": float(m.group(5)), "z": float(m.group(6)), "combat": m.group(7) == "1",
-            "dead": m.group(8) == "1", "bot": m.group(9) == "1", "quests": q}
+            "dead": m.group(8) == "1", "bot": m.group(9) == "1", "resting": m.group(10) == "1",
+            "flying": m.group(11) == "1", "quests": q}
 
 
 def npc_guid(s: Session, spawn_id: int) -> int | None:
@@ -759,22 +760,6 @@ def engage(s: Session, level: int = 8, timeout: float = 25) -> dict:
                 return {"creature": cr | {"guid": info["guid"]}, "rule": C.CREATURE_RULE, "who": w, "tried": tried}
             time.sleep(0.25)
     raise SavesError("precondition: the character never got into combat", tried=tried)
-
-
-def pick_mailbox(tele: str = "Stormwind") -> dict:
-    """The mailbox gameobject (gameobject_template.type GAMEOBJECT_TYPE_MAILBOX 19) on the tele point's map nearest it."""
-    t = F.tele_row(tele)
-    rows = db.query(
-        f"SELECT g.guid, g.id, g.position_x, g.position_y, g.position_z FROM gameobject g JOIN gameobject_template gt "
-        f"ON gt.entry = g.id WHERE g.map = {t['map']} AND gt.type = {GAMEOBJECT_TYPE_MAILBOX} "
-        f"ORDER BY POW(g.position_x-({t['x']}),2)+POW(g.position_y-({t['y']}),2), g.guid LIMIT 1", "world")
-    if not rows:
-        raise SavesError("no mailbox on the map")
-    g, e, x, y, z = rows[0]
-    return {"spawn_id": int(g), "entry": int(e), "guid": (HIGHGUID_GAMEOBJECT << 48) | (int(e) << 24) | int(g),
-            "pos": {"x": float(x), "y": float(y), "z": float(z)},
-            "rule": "the mailbox (gameobject_template.type 19) on map 0 nearest the Stormwind game_tele row; in-world "
-                    "guid = HighGuid::GameObject << 48 | entry << 24 | spawn id (ObjectGuid.h)"}
 
 
 def pick_auctioneer(tele: str = "Stormwind") -> dict:

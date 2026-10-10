@@ -285,10 +285,21 @@ def autosave_triggers(ctx):
                 produced.append({"kind": kind, "new": new, "labels": labels})
                 return new
 
+            def wait_who(key, want, timeout=8.0):
+                t0 = time.time()
+                while time.time() - t0 < timeout:
+                    w = S.who(g)
+                    if w.get(key) == want:
+                        return True
+                    time.sleep(0.25)
+                return False
+
             def city():
                 s.cmd(".tele ElwynnForest")           # out in the open first (no rest flag), then into Stormwind
-                time.sleep(2.5)
+                ev["not_resting_before_city"] = wait_who("resting", False)
+                time.sleep(1.5)                        # the module samples the flag once a second
                 s.cmd(".tele Stormwind")
+                ev["resting_in_city"] = wait_who("resting", True)
 
             def other_map():
                 s.cmd(".tele Darnassus")
@@ -303,6 +314,7 @@ def autosave_triggers(ctx):
                 S.go(s, fm["pos"])
                 fg = S.npc_guid(s, fm["spawn_id"])
                 s.ws.send(S.CMSG_ACTIVATETAXI, __import__("struct").pack("<QII", fg or 0, taxi["from"], taxi["to"]))
+                ev["flying"] = wait_who("flying", True)
 
             # moments, each after the interval, plus one trigger inside the interval
             # (the flight master stands in Stormwind: the flight follows the city, so going there adds no rest edge)
@@ -326,8 +338,12 @@ def autosave_triggers(ctx):
     finally:
         S.gm(f".moonglade save interval {config_interval()}")
     ev["produced"] = produced
+    log = (P.LOGS / "Server.log").read_text(errors="replace").splitlines()
+    ev["server_log"] = [l[:160] for l in log if "autosave" in l or "auto save" in l][-30:]
     total = sum(len(p["new"]) for p in produced)
     ev["total_autosaves_triggered"] = total
+    require(ev.get("not_resting_before_city") and ev.get("resting_in_city") and ev.get("flying"),
+            "GIVEN not met: the server didn't see the character leave and enter a rest area, or fly", **ev)
     single = [p for p in produced if p["kind"] != "two arrivals inside the interval"]
     require(all(len(p["new"]) == 1 and p["labels"][0].startswith(p["kind"] + ":") for p in single),
             "a trigger didn't produce exactly one autosave labelled with its moment", **ev)

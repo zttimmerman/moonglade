@@ -1918,9 +1918,10 @@ public:
         for (auto const& [qid, st] : p->getQuestStatusMap())
             quests += (quests.empty() ? "" : ",") + std::to_string(qid) + ":" + std::to_string(uint32(st.Status));
         handler->PSendSysMessage("Moonglade save who: {} level {} money {} map {} x {:.3f} y {:.3f} z {:.3f} combat {} "
-            "dead {} bot {} quests {}", guid, p->GetLevel(), p->GetMoney(), p->GetMapId(), p->GetPositionX(),
-            p->GetPositionY(), p->GetPositionZ(), p->IsInCombat() ? 1 : 0, p->IsAlive() ? 0 : 1,
-            p->GetSession()->IsBot() ? 1 : 0, quests.empty() ? "-" : quests);
+            "dead {} bot {} resting {} flying {} quests {}", guid, p->GetLevel(), p->GetMoney(), p->GetMapId(),
+            p->GetPositionX(), p->GetPositionY(), p->GetPositionZ(), p->IsInCombat() ? 1 : 0, p->IsAlive() ? 0 : 1,
+            p->GetSession()->IsBot() ? 1 : 0, p->HasPlayerFlag(PLAYER_FLAGS_RESTING) ? 1 : 0, p->IsInFlight() ? 1 : 0,
+            quests.empty() ? "-" : quests);
         return true;
     }
 

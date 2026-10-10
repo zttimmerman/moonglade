@@ -378,6 +378,10 @@ tf:SetScript("OnUpdate", function(self, elapsed)
 		MoongladeSaves_Refresh();
 		hook.t = hook.clock;
 	elseif ( hook.phase == "list" and (hook.list or hook.clock - hook.t > 10) ) then
+		hook.phase = "shot";
+		Screenshot();                      -- the window with its list, for a human look (harness/out/saves-gui)
+		hook.t = hook.clock;
+	elseif ( hook.phase == "shot" and hook.clock - hook.t > 1 ) then
 		hook.phase = "done";
 		frame:Hide();
 		Logout();
