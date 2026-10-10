@@ -626,7 +626,7 @@ def solo_final_boss(ctx):
             with D.Session(f["target_level"]) as s:
                 rec["session"] = _sev(s)
                 try:
-                    rec |= D.solo_final_boss(s, f)
+                    rec.update(D.solo_final_boss(s, f))
                 finally:
                     s.leave()
         try:

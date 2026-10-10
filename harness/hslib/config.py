@@ -109,12 +109,15 @@ AUTOBALANCE = {
     # five meets the unchanged dungeon and nothing is ever harder than stock (Zach, proposal Q2, 2026-10-10). The
     # inflection point, floor and boss modifier are tuned by the scale.solo_final_boss runs, recorded in
     # docs/research/m4-scaling-tuning.md (proposal Q1: a solo fight should feel like a normal group's fight).
+    # Tuned: CurveFloor 0.05 (solo 0.167 instead of the default 0.123). Floor 0.2 (solo 0.299) made the classic bosses
+    # real fights but Ingvar (Utgarde Keep, level 72) killed the solo warrior twice; at 0.05 every listed final boss
+    # died first try (Ingvar: 50-73 s, down to 17-64 % health). Inflection point and boss modifier stay at the defaults.
     "AutoBalance.InflectionPoint": "0.5",
-    "AutoBalance.InflectionPoint.CurveFloor": "0.0",
+    "AutoBalance.InflectionPoint.CurveFloor": "0.05",
     "AutoBalance.InflectionPoint.CurveCeiling": "1.0",
     "AutoBalance.InflectionPoint.BossModifier": "1.0",
     "AutoBalance.InflectionPointHeroic": "0.5",
-    "AutoBalance.InflectionPointHeroic.CurveFloor": "0.0",
+    "AutoBalance.InflectionPointHeroic.CurveFloor": "0.05",
     "AutoBalance.InflectionPointHeroic.CurveCeiling": "1.0",
     "AutoBalance.InflectionPointHeroic.BossModifier": "1.0",
     # companions count as one person each (proposal Q2 default; the module has no per-bot weight)

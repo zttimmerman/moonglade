@@ -246,6 +246,9 @@ class Session(C.Session):
             self.ev["gm_off"] = ws.command(".gm off")
             self.ev["revive"] = self.revive_if_dead()
             self.ev["stale_group"] = self.leave_stale_group()
+            if self.place:
+                # normal difficulty unless a check asks for heroic: a killed heroic check can't leave it set
+                self.ev["difficulty"] = self.set_difficulty(0)
         except Exception:
             ws.close()
             raise
@@ -514,6 +517,16 @@ def gear_quality() -> str:
     return GEAR_QUALITY.get(int(v) if v and v.isdigit() else 3, "rare")
 
 
+# Event bosses: where the fight starts when the final boss has no static spawn. Hellfire Ramparts: Vazruden the Herald
+# summons Vazruden and Nazan only after the two Hellfire Sentries it summons at Reset die (AzerothCore
+# src/server/scripts/Outland/HellfireCitadel/HellfireRamparts/boss_vazruden_the_herald.cpp, Reset() and
+# SummonedCreatureDies()); the solo probe stands at the first sentry's summon point from that file, so the sentries
+# engage it. Keyed by the final encounter's credit entry (instance_encounters.creditEntry).
+EVENT_STAGE = {17537: {"x": -1372.56, "y": 1724.31, "z": 82.967,
+                       "source": "boss_vazruden_the_herald.cpp Reset(): SummonCreature(NPC_HELLFIRE_SENTRY, -1372.56f, "
+                                 "1724.31f, 82.967f)"}}
+
+
 def solo_anchor(f: dict) -> dict:
     """Where the solo fight is staged: the final encounter's static spawn, or, for an event-summoned final boss, the
     static spawn of the creature that summons it (Hellfire Ramparts: Vazruden the Herald summons Vazruden; found by
@@ -528,11 +541,18 @@ def solo_anchor(f: dict) -> dict:
     if not rows:
         raise DungeonError(f"no static spawn for the event boss {name}", final=fin)
     g, x, y, z, n, e = rows[0]
-    return {"spawn_id": int(g), "x": float(x), "y": float(y), "z": float(z), "name": n, "entry": int(e), "event": True,
-            "rule": "creature on the map named '<credit creature name> ...' with a static spawn"}
+    out = {"spawn_id": int(g), "x": float(x), "y": float(y), "z": float(z), "name": n, "entry": int(e), "event": True,
+           "rule": "creature on the map named '<credit creature name> ...' with a static spawn"}
+    stage = EVENT_STAGE.get(fin["credit_entry"])
+    if stage:
+        out |= {"stage": stage}
+    return out
 
 
 def stand_point(anchor: dict, entrance: dict, yd: float = SOLO_STAND_YD) -> dict:
+    if anchor.get("stage"):
+        st = anchor["stage"]
+        return {"x": st["x"], "y": st["y"], "z": st["z"] + 1}
     dx, dy = entrance["x"] - anchor["x"], entrance["y"] - anchor["y"]
     d = math.hypot(dx, dy) or 1.0
     return {"x": anchor["x"] + dx / d * yd, "y": anchor["y"] + dy / d * yd, "z": None if anchor["event"] else anchor["z"] + 1}
@@ -596,6 +616,9 @@ def solo_final_boss(s: "Session", f: dict, log=None) -> dict:
                 a["probe_died_after_s"] = round(time.time() - t0, 1)
                 break
         evs = s.ws.events_since(mark)
+        for x in s.ws.events_since(0, "self_values"):
+            if UNIT_FIELD_MAXHEALTH in x["fields"]:
+                maxhp = x["fields"][UNIT_FIELD_MAXHEALTH]
         a["probe_low_health"] = low
         a["probe_max_health"] = maxhp
         a["boss_scaled_max"] = next((t["boss_max"] for t in a["trace"] if t.get("boss_max")), None)
