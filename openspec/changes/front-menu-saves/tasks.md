@@ -14,8 +14,8 @@ Estimates are builder-agent wall-clock hours, including build and harness time o
 - [x] 3.2 `savesctl.py`: the `L` verb with its action (SOAP load + status poll, one at a time), build-12340 refusal. `play.py` wiring. `clientcfg` heals a token `accountName`. (1.5 h)
 
 ## 4. Client (run B)
-- [ ] 4.1 Glue: character-screen Saves button and panel, confirm dialog, notice, `L` request (with the Q2 fallback if needed), `GetCharacterListUpdate()` after a load, `accountName` save/restore in `HSControl_Send`, and test actions for the GUI checks. (2.5 h)
-- [ ] 4.2 Add-on: Esc-menu Saves window (list, save with name, load, delete), `Bindings.xml` quicksave/quickload with defaults read from the client's default bindings, and refusal messages. (2 h)
+- [x] 4.1 Glue: character-screen Saves button and panel, confirm dialog, notice, `L` request (with the Q2 fallback if needed), `GetCharacterListUpdate()` after a load, `accountName` save/restore in `HSControl_Send`, and test actions for the GUI checks. (2.5 h)
+- [x] 4.2 Add-on: Esc-menu Saves window (list, save with name, load, delete), `Bindings.xml` quicksave/quickload with defaults read from the client's default bindings, and refusal messages. (2 h)
 
 ## 5. Checks and docs (run C)
 - [ ] 5.1 Server and probe checks: `saves.roundtrip`, `saves.scope`, `saves.item_ids_fresh`, `saves.table_coverage`, `saves.manual`, `saves.quick_slot`, `saves.autosave_triggers`, `saves.refused_in_combat`, `saves.bots_skip`, `saves.atomic`, `saves.inworld_load`, `saves.load_ordering`, `saves.undo`, `saves.load_atomic`, `saves.load_refusals`, `saves.inworld_list`, `saves.list_wording`, `saves.addon_static`, `saves.player_untouched`. (3 h)

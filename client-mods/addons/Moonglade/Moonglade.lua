@@ -103,6 +103,9 @@ banner:Hide();
 MOONGLADE_PAUSE_BANNER = banner;
 
 local function askPause(on)
+	-- the in-game Saves window (MoongladeSaves.lua) keeps the pause the game menu started when it opens from it (the
+	-- window shows before the menu hides); the window's own OnHide resumes unless the menu is up again
+	if ( not on and MoongladeSavesFrame and MoongladeSavesFrame:IsShown() ) then return; end
 	local me = UnitName("player");
 	if ( me ) then
 		SendAddonMessage(PAUSE_PREFIX, on and "1" or "0", "WHISPER", me);
@@ -111,6 +114,7 @@ local function askPause(on)
 	if ( not on ) then banner:Hide(); setDim(false); end
 end
 
+MoongladePause_Ask = askPause;
 GameMenuFrame:HookScript("OnShow", function() askPause(true); end);
 GameMenuFrame:HookScript("OnHide", function() askPause(false); end);
 for _, b in ipairs({ GameMenuButtonLogout, GameMenuButtonQuit }) do
@@ -123,7 +127,11 @@ pauseFrame:RegisterEvent("PLAYER_LEAVING_WORLD");
 pauseFrame:SetScript("OnEvent", function(self, event, prefix, message)
 	if ( event == "CHAT_MSG_ADDON" ) then
 		if ( prefix ~= PAUSE_PREFIX ) then return; end
-		if ( message == "paused" and GameMenuFrame:IsShown() ) then banner:Show(); setDim(true); else banner:Hide(); setDim(false); end
+		if ( message == "paused" and (GameMenuFrame:IsShown() or (MoongladeSavesFrame and MoongladeSavesFrame:IsShown())) ) then
+			banner:Show(); setDim(true);
+		else
+			banner:Hide(); setDim(false);
+		end
 		if ( #pauseHooks.acks < 20 ) then table.insert(pauseHooks.acks, message); end
 		if ( MoongladePauseTestAck ) then MoongladePauseTestAck(message); end
 	else
@@ -211,11 +219,9 @@ frame:RegisterEvent("PLAYER_CAMPING");
 frame:RegisterEvent("LOGOUT_CANCEL");
 frame:SetScript("OnEvent", function(self, event, arg1)
 	if ( event == "ADDON_LOADED" and arg1 == "Moonglade" ) then
-		if ( type(MoongladeTest) == "table" and (MoongladeTest.hook == 1 or MoongladeTest.hook == "pause"
-		     or MoongladeTest.hook == "saveproto") ) then
+		if ( type(MoongladeTest) == "table" and (MoongladeTest.hook == 1 or MoongladeTest.hook == "pause") ) then
 			test.on = true;
-			test.mode = (MoongladeTest.hook == "pause" or MoongladeTest.hook == "saveproto") and MoongladeTest.hook
-				or "wording";
+			test.mode = (MoongladeTest.hook == "pause") and "pause" or "wording";
 			MoongladeTest.report = nil;
 			for _, fn in ipairs({ "Logout", "Quit", "ForceQuit", "ForceLogout" }) do
 				if ( _G[fn] ) then
@@ -228,8 +234,8 @@ frame:SetScript("OnEvent", function(self, event, arg1)
 				if ( #test.errorMsgs < 5 ) then table.insert(test.errorMsgs, tostring(msg)); end
 				if ( previous ) then return previous(msg, ...); end
 			end);
-		else
-			MoongladeTest = nil;                -- nothing is saved outside the test hook
+		elseif ( not (type(MoongladeTest) == "table" and MoongladeTest.hook == "saves") ) then
+			MoongladeTest = nil;                -- nothing is saved outside the test hooks (MoongladeSaves.lua: "saves")
 		end
 		return;
 	end
@@ -266,20 +272,6 @@ frame:SetScript("OnUpdate", function(self, elapsed)
 			diag("ready " .. test.phase);
 			if ( test.mode == "pause" ) then pauseShot("before"); end   -- the world view before Esc
 		end
-	elseif ( test.mode == "saveproto" ) then
-		-- front-menu-saves prototype (task 1.1): once the world UI is up, ask the server to load (MGSAVE LOAD); it
-		-- should log the character out by itself. If the client is still in the world 12 s later, log out.
-		test.loadAt = test.loadAt or (test.clock + 6);
-		if ( not test.loadSent and test.clock >= test.loadAt ) then
-			test.loadSent = test.clock;
-			diag("send MGSAVE LOAD");
-			SendAddonMessage("MGSAVE", "LOAD", "WHISPER", UnitName("player"));
-		elseif ( test.loadSent and test.phase ~= "done" and test.clock >= test.loadSent + 12 ) then
-			diag("still in the world; Logout()");
-			test.phase = "done";
-			Logout();
-		end
-		return;
 	elseif ( test.mode == "pause" ) then
 		if ( (test.phase == "shot_paused" or test.phase == "shot_running") and test.clock >= test.shotAt ) then
 			pauseShot(test.phase == "shot_paused" and "paused" or "running");
