@@ -147,6 +147,28 @@ namespace MoongladeSaves
 
     // ------------------------------------------------------------------------------------------ store and writer
 
+    constexpr std::string_view SAVE_PREFIX = "MGSAVE\t";       // SendAddonMessage prefix + the client's tab
+
+    /// An add-on whisper to the player ("MGSAVE" + "\t" + line), as MoongladePause.cpp SendAddonState does.
+    void Reply(Player* player, std::string const& line)
+    {
+        WorldPacket data;
+        std::string text(SAVE_PREFIX);
+        text += line;
+        if (text.size() > 255)
+            text.resize(255);
+        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, text);
+        player->SendDirectMessage(&data);
+    }
+
+    void ReplyTo(ObjectGuid guid, std::string const& line)
+    {
+        if (Player* p = ObjectAccessor::FindConnectedPlayer(guid))
+            if (p->IsInWorld())
+                Reply(p, line);
+    }
+
+
     constexpr uint64 MIN_FREE_BYTES = 2ull * 1024 * 1024 * 1024;     // harness/hslib/backups.py MIN_FREE_BYTES
     constexpr std::string_view MIDDOT = "\xC2\xB7";                  // " · " in labels (UTF-8)
     constexpr std::string_view TEST_ACCOUNT = "HSTEST";              // harness paths.TEST_USER: test switches only
@@ -698,6 +720,634 @@ namespace MoongladeSaves
         }
     }
 
+
+    // ------------------------------------------------------------------------------------------ reader and list
+
+    /// A small JSON reader for the two files this module writes (manifest.json, character.json.gz): objects,
+    /// arrays, strings (with \" \\ \/ \b \f \n \r \t \uXXXX escapes), numbers, true/false/null.
+    struct JVal
+    {
+        enum Type { TNull, TBool, TNum, TStr, TArr, TObj } type = TNull;
+        bool b = false;
+        double n = 0;
+        std::string s;
+        std::vector<JVal> a;
+        std::vector<std::pair<std::string, JVal>> o;
+
+        JVal const* Get(std::string_view key) const
+        {
+            for (auto const& [k, v] : o)
+                if (k == key)
+                    return &v;
+            return nullptr;
+        }
+        std::string Str(std::string_view key) const
+        {
+            JVal const* v = Get(key);
+            return v && v->type == TStr ? v->s : std::string();
+        }
+        int64 Int(std::string_view key) const
+        {
+            JVal const* v = Get(key);
+            return v && v->type == TNum ? int64(v->n) : 0;
+        }
+    };
+
+    class JReader
+    {
+    public:
+        explicit JReader(std::string_view src) : _s(src) { }
+
+        bool Parse(JVal& out)
+        {
+            out = Value();
+            Ws();
+            return _ok && _i == _s.size();
+        }
+
+    private:
+        std::string_view _s;
+        size_t _i = 0;
+        bool _ok = true;
+        int _depth = 0;
+
+        void Ws() { while (_i < _s.size() && (_s[_i] == ' ' || _s[_i] == '\n' || _s[_i] == '\r' || _s[_i] == '\t')) ++_i; }
+        bool Eat(char c) { Ws(); if (_i < _s.size() && _s[_i] == c) { ++_i; return true; } return false; }
+
+        JVal Value()
+        {
+            JVal v;
+            Ws();
+            if (!_ok || _i >= _s.size() || ++_depth > 64)
+            {
+                _ok = false;
+                return v;
+            }
+            char c = _s[_i];
+            if (c == '{')
+            {
+                ++_i;
+                v.type = JVal::TObj;
+                if (!Eat('}'))
+                {
+                    do
+                    {
+                        Ws();
+                        JVal k = String();
+                        if (!_ok || !Eat(':'))
+                        {
+                            _ok = false;
+                            break;
+                        }
+                        v.o.emplace_back(std::move(k.s), Value());
+                    } while (_ok && Eat(','));
+                    if (!Eat('}'))
+                        _ok = false;
+                }
+            }
+            else if (c == '[')
+            {
+                ++_i;
+                v.type = JVal::TArr;
+                if (!Eat(']'))
+                {
+                    do
+                        v.a.push_back(Value());
+                    while (_ok && Eat(','));
+                    if (!Eat(']'))
+                        _ok = false;
+                }
+            }
+            else if (c == '"')
+                v = String();
+            else if (_s.substr(_i, 4) == "null")
+                _i += 4;
+            else if (_s.substr(_i, 4) == "true")
+            {
+                _i += 4;
+                v.type = JVal::TBool;
+                v.b = true;
+            }
+            else if (_s.substr(_i, 5) == "false")
+            {
+                _i += 5;
+                v.type = JVal::TBool;
+            }
+            else
+            {
+                size_t start = _i;
+                while (_i < _s.size() && (std::isdigit(static_cast<unsigned char>(_s[_i])) || _s[_i] == '-'
+                       || _s[_i] == '+' || _s[_i] == '.' || _s[_i] == 'e' || _s[_i] == 'E'))
+                    ++_i;
+                if (start == _i)
+                    _ok = false;
+                v.type = JVal::TNum;
+                v.n = std::strtod(std::string(_s.substr(start, _i - start)).c_str(), nullptr);
+            }
+            --_depth;
+            return v;
+        }
+
+        JVal String()
+        {
+            JVal v;
+            v.type = JVal::TStr;
+            if (_i >= _s.size() || _s[_i] != '"')
+            {
+                _ok = false;
+                return v;
+            }
+            ++_i;
+            while (_i < _s.size() && _s[_i] != '"')
+            {
+                char c = _s[_i++];
+                if (c != '\\')
+                {
+                    v.s += c;
+                    continue;
+                }
+                if (_i >= _s.size())
+                    break;
+                char e = _s[_i++];
+                switch (e)
+                {
+                    case '"': v.s += '"'; break;
+                    case '\\': v.s += '\\'; break;
+                    case '/': v.s += '/'; break;
+                    case 'b': v.s += '\b'; break;
+                    case 'f': v.s += '\f'; break;
+                    case 'n': v.s += '\n'; break;
+                    case 'r': v.s += '\r'; break;
+                    case 't': v.s += '\t'; break;
+                    case 'u':
+                    {
+                        if (_i + 4 > _s.size())
+                        {
+                            _ok = false;
+                            return v;
+                        }
+                        uint32 cp = uint32(std::strtoul(std::string(_s.substr(_i, 4)).c_str(), nullptr, 16));
+                        _i += 4;
+                        if (cp < 0x80)
+                            v.s += char(cp);
+                        else if (cp < 0x800)
+                        {
+                            v.s += char(0xC0 | (cp >> 6));
+                            v.s += char(0x80 | (cp & 0x3F));
+                        }
+                        else
+                        {
+                            v.s += char(0xE0 | (cp >> 12));
+                            v.s += char(0x80 | ((cp >> 6) & 0x3F));
+                            v.s += char(0x80 | (cp & 0x3F));
+                        }
+                        break;
+                    }
+                    default: _ok = false; return v;
+                }
+            }
+            if (_i >= _s.size())
+                _ok = false;
+            else
+                ++_i;
+            return v;
+        }
+    };
+
+    bool ReadManifest(fs::path const& dir, Manifest& m)
+    {
+        std::string text;
+        JVal j;
+        if (!ReadFile(dir / "manifest.json", text) || !JReader(text).Parse(j) || j.type != JVal::TObj
+            || j.Int("format") != 1)
+            return false;
+        m.id = j.Str("id");
+        m.kind = j.Str("kind");
+        m.label = j.Str("label");
+        m.created = j.Int("created");
+        m.createdUtc = j.Str("created_utc");
+        m.createdLocal = j.Str("created_local");
+        m.account = j.Str("account");
+        m.accountId = uint32(j.Int("account_id"));
+        m.guid = uint32(j.Int("character"));
+        m.name = j.Str("name");
+        m.level = uint32(j.Int("level"));
+        m.cls = uint32(j.Int("class"));
+        m.race = uint32(j.Int("race"));
+        m.zone = uint32(j.Int("zone"));
+        m.zoneName = j.Str("zone_name");
+        m.map = uint32(j.Int("map"));
+        m.playTime = uint32(j.Int("play_time"));
+        m.money = uint32(j.Int("money"));
+        m.coreSha = j.Str("core_sha");
+        m.schema = j.Str("schema");
+        m.sha256 = j.Str("sha256");
+        return !m.id.empty() && m.id == dir.filename().string();
+    }
+
+    /// A character's saves, newest first (finished folders only: .tmp-* never counts).
+    std::vector<Manifest> ListSaves(std::string const& account, uint32 guid)
+    {
+        std::vector<Manifest> out;
+        std::error_code ec;
+        fs::path charDir = CharDir(account, guid);
+        if (!fs::is_directory(charDir, ec))
+            return out;
+        for (auto const& e : fs::directory_iterator(charDir, ec))
+        {
+            std::string n = e.path().filename().string();
+            Manifest m;
+            if (n.rfind(".tmp-", 0) != 0 && e.is_directory(ec) && ReadManifest(e.path(), m))
+                out.push_back(std::move(m));
+        }
+        std::sort(out.begin(), out.end(), [](Manifest const& a, Manifest const& b)
+        {
+            return a.created != b.created ? a.created > b.created : a.id > b.id;
+        });
+        return out;
+    }
+
+    /// The list's generation: 4 hex digits of the sha256 of its ids in order. A request naming another generation
+    /// is refused ("the list changed").
+    std::string ListGen(std::vector<Manifest> const& list)
+    {
+        std::string ids;
+        for (Manifest const& m : list)
+            ids += m.id + "\n";
+        return Sha256Hex(ids).substr(0, 4);
+    }
+
+    // ------------------------------------------------------------------------------------------ loader
+
+    /// One load's progress, for `.moonglade save status <job>` (the launcher polls it).
+    struct Job
+    {
+        std::string state = "pending";            // pending | done | refused | failed
+        std::string why;
+        std::string label;
+        time_t started = 0;
+    };
+
+    std::unordered_map<uint32, Job> g_jobs;
+    uint32 g_nextJob = 1;
+    std::unordered_map<uint32, uint32> g_loading;  // character guid -> job (one load per character at a time)
+
+    std::string SqlValue(std::optional<std::string> const& v, std::string const& type)
+    {
+        if (!v)
+            return "NULL";
+        if (IsHexType(type))
+        {
+            for (char c : *v)
+                if (!std::isxdigit(static_cast<unsigned char>(c)))
+                    return "NULL";
+            return "X'" + *v + "'";
+        }
+        std::string out = "'";
+        for (char c : *v)
+        {
+            if (c == '\\' || c == '\'')
+                out += '\\';
+            if (c == '\0')
+            {
+                out += "\\0";
+                continue;
+            }
+            out += c;
+        }
+        return out + "'";
+    }
+
+    struct ParsedSave
+    {
+        Manifest m;
+        std::vector<std::vector<Row>> tables;    // SAVE_SET order, columns in the running schema's order
+    };
+
+    /// Read and check a save: the file's sha256 equals the manifest's, the format and schema are ours, and every
+    /// table's columns are the running database's. "" or the refusal reason.
+    std::string ReadSave(std::string const& account, uint32 guid, std::string const& id, ParsedSave& out)
+    {
+        fs::path dir = CharDir(account, guid) / id;
+        std::error_code ec;
+        if (id.empty() || id.find('/') != std::string::npos || id[0] == '.' || !fs::is_directory(dir, ec))
+            return "That save doesn't exist.";
+        if (!ReadManifest(dir, out.m))
+            return "That save is damaged.";
+        if (out.m.account != account || out.m.guid != guid)
+            return "That save belongs to another character.";
+        std::string gz;
+        if (!ReadFile(dir / "character.json.gz", gz) || Sha256Hex(gz) != out.m.sha256)
+            return "That save is damaged.";
+        if (out.m.schema != g_schemaFingerprint)
+            return "This save was made by a different version of Moonglade.";
+        bool ok = false;
+        std::string text = Gunzip(gz, ok);
+        JVal j;
+        if (!ok || !JReader(text).Parse(j) || j.Int("format") != 1)
+            return "That save is damaged.";
+        JVal const* schema = j.Get("schema");
+        JVal const* rows = j.Get("rows");
+        if (!schema || !rows)
+            return "That save is damaged.";
+        out.tables.assign(std::size(SAVE_SET), {});
+        for (size_t ti = 0; ti < std::size(SAVE_SET); ++ti)
+        {
+            std::string name(SAVE_SET[ti].name);
+            JVal const* cols = schema->Get(name);
+            JVal const* trows = rows->Get(name);
+            auto const& want = g_columns[name];
+            auto const& types = g_types[name];
+            if (!cols || !trows || cols->a.size() != want.size())
+                return "This save was made by a different version of Moonglade.";
+            for (size_t i = 0; i < want.size(); ++i)
+                if (cols->a[i].s != want[i] + " " + types[i])
+                    return "This save was made by a different version of Moonglade.";
+            for (JVal const& r : trows->a)
+            {
+                if (r.a.size() != want.size())
+                    return "That save is damaged.";
+                Row row;
+                row.reserve(r.a.size());
+                for (JVal const& v : r.a)
+                    row.push_back(v.type == JVal::TStr ? std::optional<std::string>(v.s) : std::nullopt);
+                out.tables[ti].push_back(std::move(row));
+            }
+        }
+        if (out.tables[0].size() != 1)
+            return "That save is damaged.";
+        return {};
+    }
+
+    /// The restore as one transaction (design.md 3): the removed-on-load rows and the save set's current rows go,
+    /// then the saved rows come back under the same character id, with fresh item, pet and equipment-set ids from
+    /// the server's own generators, the character's current name and online = 0. `failAfter` (test switch) appends
+    /// a failing statement after that many statements, so the whole transaction rolls back. It must be an error the
+    /// core treats as a failed statement (here ER_SUBQUERY_NO_1_ROW, a read): ER_NO_SUCH_TABLE, ER_BAD_FIELD_ERROR and
+    /// ER_PARSE_ERROR abort the worldserver (MySQLConnection::_HandleMySQLErrno), so the restore's own statements
+    /// only ever name the running schema's tables and columns (the schema check before a load).
+    CharacterDatabaseTransaction BuildRestore(ParsedSave const& save, uint32 guid, std::string const& currentName,
+        uint32 failAfter, uint32& statements)
+    {
+        CharacterDatabaseTransaction trans = CharacterDatabase.BeginTransaction();
+        statements = 0;
+        auto add = [&](std::string const& sql)
+        {
+            if (failAfter && statements == failAfter)
+                trans->Append(std::string("SELECT 1 FROM DUAL WHERE (SELECT 1 UNION SELECT 2) = 1"));
+            trans->Append(sql);
+            ++statements;
+        };
+
+        // fresh ids for everything this save brings back (never an id another row may hold now)
+        std::unordered_map<std::string, std::string> items, pets, sets;
+        auto colIndex = [](std::string const& table, std::string_view col) -> int
+        {
+            auto const& cols = g_columns[table];
+            for (size_t i = 0; i < cols.size(); ++i)
+                if (cols[i] == col)
+                    return int(i);
+            return -1;
+        };
+        for (size_t ti = 0; ti < std::size(SAVE_SET); ++ti)
+        {
+            std::string name(SAVE_SET[ti].name);
+            if (name == "item_instance")
+                for (Row const& r : save.tables[ti])
+                    items[*r[colIndex(name, "guid")]] = std::to_string(sObjectMgr->GetGenerator<HighGuid::Item>().Generate());
+            else if (name == "character_pet")
+                for (Row const& r : save.tables[ti])
+                    pets[*r[colIndex(name, "id")]] = std::to_string(sObjectMgr->GeneratePetNumber());
+            else if (name == "character_equipmentsets")
+                for (Row const& r : save.tables[ti])
+                    sets[*r[colIndex(name, "setguid")]] = std::to_string(sObjectMgr->GenerateEquipmentSetGuid());
+        }
+
+        for (RemovedTable const& t : REMOVED_ON_LOAD)
+            add("DELETE FROM `" + std::string(t.name) + "` WHERE " + Where(t.where, guid));
+        for (size_t ti = std::size(SAVE_SET); ti-- > 0; )
+            add("DELETE FROM `" + std::string(SAVE_SET[ti].name) + "` WHERE " + Where(SAVE_SET[ti].where, guid));
+
+        for (size_t ti = 0; ti < std::size(SAVE_SET); ++ti)
+        {
+            SaveTable const& t = SAVE_SET[ti];
+            std::string name(t.name);
+            auto const& cols = g_columns[name];
+            auto const& types = g_types[name];
+            std::string head = "INSERT INTO `" + name + "` (";
+            for (size_t i = 0; i < cols.size(); ++i)
+                head += (i ? ", `" : "`") + cols[i] + "`";
+            head += ") VALUES ";
+            std::string values;
+            uint32 n = 0;
+            for (Row row : save.tables[ti])
+            {
+                bool keep = true;
+                for (RenumberColumn const& rc : t.renumber)
+                {
+                    int ci = colIndex(name, rc.column);
+                    if (ci < 0 || !row[ci])
+                        continue;
+                    std::string& v = *row[ci];
+                    switch (rc.kind)
+                    {
+                        case Renumber::Item:              // bag 0 = not in a bag; an item not in this save: drop the row
+                            if (v == "0" && rc.column == "bag")
+                                break;
+                            if (auto it = items.find(v); it != items.end())
+                                v = it->second;
+                            else
+                                keep = false;
+                            break;
+                        case Renumber::ItemInSet:
+                            if (auto it = items.find(v); it != items.end())
+                                v = it->second;
+                            else
+                                v = "0";
+                            break;
+                        case Renumber::ItemRaw:
+                        {
+                            uint64 raw = std::strtoull(v.c_str(), nullptr, 10);
+                            if (raw)
+                                if (auto it = items.find(std::to_string(raw & 0xFFFFFFFF)); it != items.end())
+                                    v = std::to_string(ObjectGuid::Create<HighGuid::Item>(
+                                        uint32(std::strtoul(it->second.c_str(), nullptr, 10))).GetRawValue());
+                            break;
+                        }
+                        case Renumber::Pet:
+                            if (auto it = pets.find(v); it != pets.end())
+                                v = it->second;
+                            else
+                                keep = false;
+                            break;
+                        case Renumber::EquipmentSet:
+                            if (auto it = sets.find(v); it != sets.end())
+                                v = it->second;
+                            else
+                                keep = false;
+                            break;
+                        case Renumber::None:
+                            break;
+                    }
+                }
+                if (!keep)
+                    continue;
+                if (name == "characters")
+                {
+                    row[colIndex(name, "name")] = currentName;
+                    row[colIndex(name, "online")] = std::string("0");
+                }
+                std::string tuple = "(";
+                for (size_t i = 0; i < row.size(); ++i)
+                    tuple += (i ? ", " : "") + SqlValue(row[i], types[i]);
+                tuple += ")";
+                values += (n ? ", " : "") + tuple;
+                if (++n == 200)
+                {
+                    add(head + values);
+                    values.clear();
+                    n = 0;
+                }
+            }
+            if (n)
+                add(head + values);
+        }
+        if (failAfter && statements <= failAfter)
+            trans->Append(std::string("SELECT 1 FROM DUAL WHERE (SELECT 1 UNION SELECT 2) = 1"));
+        return trans;
+    }
+
+    struct LoadRequest
+    {
+        std::string account;
+        uint32 guid = 0;
+        std::string id;
+        ObjectGuid inGame;            // set: the in-game path (log this player out without saving it)
+        uint32 job = 0;
+    };
+
+    void FinishJob(uint32 job, uint32 guid, std::string const& state, std::string const& why)
+    {
+        g_loading.erase(guid);
+        auto it = g_jobs.find(job);
+        if (it != g_jobs.end())
+        {
+            it->second.state = state;
+            it->second.why = why;
+        }
+        LOG_INFO("module", "[mod-moonglade] saves: load job {} of {}: {}{}{}", job, guid, state, why.empty() ? "" : ": ", why);
+    }
+
+    /// Checks that hold for both paths: the character exists, isn't deleted, belongs to the account; returns its
+    /// current name through `name`.
+    std::string CheckCharacter(std::string const& account, uint32 guid, std::string& name)
+    {
+        QueryResult r = CharacterDatabase.Query("SELECT account, name, deleteDate IS NOT NULL FROM characters WHERE guid = {}", guid);
+        if (!r)
+            return "That character doesn't exist.";
+        if ((*r)[2].Get<int64>() != 0)
+            return "That character was deleted.";
+        if (AccountName((*r)[0].Get<uint32>()) != account)
+            return "That save belongs to another account.";
+        name = (*r)[1].Get<std::string>();
+        return {};
+    }
+
+    /// The load, in order (design.md 3): checks; the "before loading" safety save of the current state; then (in
+    /// game) the instant logout without the character save; then the restore transaction, queued in the same world
+    /// tick on the FIFO queue behind every earlier write of the character.
+    void StartLoad(LoadRequest req)
+    {
+        auto refuse = [&](std::string const& why)
+        {
+            FinishJob(req.job, req.guid, "refused", why);
+            if (req.inGame)
+                ReplyTo(req.inGame, "NO\tLOAD\t" + why);
+        };
+        if (!g_cfg.enabled)
+            return refuse("Loading is turned off.");
+        if (g_loading.count(req.guid))
+            return refuse("A load is already running for this character.");
+        std::string currentName;
+        if (std::string why = CheckCharacter(req.account, req.guid, currentName); !why.empty())
+            return refuse(why);
+        Player* online = ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(req.guid));
+        if (!req.inGame && (online || ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(req.guid))))
+            return refuse("That character is in the world.");
+        if (req.inGame && (!online || online->GetGUID() != req.inGame || online->GetSession()->IsBot()))
+            return refuse("That character isn't yours to load here.");
+        auto save = std::make_shared<ParsedSave>();
+        if (std::string why = ReadSave(req.account, req.guid, req.id, *save); !why.empty())
+            return refuse(why);
+        g_loading[req.guid] = req.job;
+        g_jobs[req.job].label = save->m.label;
+
+        SaveRequest safety;
+        safety.guid = req.guid;
+        safety.kind = "before-load";
+        safety.online = bool(req.inGame);
+        safety.done = [req, save, currentName](bool ok, std::string const& why, Manifest const&)
+        {
+            if (!ok)
+            {
+                FinishJob(req.job, req.guid, "failed", "Couldn't make the safety save first (" + why + ").");
+                if (req.inGame)
+                    ReplyTo(req.inGame, "NO\tLOAD\tCouldn't make the safety save first.");
+                return;
+            }
+            if (req.inGame)
+            {
+                Player* player = ObjectAccessor::FindConnectedPlayer(req.inGame);
+                if (!player || !player->IsInWorld())
+                {
+                    FinishJob(req.job, req.guid, "failed", "The character left the world before the load.");
+                    return;
+                }
+                Reply(player, "OK\tLOAD\t" + save->m.label);
+                WorldPackets::Character::LogoutResponse resp;
+                resp.LogoutResult = 0;
+                resp.Instant = true;
+                player->GetSession()->SendPacket(resp.Write());
+                player->GetSession()->LogoutPlayer(false);     // no character save after this point (design.md 3)
+            }
+            else if (ObjectAccessor::FindPlayer(ObjectGuid::Create<HighGuid::Player>(req.guid)))
+            {
+                FinishJob(req.job, req.guid, "refused", "That character entered the world.");
+                return;
+            }
+            uint32 failAfter = (g_test.failAfter && req.account == TEST_ACCOUNT) ? g_test.failAfter : 0;
+            uint32 statements = 0;
+            CharacterDatabaseTransaction trans = BuildRestore(*save, req.guid, currentName, failAfter, statements);
+            uint32 guid = req.guid, job = req.job;
+            g_transactions.AddCallback(CharacterDatabase.AsyncCommitTransaction(trans)).AfterComplete(
+                [guid, job, statements](bool success)
+            {
+                if (success)
+                    sCharacterCache->RefreshCacheEntry(guid);
+                FinishJob(job, guid, success ? "done" : "failed", success ? "" : "The load didn't go through; nothing changed.");
+                LOG_INFO("module", "[mod-moonglade] saves: restore of {} ({} statements): {}", guid, statements,
+                    success ? "committed" : "rolled back");
+            });
+        };
+        StartSave(std::move(safety));
+    }
+
+    uint32 NewJob()
+    {
+        uint32 id = g_nextJob++;
+        Job j;
+        j.started = time(nullptr);
+        g_jobs[id] = j;
+        if (g_jobs.size() > 256)                       // keep the table small: drop the oldest finished
+            for (auto it = g_jobs.begin(); it != g_jobs.end(); ++it)
+                if (it->second.state != "pending" && it->first + 200 < id)
+                {
+                    g_jobs.erase(it);
+                    break;
+                }
+        return id;
+    }
+
     /// Why a player-requested save is refused now ("" = allowed). Bots never get here.
     std::string RefuseSave(Player* player)
     {
@@ -764,27 +1414,6 @@ using namespace MoongladeSaves;
 // ---------------------------------------------------------------------------------------------- requests
 namespace MoongladeSaves
 {
-    constexpr std::string_view SAVE_PREFIX = "MGSAVE\t";       // SendAddonMessage prefix + the client's tab
-
-    /// An add-on whisper to the player ("MGSAVE" + "\t" + line), as MoongladePause.cpp SendAddonState does.
-    void Reply(Player* player, std::string const& line)
-    {
-        WorldPacket data;
-        std::string text(SAVE_PREFIX);
-        text += line;
-        if (text.size() > 255)
-            text.resize(255);
-        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, text);
-        player->SendDirectMessage(&data);
-    }
-
-    void ReplyTo(ObjectGuid guid, std::string const& line)
-    {
-        if (Player* p = ObjectAccessor::FindConnectedPlayer(guid))
-            if (p->IsInWorld())
-                Reply(p, line);
-    }
-
     struct AddonRequest
     {
         ObjectGuid guid;
@@ -793,6 +1422,24 @@ namespace MoongladeSaves
     };
 
     std::vector<AddonRequest> g_addonRequests;      // world thread only (CMSG_MESSAGECHAT runs in UpdateSessions)
+
+    /// "LIST": one line per save, newest first ("E\t<gen>\t<n>\t<kind>\t<when>\t<level>\t<zone>\t<label>", at
+    /// most 255 bytes with the prefix; never the save's id or path), then "END\t<gen>\t<count>".
+    void SendList(Player* player)
+    {
+        std::vector<Manifest> list = ListSaves(AccountName(player->GetSession()->GetAccountId()),
+            player->GetGUID().GetCounter());
+        std::string gen = ListGen(list);
+        uint32 n = 0;
+        for (Manifest const& m : list)
+        {
+            ++n;
+            Reply(player, "E\t" + gen + "\t" + std::to_string(n) + "\t" + m.kind + "\t"
+                + FormatTime(time_t(m.created), "%a %d %b %H:%M", false) + "\t" + std::to_string(m.level) + "\t"
+                + m.zoneName + "\t" + m.label);
+        }
+        Reply(player, "END\t" + gen + "\t" + std::to_string(n));
+    }
 
     /// A player-requested save (manual or quick) from the add-on: refusals first, then the save; the result line
     /// is "OK\t<verb>\t<label>" or "NO\t<verb>\t<reason>".
@@ -837,6 +1484,59 @@ namespace MoongladeSaves
         }
         else if (r.verb == "QUICK")
             PlayerSave(player, "QUICK", "quick", "");
+        else if (r.verb == "LIST")
+            SendList(player);
+        else if (r.verb == "LOAD" || r.verb == "QLOAD")
+        {
+            std::string account = AccountName(player->GetSession()->GetAccountId());
+            uint32 guid = player->GetGUID().GetCounter();
+            std::vector<Manifest> list = ListSaves(account, guid);
+            Manifest const* pick = nullptr;
+            if (r.verb == "QLOAD")
+            {
+                for (Manifest const& m : list)
+                    if (m.kind == "quick")
+                    {
+                        pick = &m;
+                        break;
+                    }
+                if (!pick)
+                {
+                    Reply(player, "NO\tQLOAD\tThere is no quicksave yet.");
+                    return;
+                }
+            }
+            else
+            {
+                // "LOAD <generation> <index>" (index 1 = newest, as LIST numbered them)
+                std::string gen;
+                uint32 idx = 0;
+                size_t sp = r.arg.find(' ');
+                if (sp != std::string::npos)
+                {
+                    gen = r.arg.substr(0, sp);
+                    idx = uint32(std::strtoul(r.arg.c_str() + sp + 1, nullptr, 10));
+                }
+                if (gen != ListGen(list))
+                {
+                    Reply(player, "NO\tLOAD\tThe list of saves changed. Open Saves again.");
+                    return;
+                }
+                if (idx < 1 || idx > list.size())
+                {
+                    Reply(player, "NO\tLOAD\tThat save doesn't exist.");
+                    return;
+                }
+                pick = &list[idx - 1];
+            }
+            LoadRequest lr;
+            lr.account = account;
+            lr.guid = guid;
+            lr.id = pick->id;
+            lr.inGame = player->GetGUID();
+            lr.job = NewJob();
+            StartLoad(std::move(lr));
+        }
         else
             Reply(player, "NO\t" + r.verb + "\tUnknown request.");
     }
@@ -905,6 +1605,8 @@ public:
             { "status",    HandleStatus,    SEC_GAMEMASTER, Console::Yes },
             { "tables",    HandleTables,    SEC_GAMEMASTER, Console::Yes },
             { "take",      HandleTake,      SEC_GAMEMASTER, Console::Yes },
+            { "load",      HandleLoad,      SEC_GAMEMASTER, Console::Yes },
+            { "list",      HandleList,      SEC_GAMEMASTER, Console::Yes },
             { "test",      HandleTest,      SEC_GAMEMASTER, Console::Yes },
         };
         static ChatCommandTable moongladeTable = { { "save", saveTable } };
@@ -913,8 +1615,10 @@ public:
     }
 
     /// `.moonglade save status`: enabled or the reason it isn't, the store, the schema fingerprint and the settings.
-    static bool HandleStatus(ChatHandler* handler)
+    static bool HandleStatus(ChatHandler* handler, Optional<uint32> job)
     {
+        if (job)
+            return HandleJobStatus(handler, *job);
         handler->PSendSysMessage("Moonglade saves: {} | why: {} | dir: {} | schema: {} | workers: {} | auto interval: {} "
             "| keep auto {} quick {} before-load {}", g_cfg.enabled ? "enabled" : "disabled",
             g_cfg.why.empty() ? "-" : g_cfg.why, g_cfg.dir.string(), g_schemaFingerprint.empty() ? "-" : g_schemaFingerprint,
@@ -966,6 +1670,49 @@ public:
         req.online = player && player->IsInWorld();
         StartSave(std::move(req));
         handler->PSendSysMessage("Moonglade save: queued a save of {}", guid);
+        return true;
+    }
+
+    /// `.moonglade save load <guid> <save id>` (the launcher, for a load at the character screen): queues the load
+    /// and answers "job <n>"; `.moonglade save status <n>` reports it.
+    static bool HandleLoad(ChatHandler* handler, uint32 guid, std::string id)
+    {
+        QueryResult r = CharacterDatabase.Query("SELECT account FROM characters WHERE guid = {}", guid);
+        LoadRequest lr;
+        lr.account = r ? AccountName((*r)[0].Get<uint32>()) : "";
+        lr.guid = guid;
+        lr.id = id;
+        lr.job = NewJob();
+        uint32 job = lr.job;
+        StartLoad(std::move(lr));
+        handler->PSendSysMessage("Moonglade save: job {}", job);
+        return true;
+    }
+
+    static bool HandleJobStatus(ChatHandler* handler, uint32 job)
+    {
+        auto it = g_jobs.find(job);
+        if (it == g_jobs.end())
+            handler->PSendSysMessage("Moonglade save: job {} unknown", job);
+        else
+            handler->PSendSysMessage("Moonglade save: job {} {}{}{}", job, it->second.state,
+                it->second.why.empty() ? "" : ": ", it->second.why);
+        return true;
+    }
+
+    /// `.moonglade save list <guid>`: one line per save, newest first: "<id> <kind> <level> <label>".
+    static bool HandleList(ChatHandler* handler, uint32 guid)
+    {
+        QueryResult r = CharacterDatabase.Query("SELECT account FROM characters WHERE guid = {}", guid);
+        if (!r)
+        {
+            handler->SendSysMessage("Moonglade save: no such character");
+            return true;
+        }
+        std::vector<Manifest> list = ListSaves(AccountName((*r)[0].Get<uint32>()), guid);
+        for (Manifest const& m : list)
+            handler->PSendSysMessage("Moonglade save: {} {} {} {}", m.id, m.kind, m.level, m.label);
+        handler->PSendSysMessage("Moonglade save: {} save(s), generation {}", list.size(), ListGen(list));
         return true;
     }
 
