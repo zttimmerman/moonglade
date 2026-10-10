@@ -27,6 +27,8 @@ from . import mpq, paths as P
 from .clientbuild import locale
 
 INSIDE = "Interface\\GlueXML\\HSProfiles.lua"
+SAVES_INSIDE = "Interface\\GlueXML\\HSSaves.lua"
+SAVES_SLOT = 64 * 1024          # front-menu-saves design 6(a): the save list's fixed-size, uncompressed slot
 ARCHIVE = "Data/{locale}/patch-{locale}-5.MPQ"
 TEST_ENV = "HS_GLUE_TEST"
 
@@ -172,7 +174,7 @@ def test_hook_from_env() -> dict | None:
 
 
 def write(client_dir: Path, profiles: list[dict], default: str | None = None, test: dict | None = None,
-          about: dict | None = None, control: dict | None = None) -> dict:
+          about: dict | None = None, control: dict | None = None, saves_lua: bytes | None = None) -> dict:
     """Write the profile archive into a play client. Returns evidence without any password."""
     client_dir = Path(client_dir)
     if mpq._under_client(client_dir):
@@ -183,9 +185,10 @@ def write(client_dir: Path, profiles: list[dict], default: str | None = None, te
     tmp = dest.with_name(dest.name + ".hs-new")
     tmp.unlink(missing_ok=True)
     os.close(os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600))   # 0600 before any secret is written
-    files = {INSIDE: render(profiles, default, test, about, control)}
+    files = {INSIDE: render(profiles, default, test, about, control), SAVES_INSIDE: pad_saves(saves_lua)}
     try:
-        mpq.write_archive(tmp, files)
+        # uncompressed: the save list's slot is rewritten in place while the game runs (rewrite_saves)
+        mpq.write_archive(tmp, files, compress=False)
         mpq.verify_written(tmp, files)
         os.chmod(tmp, 0o600)
         os.replace(tmp, dest)
@@ -196,6 +199,47 @@ def write(client_dir: Path, profiles: list[dict], default: str | None = None, te
             "contexts": {p.get("name") or p["account"]: p.get("context") for p in profiles}, "default": default,
             "test_hook": test, "about": about,
             "control": {"port": control["port"]} if control else None}      # never the nonce
+
+
+EMPTY_SAVES = b"HS_SAVES = { gen = 0, chars = {} };\r\n"
+
+
+def pad_saves(lua: bytes | None) -> bytes:
+    """The save list's Lua source padded with spaces to exactly SAVES_SLOT bytes (refused if it doesn't fit)."""
+    lua = EMPTY_SAVES if lua is None else bytes(lua)
+    if len(lua) > SAVES_SLOT - 2:
+        raise FrontMenuError(f"the save list ({len(lua)} bytes) doesn't fit its {SAVES_SLOT}-byte slot")
+    return lua + b"\r\n" + b" " * (SAVES_SLOT - len(lua) - 2)
+
+
+def saves_slot(client_dir: Path) -> tuple[Path, int]:
+    """(archive, byte offset) of the save list's slot: an uncompressed, unencrypted block of exactly SAVES_SLOT bytes."""
+    arch = archive_path(Path(client_dir))
+    with mpq.Archive(arch) as m:
+        bi = m.find(SAVES_INSIDE)
+        if bi is None:
+            raise FrontMenuError("no save-list slot in the generated archive")
+        off, csize, fsize, flags = m.blocks[bi]
+        base = m.base
+    if flags & ~mpq.F_EXISTS or csize != SAVES_SLOT or fsize != SAVES_SLOT:
+        raise FrontMenuError(f"the save-list slot isn't a raw {SAVES_SLOT}-byte block (flags {flags:#x}, {csize}/{fsize})")
+    return arch, base + off
+
+
+def rewrite_saves(client_dir: Path, lua: bytes) -> dict:
+    """Rewrite the save list in place (same offset and length, so the archive's tables stay valid while the client
+    has it open). Inside a play client only."""
+    client_dir = Path(client_dir)
+    if mpq._under_client(client_dir):
+        raise FrontMenuError("refusing to write the save list into client/")
+    data = pad_saves(lua)
+    arch, off = saves_slot(client_dir)
+    with open(arch, "r+b") as f:
+        f.seek(off)
+        f.write(data)
+        f.flush()
+        os.fsync(f.fileno())
+    return {"archive": str(arch.relative_to(client_dir)), "offset": off, "bytes": len(data)}
 
 
 def remove(client_dir: Path) -> dict:

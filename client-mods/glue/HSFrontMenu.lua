@@ -427,6 +427,12 @@ function HSFrontMenu_OnEvent(self, event)
 		if ( HS_TEST.enter_world_after_charlist and n > 0 and not state.enterAt and loggedIn ) then
 			state.enterAt = state.testClock + HS_TEST.enter_world_after_charlist;
 		end
+		-- front-menu-saves prototype (task 1.1): HS_TEST.charselect_back = steps timed from the first character list
+		-- after coming back from the world (a fresh glue session: state.round > 1; or the same one: enteredWorld)
+		if ( HS_TEST.charselect_back and n > 0 and not state.cbAt
+		     and (state.round > 1 or (HSSeamlessState and HSSeamlessState.enteredWorld)) ) then
+			state.cbAt = state.testClock;
+		end
 		-- HS_TEST.charselect = { {t = seconds after the character list, act = ...}, ... } (seamless-experience)
 		if ( HS_TEST.charselect and n > 0 and not state.csAt and loggedIn ) then
 			state.csAt = state.testClock;
@@ -556,6 +562,15 @@ function HSFrontMenu_TestUpdate(self, elapsed)
 			end
 		end
 	end
+	if ( HS_TEST.charselect_back and state.cbAt ) then
+		state.cbDone = state.cbDone or {};
+		for i, step in ipairs(HS_TEST.charselect_back) do
+			if ( not state.cbDone[i] and state.testClock >= state.cbAt + step.t ) then
+				state.cbDone[i] = true;
+				HSFrontMenu_TestAct(step.act);
+			end
+		end
+	end
 	if ( HS_TEST.charselect_again and state.cs2At ) then
 		state.cs2Done = state.cs2Done or {};
 		for i, step in ipairs(HS_TEST.charselect_again) do
@@ -639,6 +654,29 @@ function HSFrontMenu_TestAct(act)
 		HSControl_Send(strsub(act, 5, 5), strsub(act, 6));
 	elseif ( act == "realm:reset" ) then
 		HSControl_ResetRealm();
+	elseif ( strsub(act, 1, 8) == "ifround:" ) then      -- prototype: "ifround:N:<act>" runs <act> from round N on
+		local n, rest = string.match(act, "^ifround:(%d+):(.+)$");
+		if ( n and state.round >= tonumber(n) ) then HSFrontMenu_TestAct(rest); end
+	elseif ( act == "csrec" ) then                       -- front-menu-saves prototype: what the screen knows now
+		local parts = {};
+		for i = 1, GetNumCharacters() do
+			local name, race, class, level, zone = GetCharacterInfo(i);
+			table.insert(parts, tostring(name) .. "=" .. tostring(level) .. "@" .. tostring(zone));
+		end
+		HSFrontMenu_Mark("csrec:r" .. state.round .. ":gen=" .. tostring(HS_SAVES and HS_SAVES.gen) .. ":src="
+			.. tostring(HS_SAVES and HS_SAVES.src) .. ":screen=" .. tostring(CURRENT_GLUE_SCREEN) .. ":"
+			.. table.concat(parts, ","));
+		if ( HSSeamless_Rec ) then
+			HSSeamless_Rec(format("Z%d:%s:%s:%s", state.round, tostring(HS_SAVES and HS_SAVES.gen),
+				tostring(CURRENT_GLUE_SCREEN), table.concat(parts, ",")));
+		end
+	elseif ( strsub(act, 1, 10) == "roundgate:" ) then   -- prototype: enter the world again until round N, then quit
+		if ( state.round >= tonumber(strsub(act, 11)) ) then
+			HSFrontMenu_Mark("quit");
+			QuitGame();
+		else
+			HSFrontMenu_TestAct("play");
+		end
 	else
 		HSFrontMenu_Mark("unknown-act:" .. tostring(act));
 	end
@@ -672,8 +710,10 @@ end
 -- Send one request. Returns false (and does nothing) without a listener, while another request is pending, or away
 -- from the login screen.
 function HSControl_Send(verb, arg)
+	local screenOk = CURRENT_GLUE_SCREEN == "login"
+		or (HS_TEST and HS_TEST.ctl_charselect and CURRENT_GLUE_SCREEN == "charselect");   -- prototype Q2
 	if ( not HS_CONTROL or not HS_CONTROL.port or not HS_CONTROL.nonce or CTL.pending
-	     or CURRENT_GLUE_SCREEN ~= "login" or (HSLoadingOverlay and HSLoadingOverlay:IsShown()) ) then
+	     or not screenOk or (HSLoadingOverlay and HSLoadingOverlay:IsShown()) ) then
 		HSFrontMenu_Mark("ctl:skip:" .. tostring(verb) .. ":" .. tostring(CURRENT_GLUE_SCREEN));
 		return false;
 	end
@@ -779,6 +819,16 @@ function HSFrontMenu_Init()
 	if ( HS_TEST ) then
 		HSFrontMenu_Mark("stored=" .. HSFrontMenu_StoredBackdrop().key);
 	end
+end
+
+-- front-menu-saves prototype (task 1.1): count the glue loads of this client run in the saved account list (a client
+-- console variable, kept in memory across glue loads), so a check can tell a fresh glue session from a continued one.
+state.round = 1;
+if ( HS_TEST ) then
+	local list = GetSavedAccountList() or "";
+	state.round = (tonumber(string.match(list, "HSRN(%d+)|") or "0") or 0) + 1;
+	SetSavedAccountList(gsub(list, "HSRN%d+|", "") .. "HSRN" .. state.round .. "|");
+	HSFrontMenu_Mark("load:r" .. state.round .. ":gen=" .. tostring(HS_SAVES and HS_SAVES.gen));
 end
 
 -- Music for the very first PlayGlueMusic (SetGlueScreen / START_GLUE_MUSIC) follows the remembered backdrop.

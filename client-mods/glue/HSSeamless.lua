@@ -463,7 +463,8 @@ function HSSeamless_FlushLog(why)
 	rec("E" .. (HS_TEST_ERRORS or -1));
 	local r = table.concat(S.rec, ";");
 	if ( strlen(r) > REC_MAX ) then r = strsub(r, 1, REC_MAX - 1) .. "~"; end
-	local keep = string.match(GetSavedAccountList() or "", "HSBD%u+|") or "";
+	local keep = (string.match(GetSavedAccountList() or "", "HSBD%u+|") or "")
+		.. (string.match(GetSavedAccountList() or "", "HSRN%d+|") or "");
 	SetSavedAccountList(keep .. "HSLOG" .. r .. "|");
 end
 

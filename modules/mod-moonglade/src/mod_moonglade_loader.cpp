@@ -5,9 +5,11 @@
 
 void AddMoongladeQuietScripts();
 void AddMoongladePauseScripts();
+void AddMoongladeSavesScripts();
 
 void Addmod_moongladeScripts()
 {
     AddMoongladeQuietScripts();
     AddMoongladePauseScripts();
+    AddMoongladeSavesScripts();
 }

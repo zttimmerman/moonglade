@@ -143,3 +143,57 @@ Before the builder commits to 5 and 6, it measures on the test account, using a 
 - Q3: one in-game load end to end, done by hand with a minimal module build: does the character list after `SMSG_LOGOUT_COMPLETE` show the restored level?
 
 If Q3 fails, the builder stops and reports with evidence. Q1 and Q2 have fallbacks.
+
+### Prototype results (task 1.1, 2026-10-10, builder run A)
+All three questions hold; no fallback is needed. Runs used the test account (HSTEST / Hstester) only, on lane A, with a
+scratch play client (`env/check-play-saveproto`, dropped after each run). Evidence (git-ignored): `harness/out/fms-proto/`
+(the two prototype scripts, `ev.json` and the screenshots of the last two real-client runs).
+
+Prototype code (kept on the branch, replaced by tasks 2.2–2.4 and 4.1–4.2): `MoongladeSaves.cpp` with
+`.moonglade save protosnap <name>` (remembers an online character's level, XP, money and position) and the add-on
+whisper `MGSAVE\tLOAD`, handled on the next world tick (`WorldScript::OnUpdate`, not inside the chat handler, which
+still uses the player after the hook returns): instant `SMSG_LOGOUT_RESPONSE`, `LogoutPlayer(false)`, then one
+`CommitTransaction` writing the remembered values. Glue: `HSSaves.lua` (default in patch 0002, the live list in a
+64 KiB uncompressed slot of `patch-<locale>-5.MPQ`, `frontmenu.rewrite_saves`), plus test-only hooks (a glue-load
+counter in `accountList` as `HSRN<n>|`, `HS_TEST.charselect_back`, the acts `csrec`, `ifround:N:<act>`,
+`roundgate:N`, and `HS_TEST.ctl_charselect`). Add-on: test mode `MoongladeTest.hook = "saveproto"` (sends
+`MGSAVE LOAD` 6 s after the world UI is up).
+
+- **Q3 (in-game load, end to end): holds.**
+  - Probe, 4 rounds (`q3.py`): snapshot at level 1 in Northshire; then `.character level` to 4 and `.tele` to
+    Stormwind; in rounds 0 and 2 `.saveall` first, so the database held level 4 at Stormwind before the load. After
+    `MGSAVE LOAD`: `SMSG_LOGOUT_RESPONSE` (result 0, instant 1) and `SMSG_LOGOUT_COMPLETE` within 2–7 ms; the
+    character list requested right after showed level 1 at the snapshot position (4/4); the database row equalled
+    the snapshot (`online = 0`); logging in again placed the character at the snapshot position.
+  - Real client, 3 runs (`q12.py`, last run `q12g`): the add-on's `MGSAVE LOAD` took the client straight to character
+    select in the same frame (`PLAYER_LEAVING_WORLD` at 9.06 s, no countdown, no Lua call to Logout). In run `q12g`
+    the server logged the logout at level 6 (`Logout Character:[Hstester] … Level: 6`) and the character screen
+    right after it listed Hstester at level 3, the snapshot (`csrec:r2:…:Hstester=3`); the next world login was at
+    level 3.
+- **Q1 (save list at the character screen): (a) the fixed-size slot works; (b) the loose file doesn't.**
+  - The glue screens start fresh each time the client comes back from the world: the load counter read 2, 3, 4 in
+    rounds after the 1st, 2nd and 3rd world exits (a continued glue session would have kept its in-memory state and
+    counted once).
+  - Each fresh glue load re-read the slot: rewritten in place to `gen = 2` while the client ran (the archive open in
+    the client), the next glue load showed `gen=2, src=slot` (runs `q12a`–`q12g`). In run `q12a` round 2 still read
+    `gen = 0` because that glue load happened 1 s *before* the rewrite (the world session had ended at once, see the
+    note below); every load after a rewrite saw the new data. So nothing is cached between loads.
+  - A loose `Interface\GlueXML\HSSaves.lua` (`gen = 3`) in the play client was never read: rounds 3 and 4 still
+    showed `gen=2` from the slot.
+  - Consequence for 4.1: the glue sees a changed list only at its next load (game start, or back from the world).
+    A change made while it sits at the character screen (for example the "Before loading" save a load there
+    creates) shows after the next glue load; the glue itself knows which save it just loaded, for the notice.
+    A rewrite racing a glue load could give a torn read; the list carries an end marker the glue checks
+    (task 3.1/4.1).
+- **Q2 (control request from the character screen without leaving it): holds.**
+  - With `HSControl_Send` allowed at `charselect` (test switch `ctl_charselect`), `ctl:S` from the character
+    screen: one challenge to the listener's port (`connection.log` `RESPONSE_CONNECTED … 127.0.0.1:<port>`), reply
+    accepted (`KA10`) in 0.0–0.1 s, realmList restored, no stock dialog frame, and the screen stayed at `charselect`
+    with the character list (every one of the 7 real-client runs, `q12a`–`q12g`).
+  - The world connection survived: Play right after it entered the world (`Login Character:[Hstester]` 20 s
+    later, runs `q12b`–`q12g`). The client logs the failed fake login as `LOGIN_STATE_FAILED … DISCONNECTED` for the
+    listener connection only.
+- **Note (not a saves issue):** without a hardware key press after the client starts, every world entry ended at
+  once with a client `CMSG_LOGOUT_REQUEST` (the 3.3.5a idle logout measured against Mac uptime,
+  `checks/clientinput.py`). The prototype then sent one Shift press (`clientinput.press_shift`), as the world-entering
+  checks do. The saves GUI checks must do the same.

@@ -1,7 +1,7 @@
 Estimates are builder-agent wall-clock hours, including build and harness time on the M2 Pro (cap -j6, ccache). Total ≈ 20 h of builder time in three runs (A: 1–2, B: 3–4, C: 5–6), plus one verifier cycle of ≈ 1.5 h.
 
 ## 1. Prototype (run A; owns the stack)
-- [ ] 1.1 Measure Q1 (save list reaches the character screen: fixed-size MPQ slot, then loose file), Q2 (control request from the character screen without leaving it) and Q3 (in-game load with a minimal module: does the character list after `SMSG_LOGOUT_COMPLETE` show the restored level?) on the test account with a scratch play client. Write the results into design.md "Prototype results". Stop and report if Q3 fails. (2 h)
+- [x] 1.1 Measure Q1 (save list reaches the character screen: fixed-size MPQ slot, then loose file), Q2 (control request from the character screen without leaving it) and Q3 (in-game load with a minimal module: does the character list after `SMSG_LOGOUT_COMPLETE` show the restored level?) on the test account with a scratch play client. Write the results into design.md "Prototype results". Stop and report if Q3 fails. (2 h)
 
 ## 2. Server: mod-moonglade `MoongladeSaves` (run A)
 - [ ] 2.1 Save set and classification table in code, from design.md section 1. `Moonglade.Saves.*` config (dir, intervals, keep counts, enable). `config.write_all` renders the per-lane dir. Refuse to enable when `CharacterDatabase.WorkerThreads` ≠ 1. (1.5 h)
