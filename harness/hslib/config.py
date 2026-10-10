@@ -18,8 +18,9 @@ from . import paths as P
 #               (openspec/changes/true-pause).
 #   scaling-off m0 with dungeon scaling off (AutoBalance.Enable.Global = 0, mod-autobalance): the unscaled reference
 #               reads of scale.* and their counterexamples (openspec/changes/m4-dungeon-scaling design.md §2).
-#   lockouts-stock  m0 with the stock lockouts: AccountInstancesPerHour 5 (worldserver.conf.dist) and fresh-after-clear
-#               off (Moonglade.Dungeons.FreshAfterClear = 0), for the lock.* counterexamples.
+#   lockouts-stock  m0 with the stock lockouts: AccountInstancesPerHour 5 (worldserver.conf.dist), fresh-after-clear
+#               off (Moonglade.Dungeons.FreshAfterClear = 0) and stranded companions left alone
+#               (Moonglade.Dungeons.FreeStrandedCompanions = 0), for the lock.* counterexamples.
 # A profile may carry an "era" section: overrides for mod_era_profile.conf, and a "moonglade" section for
 # mod_moonglade.conf. No profile but `wotlk` sets an era section, so the
 # default (vanilla mode on) comes from the module's .conf.dist (era-profile "Default is vanilla mode").
@@ -94,7 +95,8 @@ PROFILES["saves-workers2"] = {**PROFILES["m0"], "world": {"CharacterDatabase.Wor
 PROFILES["scaling-off"] = {**PROFILES["m0"], "autobalance": {"AutoBalance.Enable.Global": "0"}}
 # m4-dungeon-scaling (design.md §2): stock lockouts. 5 = worldserver.conf.dist's AccountInstancesPerHour default
 PROFILES["lockouts-stock"] = {**PROFILES["m0"], "world": {"AccountInstancesPerHour": "5"},
-                              "moonglade": {"Moonglade.Dungeons.FreshAfterClear": "0"}}
+                              "moonglade": {"Moonglade.Dungeons.FreshAfterClear": "0",
+                                            "Moonglade.Dungeons.FreeStrandedCompanions": "0"}}
 
 # m4-dungeon-scaling (design.md §2, ADR-0014): Moonglade's mod-autobalance settings, in every profile (a profile's
 # "autobalance" section layers on top). Keys not listed keep AutoBalance.conf.dist's default. These are module tuning
