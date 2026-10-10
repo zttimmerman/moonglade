@@ -16,4 +16,15 @@
 Moonglade.QuietServerText = 1
 
 #
+#    Moonglade.Pause.Enable
+#        Description: True pause (openspec/changes/true-pause, ADR-0013). Opening the game menu (the Moonglade add-on's
+#                     "MGPAUSE" message) or `.moonglade pause on` stops the whole world until the menu closes; see
+#                     src/MoongladePause.cpp. Needs the core patch patches/core/0003-world-pause.patch. Re-read on a
+#                     config reload (turning it off resumes a paused world).
+#        Default:     1 - (Pausing allowed)
+#                     0 - (Pause requests do nothing)
+
+Moonglade.Pause.Enable = 1
+
+#
 ###################################################################################################

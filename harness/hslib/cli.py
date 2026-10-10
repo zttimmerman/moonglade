@@ -39,7 +39,7 @@ def main(argv=None) -> int:
     u = sub.add_parser("up", help="start mysqld, authserver, worldserver; wait for readiness")
     u.add_argument("--world-datadir", type=Path, help="override worldserver DataDir (self-tests)")
     u.add_argument("--timeout", type=int)
-    u.add_argument("--profile", help="config profile (harness/hslib/config.py PROFILES: m0 | population | wotlk); "
+    u.add_argument("--profile", help="config profile (harness/hslib/config.py PROFILES: m0 | population | wotlk | pause-off); "
                                      "default $HS_PROFILE or m0. A worldserver already running is left as is")
     sub.add_parser("down", help="graceful shutdown of the whole stack")
     sub.add_parser("status", help="process/port/readiness status")

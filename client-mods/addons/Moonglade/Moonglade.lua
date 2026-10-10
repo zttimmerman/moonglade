@@ -1,4 +1,5 @@
--- Moonglade wording add-on (openspec/changes/seamless-experience, client-connectivity "In-game wording add-on").
+-- Moonglade wording add-on (openspec/changes/seamless-experience, client-connectivity "In-game wording add-on"), and the
+-- game menu's true pause (openspec/changes/true-pause): Esc pauses the world, closing the menu resumes.
 --
 -- Shipped in the play client as data (patch 0003, Interface\AddOns\Moonglade\, a normal add-on folder: no FrameXML
 -- file is changed) and enabled by default (a new add-on is enabled unless the account's AddOns.txt disables it).
@@ -17,6 +18,8 @@
 -- only the harness writes hook = 1, only into WTF/Account/HSTEST/ of a scratch play client
 -- (seamless_checks.plant_addon_hook refuses any other client), so the hook never reaches the player's account.
 -- (The account name itself isn't readable here: GetCVar("accountName") didn't match in the world, measured.)
+-- With hook = "pause" the same planted table runs the true-pause test instead (client.pause_menu; see "Pause test
+-- mode" below): no popup, two screenshots around the harness's Esc presses, the pause messages sent and answered.
 
 local WORDING = {
 	LOGOUT = "Exit to Menu",
@@ -40,6 +43,95 @@ end
 if ( GameMenuButtonLogout ) then GameMenuButtonLogout:SetText(LOGOUT); end
 if ( StaticPopupDialogs and StaticPopupDialogs["CAMP"] ) then StaticPopupDialogs["CAMP"].text = CAMP_TIMER; end
 
+-- ---------------------------------------------------------------- true pause (openspec/changes/true-pause)
+
+-- Opening the game menu (Esc) pauses the whole world; closing it resumes. The add-on asks the server with a hidden
+-- add-on whisper to the player's own character ("MGPAUSE" "1" / "0"); mod-moonglade (MoongladePause.cpp) handles and
+-- swallows it, and answers "MGPAUSE" "paused" | "running" | "refused" (on a flight path, boat or zeppelin) |
+-- "disabled". The "Paused" banner and a dimmed world view (a black full-screen layer at 50 % opacity, below the menu
+-- and the banner: the client keeps drawing idle animations while the server is paused, so the dimming makes the
+-- pause read as paused; Zach, 2026-10-09) show only on "paused", so they never claim a pause the server refused. Esc is the
+-- only key (no binding) and nothing pauses on losing focus (Zach, 2026-10-09). Logout and Exit resume first: their
+-- buttons' PreClick runs before the menu's own OnClick (which hides the menu and logs out), and the server also
+-- resumes on any logout request.
+local PAUSE_PREFIX = "MGPAUSE";
+local pauseHooks = { sent = {}, acks = {} };       -- the test hook's record (harness checks only)
+
+local DIM_ALPHA = 0.5;
+-- The dim covers every other piece of UI too (tutorial popups are HIGH, dialogs DIALOG): it is FULLSCREEN, and while it
+-- shows the game menu is lifted from DIALOG to FULLSCREEN_DIALOG (put back when the menu closes), so only the menu and
+-- the banner stay above it.
+local dim = CreateFrame("Frame", "MoongladePauseDim", UIParent);
+dim:SetFrameStrata("FULLSCREEN");
+dim:SetAllPoints(UIParent);
+dim.tex = dim:CreateTexture(nil, "BACKGROUND");
+dim.tex:SetAllPoints(dim);
+dim.tex:SetTexture(0, 0, 0, DIM_ALPHA);
+dim:Hide();
+MOONGLADE_PAUSE_DIM = dim;
+local menuStrata;
+
+local function setDim(on)
+	if ( on ) then
+		if ( not menuStrata ) then
+			menuStrata = GameMenuFrame:GetFrameStrata();
+			GameMenuFrame:SetFrameStrata("FULLSCREEN_DIALOG");
+		end
+		dim:Show();
+	else
+		dim:Hide();
+		if ( menuStrata ) then
+			GameMenuFrame:SetFrameStrata(menuStrata);
+			menuStrata = nil;
+		end
+	end
+end
+
+local banner = CreateFrame("Frame", "MoongladePauseBanner", UIParent);
+banner:SetFrameStrata("TOOLTIP");                -- above the dim and the lifted game menu
+banner:SetWidth(320);
+banner:SetHeight(72);
+banner:SetPoint("TOP", UIParent, "TOP", 0, -64);
+banner:SetBackdrop({ bgFile = "Interface\\Tooltips\\UI-Tooltip-Background",
+                     edgeFile = "Interface\\Tooltips\\UI-Tooltip-Border",
+                     tile = true, tileSize = 16, edgeSize = 16, insets = { left = 4, right = 4, top = 4, bottom = 4 } });
+banner:SetBackdropColor(0, 0, 0, 0.8);
+banner.text = banner:CreateFontString(nil, "OVERLAY", "GameFontNormalHuge");
+banner.text:SetPoint("CENTER");
+banner.text:SetText("Paused");
+banner:Hide();
+MOONGLADE_PAUSE_BANNER = banner;
+
+local function askPause(on)
+	local me = UnitName("player");
+	if ( me ) then
+		SendAddonMessage(PAUSE_PREFIX, on and "1" or "0", "WHISPER", me);
+		if ( #pauseHooks.sent < 20 ) then table.insert(pauseHooks.sent, on and "1" or "0"); end
+	end
+	if ( not on ) then banner:Hide(); setDim(false); end
+end
+
+GameMenuFrame:HookScript("OnShow", function() askPause(true); end);
+GameMenuFrame:HookScript("OnHide", function() askPause(false); end);
+for _, b in ipairs({ GameMenuButtonLogout, GameMenuButtonQuit }) do
+	if ( b ) then b:HookScript("PreClick", function() askPause(false); end); end
+end
+
+local pauseFrame = CreateFrame("Frame");
+pauseFrame:RegisterEvent("CHAT_MSG_ADDON");
+pauseFrame:RegisterEvent("PLAYER_LEAVING_WORLD");
+pauseFrame:SetScript("OnEvent", function(self, event, prefix, message)
+	if ( event == "CHAT_MSG_ADDON" ) then
+		if ( prefix ~= PAUSE_PREFIX ) then return; end
+		if ( message == "paused" and GameMenuFrame:IsShown() ) then banner:Show(); setDim(true); else banner:Hide(); setDim(false); end
+		if ( #pauseHooks.acks < 20 ) then table.insert(pauseHooks.acks, message); end
+		if ( MoongladePauseTestAck ) then MoongladePauseTestAck(message); end
+	else
+		banner:Hide();
+		setDim(false);
+	end
+end);
+
 -- ---------------------------------------------------------------- test hook (harness checks only)
 
 -- Sequenced by events and states, not by fixed delays (verifier cycle 1 flake): a freshly created character's first
@@ -55,6 +147,31 @@ local test = { on = false, errors = 0, errorMsgs = {}, popup = nil, clock = 0, r
 
 local function diag(e)
 	if ( #test.diag < 30 ) then table.insert(test.diag, format("%.2f %s", test.clock, e)); end
+end
+
+-- Pause test mode (MoongladeTest.hook = "pause", client.pause_menu): once the world UI is up the add-on waits for the
+-- harness's hardware Esc presses (it takes a screenshot of the world view first, before any Esc). When the server
+-- answers "paused" it takes a screenshot a second later (the menu, the banner and the dimming up), records what it shows, and when the server answers "running" after the second Esc it takes another
+-- one, then logs out (the report is written then). PAUSE_GIVE_UP_S after the world UI is up it logs out regardless.
+local PAUSE_SHOT_DELAY_S, PAUSE_GIVE_UP_S = 1.0, 150
+local pauseTest = { shots = {} };
+
+local function pauseShot(tag)
+	Screenshot();
+	table.insert(pauseTest.shots, { tag = tag, at = format("%.2f", test.clock), banner = banner:IsVisible() and 1 or 0,
+	                                 dim = dim:IsVisible() and 1 or 0, menu_strata = GameMenuFrame:GetFrameStrata(),
+	                                 tutorial = (TutorialFrame and TutorialFrame:IsVisible()) and 1 or 0,
+	                                 menu = GameMenuFrame:IsShown() and 1 or 0, text = banner.text:GetText() });
+end
+
+function MoongladePauseTestAck(message)
+	if ( not test.on or test.mode ~= "pause" ) then return; end
+	diag("ack " .. message);
+	if ( message == "paused" and test.phase == "wait_menu" ) then
+		test.phase, test.shotAt = "shot_paused", test.clock + PAUSE_SHOT_DELAY_S;
+	elseif ( message == "running" and test.phase == "wait_close" ) then
+		test.phase, test.shotAt = "shot_running", test.clock + PAUSE_SHOT_DELAY_S;
+	end
 end
 
 local function report(at)
@@ -74,6 +191,8 @@ local function report(at)
 		at_logout = { phase = test.phase, ticks = test.ticks, clock = test.clock, ui_visible = UIParent:IsVisible() and 1 or 0,
 		              cinematic = InCinematic() and 1 or 0 },
 		build = select(4, GetBuildInfo()),
+		pause = { mode = test.mode, sent = pauseHooks.sent, acks = pauseHooks.acks, shots = pauseTest.shots,
+		          banner_strata = banner:GetFrameStrata() },
 	};
 end
 
@@ -92,8 +211,9 @@ frame:RegisterEvent("PLAYER_CAMPING");
 frame:RegisterEvent("LOGOUT_CANCEL");
 frame:SetScript("OnEvent", function(self, event, arg1)
 	if ( event == "ADDON_LOADED" and arg1 == "Moonglade" ) then
-		if ( type(MoongladeTest) == "table" and MoongladeTest.hook == 1 ) then
+		if ( type(MoongladeTest) == "table" and (MoongladeTest.hook == 1 or MoongladeTest.hook == "pause") ) then
 			test.on = true;
+			test.mode = (MoongladeTest.hook == "pause") and "pause" or "wording";
 			MoongladeTest.report = nil;
 			for _, fn in ipairs({ "Logout", "Quit", "ForceQuit", "ForceLogout" }) do
 				if ( _G[fn] ) then
@@ -139,7 +259,29 @@ frame:SetScript("OnUpdate", function(self, elapsed)
 		if ( not worldUp() ) then test.readyAt = nil; return; end
 		test.readyAt = test.readyAt or test.clock;
 		test.startedAt = test.startedAt or test.clock;
-		if ( test.clock - test.readyAt >= SETTLE_S ) then test.phase = "show"; end
+		if ( test.clock - test.readyAt >= SETTLE_S ) then
+			test.phase = (test.mode == "pause") and "wait_menu" or "show";
+			diag("ready " .. test.phase);
+			if ( test.mode == "pause" ) then pauseShot("before"); end   -- the world view before Esc
+		end
+	elseif ( test.mode == "pause" ) then
+		if ( (test.phase == "shot_paused" or test.phase == "shot_running") and test.clock >= test.shotAt ) then
+			pauseShot(test.phase == "shot_paused" and "paused" or "running");
+			diag("shot " .. test.phase);
+			if ( test.phase == "shot_paused" ) then test.phase = "wait_close";
+			else test.phase, test.logoutAt = "after_shot", test.clock + 1; end
+		elseif ( test.phase == "after_shot" and test.clock >= test.logoutAt ) then
+			test.phase = "logout";
+		end
+		if ( test.phase ~= "logout" and test.startedAt and test.clock - test.startedAt > PAUSE_GIVE_UP_S ) then
+			diag("gave up in phase " .. test.phase);
+			test.phase = "logout";
+		end
+		if ( test.phase == "logout" ) then
+			test.phase = "done";
+			Logout();
+		end
+		return;
 	elseif ( test.phase == "show" ) then
 		-- the logout countdown popup, the way UIParent.lua shows it on PLAYER_CAMPING
 		local d = StaticPopup_Show("CAMP");

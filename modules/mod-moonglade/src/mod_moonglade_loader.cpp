@@ -4,8 +4,10 @@
  */
 
 void AddMoongladeQuietScripts();
+void AddMoongladePauseScripts();
 
 void Addmod_moongladeScripts()
 {
     AddMoongladeQuietScripts();
+    AddMoongladePauseScripts();
 }

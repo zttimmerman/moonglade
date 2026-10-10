@@ -113,6 +113,7 @@ Double-click `dist/Moonglade.app` (or drag it to the Dock), or run `./play` in a
 
 - The first run creates your personal account, **`PLAYER`**, with a random password. It's not a GM account. The name and password are saved in **`env/player.json`** (gitignored, readable only by you). To choose your own name and password instead, create that file *before* the first run: `{"account": "NAME", "password": "secret"}` (letters and digits, up to 16 characters each).
 - The login screen shows the Moonglade menu. Press **Continue** (or Enter) and you're in. Create a character at character select as usual.
+- **Esc pauses the world.** Opening the game menu stops everything: monsters, your companions, buffs, DoTs, cooldowns and respawns. The screen dims and shows "Paused"; closing the menu picks up exactly where it stopped. Buff timers and cooldown spirals the game draws itself may jump back by the paused time when you resume. You can't pause on a flight path, boat or zeppelin (the game says so), a spell you were casting is cancelled, and Exit to Menu / Exit Game resume first. There's no player switch to turn pausing off yet; for testing, `harness/hs up --profile pause-off` starts the server with `Moonglade.Pause.Enable = 0`.
 - Quitting the game shuts everything down. `./play` prints `All stopped.`
 
 ## Using a release
