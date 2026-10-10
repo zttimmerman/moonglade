@@ -49,6 +49,12 @@ This is the second of three M4 changes (see `m4-dungeon-scaling`'s proposal for 
 3. **When you die in a dungeon, what should companions do?** *Default:* stock mod-playerbots behaviour. They keep fighting if they can; if everyone dies, they release and run back with you. The alternative is an instant "party wipe → everyone back at the entrance" rule (a new feature).
 4. **The two dungeons you'll play for the M4 sign-off.** *Default:* The Deadmines with companions, and one listed dungeon near your character's current level, solo or with companions as you like.
 
+**Zach's answers (2026-10-10):**
+- Q1: the default party is fine, as long as he can play the tank or healer himself and the companion in that role is replaced. That is the default: a hunter takes the free damage slot.
+- Q2: damage dealers wait for the tank (yes).
+- Q3: stock wipe behaviour (yes).
+- Q4: gate dungeons are the default (Deadmines with companions plus one near his level).
+
 ## Sources
 - mod-playerbots source at pin `7bae1b5c` (paths in design.md). Config defaults from `vendor/mod-playerbots/conf/playerbots.conf.dist`.
 - Dungeon facts: `m4-dungeon-scaling` design.md §6 (DBC/SQL rules). No game data values are written by this change.

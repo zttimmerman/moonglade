@@ -40,6 +40,14 @@ The set covers four level bands and both dungeons with and without mod-playerbot
 4. **When the monsters are made weaker for a smaller party, should they give less XP and gold?** *Default:* yes. XP and gold drop in proportion, so a solo run isn't a faster way to level than questing (this matters for vanilla pace). The alternative is full XP and gold.
 5. **Heroic dungeons:** *default:* no once-a-day lock; they reset the same way normal dungeons do. The alternative is to keep the daily lock for heroics only.
 
+**Zach's answers (2026-10-10):**
+- Q1 asked to confirm the meaning. The default stands: solo monsters are weakened so a fight feels like a normal group's fight at the suggested level. They are not left at full group strength.
+- Q2: "We shouldn't make it even more difficult than vanilla". A party never meets anything harder than the unchanged dungeon (CurveCeiling 1.0, `scale.party_stock`), and smaller parties only ever get weaker monsters. Companions count as one person each (default).
+- Q3: no level scaling (confirmed).
+- Q4: less XP and gold when weakened (yes).
+- Q5: no heroic daily lock (yes).
+- Follow-up research (not in M4): with vanilla mode on, dungeon creatures keep their WotLK numbers (mod-era-profile covers outdoor 1–60 only). Comparing them with VMaNGOS dungeon values is a separate era-profile item.
+
 ## Sources
 - mod-autobalance at `1d707cb61a0962ab01e4123681e2d3b66cc558a2` (2026-10-07) and mod-solocraft at `59588838988d1b74111d26670d99d0e649014b93` (2026-09-21). They were read from source tarballs; links and findings are in design.md §1.
 - Upstream issue search: design.md §1.4.

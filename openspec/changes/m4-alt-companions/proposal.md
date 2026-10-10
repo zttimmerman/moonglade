@@ -19,6 +19,11 @@ This is the third of three M4 changes (the split is explained in `m4-dungeon-sca
 2. **Should `/mg party` bring your own alts first?** When an alt fits a missing role and is within 5 levels of you, it would take that slot before a generated companion does. *Default:* no for now; you bring alts by name. This becomes a party-screen option after M4.
 3. **If an alt is far below your level, should it be raised to your level for the trip?** *Default:* no. It keeps its own level (it may struggle), because raising it would permanently change your character. Generated companions are the ones that match your level.
 
+**Zach's answers (2026-10-10):**
+- Q1: no free gear for alts ("probably not").
+- Q2: no; alts are brought by name. `/mg party` is Moonglade's own add-on command, which sends stock playerbots commands.
+- Q3: no level raise.
+
 ## Sources
 - mod-playerbots source and config at pin `7bae1b5c` (cited in design.md).
 - Zach's decisions: STATUS "Party RPG" (2026-10-07); the saves decision that an alt keeps its trip's progress (2026-10-09).
