@@ -107,8 +107,11 @@ def patched_pin_state(repo_dir, sha, patches, ignore_untracked_prefix=None) -> l
     return problems
 
 
+AB_SRC = P.VENDOR / "mod-autobalance"   # SPIKE m4-dungeon-scaling 1.1
+
+
 def _expected_links() -> dict:
-    links = {"mod-playerbots": P.BOTS_SRC}
+    links = {"mod-playerbots": P.BOTS_SRC, "mod-autobalance": AB_SRC}
     for m in sorted(P.MODULES.iterdir()) if P.MODULES.exists() else []:
         if m.is_dir() and not m.name.startswith("."):
             links[m.name] = m
@@ -146,6 +149,9 @@ def sync_vendor() -> dict:
     lock = P.fork_lock()
     _ensure_clone(P.CORE_SRC, lock["core_repo"], lock["core_branch"], lock["core_sha"])
     _ensure_clone(P.BOTS_SRC, lock["playerbots_repo"], lock["playerbots_branch"], lock["playerbots_sha"])
+    _ensure_clone(AB_SRC, lock["autobalance_repo"], lock["autobalance_branch"], lock["autobalance_sha"])
+    _git(AB_SRC, "checkout", "-f", "--detach", lock["autobalance_sha"])
+    _git(AB_SRC, "clean", "-fdx")
 
     before = {
         "core": pin_state(P.CORE_SRC, lock["core_sha"], "modules/"),
@@ -287,7 +293,8 @@ def _resolved_deps() -> dict:
 
 # fork.lock keys that determine the server build. The other pins (Ghidra, Wine runtime, client data, VMaNGOS)
 # don't affect authserver/worldserver, so bumping them must not force a from-empty build.
-BUILD_PINS = ("core_repo", "core_branch", "core_sha", "playerbots_repo", "playerbots_branch", "playerbots_sha")
+BUILD_PINS = ("core_repo", "core_branch", "core_sha", "playerbots_repo", "playerbots_branch", "playerbots_sha",
+              "autobalance_sha")
 
 
 def build_pins(path=None) -> dict:

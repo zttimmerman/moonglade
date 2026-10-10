@@ -85,6 +85,10 @@ PROFILES["wotlk"] = {**PROFILES["m0"], "era": {"EraProfile.Enable": "0"}}
 # true-pause (pause.disabled_noop): m0 with pausing turned off (mod-moonglade Moonglade.Pause.Enable = 0)
 PROFILES["pause-off"] = {**PROFILES["m0"], "moonglade": {"Moonglade.Pause.Enable": "0"}}
 # front-menu-saves (saves.load_ordering): m0 with two character-database workers; the module must refuse saves then
+# SPIKE m4-dungeon-scaling 1.1 (not on main): the design.md §2 starting keys for AutoBalance
+PROFILES["m4spike"] = {**PROFILES["m0"], "world": {"AccountInstancesPerHour": "1000"},
+                       "autobalance": {"AutoBalance.LevelScaling": "0", "AutoBalance.PlayerChangeNotify": "0"}}
+PROFILES["m4spike-off"] = {**PROFILES["m4spike"], "autobalance": {"AutoBalance.Enable.Global": "0"}}
 PROFILES["saves-workers2"] = {**PROFILES["m0"], "world": {"CharacterDatabase.WorkerThreads": "2"}}
 
 ERA_CONF = "mod_era_profile.conf"     # modules/mod-era-profile/conf/mod_era_profile.conf.dist, installed to etc/modules
@@ -190,7 +194,8 @@ def module_overrides(prof: dict) -> dict[str, dict[str, str]]:
                                      "AiPlayerbot.CommandServerPort": "0"},
             ERA_CONF + ".dist": dict(prof.get("era", {})),
             # front-menu-saves: the lane's save store (lane A: env/saves, the player's; lane B: its own root)
-            MOONGLADE_CONF + ".dist": {"Moonglade.Saves.Dir": f'"{P.SAVES}"', **prof.get("moonglade", {})}}
+            MOONGLADE_CONF + ".dist": {"Moonglade.Saves.Dir": f'"{P.SAVES}"', **prof.get("moonglade", {})},
+            "AutoBalance.conf.dist": dict(prof.get("autobalance", {}))}
 
 
 def module_env(prof: dict, mods: Path) -> dict[str, str]:

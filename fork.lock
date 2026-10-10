@@ -6,6 +6,10 @@ core_sha=7f12e89ee5f467a50e62eba1d525eac7dc953d03
 playerbots_repo=https://github.com/mod-playerbots/mod-playerbots.git
 playerbots_branch=master
 playerbots_sha=7bae1b5c58c76a0aa20381155edc08096d1485b2
+# SPIKE (m4-dungeon-scaling 1.1): mod-autobalance master, 2026-10-07. Not on main.
+autobalance_repo=https://github.com/azerothcore/mod-autobalance.git
+autobalance_branch=master
+autobalance_sha=1d707cb61a0962ab01e4123681e2d3b66cc558a2
 client_data_url=https://github.com/wowgaming/client-data/releases/download/v20.0/Data.zip
 # sha256 of that URL's file, computed 2026-10-07 (easy-setup); its 22279 members match the dev Mac's data/client-data by size.
 client_data_sha256=a3d4df635ae6c2c8f08052c32a79e0f806955150ad36b014a823dd08a32a4610

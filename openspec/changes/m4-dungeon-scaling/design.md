@@ -138,3 +138,72 @@ Values seen on 2026-10-10 (client-data v20.0 DBCs, core base SQL), for the propo
 ## 8. Open items for builders (not Zach decisions)
 - Bot detection inside mod-moonglade without linking playerbots: confirm that `WorldSession::IsBot()` is set for addclass and alt bots (task 2.3).
 - Does `.go xyz` into an instance map respect the access requirement for a GM with `.gm off`? Prototype 1.1 records it. If it's refused, use the entrance area trigger (`.go trigger`).
+
+## Prototype results (task 1.1, 2026-10-10, branch `spike/m4-dungeon`)
+Spike code (throwaway, on the spike branch only): `harness/spike_m4.py`, `harness/spike_m4_modes.py`, the pin in `fork.lock`, the clone/link in `build.py`, profiles `m4spike`/`m4spike-off` in `config.py`, and `modules/mod-moonglade/src/MoongladeDungeons.cpp`. Probe on the harness companion account (HSCOMP, security 2), never PLAYER. Evidence JSON was kept under `env/spike-m4/` (not committed). Character level 19 = `LFGDungeons.dbc` row 6 `Target_Level`; every dungeon fact was read by the §6 rules.
+
+### (a) Build and stability: PASS
+- mod-autobalance `1d707cb6` built with core `7f12e89e` + patches 0001–0003 (incl. world pause) + playerbots `7bae1b5c` + 0001 + mod-era-profile + mod-moonglade, no source changes, no compile errors (incremental `hs build` on the main build tree). `server/etc/modules/AutoBalance.conf` is rendered by the existing `write_all` loop once `MODULE_SECTIONS` gets an `AutoBalance.conf.dist` entry.
+- Boot log: `AutoBalance::OnBeforeConfigLoad: Config loaded`, `Moonglade.Dungeons.FreshAfterClear = 1`. One worldserver process ran the whole spike (~2 h, ~20 instance creations, 4 party clears, selfbot fights, resets): no crash, `Errors.log` empty.
+- No upstream patch was needed; nothing new found in `gh search` beyond §1.4.
+
+### (b) Probe + four companions kill the first boss: PASS
+- `.go xyz <areatrigger_teleport 78 target> 36` with `.gm off` enters (SMSG_NEW_WORLD map 36); (f) the access check passes at level 19 (no requirement row stops it). The `OnPlayerCanEnterMap` hook runs for a non-GM (log line per entry).
+- Companions: `addclass` inside the dungeon works; the new bots arrive through playerbots' summon-on-group-join. `talents spec <name>` and `autogear` answer ("Picking prot pve", "I'm auto gearing (blue).").
+- First kill, passive master, stage 12 yd from Rhahk'Zor: dead in 44.7 s, tank+healer+mage died; `completedEncounters` = 1 (bit 0, encounter 161).
+- From 30 yd the tank's `attack` silently did nothing (no line of sight; `AttackAction::Attack` returns false, the error text is verbose-only).
+
+### (c) Selfbot: PASS
+- `.playerbots bot initself=uncommon` then `.playerbots bot self` ("Enable player botAI") on the probe. It is moved server-side (the probe sent only chat, selection, time-sync and keep-alive), closes 4–8 yd to its target, uses abilities (spell hits 7384 Overpower, 8198 Thunder Clap, 34428 Victory Rush) and killed Rhahk'Zor solo in 18.3 s and Gilnid in 16.4 s with no deaths (entry-verified `.npc info` reads).
+- As party leader the selfbot is a fifth DPS; party fights went better with it (see 6).
+- A dead selfbot releases its spirit by itself, so it lands at the graveyard outside the dungeon. Wipe recovery has to re-enter.
+
+### (d) Scaling numbers (defaults: InflectionPoint 0.5, floor 0, ceiling 1, BossModifier 1; LevelScaling 0)
+Rhahk'Zor (entry 644). The stock value is `creature_classlevelstats` level 19 class 1 `basehp0` 449 × `HealthModifier` 10 = 4490 (world DB at our pin).
+
+| Players on map (`.ab mapstat`) | Health / armour / damage / XP / money multiplier (`.ab creaturestat`) | Max health (`.npc info`) |
+|---|---|---|
+| 1 (probe) | 0.123 | 554 |
+| 2 | 0.351 | 1578 |
+| 3 (+warrior, priest) | 0.684 | 3073 |
+| 5 (+mage, rogue) | 1.000 | 4490 (stock) |
+
+- Gilnid solo: 0.123 → 359 (stock 6 × 484 = 2904).
+- Bots count as players. `.gm on` **after** entry doesn't change the count (5 stays 5), because AutoBalance counts at `AddPlayerToMap`. So the "probe left in GM mode" counterexample must enter in GM mode.
+- Solo at the defaults is very easy: a level-19 selfbot in greens kills a boss in 16–18 s untouched. Task 3.4 tuning has real work to do.
+
+### (e) Fresh after clear (prototype hook): PASS
+- Partial clear: kill Rhahk'Zor (mask 0x1), leave, re-enter (also in a new session) → same instance id, mask kept, boss still dead.
+- Full clear (every static-spawn encounter; Sneed has no static spawn, so the mask is 0x7d) → re-entry gives a new instance id with Rhahk'Zor alive again. Log: `dungeons: Hscomp map 36 instance 13 (mask 0x7d) finished: reset, all unbound`. Repeated twice (12→13, 13→14).
+- The "final encounter done" rule (`lastEncounterDungeon` ≠ 0) is what makes the Sneed gap harmless.
+
+### 6. Scripted party clear through VanCleef: PASS (stop condition not hit)
+Party: prot warrior, holy priest, frost mage, combat rogue, plus the selfbot probe. Per boss: GM-on teleport 6 yd from the boss, `summon`, GM off, tank `attack`, party `attack`, revive on a wipe.
+
+| Run | Result | Time | Wipes | Notes |
+|---|---|---|---|---|
+| 1 | stopped at Mr. Smite | — | — | Driver bugs (stale selection in `.npc info`, 12 yd straight-line stage inside rock); not counted |
+| 2 | **VanCleef dead, mask 0x7d** | 362 s | 1 (Gilnid, adds) | VanCleef on the 1st attempt, 35 s |
+| 3 | stopped at Gilnid | — | 1 | The selfbot released after the wipe; the driver didn't re-enter (fixed) |
+| 4 | **VanCleef dead, mask 0x7d** | 461 s | 2 (Smite, Cookie) | VanCleef on the 1st attempt, 46 s |
+
+- Deaths by role, run 4: Rhahk'Zor tank+healer+mage; Smite all; Cookie tank + master. The wipes come from the adds around Gilnid, Smite and Cookie (no classic tactics), as `m4-dungeon-companions` §7 expected.
+
+### What changes the design
+1. **`.die` gives no encounter credit.** `Die.Command.Mode = 1` → `Unit::Kill`, which rewards only when `IsDamageEnoughForLootingAndReward` (`Unit.cpp:13554`), so `KillRewarder` step 5 never runs. Use `.damage <current health>` (security 2), which credited every bit. This changes §3 "How checks clear a dungeon quickly".
+2. **Dismissing companions drops a half-done dungeon (stock).** `Group::RemoveMember` → `Player::ResetInstances(INSTANCE_RESET_GROUP_LEAVE)` (`Group.cpp:736`, `PlayerMisc.cpp:295`) unbinds every non-permanent bind of a map the player isn't in, and 5-player normal binds stay non-permanent after kills (`character_instance.permanent = 0` with mask 0x1). Measured: boss 1 killed, companion removed outside → re-entry gave a new instance, boss alive. The proposal's "leave halfway, your progress is still there" holds only while the party stays together. MoongladeDungeons needs a "keep partial progress" part (e.g. make the real player's bind permanent on the first credited encounter in a 5-player dungeon; fresh-after-clear still clears it). `lock.partial_kept` needs a dismiss-companions variant. About +3 h.
+3. **Companions stuck in a stale copy.** A pool character that logged out inside a dungeon logs back into its old copy. playerbots `SummonAction::Teleport` → `TeleportTo(sameMapId)` only near-teleports inside that copy, so it never joins (seen: mapstat stayed at 1). The GM `.summon` refuses non-GM targets into an instance (`Instance.GMSummonPlayer = 0`, `cs_misc.cpp:975-985`). No upstream issue found (`gh search` "summon", "instance" on mod-playerbots). This also hits real play and `m4-alt-companions`. Fix candidate: mod-moonglade, on a bot joining its master's group, if the bot is in another copy of the master's dungeon map, `TeleportTo` the bot's homebind and then let the summon run, or unbind it. The spike works around it by moving offline pool characters out with `tele name` before each session. About +2–3 h.
+4. **`.mmap path` needs security 3** (`world.command`), and it prints only Start/End/ActualEnd, never the path points (`cs_mmaps.cpp:110-127`; the points are spawned as visual waypoints). The companions' §4 staging rule doesn't work on the level-2 companion account.
+   - The spike's rule: GM-on teleport 6 yd from the boss toward the previous stage, gather, then GM off.
+   - Choose between that and a separate level-3 harness account (raising HSCOMP's level was not done).
+5. **Bots are summoned with the playerbots whisper `summon`,** not the GM `.summon`. A `.gps` on an unseen selection returns the master's own position, so "near" checks must reject an identical position.
+6. **AutoBalance counts on map add/remove only** (see d). Check counterexamples must toggle GM before entry.
+7. Selfbot death → auto-release to the graveyard; solo-run and party drivers must re-enter after a wipe.
+
+### Revised estimates
+- `m4-dungeon-scaling`: 25–29 h → **30–34 h** (+3 h partial-progress persistence and its checks, +2–3 h stale-copy companion fix, ±0 `.damage` instead of `.die`). Task 1.1 took ~2.5 h of the 5–6 h estimate.
+- `m4-dungeon-companions`: 28–34 h → **30–36 h**:
+  - staging rule rework (+1–2 h);
+  - wipe recovery with selfbot release (+0.5 h);
+  - selection-safe boss reads (+0.5 h).
+  - Party clears succeed with 1–2 wipes in 6–8 min, so the "classic tactics gap" contingent 5.1 isn't triggered by the Deadmines.

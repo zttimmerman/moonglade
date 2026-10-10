@@ -7,6 +7,7 @@ void AddMoongladeQuietScripts();
 void AddMoongladeAddonScripts();
 void AddMoongladePauseScripts();
 void AddMoongladeSavesScripts();
+void AddMoongladeDungeonsScripts();   // SPIKE m4-dungeon-scaling 1.1
 
 void Addmod_moongladeScripts()
 {
@@ -14,4 +15,5 @@ void Addmod_moongladeScripts()
     AddMoongladeAddonScripts();
     AddMoongladePauseScripts();
     AddMoongladeSavesScripts();
+    AddMoongladeDungeonsScripts();
 }
