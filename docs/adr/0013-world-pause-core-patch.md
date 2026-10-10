@@ -1,6 +1,6 @@
 # ADR-0013: Core patch: a world-pause switch
 
-- Status: proposed (2026-10-09). It becomes accepted with the `true-pause` verifier PASS. Patch: `patches/core/0003-world-pause.patch`. Checks: `pause.*` and `client.pause_menu`.
+- Status: accepted (2026-10-10, `true-pause` verifier cycle 2 PASS: full run 171/0/41, --force-clean). Patch: `patches/core/0003-world-pause.patch`. Checks: `pause.*` and `client.pause_menu`.
 - Date: 2026-10-09
 
 ## Context
