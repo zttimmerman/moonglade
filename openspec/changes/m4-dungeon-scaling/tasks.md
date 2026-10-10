@@ -9,7 +9,7 @@ Estimates are agent-hours of builder work, including the from-empty builds they 
   - (e) `OnPlayerCanEnterMap` unbind-before-enter: re-entry after `.die` on every boss gives a new instance id.
   - (f) Whether `.go xyz` into map 36 honours access requirements.
   - Write `docs/research/m4-dungeon-spike.md` with the numbers.
-- [ ] 1.2 **ADR-0014 "Third-party gameplay module: mod-autobalance"** (0.5 h, orchestrator): choice vs SoloCraft, pin, licence notice, upstream search (design.md §1), fallback plan.
+- [x] 1.2 **ADR-0014 "Third-party gameplay module: mod-autobalance"** (0.5 h, orchestrator): choice vs SoloCraft, pin, licence notice, upstream search (design.md §1), fallback plan.
 
 ## 2. Server
 - [ ] 2.1 **Pin and build integration** (3–4 h): fork.lock keys; `build.py` (clone, checkout, clean, link, `BUILD_PINS`, manifest); `bootstrap.py`; baseline; `tools/release` (THIRD_PARTY notice from the source header, source manifest, conf in payload, golden paths). `hs build --force-clean` green; `build.*`, `release.*`, `public.*` green.
