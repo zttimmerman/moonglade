@@ -30,9 +30,12 @@ from .. import launch
 
 BASE, SECT_RVA, SECT_RAW, ALIGN = 0x400000, 0x1000, 0x200, 0x200
 VK_SHIFT, SCAN_SHIFT, KEYEVENTF_KEYUP, INPUT_KEYBOARD = 0x10, 0x2A, 0x2, 1
+# true-pause (client.pause_menu): the same program with Esc, which opens and closes the game menu (WinUser.h
+# VK_ESCAPE 0x1B; set-1 scan code 0x01)
+VK_ESCAPE, SCAN_ESCAPE = 0x1B, 0x01
 
 
-def _section() -> bytes:
+def _section(vk: int = VK_SHIFT, scan: int = SCAN_SHIFT) -> bytes:
     s = bytearray(ALIGN)
     va = lambda off: BASE + SECT_RVA + off                         # noqa: E731
     o_inputs, o_desc, o_u_ilt, o_u_iat, o_k_ilt, o_k_iat = 0x40, 0x80, 0xC0, 0xC8, 0xD0, 0xD8
@@ -42,7 +45,7 @@ def _section() -> bytes:
             + b"\x50" + b"\xff\x15" + struct.pack("<I", va(o_k_iat)))                 # ExitProcess(eax)
     s[0:len(code)] = code
     for i, flags in enumerate((0, KEYEVENTF_KEYUP)):                                   # INPUT, 28 bytes each
-        struct.pack_into("<IHHIII8x", s, o_inputs + 28 * i, INPUT_KEYBOARD, VK_SHIFT, SCAN_SHIFT, flags, 0, 0)
+        struct.pack_into("<IHHIII8x", s, o_inputs + 28 * i, INPUT_KEYBOARD, vk, scan, flags, 0, 0)
     rva = lambda off: SECT_RVA + off                               # noqa: E731
     struct.pack_into("<IIIII", s, o_desc, rva(o_u_ilt), 0, 0, rva(o_user32), rva(o_u_iat))
     struct.pack_into("<IIIII", s, o_desc + 20, rva(o_k_ilt), 0, 0, rva(o_kernel32), rva(o_k_iat))
@@ -56,8 +59,8 @@ def _section() -> bytes:
     return bytes(s)
 
 
-def program() -> bytes:
-    sect = _section()
+def program(vk: int = VK_SHIFT, scan: int = SCAN_SHIFT) -> bytes:
+    sect = _section(vk, scan)
     dos = bytearray(0x40)
     dos[0:2] = b"MZ"
     struct.pack_into("<I", dos, 0x3C, 0x40)
@@ -75,8 +78,13 @@ def program() -> bytes:
 
 def press_shift(tmp: Path, timeout: float = 60) -> dict:
     """Write the program into `tmp` and run it in the client's prefix. Returns evidence; injected == 2 on success."""
-    exe = Path(tmp) / "hs-shift.exe"
-    exe.write_bytes(program())
+    return press_key(tmp, VK_SHIFT, SCAN_SHIFT, "hs-shift.exe", timeout)
+
+
+def press_key(tmp: Path, vk: int, scan: int, name: str, timeout: float = 60) -> dict:
+    """press_shift for another key (down + up). Returns evidence; injected == 2 on success."""
+    exe = Path(tmp) / name
+    exe.write_bytes(program(vk, scan))
     r = subprocess.run([str(launch.WINE), str(exe)], env=launch.wine_env(), capture_output=True, text=True,
                        timeout=timeout)
     return {"exe": exe.name, "exit_code": r.returncode, "injected": r.returncode if r.returncode in (0, 1, 2) else None,

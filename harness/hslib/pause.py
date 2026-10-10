@@ -421,7 +421,7 @@ def status() -> dict:
 
 def lost_ms(before: float, t_before: float, after: float, t_after: float, paused_ms: int) -> int:
     """How much a remaining time (ms) dropped beyond the unpaused wall time between two read-outs: 0 when it froze
-    for the whole pause, ~paused_ms when it kept running. paused_ms = the server's paused-total difference."""
+    for the whole pause, ~paused_ms when it kept running. paused_ms = the pause as the probe measured it."""
     unpaused = (t_after - t_before) * 1000 - paused_ms
     return round((before - after) - unpaused)
 

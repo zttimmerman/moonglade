@@ -48,12 +48,24 @@ if ( StaticPopupDialogs and StaticPopupDialogs["CAMP"] ) then StaticPopupDialogs
 -- Opening the game menu (Esc) pauses the whole world; closing it resumes. The add-on asks the server with a hidden
 -- add-on whisper to the player's own character ("MGPAUSE" "1" / "0"); mod-moonglade (MoongladePause.cpp) handles and
 -- swallows it, and answers "MGPAUSE" "paused" | "running" | "refused" (on a flight path, boat or zeppelin) |
--- "disabled". The "Paused" banner shows only on "paused", so it never claims a pause the server refused. Esc is the
+-- "disabled". The "Paused" banner and a dimmed world view (a black full-screen layer at 50 % opacity, below the menu
+-- and the banner: the client keeps drawing idle animations while the server is paused, so the dimming makes the
+-- pause read as paused; Zach, 2026-10-09) show only on "paused", so they never claim a pause the server refused. Esc is the
 -- only key (no binding) and nothing pauses on losing focus (Zach, 2026-10-09). Logout and Exit resume first: their
 -- buttons' PreClick runs before the menu's own OnClick (which hides the menu and logs out), and the server also
 -- resumes on any logout request.
 local PAUSE_PREFIX = "MGPAUSE";
 local pauseHooks = { sent = {}, acks = {} };       -- the test hook's record (harness checks only)
+
+local DIM_ALPHA = 0.5;
+local dim = CreateFrame("Frame", "MoongladePauseDim", UIParent);
+dim:SetFrameStrata("HIGH");                      -- under the game menu (DIALOG) and the banner (FULLSCREEN_DIALOG)
+dim:SetAllPoints(UIParent);
+dim.tex = dim:CreateTexture(nil, "BACKGROUND");
+dim.tex:SetAllPoints(dim);
+dim.tex:SetTexture(0, 0, 0, DIM_ALPHA);
+dim:Hide();
+MOONGLADE_PAUSE_DIM = dim;
 
 local banner = CreateFrame("Frame", "MoongladePauseBanner", UIParent);
 banner:SetFrameStrata("FULLSCREEN_DIALOG");
@@ -76,7 +88,7 @@ local function askPause(on)
 		SendAddonMessage(PAUSE_PREFIX, on and "1" or "0", "WHISPER", me);
 		if ( #pauseHooks.sent < 20 ) then table.insert(pauseHooks.sent, on and "1" or "0"); end
 	end
-	if ( not on ) then banner:Hide(); end
+	if ( not on ) then banner:Hide(); dim:Hide(); end
 end
 
 GameMenuFrame:HookScript("OnShow", function() askPause(true); end);
@@ -91,11 +103,12 @@ pauseFrame:RegisterEvent("PLAYER_LEAVING_WORLD");
 pauseFrame:SetScript("OnEvent", function(self, event, prefix, message)
 	if ( event == "CHAT_MSG_ADDON" ) then
 		if ( prefix ~= PAUSE_PREFIX ) then return; end
-		if ( message == "paused" and GameMenuFrame:IsShown() ) then banner:Show(); else banner:Hide(); end
+		if ( message == "paused" and GameMenuFrame:IsShown() ) then banner:Show(); dim:Show(); else banner:Hide(); dim:Hide(); end
 		if ( #pauseHooks.acks < 20 ) then table.insert(pauseHooks.acks, message); end
 		if ( MoongladePauseTestAck ) then MoongladePauseTestAck(message); end
 	else
 		banner:Hide();
+		dim:Hide();
 	end
 end);
 
@@ -117,8 +130,8 @@ local function diag(e)
 end
 
 -- Pause test mode (MoongladeTest.hook = "pause", client.pause_menu): once the world UI is up the add-on waits for the
--- harness's hardware Esc presses. When the server answers "paused" it takes a screenshot a second later (the menu and
--- the banner up), records what it shows, and when the server answers "running" after the second Esc it takes another
+-- harness's hardware Esc presses (it takes a screenshot of the world view first, before any Esc). When the server
+-- answers "paused" it takes a screenshot a second later (the menu, the banner and the dimming up), records what it shows, and when the server answers "running" after the second Esc it takes another
 -- one, then logs out (the report is written then). PAUSE_GIVE_UP_S after the world UI is up it logs out regardless.
 local PAUSE_SHOT_DELAY_S, PAUSE_GIVE_UP_S = 1.0, 150
 local pauseTest = { shots = {} };
@@ -126,6 +139,7 @@ local pauseTest = { shots = {} };
 local function pauseShot(tag)
 	Screenshot();
 	table.insert(pauseTest.shots, { tag = tag, at = format("%.2f", test.clock), banner = banner:IsVisible() and 1 or 0,
+	                                 dim = dim:IsVisible() and 1 or 0,
 	                                 menu = GameMenuFrame:IsShown() and 1 or 0, text = banner.text:GetText() });
 end
 
@@ -227,6 +241,7 @@ frame:SetScript("OnUpdate", function(self, elapsed)
 		if ( test.clock - test.readyAt >= SETTLE_S ) then
 			test.phase = (test.mode == "pause") and "wait_menu" or "show";
 			diag("ready " .. test.phase);
+			if ( test.mode == "pause" ) then pauseShot("before"); end   -- the world view before Esc
 		end
 	elseif ( test.mode == "pause" ) then
 		if ( (test.phase == "shot_paused" or test.phase == "shot_running") and test.clock >= test.shotAt ) then

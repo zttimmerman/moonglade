@@ -5,7 +5,8 @@ and asks for the pause exactly as the Moonglade add-on does (an "MGPAUSE" add-on
 state comes from `.moonglade pause status` (SOAP) and the module's GM read-outs (`.moonglade pause unit|cooldown`), the
 client's view from the packets the probe receives. Each pause lasts PAUSE_S unless the scenario says otherwise.
 "Lost time" (pause.lost_ms) is how much a remaining time dropped beyond the unpaused wall time between two read-outs,
-with the paused time taken from the server's own paused total: ~0 when it froze, ~the pause when it ran on.
+with the paused time measured by the probe (the server's "paused" answer to its "running" answer): ~0 when it froze,
+~the pause when it ran on.
 client.pause_menu (seamless_checks.py style) drives the real play client with hardware Esc presses."""
 from __future__ import annotations
 
@@ -39,7 +40,14 @@ def _session(**kw) -> Z.Session:
 
 
 def _close(s: Z.Session, ev: dict) -> None:
-    s.__exit__(None, None, None)
+    """End the session (resume, remove companions, log out). A session the server already dropped can't run the
+    cleanup commands; that is recorded, never raised over the check's own result."""
+    try:
+        s.__exit__(None, None, None)
+    except (Z.probe.ProbeError, OSError) as e:
+        ev["session_end_error"] = f"{type(e).__name__}: {e}"
+        if s.ws:
+            s.ws.close()
     ev["session_end"] = {k: s.ev.get(k) for k in ("resume_at_exit", "logout", "cleanup_errors")}
 
 
@@ -142,8 +150,10 @@ def aura_frozen(ctx):
         b1 = _run(lambda: s.aura(s.guid, buff))
         st1 = Z.status()
         ev["buff_after"], ev["status"] = b1, [st0, st1]
-        paused_ms = st1["paused_total_ms"] - st0["paused_total_ms"]
-        ev["paused_ms"] = paused_ms
+        # the paused time as the probe saw it (the server's "paused" to its "running" answer), not the server's own
+        # paused total (kept as evidence): a server whose clock didn't stop could also miscount it
+        paused_ms = round((r["reply_t"] - p["reply_t"]) * 1000)
+        ev["paused_ms"], ev["server_paused_total_delta_ms"] = paused_ms, st1["paused_total_ms"] - st0["paused_total_ms"]
         ev["buff_lost_ms"] = Z.lost_ms(b0["duration"], b0["t"], b1["duration"], b1["t"], paused_ms)
         ticks = s.tap.after(p["reply_i"], r["sent_i"], kind="periodic", spell=dot)
         ev["dot_ticks_during_pause"] = ticks[:5]
@@ -207,8 +217,10 @@ def cooldown_frozen(ctx):
         c1 = {"player": _run(lambda: s.cooldown(s.guid, pcd)), "creature": _run(lambda: s.cooldown(cg, ccd))}
         st1 = Z.status()
         ev["cooldowns_after"], ev["status"] = c1, [st0, st1]
-        paused_ms = st1["paused_total_ms"] - st0["paused_total_ms"]
-        ev["paused_ms"] = paused_ms
+        # the paused time as the probe saw it (the server's "paused" to its "running" answer), not the server's own
+        # paused total (kept as evidence): a server whose clock didn't stop could also miscount it
+        paused_ms = round((r["reply_t"] - p["reply_t"]) * 1000)
+        ev["paused_ms"], ev["server_paused_total_delta_ms"] = paused_ms, st1["paused_total_ms"] - st0["paused_total_ms"]
         ev["lost_ms"] = {k: Z.lost_ms(c0[k]["ms"], c0[k]["t"], c1[k]["ms"], c1[k]["t"], paused_ms) for k in c0}
         corr = ([x for x in s.tap.between(r["sent_t"], kind="modify_cooldown") if x["spell"] == pcd and x["guid"] == s.guid]
                 + [x for x in s.tap.between(r["sent_t"], kind="spell_cooldown")
@@ -320,8 +332,9 @@ def respawn_frozen(ctx):
         k1 = _run(lambda: Z.respawn_remaining(s, victim["spawn_id"]))
         st1 = Z.status()
         ev["at_resume"], ev["status_respawn"] = k1, [st0, st1]
-        paused_ms = st1["paused_total_ms"] - st0["paused_total_ms"]
+        paused_ms = round((r["reply_t"] - p["reply_t"]) * 1000)      # as the probe saw it (see cooldown_frozen)
         ev["respawn_paused_ms"] = paused_ms
+        ev["server_paused_total_delta_ms"] = st1["paused_total_ms"] - st0["paused_total_ms"]
         expect = t_kill + R + paused_ms / 1000
         ev["respawn_expected_t"] = round(expect, 1)
         back = None
@@ -604,4 +617,191 @@ def disabled_noop(ctx):
     finally:
         back = (was or {}).get("profile") or config.DEFAULT_PROFILE
         ev["restore"] = stack.ensure_profile(back if back != "pause-off" else config.DEFAULT_PROFILE)
+    return ev
+
+
+# ---------------------------------------------------------------- Esc in the real client
+
+PAUSE_HOOK = '-- planted by the harness (pause_checks.py): the add-on\'s pause test mode\r\nMoongladeTest = {\r\n\t["hook"] = "pause",\r\n}\r\n'
+MENU_GLUE = {"marker": False, "script": [{"t": 4, "act": "shot"}, {"t": 20, "act": "continue"}],
+             "charselect": [{"t": 2, "act": "play"}]}
+WORLD_TIMEOUT = 300         # the client up -> Continue at 20 s -> character select -> Play -> in the world
+ESC_TRIES, ESC_WAIT_S = 6, 6
+REPORT_TIMEOUT_S = 120
+BANNER_GOLD_MIN = 40        # gold text pixels (GameFontNormalHuge, 1.0/0.82/0) in the banner box of the paused shot
+# The dimming (spec: "the world view dimmed"): mean brightness of a world region away from the menu (centre), the
+# banner (top centre), the unit frame (top left), the chat and action bars (bottom) and the tutorial/minimap (right),
+# as fractions of the screenshot. The add-on dims with black at 50 % opacity, which halves it; "clearly lower" = at
+# most DIM_MAX_RATIO of the pre-Esc shot, "back" = within RESTORE_TOL of it (idle animations, the day/night sky).
+DIM_REGION = (0.04, 0.26, 0.30, 0.56)
+DIM_MAX_RATIO = 0.75
+RESTORE_TOL = 0.12
+
+
+def _gold_pixels(path, box) -> int:
+    """Pixels in `box` (x0, y0, x1, y1, fractions of the screenshot) that are the banner's gold text colour."""
+    from .playclient_util import _bmp_pixels
+    w, h, px = _bmp_pixels(path)
+    n = 0
+    for y in range(int(box[1] * h), int(box[3] * h), 2):
+        for x in range(int(box[0] * w), int(box[2] * w), 2):
+            r, g, b = px(x, y)
+            n += r > 190 and 120 < g < 230 and b < 90 and r - b > 120
+    return n
+
+
+def _brightness(path, box=DIM_REGION) -> float:
+    """Mean (r + g + b) / 3 over `box` (fractions of the screenshot), sampled every 4th pixel."""
+    from .playclient_util import _bmp_pixels
+    w, h, px = _bmp_pixels(path)
+    tot = n = 0
+    for y in range(int(box[1] * h), int(box[3] * h), 4):
+        for x in range(int(box[0] * w), int(box[2] * w), 4):
+            tot += sum(px(x, y)) / 3
+            n += 1
+    return round(tot / n, 2) if n else 0.0
+
+
+def _banner_box(path) -> tuple:
+    """The banner's frame (MoongladePauseBanner: 320 x 72 UI units, TOP of UIParent at -64), as fractions of the
+    screenshot, plus a margin. UIParent is 768 units high; its width follows the aspect ratio."""
+    from .playclient_util import _bmp_pixels
+    w, h, _ = _bmp_pixels(path)
+    u = h / 768
+    return ((w / 2 - 170 * u) / w, (60 * u) / h, (w / 2 + 170 * u) / w, (140 * u) / h)
+
+
+@check("client.pause_menu", order=450, capability=CAP, stack="down", tier="full")
+def pause_menu(ctx):
+    """GIVEN the play client in the world (a scratch patched play client, ./play --account test, the harness test
+    account; the add-on's pause test mode planted in its SavedVariables), WHEN a hardware Esc (SendInput in the
+    client's Wine prefix) opens the game menu and a second one closes it, THEN `.moonglade pause status` reports
+    paused while the menu is open, the add-on's screenshot taken then shows the "Paused" banner (its report: banner and
+    menu shown; the screenshot's banner box holds the banner's gold text, the shot after the resume doesn't) and the
+    world view dimmed (DIM_REGION's mean brightness at most DIM_MAX_RATIO of the add-on's pre-Esc shot), and after the
+    menu closes the server reports running and DIM_REGION's brightness is back within RESTORE_TOL of the pre-Esc
+    shot."""
+    from . import clientinput
+    from .play_checks import is_clear, remaining, require_given_clear
+    from .playclient_util import PlayRun, build_scratch, drop_scratch, fresh_scratch, screenshots
+    from .seamless_checks import addon_report, addon_sv_path, server_logins
+    from .. import paths as P
+
+    ev: dict = {"account": P.TEST_USER, "glue_test": MENU_GLUE}
+    scratch = run = None
+    try:
+        require_given_clear(ev)
+        scratch = fresh_scratch("pause")
+        build = build_scratch(scratch)
+        ev["scratch"] = {"dir": str(scratch), "addon_outputs": sorted(o for o in build["stamp"]["outputs"]
+                                                                      if o.startswith("Interface/AddOns/Moonglade/"))}
+        require(scratch.parent == P.ENV and scratch.name.startswith("check-play-"),
+                "refusing to plant the add-on test hook outside a scratch play client", dir=str(scratch))
+        sv = addon_sv_path(scratch)
+        sv.parent.mkdir(parents=True, exist_ok=True)
+        sv.write_text(PAUSE_HOOK)
+        run = PlayRun("pause", glue_test=MENU_GLUE, scratch=scratch)
+        run.start()
+        up = run.wait_client()
+        ev["client_up"] = {k: v for k, v in up.items() if k != "t"}
+        require(up.get("up"), "the real Wow.exe never came up", output=run.output()[-2500:], **ev)
+        t_up = up["t"]
+        t0 = time.time()
+        while time.time() - t0 < 120 and not [p for p in screenshots(scratch) if p.stat().st_mtime >= t_up - 5]:
+            time.sleep(0.5)
+        ev["client_input"] = clientinput.press_shift(run.tmp)
+        require(ev["client_input"]["injected"] == 2, "GIVEN not met: the hardware key press didn't reach the client", **ev)
+        login = None
+        while time.time() - t_up < WORLD_TIMEOUT and not login:
+            login = next((x for x in server_logins(P.TEST_CHAR) if x["t"] >= int(t_up)), None)
+            time.sleep(2)
+        ev["server_login"] = login
+        require(login is not None, "GIVEN not met: the character never entered the world", **ev)
+        # the add-on's pre-Esc screenshot of the world view (taken once the world UI is up), before the first Esc
+        t_w = time.time()
+        while time.time() - t_w < 60 and not [p for p in screenshots(scratch) if p.stat().st_mtime >= login["t"]]:
+            time.sleep(0.5)
+        ev["before_shot_after_s"] = round(time.time() - t_w, 1)
+        time.sleep(1)
+        # WHEN: Esc opens the game menu
+        presses, paused = [], None
+        for _ in range(ESC_TRIES):
+            presses.append(clientinput.press_key(run.tmp, clientinput.VK_ESCAPE, clientinput.SCAN_ESCAPE, "hs-esc.exe"))
+            t_press = time.time()
+            while time.time() - t_press < ESC_WAIT_S:
+                st = Z.status()
+                if st["state"] == "paused":
+                    paused = st | {"after_press_s": round(time.time() - t_press, 2)}
+                    break
+                time.sleep(0.3)
+            if paused:
+                break
+        ev["esc_open"], ev["status_menu_open"] = presses, paused
+        require(paused is not None, "the server never reported paused after Esc", **ev)
+        n_shots = len(screenshots(scratch))
+        t1 = time.time()
+        while time.time() - t1 < 15 and len(screenshots(scratch)) <= n_shots:
+            time.sleep(0.5)
+        time.sleep(1)
+        # WHEN: Esc closes it
+        ev["esc_close"] = clientinput.press_key(run.tmp, clientinput.VK_ESCAPE, clientinput.SCAN_ESCAPE, "hs-esc.exe")
+        t2, running = time.time(), None
+        while time.time() - t2 < 10:
+            st = Z.status()
+            if st["state"] == "running":
+                running = st | {"after_press_s": round(time.time() - t2, 2)}
+                break
+            time.sleep(0.3)
+        ev["status_menu_closed"] = running
+        t3, rep = time.time(), None
+        while time.time() - t3 < REPORT_TIMEOUT_S and rep is None:
+            rep = addon_report(scratch)
+            time.sleep(2)
+        ev["addon_report"] = {k: (rep or {}).get(k) for k in ("at", "errors", "error_msgs", "pause", "diag")}
+        shots = [p for p in screenshots(scratch) if p.stat().st_mtime >= t_up - 5]
+        ev["screenshots"] = [{"file": p.name, "mtime": round(p.stat().st_mtime, 2)} for p in shots]
+        ev["stop"] = run.stop()
+        pr = (rep or {}).get("pause") or {}
+        pshots = pr.get("shots") or []
+        by_tag = {x.get("tag"): x for x in (pshots.values() if isinstance(pshots, dict) else pshots)}
+        ev["report_shots"] = by_tag
+        # the add-on's three screenshots are the newest three: before Esc, after the pause, after the resume
+        if len(shots) >= 3:
+            sb, sp, sr = shots[-3], shots[-2], shots[-1]
+            ev["brightness"] = {"region": DIM_REGION, "before": _brightness(sb), "paused": _brightness(sp),
+                                "running": _brightness(sr), "files": [sb.name, sp.name, sr.name]}
+            box = _banner_box(sp)
+            ev["banner_box"] = [round(v, 3) for v in box]
+            ev["gold_pixels"] = {"paused_shot": _gold_pixels(sp, box), "running_shot": _gold_pixels(sr, box),
+                                 "files": [sp.name, sr.name]}
+            P.OUT.mkdir(parents=True, exist_ok=True)
+            import shutil
+            shutil.copyfile(sp, P.OUT / "pause-menu-paused.jpg")
+            shutil.copyfile(sr, P.OUT / "pause-menu-running.jpg")
+            shutil.copyfile(sb, P.OUT / "pause-menu-before.jpg")
+            ev["kept_shots"] = ["harness/out/pause-menu-before.jpg", "harness/out/pause-menu-paused.jpg",
+                                "harness/out/pause-menu-running.jpg"]
+        gp = ev.get("gold_pixels") or {}
+        require(running is not None, "the server didn't report running after the menu closed", **ev)
+        require(rep is not None and pr.get("mode") == "pause", "no add-on report from the pause test mode", **ev)
+        require((by_tag.get("paused") or {}).get("banner") == 1 and (by_tag.get("paused") or {}).get("menu") == 1,
+                "the add-on's paused screenshot wasn't taken with the banner and the menu shown", **ev)
+        require((by_tag.get("running") or {}).get("banner") == 0, "the banner was still shown after the resume", **ev)
+        require(gp.get("paused_shot", 0) >= BANNER_GOLD_MIN and gp.get("running_shot", 0) * 4 < gp.get("paused_shot", 0),
+                "the paused screenshot doesn't show the banner's text in its box (or the running one does too)", **ev)
+        br = ev.get("brightness") or {}
+        require(br and (by_tag.get("before") or {}).get("dim") == 0 and (by_tag.get("paused") or {}).get("dim") == 1
+                and (by_tag.get("running") or {}).get("dim") == 0,
+                "the add-on's report doesn't show the dimming only while paused (or the pre-Esc shot is missing)", **ev)
+        require(br["paused"] <= DIM_MAX_RATIO * br["before"],
+                "the world view isn't clearly dimmed while paused (region brightness vs. the pre-Esc shot)", **ev)
+        require(abs(br["running"] - br["before"]) <= RESTORE_TOL * br["before"],
+                "the world view's brightness didn't come back after the menu closed", **ev)
+        require(rep.get("errors") == 0, "the add-on counted Lua errors", **ev)
+    finally:
+        if run is not None:
+            run.cleanup()
+        ev["remaining_after"] = remaining()
+        drop_scratch(scratch)
+    require(is_clear(ev["remaining_after"]), "something is still running", **ev)
     return ev
