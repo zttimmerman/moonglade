@@ -1,31 +1,177 @@
 /*
- * mod-moonglade: per-character saves (openspec/changes/front-menu-saves). PROTOTYPE (task 1.1, Q3): the smallest
- * in-game load that answers "does the character list after SMSG_LOGOUT_COMPLETE show the restored level?".
- *   - `.moonglade save protosnap <name>` (SOAP): remember an online character's level, XP, money and position.
- *   - Add-on whisper "MGSAVE\tLOAD" (to itself): on the next world tick the module sends the instant-logout response,
- *     logs the character out WITHOUT saving it (LogoutPlayer(false)), and queues one transaction that writes the
- *     remembered values back. The character database's async queue is FIFO with one worker, so the client's next
- *     character-list query is answered after it.
+ * mod-moonglade: per-character saves (openspec/changes/front-menu-saves; no core patch). See MoongladeSaves.h for
+ * the save set and the change's design.md for the whole design.
+ *
+ * Configuration (mod_moonglade.conf, Moonglade.Saves.*): Enable, Dir (the lane's save store, rendered by the
+ * launcher's config.write_all), AutoMinIntervalS, KeepAuto / KeepQuick / KeepBeforeLoad. Saves stay disabled, with
+ * the reason logged and reported by `.moonglade save status`, when:
+ *   - Enable is 0, or Dir is empty, relative or can't be created;
+ *   - CharacterDatabase.WorkerThreads isn't 1: a load relies on the character database's async queue being FIFO with
+ *     one worker, so it lands after every earlier write of the character (design.md 3, "Ordering").
  */
+
+#include "MoongladeSaves.h"
 
 #include "CharacterPackets.h"
 #include "Chat.h"
 #include "CommandScript.h"
+#include "Config.h"
+#include "CryptoHash.h"
 #include "DatabaseEnv.h"
 #include "Log.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "ScriptMgr.h"
+#include "Util.h"
 #include "WorldSession.h"
 
-#include <mutex>
+#include <filesystem>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
 using namespace Acore::ChatCommands;
+namespace fs = std::filesystem;
 
+namespace MoongladeSaves
+{
+    struct Settings
+    {
+        bool enabled = false;
+        std::string why = "not configured yet";      // why saves are disabled ("" when enabled)
+        fs::path dir;
+        uint32 autoMinIntervalS = 120;
+        uint32 keepAuto = 5;
+        uint32 keepQuick = 1;
+        uint32 keepBeforeLoad = 3;
+        int32 workerThreads = 1;
+    };
+
+    Settings g_cfg;
+    std::string g_schemaFingerprint;                // sha256 over the save set's column lists (design.md 2)
+    std::unordered_map<std::string, std::vector<std::string>> g_columns;   // table -> columns (ordinal order)
+    std::unordered_map<std::string, std::vector<std::string>> g_types;     // table -> DATA_TYPE per column
+
+    std::string Where(std::string_view where, uint32 guid)
+    {
+        std::string out(where);
+        std::string const g = std::to_string(guid);
+        for (size_t p; (p = out.find("{g}")) != std::string::npos; )
+            out.replace(p, 3, g);
+        return out;
+    }
+
+    /// Remove leftovers of saves a crash interrupted: every `.tmp-*` folder two levels below the store
+    /// (<dir>/<ACCOUNT>/<character id>/.tmp-<id>). Returns how many were removed.
+    uint32 CleanTmp()
+    {
+        uint32 n = 0;
+        std::error_code ec;
+        if (g_cfg.dir.empty() || !fs::is_directory(g_cfg.dir, ec))
+            return 0;
+        for (auto const& acct : fs::directory_iterator(g_cfg.dir, ec))
+        {
+            if (!acct.is_directory(ec))
+                continue;
+            for (auto const& chr : fs::directory_iterator(acct.path(), ec))
+            {
+                if (!chr.is_directory(ec))
+                    continue;
+                std::vector<fs::path> tmp;
+                for (auto const& s : fs::directory_iterator(chr.path(), ec))
+                    if (s.path().filename().string().rfind(".tmp-", 0) == 0)
+                        tmp.push_back(s.path());
+                for (fs::path const& p : tmp)
+                {
+                    fs::remove_all(p, ec);
+                    ++n;
+                }
+            }
+        }
+        return n;
+    }
+
+    /// The running database's columns for every save-set table (INFORMATION_SCHEMA, ordinal order) and their
+    /// fingerprint. A save whose fingerprint differs is refused (design.md 3, Checks).
+    bool LoadSchema(std::string& why)
+    {
+        g_columns.clear();
+        g_types.clear();
+        std::string fp;
+        for (SaveTable const& t : SAVE_SET)
+        {
+            QueryResult r = CharacterDatabase.Query("SELECT COLUMN_NAME, DATA_TYPE FROM information_schema.COLUMNS "
+                "WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = '{}' ORDER BY ORDINAL_POSITION", t.name);
+            if (!r)
+            {
+                why = "table " + std::string(t.name) + " not found";
+                return false;
+            }
+            auto& cols = g_columns[std::string(t.name)];
+            auto& types = g_types[std::string(t.name)];
+            do
+            {
+                cols.push_back((*r)[0].Get<std::string>());
+                types.push_back((*r)[1].Get<std::string>());
+            } while (r->NextRow());
+            fp += std::string(t.name) + ":";
+            for (size_t i = 0; i < cols.size(); ++i)
+                fp += cols[i] + " " + types[i] + ",";
+            fp += ";";
+        }
+        g_schemaFingerprint = ByteArrayToHexStr(Acore::Crypto::SHA256::GetDigestOf(fp));
+        return true;
+    }
+
+    void Configure()
+    {
+        Settings s;
+        s.dir = sConfigMgr->GetOption<std::string>("Moonglade.Saves.Dir", "");
+        s.autoMinIntervalS = sConfigMgr->GetOption<uint32>("Moonglade.Saves.AutoMinIntervalS", 120);
+        s.keepAuto = sConfigMgr->GetOption<uint32>("Moonglade.Saves.KeepAuto", 5);
+        s.keepQuick = sConfigMgr->GetOption<uint32>("Moonglade.Saves.KeepQuick", 1);
+        s.keepBeforeLoad = sConfigMgr->GetOption<uint32>("Moonglade.Saves.KeepBeforeLoad", 3);
+        s.workerThreads = sConfigMgr->GetOption<int32>("CharacterDatabase.WorkerThreads", 1);
+        bool enable = sConfigMgr->GetOption<bool>("Moonglade.Saves.Enable", true);
+        std::error_code ec;
+        if (!enable)
+            s.why = "Moonglade.Saves.Enable = 0";
+        else if (s.workerThreads != 1)
+            s.why = "CharacterDatabase.WorkerThreads = " + std::to_string(s.workerThreads)
+                + " (saves need 1: one FIFO async worker orders a load after every earlier write)";
+        else if (s.dir.empty())
+            s.why = "Moonglade.Saves.Dir is empty";
+        else if (!s.dir.is_absolute())
+            s.why = "Moonglade.Saves.Dir is not an absolute path";
+        else if (fs::create_directories(s.dir, ec), ec)
+            s.why = "Moonglade.Saves.Dir can't be created (" + ec.message() + ")";
+        else
+            s.why.clear();
+        s.enabled = s.why.empty();
+        g_cfg = s;
+        if (g_cfg.enabled)
+        {
+            std::string why;
+            if (!LoadSchema(why))
+            {
+                g_cfg.enabled = false;
+                g_cfg.why = "schema: " + why;
+            }
+        }
+        uint32 cleaned = g_cfg.enabled ? CleanTmp() : 0;
+        if (g_cfg.enabled)
+            LOG_INFO("module", "[mod-moonglade] saves enabled: dir {}, auto interval {} s, keep auto {} quick {} "
+                "before-load {}, schema {}, {} unfinished save(s) removed", g_cfg.dir.string(), g_cfg.autoMinIntervalS,
+                g_cfg.keepAuto, g_cfg.keepQuick, g_cfg.keepBeforeLoad, g_schemaFingerprint.substr(0, 12), cleaned);
+        else
+            LOG_WARN("module", "[mod-moonglade] saves disabled: {}", g_cfg.why);
+    }
+}
+
+using namespace MoongladeSaves;
+
+// ---------------------------------------------------------------------------------------------- PROTOTYPE (1.1)
 namespace
 {
     constexpr std::string_view SAVE_PREFIX = "MGSAVE\t";
@@ -48,10 +194,7 @@ namespace
         Player* player = ObjectAccessor::FindConnectedPlayer(guid);
         auto it = g_snaps.find(guid.GetCounter());
         if (!player || it == g_snaps.end())
-        {
-            LOG_INFO("module", "[mod-moonglade] proto load: no player or no snapshot for {}", guid.ToString());
             return;
-        }
         WorldSession* session = player->GetSession();
         WorldPackets::Character::LogoutResponse resp;
         resp.LogoutResult = 0;
@@ -65,7 +208,6 @@ namespace
             "position_y = {}, position_z = {}, orientation = {}, online = 0 WHERE guid = {}",
             s.level, s.xp, s.money, s.map, s.zone, s.x, s.y, s.z, s.o, guid.GetCounter());
         CharacterDatabase.CommitTransaction(trans);
-        LOG_INFO("module", "[mod-moonglade] proto load queued for {} (level {})", guid.ToString(), s.level);
     }
 }
 
@@ -89,7 +231,13 @@ public:
 class MoongladeSavesWorldScript : public WorldScript
 {
 public:
-    MoongladeSavesWorldScript() : WorldScript("MoongladeSavesWorldScript", { WORLDHOOK_ON_UPDATE }) { }
+    MoongladeSavesWorldScript() : WorldScript("MoongladeSavesWorldScript",
+        { WORLDHOOK_ON_AFTER_CONFIG_LOAD, WORLDHOOK_ON_UPDATE }) { }
+
+    void OnAfterConfigLoad(bool /*reload*/) override
+    {
+        Configure();
+    }
 
     void OnUpdate(uint32 /*diff*/) override
     {
@@ -111,11 +259,39 @@ public:
     {
         static ChatCommandTable saveTable =
         {
+            { "status",    HandleStatus,    SEC_GAMEMASTER, Console::Yes },
+            { "tables",    HandleTables,    SEC_GAMEMASTER, Console::Yes },
             { "protosnap", HandleProtoSnap, SEC_GAMEMASTER, Console::Yes },
         };
         static ChatCommandTable moongladeTable = { { "save", saveTable } };
         static ChatCommandTable commandTable = { { "moonglade", moongladeTable } };
         return commandTable;
+    }
+
+    /// `.moonglade save status`: enabled or the reason it isn't, the store, the schema fingerprint and the settings.
+    static bool HandleStatus(ChatHandler* handler)
+    {
+        handler->PSendSysMessage("Moonglade saves: {} | why: {} | dir: {} | schema: {} | workers: {} | auto interval: {} "
+            "| keep auto {} quick {} before-load {}", g_cfg.enabled ? "enabled" : "disabled",
+            g_cfg.why.empty() ? "-" : g_cfg.why, g_cfg.dir.string(), g_schemaFingerprint.empty() ? "-" : g_schemaFingerprint,
+            g_cfg.workerThreads, g_cfg.autoMinIntervalS, g_cfg.keepAuto, g_cfg.keepQuick, g_cfg.keepBeforeLoad);
+        return true;
+    }
+
+    /// `.moonglade save tables`: the classification, one line per list (saves.table_coverage).
+    static bool HandleTables(ChatHandler* handler)
+    {
+        std::string save, removed, kept;
+        for (SaveTable const& t : SAVE_SET)
+            save += (save.empty() ? "" : ",") + std::string(t.name);
+        for (RemovedTable const& t : REMOVED_ON_LOAD)
+            removed += (removed.empty() ? "" : ",") + std::string(t.name);
+        for (std::string_view t : KEPT)
+            kept += (kept.empty() ? "" : ",") + std::string(t);
+        handler->PSendSysMessage("Moonglade save tables: in-save {}", save);
+        handler->PSendSysMessage("Moonglade save tables: removed-on-load {}", removed);
+        handler->PSendSysMessage("Moonglade save tables: kept {}", kept);
+        return true;
     }
 
     static bool HandleProtoSnap(ChatHandler* handler, std::string name)

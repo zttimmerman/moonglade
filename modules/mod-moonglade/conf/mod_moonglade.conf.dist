@@ -27,4 +27,44 @@ Moonglade.QuietServerText = 1
 Moonglade.Pause.Enable = 1
 
 #
+#    Moonglade.Saves.Enable
+#        Description: Per-character saves (openspec/changes/front-menu-saves; src/MoongladeSaves.cpp): manual saves,
+#                     one quicksave, autosaves at safe moments, and loading a save while the game runs. Saves stay
+#                     off (reason in the log and `.moonglade save status`) when Moonglade.Saves.Dir is empty or
+#                     CharacterDatabase.WorkerThreads isn't 1 (a load is ordered after every earlier write of the
+#                     character by the character database's single FIFO worker).
+#        Default:     1 - (Saves on)
+#                     0 - (Saves off: requests are refused)
+
+Moonglade.Saves.Enable = 1
+
+#
+#    Moonglade.Saves.Dir
+#        Description: The save store: <Dir>/<ACCOUNT>/<character id>/<save id>/. The launcher renders it per lane
+#                     (harness/hslib/config.py: <lane env>/saves; the player's is env/saves). Absolute path.
+#        Default:     "" - (no store: saves off)
+
+Moonglade.Saves.Dir = ""
+
+#
+#    Moonglade.Saves.AutoMinIntervalS
+#        Description: At most one autosave per character in this many seconds (entering a rest area, taking a
+#                     flight, arriving on a new map).
+#        Default:     120
+
+Moonglade.Saves.AutoMinIntervalS = 120
+
+#
+#    Moonglade.Saves.KeepAuto
+#    Moonglade.Saves.KeepQuick
+#    Moonglade.Saves.KeepBeforeLoad
+#        Description: How many autosaves, quicksaves and "before loading" safety saves are kept per character (the
+#                     oldest go first). Manual saves are never rotated.
+#        Default:     5, 1, 3
+
+Moonglade.Saves.KeepAuto = 5
+Moonglade.Saves.KeepQuick = 1
+Moonglade.Saves.KeepBeforeLoad = 3
+
+#
 ###################################################################################################
