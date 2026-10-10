@@ -3,7 +3,7 @@ Zach wants saves that feel like a single-player RPG ("function similar to … El
 
 ## What Zach gets (plain language)
 - **Saves belong to a character.** Each character has its own list of saves. Loading one rewinds only that character. Your other characters, the AI players, monsters, the auction house and other characters' mail are not touched.
-- **A save holds that character's progress:** level and XP, talents and spells, gear, bags, bank, gold, quests, reputation, professions, pets and position (including hearthstone). It holds no AI players, no monsters (the server never stores live monster state anyway, only respawn timers) and no other character.
+- **A save holds that character's progress:** level and XP, talents and spells, gear, bags, bank, gold, quests, reputation, professions, pets and position (including the home inn you're bound to). It holds no AI players, no monsters (the server never stores live monster state anyway, only respawn timers) and no other character.
 - **Three kinds of save:**
   - **Manual saves.** Esc → Saves → Save. You can give it a name; otherwise it gets one like "Elwynn Forest · Level 12 · Tue 21:04".
   - **One quicksave** per character, taken with the quicksave key. Each quicksave replaces the previous one.
@@ -61,4 +61,5 @@ Zach wants saves that feel like a single-player RPG ("function similar to … El
 - Zach's decisions (2026-10-09), recorded in STATUS.md and the orchestrator's memory notes.
 
 ## Spec-change log
-- (none yet)
+- 2026-10-10 (clarification, orchestrator): in-game `LOAD` (and `DELETE`) name a save by list generation + index from `MGSAVE LIST`, not by save id, so that no save id ever appears in reply lines (`saves.list_wording`). Same pattern as the glue's `L` verb. Found in builder run A.
+- 2026-10-10 (wording): "hearthstone" replaced by "home inn" / "home bind" so tracked files avoid the old project name (`repo.naming`). No behaviour change.

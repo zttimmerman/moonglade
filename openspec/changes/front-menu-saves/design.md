@@ -16,7 +16,7 @@ The core already has a list of "everything that belongs to one character": the `
 | `character_reputation` | reputation | — |
 | `character_achievement`, `character_achievement_progress` | achievements | — |
 | `character_aura`, `character_spell_cooldown` | buffs, cooldowns at save time | — |
-| `character_homebind` | hearthstone location | — |
+| `character_homebind` | home bind location | — |
 | `character_declinedname` | declined names (ruRU clients) | — |
 | `character_inventory` | equipped items, bags, backpack, bank, keyring (`bag`, `item` are item IDs) | `bag`, `item` → new item IDs |
 | `item_instance` | the items themselves. **Only items referenced by this save's `character_inventory`**. The core's dump takes every item whose `owner_guid` is the character (`BaseTables`, `:73-80`), which also catches items in auctions and mail. Those belong to the world and stay out | `guid` → new item ID |

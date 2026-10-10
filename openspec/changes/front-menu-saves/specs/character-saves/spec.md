@@ -96,7 +96,7 @@ A save SHALL be loadable from the character screen and from the in-game Saves wi
 
 #### Scenario: Load in the game
 - **GIVEN** a probe character in the world, in combat, with a save from an earlier level
-- **WHEN** it sends `MGSAVE LOAD <save>`
+- **WHEN** it sends `MGSAVE LIST`, then `MGSAVE LOAD <generation> <index>` naming that save from the list
 - **THEN**
   - the probe gets `SMSG_LOGOUT_COMPLETE` within 3 s, without a 20 s countdown;
   - the next character list shows the saved level and zone;
