@@ -8,5 +8,5 @@
 - [x] 3.1 Moonglade addon: Esc menu hooks, banner, dimmed world view while paused, unpause before Logout/Exit
 ## 4. Checks and docs
 - [x] 4.1 `pause.*` checks and `client.pause_menu`
-- [ ] 4.3 `pause.disconnect_unpauses` (spec-change log 2026-10-09): check + counterexample, ≥3×
+- [x] 4.3 `pause.disconnect_unpauses` (spec-change log 2026-10-09): check + counterexample, ≥3×
 - [x] 4.2 design "As built"; docs/setup or player notes

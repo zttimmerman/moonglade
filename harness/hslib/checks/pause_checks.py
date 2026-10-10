@@ -581,6 +581,64 @@ def logout_unpauses(ctx):
     return ev
 
 
+DROP_RESUME_S = 5.0         # spec: "within a few seconds" (the session timeout it must not wait for is 60 s of game time)
+OFFLINE_WAIT_S = 90         # afterwards: the dropped session's character goes offline (WorldSessionMgr, 60 s)
+
+
+@check("pause.disconnect_unpauses", order=451, capability=CAP, stack="up", tier="full")
+def disconnect_unpauses(ctx):
+    """GIVEN a world paused by a connected client (the companion probe session; the server answered "paused" and
+    `.moonglade pause status` says paused), WHEN that client's connection is cut without a logout (the probe's socket
+    is shut down and closed; no CMSG_LOGOUT_REQUEST), THEN `.moonglade pause status` reports running within 5 s of
+    the cut. Afterwards the check waits for the character to go offline, so later checks can log it in."""
+    ev = {}
+    _status_running(ev)
+    s = _session()
+    cut = False
+    try:
+        p = _run(s.pause)
+        ev["pause"] = p
+        st = Z.status()
+        ev["status_paused"] = st
+        require(st["state"] == "paused", "GIVEN not met: the world isn't paused", **ev)
+        time.sleep(2)
+        s.ws.stop_pump()
+        t_cut = time.time()
+        import socket as _socket
+        try:
+            s.ws.sock.shutdown(_socket.SHUT_RDWR)
+        except OSError as e:
+            ev["shutdown_error"] = str(e)
+        s.ws.sock.close()
+        s.ws.sock = None
+        cut = True
+        ev["cut_t"] = round(t_cut, 3)
+        samples, running = [], None
+        while time.time() - t_cut < DROP_RESUME_S + 5:
+            st = Z.status()
+            samples.append({"after_s": round(st["t"] - t_cut, 2), "state": st["state"]})
+            if st["state"] == "running":
+                running = st | {"after_cut_s": round(st["t"] - t_cut, 2)}
+                break
+            time.sleep(0.25)
+        ev["status_samples"], ev["status_running"] = samples[-8:], running
+        require(running is not None and running["after_cut_s"] <= DROP_RESUME_S,
+                "the world didn't unpause within 5 s of the client's connection being cut", **ev)
+    finally:
+        if not cut:
+            _close(s, ev)
+        else:
+            try:
+                ev["resume_at_exit"] = soap.gm("moonglade pause off", timeout=10).evidence()
+            except OSError as e:
+                ev["resume_at_exit"] = str(e)
+            t0 = time.time()
+            while time.time() - t0 < OFFLINE_WAIT_S and (Z.C.char_row() or {}).get("online"):
+                time.sleep(2)
+            ev["character_offline_after_s"] = round(time.time() - t0, 1)
+    return ev
+
+
 @check("pause.disabled_noop", order=449, capability=CAP, stack="up", tier="full")
 def disabled_noop(ctx):
     """GIVEN Moonglade.Pause.Enable = 0 (the stack restarted with the pause-off config profile; `.moonglade pause
