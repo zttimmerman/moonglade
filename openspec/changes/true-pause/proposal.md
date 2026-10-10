@@ -31,3 +31,5 @@ Zach wants a single-player feel: pressing Esc should stop the world the way a si
 
 ## Spec-change log
 - 2026-10-09 (tightening, Zach): "Esc pauses in the real client" adds a dimmed world view behind the menu, and `client.pause_menu` asserts the dimming and its removal on resume. Reason: the client keeps drawing idle animations and effects while the server is paused; Zach asked for the pause to read clearly as paused. Truly freezing client animations is a separate backlog research item (would need a client patch, its own ADR and Zach's yes).
+- 2026-10-09 (tightening, orchestrator): new scenario "A lost client doesn't leave the world paused" (`pause.disconnect_unpauses`). Reason: the builder found that a client dropped while paused left the world paused for good (the session timeout runs on the frozen game clock); the fix needs a check.
+- 2026-10-09 (clarification): `pause.respawn_frozen` uses two pauses longer than the respawn time, one per GIVEN, on the shortest-respawn creature chosen by rule (design.md). Scenario text unchanged.

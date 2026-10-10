@@ -60,6 +60,12 @@ Pausing SHALL be refused on a flight path, boat or zeppelin, with a message to t
 - **THEN** the world unpauses and the logout completes within the normal countdown
 - Check: `pause.logout_unpauses`
 
+#### Scenario: A lost client doesn't leave the world paused
+- **GIVEN** a world paused by a connected client
+- **WHEN** that client disconnects or is killed without logging out
+- **THEN** the world unpauses within a few seconds (it does not wait for the session timeout, which runs on the frozen clock)
+- Check: `pause.disconnect_unpauses`
+
 #### Scenario: Pause disabled means no change
 - **GIVEN** `Moonglade.Pause.Enable = 0`
 - **WHEN** the pause addon message arrives
