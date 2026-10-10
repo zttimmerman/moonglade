@@ -206,3 +206,34 @@ counter in `accountList` as `HSRN<n>|`, `HS_TEST.charselect_back`, the acts `csr
   once with a client `CMSG_LOGOUT_REQUEST` (the 3.3.5a idle logout measured against Mac uptime,
   `checks/clientinput.py`). The prototype then sent one Shift press (`clientinput.press_shift`), as the world-entering
   checks do. The saves GUI checks must do the same.
+
+### As built so far (builder run A: tasks 2.1–2.4, 3.1–3.2)
+Where the code differs from the plan above, and why. The full "As built" comes with task 5.3.
+- **Snapshot reads (4):** not a `CharacterDatabaseQueryHolder` (a holder takes prepared statements only, and the core
+  has none for these column lists). After `SaveToDB` the world thread queues one `AsyncQuery` per save-set table back
+  to back on the same single FIFO worker, so the reads run right behind the commit with nothing of this character in
+  between. Each read is `SELECT 1, <columns> FROM (SELECT 1) hs LEFT JOIN <table> t ON <where>`: the core returns an
+  empty result both for "no rows" and for a failed query, and the join's marker row makes a failed read fail the
+  whole save (fail closed).
+- **Add-on verbs (5):** `LOAD` and `DELETE` take `<generation> <index>` from the last `LIST` (generation = 4 hex digits
+  of the sha256 of the list's ids; index 1 = newest), not a save id, because the spec's reply lines must not carry
+  save ids (`saves.list_wording`). A stale generation is refused ("The list of saves changed"). `LIST` lines:
+  `E\t<gen>\t<n>\t<kind>\t<when>\t<level>\t<zone>\t<label>`, then `END\t<gen>\t<count>`; results `OK|NO\t<verb>\t<text>`.
+- **Shared add-on parser (5):** `MoongladeAddon.{h,cpp}` owns `OnPlayerCanUseChat`; `MGPAUSE` and `MGSAVE` register by
+  prefix. A load is handled on the next world tick (`WorldScript::OnUpdate`), never inside the chat handler.
+- **Test switches (3, 9):** not an `HS_SAVES_TEST` environment variable but console-only GM commands, which the game
+  can't reach and which apply to characters of the test account (`HSTEST`) only: `.moonglade save test failafter <n>
+  | pause <s> | off`, and `.moonglade save interval <s>` (autosave interval until restart). The failing statement is
+  a read that errors (`ER_SUBQUERY_NO_1_ROW`): a missing-table, unknown-column or parse error makes the core abort the
+  worldserver (`MySQLConnection::_HandleMySQLErrno`).
+- **Commands:** `.moonglade save status [job]`, `tables`, `take <guid> [label]`, `load <guid> <id>`, `list <guid>`,
+  `interval`, `test`.
+- **Ids:** `YYYYMMDD-HHMMSS-<kind>[-n]` in UTC; `n` is one more than the highest of that second and kind, so an id freed
+  by rotation is never reused for a newer save.
+- **Autosave labels:** `Rested: …`, `Took a flight: …`, `Arrived: …` (`<Zone> · Level <n> · <Ddd HH:MM>`); triggers are
+  queued 1 s after the moment and skipped (logged, never queued again) inside the interval or when a save would be
+  refused. The login map is not an arrival (5 s after login).
+- **Listener (5):** connections are served on their own threads (at most 4) so a second `L` during a load is refused at
+  once; `Listener.validators["L"]` refuses a stale or unknown list entry before the action runs.
+- **HS_SAVES (6):** `{gen = "<hex>", chars = {{name, level, class, saves = {{idx, label, kind, when, level}}}}}` plus
+  `HS_SAVES_END = "<hex>"` last; at most 20 saves per character and 99 in all on the character screen.
