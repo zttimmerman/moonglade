@@ -7,7 +7,7 @@ Estimates are builder-agent wall-clock hours, including build and harness time o
 - [x] 2.1 Save set and classification table in code, from design.md section 1. `Moonglade.Saves.*` config (dir, intervals, keep counts, enable). `config.write_all` renders the per-lane dir. Refuse to enable when `CharacterDatabase.WorkerThreads` ≠ 1. (1.5 h)
 - [x] 2.2 Writer: `SaveToDB` → `AsyncCommitTransaction` → query holder → `character.json.gz` + manifest. Atomic `.tmp-` → rename, rotation, disk guard, refusals (combat, dead, falling, BG/arena, between maps, bots). (2.5 h)
 - [x] 2.3 Loader: checks, before-load save, one transaction with fresh item/pet/set IDs, corpse and short-lived item rows, cache update. In-game path with `LogoutPlayer(false)` + instant logout. `HS_SAVES_TEST` fail-after-N switch (test account only). (3 h)
-- [ ] 2.4 Autosave triggers (rest, flight, map change, min interval). `MGSAVE` addon-message verbs and replies. `.moonglade save load|status|list` commands. Coordinate the `OnPlayerCanUseChat` parser with `true-pause` if it has merged. (1.5 h)
+- [x] 2.4 Autosave triggers (rest, flight, map change, min interval). `MGSAVE` addon-message verbs and replies. `.moonglade save load|status|list` commands. Coordinate the `OnPlayerCanUseChat` parser with `true-pause` if it has merged. (1.5 h)
 
 ## 3. Launcher (run B)
 - [ ] 3.1 `harness/hslib/charsaves.py`: read manifests, build `HS_SAVES` with a generation, refresh it in the chosen Q1 mechanism, map (generation, index) to (character, save), delete on request. `P.PLAYER_SAVES`. (1.5 h)

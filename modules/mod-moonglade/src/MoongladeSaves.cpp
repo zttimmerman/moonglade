@@ -27,6 +27,7 @@
 #include "Transaction.h"
 #include "World.h"
 #include "Log.h"
+#include "MoongladeAddon.h"
 #include "ObjectAccessor.h"
 #include "Player.h"
 #include "ScriptMgr.h"
@@ -42,6 +43,7 @@
 #include <filesystem>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <string>
 #include <thread>
 #include <unistd.h>
@@ -147,18 +149,10 @@ namespace MoongladeSaves
 
     // ------------------------------------------------------------------------------------------ store and writer
 
-    constexpr std::string_view SAVE_PREFIX = "MGSAVE\t";       // SendAddonMessage prefix + the client's tab
-
-    /// An add-on whisper to the player ("MGSAVE" + "\t" + line), as MoongladePause.cpp SendAddonState does.
+    /// An add-on whisper to the player: "MGSAVE\t<line>" (the shared channel, MoongladeAddon.h).
     void Reply(Player* player, std::string const& line)
     {
-        WorldPacket data;
-        std::string text(SAVE_PREFIX);
-        text += line;
-        if (text.size() > 255)
-            text.resize(255);
-        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, text);
-        player->SendDirectMessage(&data);
+        MoongladeAddon::Send(player, "MGSAVE", line);
     }
 
     void ReplyTo(ObjectGuid guid, std::string const& line)
@@ -1463,6 +1457,104 @@ namespace MoongladeSaves
         StartSave(std::move(req));
     }
 
+    struct AutoState
+    {
+        uint32 loginMs = 0;
+        uint32 lastCheckMs = 0;
+        bool initialised = false;
+        bool resting = false;
+        bool flying = false;
+    };
+
+    struct AutoTrigger
+    {
+        ObjectGuid guid;
+        std::string moment;
+        uint32 dueMs;
+    };
+
+    std::mutex g_autoLock;                                    // map threads (OnPlayerUpdate) and the world thread
+    std::unordered_map<uint32, AutoState> g_auto;
+    std::vector<AutoTrigger> g_autoQueue;
+    std::unordered_map<uint32, time_t> g_lastAuto;           // world thread: the last autosave per character
+
+    void QueueAuto(ObjectGuid guid, std::string moment)      // caller holds g_autoLock
+    {
+        LOG_INFO("module", "[mod-moonglade] saves: autosave trigger ({}) of {}", moment, guid.GetCounter());
+        if (g_autoQueue.size() < 256)
+            g_autoQueue.push_back({ guid, std::move(moment), getMSTime() + 1000 });
+    }
+
+    void ProcessAutosaves()
+    {
+        std::vector<AutoTrigger> due;
+        {
+            std::lock_guard<std::mutex> lock(g_autoLock);
+            uint32 now = getMSTime();
+            auto keep = std::remove_if(g_autoQueue.begin(), g_autoQueue.end(), [&](AutoTrigger const& t)
+            {
+                if (int32(now - t.dueMs) < 0)
+                    return false;
+                due.push_back(t);
+                return true;
+            });
+            g_autoQueue.erase(keep, g_autoQueue.end());
+        }
+        for (AutoTrigger const& t : due)
+        {
+            Player* player = ObjectAccessor::FindConnectedPlayer(t.guid);
+            uint32 g = t.guid.GetCounter();
+            if (!player || !player->IsInWorld() || player->GetSession()->IsBot())
+            {
+                LOG_INFO("module", "[mod-moonglade] saves: autosave ({}) of {} skipped: not in the world", t.moment, g);
+                continue;
+            }
+            time_t now = time(nullptr);
+            auto last = g_lastAuto.find(g);
+            if (last != g_lastAuto.end() && now - last->second < time_t(g_cfg.autoMinIntervalS))
+            {
+                LOG_INFO("module", "[mod-moonglade] saves: autosave ({}) of {} skipped: inside the interval", t.moment, g);
+                continue;
+            }
+            if (std::string why = RefuseSave(player); !why.empty())
+            {
+                LOG_INFO("module", "[mod-moonglade] saves: autosave ({}) of {} skipped: {}", t.moment, g, why);
+                continue;
+            }
+            g_lastAuto[g] = now;
+            SaveRequest req;
+            req.guid = g;
+            req.kind = "auto";
+            req.moment = t.moment;
+            req.online = true;
+            StartSave(std::move(req));
+        }
+    }
+
+    /// "DELETE <gen> <index>": manual saves only (the others rotate by themselves).
+    void DeleteSave(Player* player, std::string const& arg)
+    {
+        std::string account = AccountName(player->GetSession()->GetAccountId());
+        uint32 guid = player->GetGUID().GetCounter();
+        std::vector<Manifest> list = ListSaves(account, guid);
+        size_t sp = arg.find(' ');
+        std::string gen = sp == std::string::npos ? arg : arg.substr(0, sp);
+        uint32 idx = sp == std::string::npos ? 0 : uint32(std::strtoul(arg.c_str() + sp + 1, nullptr, 10));
+        if (gen != ListGen(list))
+            return Reply(player, "NO\tDELETE\tThe list of saves changed. Open Saves again.");
+        if (idx < 1 || idx > list.size())
+            return Reply(player, "NO\tDELETE\tThat save doesn't exist.");
+        Manifest const& m = list[idx - 1];
+        if (m.kind != "manual")
+            return Reply(player, "NO\tDELETE\tOnly your own saves can be deleted.");
+        std::error_code ec;
+        fs::remove_all(CharDir(account, guid) / m.id, ec);
+        if (ec)
+            return Reply(player, "NO\tDELETE\tCouldn't delete that save.");
+        LOG_INFO("module", "[mod-moonglade] saves: deleted {} of {} (player's request)", m.id, guid);
+        Reply(player, "OK\tDELETE\t" + m.label);
+    }
+
     void HandleAddonRequest(AddonRequest const& r)
     {
         Player* player = ObjectAccessor::FindConnectedPlayer(r.guid);
@@ -1486,6 +1578,8 @@ namespace MoongladeSaves
             PlayerSave(player, "QUICK", "quick", "");
         else if (r.verb == "LIST")
             SendList(player);
+        else if (r.verb == "DELETE")
+            DeleteSave(player, r.arg);
         else if (r.verb == "LOAD" || r.verb == "QLOAD")
         {
             std::string account = AccountName(player->GetSession()->GetAccountId());
@@ -1542,29 +1636,75 @@ namespace MoongladeSaves
     }
 }
 
+// Autosave triggers (design.md 4): the rising edge of the resting flag (an inn or a city) and of being on a flight,
+// checked at most once a second per character in OnPlayerUpdate (map threads), and arriving on a new map
+// (OnPlayerMapChanged, not the map the character logs in to). A trigger is queued with a short delay (the arrival
+// finishes first) and handled on the world thread: skipped, not queued again, inside AutoMinIntervalS, in combat or
+// whenever a save would be refused. Bots never trigger.
 class MoongladeSavesPlayerScript : public PlayerScript
 {
 public:
-    MoongladeSavesPlayerScript() : PlayerScript("MoongladeSavesPlayerScript", { PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT }) { }
+    MoongladeSavesPlayerScript() : PlayerScript("MoongladeSavesPlayerScript",
+        { PLAYERHOOK_ON_UPDATE, PLAYERHOOK_ON_LOGIN, PLAYERHOOK_ON_LOGOUT }) { }
 
-    // "MGSAVE" add-on whispers to oneself: handled on the next world tick (a load logs the character out, which
-    // must not happen inside the chat handler) and swallowed. Bots never save (design.md 4, "Who may save").
-    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 language, std::string& msg, Player* receiver) override
+    void OnPlayerLogin(Player* player) override
     {
-        if (type != CHAT_MSG_WHISPER || language != LANG_ADDON || receiver != player
-            || std::string_view(msg).substr(0, SAVE_PREFIX.size()) != SAVE_PREFIX)
-            return true;
         if (player->GetSession()->IsBot())
-            return false;
-        std::string_view rest = std::string_view(msg).substr(SAVE_PREFIX.size());
-        size_t sp = rest.find(' ');
-        AddonRequest r;
-        r.guid = player->GetGUID();
-        r.verb = std::string(rest.substr(0, sp));
-        r.arg = sp == std::string_view::npos ? std::string() : std::string(rest.substr(sp + 1));
-        if (g_addonRequests.size() < 64)
-            g_addonRequests.push_back(std::move(r));
-        return false;
+            return;
+        std::lock_guard<std::mutex> lock(g_autoLock);
+        AutoState& st = g_auto[player->GetGUID().GetCounter()];
+        st = AutoState{};
+        st.loginMs = getMSTime();
+    }
+
+    void OnPlayerLogout(Player* player) override
+    {
+        std::lock_guard<std::mutex> lock(g_autoLock);
+        auto it = g_auto.find(player->GetGUID().GetCounter());
+        if (it != g_auto.end())
+        {
+            it->second.loginMs = 0;
+            it->second.initialised = false;
+        }
+    }
+
+    void OnPlayerUpdate(Player* player, uint32 /*diff*/) override
+    {
+        if (!g_cfg.enabled || player->GetSession()->IsBot())
+            return;
+        uint32 now = getMSTime();
+        std::lock_guard<std::mutex> lock(g_autoLock);
+        auto it = g_auto.find(player->GetGUID().GetCounter());
+        if (it == g_auto.end() || !it->second.loginMs)
+            return;
+        AutoState& st = it->second;
+        if (st.initialised && getMSTimeDiff(st.lastCheckMs, now) < 1000)
+            return;
+        st.lastCheckMs = now;
+        bool resting = player->HasPlayerFlag(PLAYER_FLAGS_RESTING);
+        bool flying = player->IsInFlight();
+        if (st.initialised)
+        {
+            if (resting && !st.resting)
+                QueueAuto(player->GetGUID(), "Rested");
+            if (flying && !st.flying)
+                QueueAuto(player->GetGUID(), "Took a flight");
+        }
+        st.resting = resting;
+        st.flying = flying;
+        st.initialised = true;
+    }
+
+    void OnPlayerMapChanged(Player* player) override
+    {
+        if (!g_cfg.enabled || player->GetSession()->IsBot())
+            return;
+        std::lock_guard<std::mutex> lock(g_autoLock);
+        auto it = g_auto.find(player->GetGUID().GetCounter());
+        // the map the character logs in to isn't an arrival (OnPlayerMapChanged runs from Map::AddPlayerToMap)
+        if (it == g_auto.end() || !it->second.loginMs || getMSTimeDiff(it->second.loginMs, getMSTime()) < 5000)
+            return;
+        QueueAuto(player->GetGUID(), "Arrived");
     }
 };
 
@@ -1583,6 +1723,7 @@ public:
     {
         g_queries.ProcessReadyCallbacks();
         g_transactions.ProcessReadyCallbacks();
+        ProcessAutosaves();
         if (!g_addonRequests.empty())
         {
             std::vector<AddonRequest> reqs;
@@ -1607,6 +1748,7 @@ public:
             { "take",      HandleTake,      SEC_GAMEMASTER, Console::Yes },
             { "load",      HandleLoad,      SEC_GAMEMASTER, Console::Yes },
             { "list",      HandleList,      SEC_GAMEMASTER, Console::Yes },
+            { "interval",  HandleInterval,  SEC_GAMEMASTER, Console::Yes },
             { "test",      HandleTest,      SEC_GAMEMASTER, Console::Yes },
         };
         static ChatCommandTable moongladeTable = { { "save", saveTable } };
@@ -1716,6 +1858,21 @@ public:
         return true;
     }
 
+    /// `.moonglade save interval <s>` (console only): the autosave interval until the next restart or config
+    /// reload (saves.autosave_triggers uses a short one).
+    static bool HandleInterval(ChatHandler* handler, uint32 seconds)
+    {
+        if (handler->GetSession())
+        {
+            handler->SendSysMessage("Moonglade save: the interval switch is console-only");
+            return true;
+        }
+        g_cfg.autoMinIntervalS = seconds;
+        g_lastAuto.clear();
+        handler->PSendSysMessage("Moonglade save: autosave interval {} s", seconds);
+        return true;
+    }
+
     /// `.moonglade save test failafter <n> | pause <s> | off` (console only; affects characters of the test account
     /// only): the switches saves.load_atomic and saves.atomic use.
     static bool HandleTest(ChatHandler* handler, std::string what, Optional<uint32> n)
@@ -1744,6 +1901,20 @@ public:
 
 void AddMoongladeSavesScripts()
 {
+    // "MGSAVE" add-on whispers (the shared parser, MoongladeAddon.h): handled on the next world tick (a load logs the
+    // character out, which must not happen inside the chat handler). Bots never save (design.md 4, "Who may save").
+    MoongladeAddon::Register("MGSAVE", [](Player* player, std::string_view text)
+    {
+        if (player->GetSession()->IsBot())
+            return;
+        size_t sp = text.find(' ');
+        AddonRequest r;
+        r.guid = player->GetGUID();
+        r.verb = std::string(text.substr(0, sp));
+        r.arg = sp == std::string_view::npos ? std::string() : std::string(text.substr(sp + 1));
+        if (g_addonRequests.size() < 64)
+            g_addonRequests.push_back(std::move(r));
+    });
     new MoongladeSavesPlayerScript();
     new MoongladeSavesWorldScript();
     new MoongladeSavesCommandScript();
