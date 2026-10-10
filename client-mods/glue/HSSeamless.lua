@@ -111,7 +111,8 @@ local REC_MAX = 255 - 16;                       -- the cvar limit, minus "HSBD<b
 S.rec = {};
 
 local function rec(tok)
-	if ( HS_TEST ) then table.insert(S.rec, tok); end
+	-- HS_TEST.rec_skip = { G = true, ... }: token kinds (first letter) a check doesn't need, so the record fits
+	if ( HS_TEST and not (HS_TEST.rec_skip and HS_TEST.rec_skip[strsub(tok, 1, 1)]) ) then table.insert(S.rec, tok); end
 end
 HSSeamless_Rec = rec;
 
@@ -462,9 +463,9 @@ function HSSeamless_FlushLog(why)
 	rec("W");
 	rec("E" .. (HS_TEST_ERRORS or -1));
 	local r = table.concat(S.rec, ";");
-	if ( strlen(r) > REC_MAX ) then r = strsub(r, 1, REC_MAX - 1) .. "~"; end
-	local keep = (string.match(GetSavedAccountList() or "", "HSBD%u+|") or "")
-		.. (string.match(GetSavedAccountList() or "", "HSRN%d+|") or "");
+	local keep = string.match(GetSavedAccountList() or "", "HSBD%u+|") or "";
+	local room = math.min(REC_MAX, 250 - strlen(keep) - 6);        -- "HSLOG" .. r .. "|" after keep, under the limit
+	if ( strlen(r) > room ) then r = strsub(r, 1, room - 1) .. "~"; end
 	SetSavedAccountList(keep .. "HSLOG" .. r .. "|");
 end
 

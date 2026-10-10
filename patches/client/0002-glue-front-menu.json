@@ -8,6 +8,7 @@
     "Interface\\GlueXML\\HSFrontMenu.xml": "client-mods/glue/HSFrontMenu.xml",
     "Interface\\GlueXML\\HSFrontMenu.lua": "client-mods/glue/HSFrontMenu.lua",
     "Interface\\GlueXML\\HSSeamless.lua": "client-mods/glue/HSSeamless.lua",
+    "Interface\\GlueXML\\HSCharSaves.lua": "client-mods/glue/HSCharSaves.lua",
     "Interface\\GlueXML\\HSProfiles.lua": "client-mods/glue/HSProfiles.lua",
     "Interface\\GlueXML\\HSSaves.lua": "client-mods/glue/HSSaves.lua"
   },

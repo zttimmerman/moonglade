@@ -345,6 +345,7 @@ local HS_Stock_OnShow = AccountLogin_OnShow;
 local HS_Stock_OnKeyDown = AccountLogin_OnKeyDown;
 
 function AccountLogin_OnShow(self)
+	state.startScreen = state.startScreen or "login";
 	local b = state.backdrop or HSFrontMenu_StoredBackdrop();
 	CurrentGlueMusic = b.music;              -- the stock OnShow starts CurrentGlueMusic
 	state.shown = false;
@@ -427,11 +428,12 @@ function HSFrontMenu_OnEvent(self, event)
 		if ( HS_TEST.enter_world_after_charlist and n > 0 and not state.enterAt and loggedIn ) then
 			state.enterAt = state.testClock + HS_TEST.enter_world_after_charlist;
 		end
-		-- front-menu-saves prototype (task 1.1): HS_TEST.charselect_back = steps timed from the first character list
-		-- after coming back from the world (a fresh glue session: state.round > 1; or the same one: enteredWorld)
-		if ( HS_TEST.charselect_back and n > 0 and not state.cbAt
-		     and (state.round > 1 or (HSSeamlessState and HSSeamlessState.enteredWorld)) ) then
-			state.cbAt = state.testClock;
+		-- front-menu-saves: HS_TEST.charselect_return = steps timed from the first character list of a glue session that
+		-- started at the character screen (back from the world: the glue screens load fresh then, design.md "Prototype
+		-- results" Q1), so they never run after a login
+		if ( HS_TEST.charselect_return and n > 0 and not state.crAt and HSSeamlessState and HSSeamlessState.logins == 0
+		     and state.startScreen == "charselect" ) then
+			state.crAt = state.testClock;
 		end
 		-- HS_TEST.charselect = { {t = seconds after the character list, act = ...}, ... } (seamless-experience)
 		if ( HS_TEST.charselect and n > 0 and not state.csAt and loggedIn ) then
@@ -562,11 +564,11 @@ function HSFrontMenu_TestUpdate(self, elapsed)
 			end
 		end
 	end
-	if ( HS_TEST.charselect_back and state.cbAt ) then
-		state.cbDone = state.cbDone or {};
-		for i, step in ipairs(HS_TEST.charselect_back) do
-			if ( not state.cbDone[i] and state.testClock >= state.cbAt + step.t ) then
-				state.cbDone[i] = true;
+	if ( HS_TEST.charselect_return and state.crAt ) then
+		state.crDone = state.crDone or {};
+		for i, step in ipairs(HS_TEST.charselect_return) do
+			if ( not state.crDone[i] and state.testClock >= state.crAt + step.t ) then
+				state.crDone[i] = true;
 				HSFrontMenu_TestAct(step.act);
 			end
 		end
@@ -654,29 +656,8 @@ function HSFrontMenu_TestAct(act)
 		HSControl_Send(strsub(act, 5, 5), strsub(act, 6));
 	elseif ( act == "realm:reset" ) then
 		HSControl_ResetRealm();
-	elseif ( strsub(act, 1, 8) == "ifround:" ) then      -- prototype: "ifround:N:<act>" runs <act> from round N on
-		local n, rest = string.match(act, "^ifround:(%d+):(.+)$");
-		if ( n and state.round >= tonumber(n) ) then HSFrontMenu_TestAct(rest); end
-	elseif ( act == "csrec" ) then                       -- front-menu-saves prototype: what the screen knows now
-		local parts = {};
-		for i = 1, GetNumCharacters() do
-			local name, race, class, level, zone = GetCharacterInfo(i);
-			table.insert(parts, tostring(name) .. "=" .. tostring(level) .. "@" .. tostring(zone));
-		end
-		HSFrontMenu_Mark("csrec:r" .. state.round .. ":gen=" .. tostring(HS_SAVES and HS_SAVES.gen) .. ":src="
-			.. tostring(HS_SAVES and HS_SAVES.src) .. ":screen=" .. tostring(CURRENT_GLUE_SCREEN) .. ":"
-			.. table.concat(parts, ","));
-		if ( HSSeamless_Rec ) then
-			HSSeamless_Rec(format("Z%d:%s:%s:%s", state.round, tostring(HS_SAVES and HS_SAVES.gen),
-				tostring(CURRENT_GLUE_SCREEN), table.concat(parts, ",")));
-		end
-	elseif ( strsub(act, 1, 10) == "roundgate:" ) then   -- prototype: enter the world again until round N, then quit
-		if ( state.round >= tonumber(strsub(act, 11)) ) then
-			HSFrontMenu_Mark("quit");
-			QuitGame();
-		else
-			HSFrontMenu_TestAct("play");
-		end
+	elseif ( strsub(act, 1, 6) == "saves:" and HSCharSaves_TestAct ) then   -- front-menu-saves (HSCharSaves.lua)
+		HSCharSaves_TestAct(strsub(act, 7));
 	else
 		HSFrontMenu_Mark("unknown-act:" .. tostring(act));
 	end
@@ -696,8 +677,21 @@ end
 -- realmlist at every start (clientcfg.py).
 -- Replies: the texts of the two codes the launcher uses (savesctl.py ACCEPTED / REFUSED; the live table in the
 -- change's design.md). Any other text, or none in time, means the launcher couldn't be reached.
+-- front-menu-saves:
+--   - which screen each verb is sent from: S (status) from the title menu, L (load a save) from the character screen
+--     (measured: a request there leaves the character list and the world connection as they were, design.md Q2);
+--   - the saved account name (accountName, written to Config.wtf on entering the world) is put back after every
+--     request, so a control token never stays in it (the launcher also heals a leftover one at start, clientcfg.py);
+--   - L waits up to HS_CONTROL_TIMEOUT_L (the launcher polls the load for up to 10 s);
+--   - a request the client never gets out (no "Connected" status within HS_CONTROL_CONNECT_S: right after a login the
+--     client keeps its login-server connection open for a while, measured 4-27 s, and a request sent meanwhile goes
+--     nowhere) ends early as class U with why "noconnect", so the caller can send it again; nothing reached the
+--     launcher.
 HS_CONTROL_REPLY = { accepted = "LOGIN_DBBUSY", refused = "LOGIN_BANNED" };
 HS_CONTROL_TIMEOUT = 5;
+HS_CONTROL_TIMEOUT_L = 15;
+HS_CONTROL_CONNECT_S = 3;
+HS_CONTROL_SCREEN = { S = "login", L = "charselect" };
 HS_CONTROL_TEXT = { pending = "One moment" .. "\226\128\166", unreachable = "Couldn't reach Moonglade. Nothing changed." };
 
 local CTL = { clock = 0, pending = nil, last = nil, n = 0, graceUntil = 0, saved = nil };
@@ -707,22 +701,23 @@ local function ctlClean(s)
 	return (gsub(gsub(tostring(s or ""), "[\r\n;|\"]", ","), ":", "."));
 end
 
--- Send one request. Returns false (and does nothing) without a listener, while another request is pending, or away
--- from the login screen.
-function HSControl_Send(verb, arg)
-	local screenOk = CURRENT_GLUE_SCREEN == "login"
-		or (HS_TEST and HS_TEST.ctl_charselect and CURRENT_GLUE_SCREEN == "charselect");   -- prototype Q2
+-- Send one request. Returns false (and does nothing) without a listener, while another request is pending, from a
+-- screen the verb doesn't belong to, or while the loading overlay is up. `onResult(cls, why)` is called when it ends.
+function HSControl_Send(verb, arg, onResult, pendingText)
 	if ( not HS_CONTROL or not HS_CONTROL.port or not HS_CONTROL.nonce or CTL.pending
-	     or not screenOk or (HSLoadingOverlay and HSLoadingOverlay:IsShown()) ) then
+	     or CURRENT_GLUE_SCREEN ~= (HS_CONTROL_SCREEN[verb] or "login")
+	     or (HSLoadingOverlay and HSLoadingOverlay:IsShown()) ) then
 		HSFrontMenu_Mark("ctl:skip:" .. tostring(verb) .. ":" .. tostring(CURRENT_GLUE_SCREEN));
 		return false;
 	end
 	CTL.n = CTL.n + 1;
 	CTL.saved = GetCVar("realmList");
+	CTL.savedAccount = GetSavedAccountName();
 	SetCVar("realmList", "127.0.0.1:" .. HS_CONTROL.port);
-	CTL.pending = { verb = verb, t0 = CTL.clock, stockFrames = 0, events = 0, result = nil,
-	                realmSet = GetCVar("realmList") };
-	HSControlOverlayText:SetText(HS_CONTROL_TEXT.pending);
+	CTL.pending = { verb = verb, t0 = CTL.clock, stockFrames = 0, events = 0, result = nil, connected = false,
+	                realmSet = GetCVar("realmList"), onResult = onResult,
+	                timeout = (verb == "L") and HS_CONTROL_TIMEOUT_L or HS_CONTROL_TIMEOUT };
+	HSControlOverlayText:SetText(pendingText or HS_CONTROL_TEXT.pending);
 	HSControlOverlay:Show();
 	HSFrontMenu_Mark("ctl:send:" .. verb .. ":realm=" .. (CTL.pending.realmSet == ("127.0.0.1:" .. HS_CONTROL.port) and 1 or 0));
 	-- DefaultServerLogin wipes the password string it's given, in place (HSFrontMenu_Login): a throwaway one per request
@@ -741,7 +736,8 @@ local function finish(text, why)
 	CTL.pending = nil;
 	CTL.graceUntil = CTL.clock + 2;           -- late status events of this request stay off screen too
 	SetCVar("realmList", CTL.saved);
-	local realmOk = (GetCVar("realmList") == CTL.saved) and 1 or 0;
+	SetSavedAccountName(CTL.savedAccount or "");
+	local realmOk = (GetCVar("realmList") == CTL.saved and GetSavedAccountName() == (CTL.savedAccount or "")) and 1 or 0;
 	local cls = classify(text);
 	HSControlOverlay:Hide();
 	CTL.last = { verb = p.verb, cls = cls, text = text, why = why, secs = CTL.clock - p.t0, realmOk = realmOk,
@@ -752,6 +748,7 @@ local function finish(text, why)
 		HSSeamless_Rec(format("K%s%d%d:%s:%d", cls, realmOk, p.stockFrames > 0 and 1 or 0,
 			HSSeamless_Adler(text or ""), math.floor((CTL.clock - p.t0) * 10 + 0.5)));
 	end
+	if ( p.onResult ) then p.onResult(cls, why, p.stockFrames); end
 end
 
 -- realm:reset (test action): realmList back to the value before the last request (or without a port).
@@ -769,7 +766,10 @@ function HSControl_OnUpdate(self, elapsed)
 	if ( p.result ) then
 		StatusDialogClick();                      -- what the stock Okay button does (GlueDialogTypes.OKAY.OnAccept)
 		finish(p.result, "reply");
-	elseif ( CTL.clock - p.t0 > HS_CONTROL_TIMEOUT ) then
+	elseif ( not p.connected and CTL.clock - p.t0 > HS_CONTROL_CONNECT_S ) then
+		StatusDialogClick();                      -- the request never left the client: cancel it (CANCEL.OnAccept)
+		finish(nil, "noconnect");
+	elseif ( CTL.clock - p.t0 > p.timeout ) then
 		StatusDialogClick();                      -- what the stock Cancel button does (GlueDialogTypes.CANCEL.OnAccept)
 		finish(nil, "timeout");
 	end
@@ -795,7 +795,11 @@ function GlueDialog_OnEvent(self, event, arg1, arg2, arg3)
 	if ( (CTL.pending or CTL.clock < CTL.graceUntil)
 	     and (event == "OPEN_STATUS_DIALOG" or event == "UPDATE_STATUS_DIALOG" or event == "CLOSE_STATUS_DIALOG") ) then
 		local p = CTL.pending;
-		if ( p ) then p.events = p.events + 1; end
+		if ( p ) then
+			p.events = p.events + 1;
+			-- any status text ("Connected", "Authenticating", a reply) means the request left the client
+			if ( (arg2 and arg2 ~= "") or (event == "UPDATE_STATUS_DIALOG" and arg1 and arg1 ~= "") ) then p.connected = true; end
+		end
 		HSFrontMenu_Mark("ctl:ev:" .. event .. ":" .. ctlClean(strsub(tostring(arg1 or ""), 1, 40)) .. ":"
 			.. ctlClean(strsub(tostring(arg2 or ""), 1, 40)));
 		if ( event == "OPEN_STATUS_DIALOG" ) then
@@ -821,15 +825,9 @@ function HSFrontMenu_Init()
 	end
 end
 
--- front-menu-saves prototype (task 1.1): count the glue loads of this client run in the saved account list (a client
--- console variable, kept in memory across glue loads), so a check can tell a fresh glue session from a continued one.
-state.round = 1;
-if ( HS_TEST ) then
-	local list = GetSavedAccountList() or "";
-	state.round = (tonumber(string.match(list, "HSRN(%d+)|") or "0") or 0) + 1;
-	SetSavedAccountList(gsub(list, "HSRN%d+|", "") .. "HSRN" .. state.round .. "|");
-	HSFrontMenu_Mark("load:r" .. state.round .. ":gen=" .. tostring(HS_SAVES and HS_SAVES.gen));
-end
+-- front-menu-saves: which screen this glue session started at (a session that starts at the character screen came
+-- back from the world: HS_TEST.charselect_return)
+state.startScreen = nil;
 
 -- Music for the very first PlayGlueMusic (SetGlueScreen / START_GLUE_MUSIC) follows the remembered backdrop.
 CurrentGlueMusic = HSFrontMenu_StoredBackdrop().music;

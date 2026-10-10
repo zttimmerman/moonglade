@@ -30,7 +30,8 @@ KIND_TEXT = {"manual": "Saved", "quick": "Quicksave", "auto": "Autosave", "befor
 MAX_PER_CHAR = 20            # the character screen lists at most this many saves per character (newest first)
 MAX_INDEX = 99               # the token's index has two digits
 LOAD_POLL_S = 10.0           # design.md 5: the launcher polls the load at most this long
-POLL_S = 1.0                 # design.md 6: the store is checked for changes at most this often while the game runs
+POLL_S = 0.25                # design.md 6: the store is checked this often while the game runs (a save made right
+                             # before leaving the world must be in the slot before the glue screens load again)
 
 
 class SavesError(RuntimeError):
