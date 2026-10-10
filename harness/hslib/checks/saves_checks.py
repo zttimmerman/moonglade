@@ -476,7 +476,7 @@ def roundtrip(ctx):
         sel = lambda c: (s.ws.set_selection(g), s.cmd(c))[1]       # noqa: E731
         ch = {"levelup": sel(".levelup 2"), "money": sel(".modify money -50000"),
               "quest": S.gm(f"quest remove {S.F.QUEST_ID} {P.SAVES_CHAR}"), "talents": S.gm(f"reset talents {P.SAVES_CHAR}"),
-              "rep": sel(f".modify reputation {fac['faction']} {fac['standing'] + 500}")}
+              "rep": sel(f".modify reputation {fac['faction']} {S.REP_CHANGED}")}
         bag = [it for it in S.inventory(g) if it["bag"] == 0 and S.INVENTORY_SLOT_ITEM_START <= it["slot"] < 39]
         if bag:
             S.destroy_item(s.ws, S.INVENTORY_SLOT_BAG_0, bag[0]["slot"])
@@ -517,7 +517,8 @@ def roundtrip(ctx):
 
 @check("saves.scope", order=481, capability=CAP, stack="up", tier="full")
 def scope(ctx):
-    """Two characters A and B; a mail in A's mailbox, an auction by A, A on B's friend list; with the world paused
+    """Two characters A and B; a mail in A's mailbox, an auction by A, A on B's friend list, a dungeon lockout of A
+    (A entered the Deadmines); with the world paused
     (`.moonglade pause on`, so bots and respawns stand still) a checksum of every table of the character and playerbots
     databases is taken (and taken twice before, to show it's stable); A's save is loaded: B's rows, A's mail, the
     auction and its item, the friend entry, A's instance lockouts and every table outside the save set are
@@ -537,15 +538,26 @@ def scope(ctx):
         require(bag, "GIVEN not met: no bag item to auction", **ev)
         ev["auction"] = S.sell_auction(s, bag[0]["item"])
         s.cmd(".save")
+    with S.Session(P.SAVES_CHAR, tele=None) as s:
+        # a real dungeon lockout for A (character_instance): entering the dungeon binds it (game_tele "Deadmines",
+        # map 36: Map.dbc InstanceType 1)
+        if not db.query(f"SELECT 1 FROM character_instance WHERE guid={a}", "characters"):
+            ev["dungeon"] = s.cmd(".tele Deadmines")
+            time.sleep(3)
+            s.cmd(".tele Stormwind")
+            time.sleep(1)
+        s.cmd(".save")
     with S.Session(P.SAVES_ALT) as s:
         S.add_friend(s, P.SAVES_CHAR)
     require(S.wait_offline(P.SAVES_CHAR) and S.wait_offline(P.SAVES_ALT), "GIVEN not met: characters online", **ev)
     q = lambda sql: int(db.scalar(sql, "characters") or 0)      # noqa: E731
     given = {"mail": q(f"SELECT COUNT(*) FROM mail WHERE receiver={a}"),
              "auction": q(f"SELECT COUNT(*) FROM auctionhouse WHERE itemowner={a}"),
-             "friend": q(f"SELECT COUNT(*) FROM character_social WHERE guid={b} AND friend={a}")}
+             "friend": q(f"SELECT COUNT(*) FROM character_social WHERE guid={b} AND friend={a}"),
+             "lockout": q(f"SELECT COUNT(*) FROM character_instance WHERE guid={a}")}
     ev["given"] = given
-    require(all(given.values()), "GIVEN not met: no mail, auction or friend entry", **ev)
+    ev["lockout_rows"] = db.query(f"SELECT * FROM character_instance WHERE guid={a}", "characters")
+    require(all(given.values()), "GIVEN not met: no mail, auction, friend entry or dungeon lockout", **ev)
     save = S.take(a, "scope")
     with S.Session(P.SAVES_CHAR, tele=None) as s:
         s.ws.set_selection(a)
@@ -573,9 +585,12 @@ def scope(ctx):
     require(ev["a_level_after"] == save["level"], "A's own rows didn't change to the save", **ev)
     after = {k: q(v) for k, v in (("mail", f"SELECT COUNT(*) FROM mail WHERE receiver={a}"),
                                    ("auction", f"SELECT COUNT(*) FROM auctionhouse WHERE itemowner={a}"),
-                                   ("friend", f"SELECT COUNT(*) FROM character_social WHERE guid={b} AND friend={a}"))}
+                                   ("friend", f"SELECT COUNT(*) FROM character_social WHERE guid={b} AND friend={a}"),
+                                   ("lockout", f"SELECT COUNT(*) FROM character_instance WHERE guid={a}"))}
     ev["after"] = after
-    require(after == given, "A's mail, auction or friend entry changed", **ev)
+    ev["lockout_rows_after"] = db.query(f"SELECT * FROM character_instance WHERE guid={a}", "characters")
+    require(after == given and ev["lockout_rows_after"] == ev["lockout_rows"],
+            "A's mail, auction, friend entry or dungeon lockout changed", **ev)
     return ev
 
 
@@ -624,6 +639,8 @@ def item_ids_fresh(ctx):
     ev["item_x"] = x
     save = S.take(a, "holds X")
     log_start = (P.LOGS / "Server.log").stat().st_size
+    dbe = P.LOGS / "DBErrors.log"
+    dbe_start = dbe.stat().st_size if dbe.exists() else 0
     with S.Session(P.SAVES_CHAR, tele="Stormwind") as s:
         ev["mail"] = S.mail_item(s, P.SAVES_ALT, x["item"])
         s.cmd(".save")
@@ -640,8 +657,18 @@ def item_ids_fresh(ctx):
     ev["original_x_row"] = db.query(f"SELECT guid, itemEntry, owner_guid FROM item_instance WHERE guid={x['item']}", "characters")
     log = (P.LOGS / "Server.log").read_bytes()[log_start:].decode(errors="replace").splitlines()
     ev["log_errors"] = [l[:200] for l in log if re.search(r"(?i)error|duplicate", l) and re.search(r"(?i)item|sql|db", l)][:10]
-    dbe = P.LOGS / "DBErrors.log"
-    ev["db_errors_tail"] = dbe.read_text(errors="replace").splitlines()[-3:] if dbe.exists() else []
+    if not dbe.exists():
+        ev["db_errors_new"] = []                       # no DB error was ever logged
+    else:
+        raw = dbe.read_bytes()
+        ev["db_errors_new"] = raw[dbe_start if len(raw) >= dbe_start else 0:].decode(errors="replace").splitlines()[:10]
+    ev["db_errors_log_exists"] = dbe.exists()
+    ev["duplicate_item_guids"] = {
+        "item_instance": db.query("SELECT guid, COUNT(*) FROM item_instance GROUP BY guid HAVING COUNT(*) > 1", "characters"),
+        "in_two_inventory_rows": db.query("SELECT item, COUNT(*) FROM character_inventory GROUP BY item HAVING COUNT(*) > 1",
+                                          "characters"),
+        "both_in_inventory_and_mail": db.query("SELECT ci.item FROM character_inventory ci JOIN mail_items mi "
+                                               "ON mi.item_guid = ci.item", "characters")}
     logins = {}
     for n in (P.SAVES_CHAR, P.SAVES_ALT):
         with S.Session(n, tele=None) as s:
@@ -650,7 +677,9 @@ def item_ids_fresh(ctx):
     require(ev["load"]["state"] == "done", "the load didn't finish", **ev)
     require(xs and xs[0]["item"] != x["item"], "A doesn't have X again under a new id", **ev)
     require(ev["b_mail_after"] == in_mail and ev["original_x_row"], "B's mail doesn't hold the original X", **ev)
-    require(not ev["log_errors"], "the server log shows an item or database error", **ev)
+    require(not any(ev["duplicate_item_guids"].values()), "an item id is duplicated", **ev)
+    require(not ev["log_errors"] and not ev["db_errors_new"], "the server log or DBErrors.log shows an item or "
+            "database error", **ev)
     require(all(logins.values()), "a character didn't log in", **ev)
     return ev
 
@@ -751,9 +780,21 @@ def load_ordering(ctx):
         time.sleep(0.5)
         r = db.query(f"SELECT CAST(position_x AS DOUBLE), CAST(position_y AS DOUBLE), money FROM characters WHERE guid={g}",
                      "characters")[0]
-        rounds.append({"i": i, "logout": bool(done), "db": r, "ok": r == list(sx)})
+        bl = sorted(x for x in S.store_ids(g) if "-before-load" in x)
+        pre = None
+        if bl:
+            rows = S.file_rows(S.store_dir(g) / bl[-1])["characters"]
+            cols = [c.split(" ")[0] for c in rows["columns"]]
+            pre = {k: rows["rows"][0][cols.index(k)] for k in ("money", "position_x", "position_y")}
+        # the pre-load values reached the database: the load's own before-load save (read back from the database
+        # right before the restore) holds the gold gained and the move
+        reached = bool(pre) and int(pre["money"]) == int(sx[2]) + 777 and float(pre["position_x"]) != float(sx[0])
+        rounds.append({"i": i, "logout": bool(done), "db": r, "pre_load_in_db": pre, "pre_reached_db": reached,
+                       "ok": r == list(sx) and reached})
     ev["save_values"] = sx
     ev["rounds"] = rounds
+    require(all(x["pre_reached_db"] for x in rounds), "GIVEN not met: a round's pre-load values never reached the "
+            "database", **ev)
     require(all(x["ok"] for x in rounds), f"{sum(not x['ok'] for x in rounds)} of 20 loads left pre-load values", **ev)
     # WorkerThreads = 2: refused (the test profile), then the normal profile again
     try:

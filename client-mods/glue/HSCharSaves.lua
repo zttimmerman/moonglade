@@ -4,8 +4,10 @@
 -- kind ("Quicksave", "Autosave", "Before loading", "Saved") and time. Load asks "Load '<label>'? <Name> goes back to
 -- <time>. Your other characters aren't affected." and then asks the launcher over the control channel (HSControl_Send
 -- "L<generation><index>", HSFrontMenu.lua; the launcher maps it to the save and has the server load it). While it runs,
--- "Loading your save..." is on screen. On success the character list is fetched again (GetCharacterListUpdate), so
--- the restored level and place show without leaving the screen, and a line says "Loaded '<label>'".
+-- "Loading your save..." is on screen. On success the glue goes back to the title menu and logs in again with the
+-- profile (a second or two, the overlay up): the request left the client's idea of the logged-in account at the
+-- request's token, which would file the session's settings under WTF\Account\<token>. The new character list shows
+-- the restored level and place, and a line says "Loaded '<label>'".
 --
 -- The list is HS_SAVES (+ HS_SAVES_END), which the launcher keeps current in the play client (harness/hslib/
 -- charsaves.py). The glue screens read it each time they load: at game start and back from the world. It carries
@@ -20,7 +22,8 @@
 -- Test actions (HS_TEST only, via HSFrontMenu_TestAct "saves:<act>"): open, pick:<n> (the n-th row), load (the Load
 -- button), confirm (the dialog's Load), close. Test record tokens: V<count>:<kind1 initial><kind2 initial>:<first 4
 -- hex of label1's adler>:<same for label2> (panel opened; the first two rows), J<class>:<attempts>:<tenths from confirm>:<stock dialog frames> (load
--- result), N:<adler> (the notice), U<level> (the selected character's level in the first character list after a load).
+-- result), N:<adler> (the notice), U<level>:<tenths from confirm> (the selected character's level in the first character
+-- list after a load).
 
 HS_SAVES_TEXT = {
 	button = "Saves",
@@ -159,10 +162,14 @@ local function attempt()
 		rec(format("J%s:%d:%d:%d", cls, L.attempts, math.floor((CS.clock - L.t0) * 10 + 0.5), L.stock));
 		HSFrontMenu_Mark(format("saves:result:%s:%s:%d", cls, tostring(why), L.attempts));
 		if ( cls == "A" ) then
+			-- Back to the title menu and in again (DisconnectFromServer + the profile's own login): the control request
+			-- left the client's notion of the logged-in account at the request's token, and the client would file
+			-- this session's settings (key bindings, add-on data) under WTF\Account\<token> (measured, builder run C).
+			-- A fresh login puts the real account back; the new character list shows the loaded save.
 			HSCharSaves_Close();
-			CS.afterLoad = true;
-			notice(format(T.loaded, L.label));
-			GetCharacterListUpdate();
+			CS.afterLoad, CS.loadedLabel, CS.relogin, CS.loadT0 = true, L.label, true, L.t0;
+			HSFrontMenu_Mark("saves:relogin");
+			CharacterSelect_Exit();
 		else
 			notice(cls == "R" and T.failed or T.unreachable);
 		end
@@ -191,16 +198,36 @@ end
 
 function HSCharSaves_OnUpdate(self, elapsed)
 	CS.clock = CS.clock + elapsed;
+	if ( CS.reloginAt and CS.clock >= CS.reloginAt ) then
+		CS.reloginAt = nil;
+		HSFrontMenu_Continue("saves");
+		HSLoadingOverlayText:SetText(T.loading);
+	end
 	if ( CS.load and CS.load.nextAt and CS.clock >= CS.load.nextAt ) then attempt(); end
 end
 
 function HSCharSaves_OnEvent(self, event)
-	if ( event == "CHARACTER_LIST_UPDATE" and CS.afterLoad ) then
+	if ( event == "CHARACTER_LIST_UPDATE" and CS.afterLoad and not CS.relogin and not CS.reloginAt
+	     and GetNumCharacters() > 0 ) then
 		CS.afterLoad = false;
+		HSControlOverlay:Hide();
+		notice(format(T.loaded, CS.loadedLabel or ""));
 		local i = CharacterSelect and CharacterSelect.selectedIndex or 1;
 		local _, _, _, level = GetCharacterInfo(i);
 		HSFrontMenu_Mark("saves:list:" .. tostring(level));
-		rec("U" .. tostring(level));
+		rec(format("U%s:%d", tostring(level), math.floor((CS.clock - (CS.loadT0 or CS.clock)) * 10 + 0.5)));
+	end
+end
+
+-- back at the title menu after a load: log in again right away (HSCharSaves_OnUpdate), the overlay stays up
+local HS_CS_AL_OnShow = AccountLogin_OnShow;
+function AccountLogin_OnShow(...)
+	HS_CS_AL_OnShow(...);
+	if ( CS.relogin ) then
+		CS.relogin = false;
+		CS.reloginAt = CS.clock + 0.1;
+		HSControlOverlayText:SetText(T.loading);
+		HSControlOverlay:Show();
 	end
 end
 

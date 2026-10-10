@@ -256,6 +256,15 @@ Where the code differs from the plan above, and why; then what was measured.
   retry and 5.3 s in all.
 - The saved account name is put back after every control request; `S` is sent only from the title menu, `L` only
   from the character screen.
+- **After a load the glue goes back to the title menu and logs in again** (`CharacterSelect_Exit`, then the
+  profile's own Continue, "Loading your save…" up all along; a second or two). Found in fix round 1: the control
+  request leaves the client's idea of the logged-in account at the request's token (`HS<nonce>L<gen><nn>`), and the
+  next world entry filed the account's settings under `WTF\Account\<token>\` (key bindings, add-on data) instead of
+  the real account's folder. `GetCharacterListUpdate()` alone kept that. The fresh login puts the real account back;
+  `savesctl.account_name_kept` now also fails on a token-named file or folder anywhere in `WTF\`.
+- **Saves made inside a dungeon** (measured, fix round 1): loading one puts the character back inside the dungeon at
+  the saved spot, whether its lockout still exists or was cleared (then the server opens a fresh copy). The lockout
+  itself is world state and isn't rewound.
 
 **In the game (`MoongladeSaves.lua`, `Bindings.xml`):**
 - Default keys **F6** (quicksave) and **F7** (quickload): the client's own `WTF\DefaultBindings.wtf` (`Data\patch-3.MPQ`)
@@ -272,6 +281,14 @@ Where the code differs from the plan above, and why; then what was measured.
 - `saves.scope` takes its checksums with the world paused (`.moonglade pause on`), after showing two checksums without
   a load agree; otherwise the AI players and respawns change tables in between.
 - `saves.player_untouched` and `saves.table_coverage` run in the full tier (the quick tier is at its budget).
+- Reputation in the round trip: `.modify reputation` sets the absolute value, and `character_reputation.standing` is
+  relative to the race base, so the checks set fixed absolute values (`saves.REP_GIVEN` / `REP_CHANGED`); deriving
+  them from the stored standing drifted to the floor run after run (verifier cycle 1).
+- `saves.scope` gives A a real dungeon lockout (`.tele Deadmines`) and requires it unchanged; `saves.item_ids_fresh`
+  also requires no duplicated item id (item_instance, inventory, inventory vs mail) and no new DBErrors.log lines;
+  `saves.load_ordering` requires each round's pre-load values in the database (the load's own before-load save).
+- The add-on sets its default keys at PLAYER_ENTERING_WORLD / UPDATE_BINDINGS once the binding set is valid (at
+  VARIABLES_LOADED it can be neither 1 nor 2, and SaveBindings raised an error, verifier cycle 1).
 - GUI session: one real-client run, Shift pressed once (the idle logout), records read from `Config.wtf` while the run
   goes on, screenshots kept in `harness/out/saves-gui/`. Like the other real-client sessions (savesctl.live_*,
   client.wording_addon) the three checks are full tier, not `gui=True` (they need no exclusive screen focus).

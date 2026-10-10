@@ -306,11 +306,18 @@ end);
 
 -- ---------------------------------------------------------------- default keys, once
 
+-- Once the client has its key bindings (VARIABLES_LOADED can come before them: GetCurrentBindingSet() isn't 1 or 2
+-- yet, and SaveBindings then raises "Usage: SaveBindings(1||2)"), so this waits for a valid binding set at
+-- PLAYER_ENTERING_WORLD or UPDATE_BINDINGS, and marks it done only after the save.
 local keys = CreateFrame("Frame");
-keys:RegisterEvent("VARIABLES_LOADED");
+keys:RegisterEvent("PLAYER_ENTERING_WORLD");
+keys:RegisterEvent("UPDATE_BINDINGS");
+MoongladeSavesKeys = { set = nil, changed = false };
 keys:SetScript("OnEvent", function()
 	MoongladeSettings = type(MoongladeSettings) == "table" and MoongladeSettings or {};
-	if ( MoongladeSettings.keysSet ) then return; end
+	if ( MoongladeSettings.keysSet ) then MoongladeSavesKeys.set = "already"; return; end
+	local set = GetCurrentBindingSet();
+	if ( set ~= 1 and set ~= 2 ) then return; end          -- not loaded yet: the next event tries again
 	local changed = false;
 	for action, key in pairs(DEFAULT_KEYS) do
 		if ( not GetBindingKey(action) and (GetBindingAction(key) or "") == "" ) then
@@ -318,8 +325,10 @@ keys:SetScript("OnEvent", function()
 			changed = true;
 		end
 	end
-	if ( changed ) then SaveBindings(GetCurrentBindingSet()); end
+	if ( changed ) then SaveBindings(set); end
 	MoongladeSettings.keysSet = 1;
+	MoongladeSavesKeys.set, MoongladeSavesKeys.changed = set, changed;
+	keys:UnregisterAllEvents();
 end);
 
 -- ---------------------------------------------------------------- test hook (harness checks only)
@@ -331,17 +340,30 @@ tf:RegisterEvent("PLAYER_LOGOUT");
 tf:SetScript("OnEvent", function(self, event, arg1)
 	if ( event == "ADDON_LOADED" and arg1 == "Moonglade" ) then
 		hook.on = type(MoongladeTest) == "table" and MoongladeTest.hook == "saves";
+		if ( hook.on ) then
+			hook.errors, hook.errorMsgs = 0, {};
+			local previous = geterrorhandler();
+			seterrorhandler(function(msg, ...)
+				hook.errors = hook.errors + 1;
+				if ( #hook.errorMsgs < 5 ) then table.insert(hook.errorMsgs, tostring(msg)); end
+				if ( previous ) then return previous(msg, ...); end
+			end);
+		end
 		-- the second world entry of the same test run (its report is already there) only quits the game
 		hook.again = hook.on and type(MoongladeTest.saves) == "table";
 	elseif ( event == "PLAYER_ENTERING_WORLD" and hook.on and not hook.phase ) then
 		hook.phase = "settle";
 	elseif ( event == "PLAYER_LOGOUT" and hook.on and hook.again ) then
-		MoongladeTest.again = { phase = hook.phase };
+		MoongladeTest.again = { phase = hook.phase, errors = hook.errors, error_msgs = hook.errorMsgs,
+		                        keys = MoongladeSavesKeys.set, quicksave_key = GetBindingKey("MOONGLADE_QUICKSAVE"),
+		                        quickload_key = GetBindingKey("MOONGLADE_QUICKLOAD") };
 	elseif ( event == "PLAYER_LOGOUT" and hook.on ) then
 		MoongladeTest.saves = { phase = hook.phase, sent = hook.sent, replies = hook.replies, list = hook.list,
 		                        quicksave_key = GetBindingKey("MOONGLADE_QUICKSAVE"),
 		                        quickload_key = GetBindingKey("MOONGLADE_QUICKLOAD"),
-		                        menu_button = GameMenuButtonMoongladeSaves:GetText() };
+		                        menu_button = GameMenuButtonMoongladeSaves:GetText(), errors = hook.errors,
+		                        error_msgs = hook.errorMsgs, keys = MoongladeSavesKeys.set,
+		                        keys_changed = MoongladeSavesKeys.changed and 1 or 0 };
 	end
 end);
 

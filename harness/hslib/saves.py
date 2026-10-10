@@ -591,6 +591,12 @@ def save_equipment_set(ws, index: int, name: str, icon: str, items: list[int]):
 RICH_LEVEL = 20                  # >= 10 for a talent point (Player::InitTalentForLevel) and for the pet
 RICH_MONEY = 123456              # copper; any distinct amount
 SET_NAME, SET_ICON = "Hs set", "INV_Misc_QuestionMark"
+# `.modify reputation <faction> <value>` sets the ABSOLUTE reputation (cs_modify.cpp HandleModifyRepCommand ->
+# ReputationMgr::SetOneFactionReputation(..., incremental = false)); character_reputation.standing stores it relative to
+# the race/class base (ReputationMgr::GetBaseReputation, Faction.dbc BaseRepValue). So the checks set fixed absolute
+# values, never "the stored standing + delta" (which drifted to the floor, -42000, run after run).
+REP_GIVEN = 1000                  # Neutral (0..2999, ReputationMgr::PointsInRank)
+REP_CHANGED = 2500                # still Neutral, a different value
 
 
 def _self_cmd(s: Session, text: str) -> list[str]:
@@ -613,6 +619,26 @@ def faction_rule(guid: int) -> dict:
         raise SavesError("no visible reputation row")
     return {"faction": int(rows[0][0]), "standing": int(rows[0][1]),
             "rule": "the character's visible reputation (flags & FACTION_FLAG_VISIBLE 0x1) with the lowest faction id"}
+
+
+def rep_absolute(guid: int) -> int | None:
+    """The character's absolute reputation with the faction_rule faction: the stored standing plus the base for its
+    race and class (ReputationMgr::GetBaseReputation over Faction.dbc: FactionEntry 0 ID, 2-5 BaseRepRaceMask,
+    6-9 BaseRepClassMask, 10-13 BaseRepValue)."""
+    fac = faction_rule(guid)
+    row = db.query(f"SELECT race, class FROM characters WHERE guid = {int(guid)}", "characters")[0]
+    race_mask, class_mask = 1 << (int(row[0]) - 1), 1 << (int(row[1]) - 1)
+    recs, _ = dbc.read_dbc("Faction.dbc")
+    f = next((r for r in recs if r[0] == fac["faction"]), None)
+    if f is None:
+        return None
+    base = 0
+    for i in range(4):
+        rm, cm, val = f[2 + i], f[6 + i], f[10 + i]
+        if ((rm & race_mask) or (rm == 0 and cm != 0)) and ((cm & class_mask) or cm == 0):
+            base = val - (1 << 32) if val >= 1 << 31 else val
+            break
+    return base + fac["standing"]
 
 
 def prepare_rich() -> dict:
@@ -649,7 +675,7 @@ def prepare_rich() -> dict:
         ev["save1"] = s.cmd(".save")
         time.sleep(1.0)
         fac = faction_rule(g)
-        ev["reputation"] = fac | {"modify": _self_cmd(s, f".modify reputation {fac['faction']} {fac['standing'] + 777}")}
+        ev["reputation"] = fac | {"modify": _self_cmd(s, f".modify reputation {fac['faction']} {REP_GIVEN}")}
         # an equipment set of the equipped items (CMSG_EQUIPMENT_SET_SAVE)
         inv = inventory(g)
         equipped = [0] * EQUIPMENT_SLOT_END
@@ -698,7 +724,7 @@ def given_rich(guid: int) -> dict:
         "active_quest": int(q(f"SELECT COUNT(*) FROM character_queststatus WHERE guid={guid} AND quest={F.QUEST_ID}")) == 1,
         "talent": int(q(f"SELECT COUNT(*) FROM character_talent WHERE guid={guid}")) >= 1,
         "skill": int(q(f"SELECT COUNT(*) FROM character_skills WHERE guid={guid} AND skill={pick_skill()['skill']}")) == 1,
-        "reputation": True,
+        "reputation": rep_absolute(guid) == REP_GIVEN,
     }
     return g
 

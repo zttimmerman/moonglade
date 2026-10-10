@@ -255,14 +255,40 @@ def port_answers(port: int) -> bool:
         return False
 
 
-def _texts_since(t0: float) -> dict[str, str]:
-    """Every harness log written during the check (env/logs/*), play-last.json: where a leaked nonce would land."""
+def log_sizes() -> dict[str, int]:
+    """Every harness log's size now (env/logs/*): _texts_since reads only what was written after this."""
+    return {str(p): p.stat().st_size for p in P.LOGS.glob("*") if p.is_file()}
+
+
+def _texts_since(t0: float, start_sizes: dict[str, int] | None = None) -> dict[str, str]:
+    """Every harness log written during the check (env/logs/*) and play-last.json: where a leaked nonce would land.
+    With start_sizes, a log that grew is read from where it stood at the start (an appended log like mysqld.err
+    holds megabytes of older text); a log rewritten since (now smaller) is read whole."""
     out = {}
     for p in sorted(P.LOGS.glob("*")):
         if p.is_file() and p.stat().st_mtime >= t0 - 1 and p.stat().st_size < 50_000_000:
-            out[str(p.relative_to(P.ROOT))] = p.read_text(errors="replace")
+            off = (start_sizes or {}).get(str(p), 0)
+            with open(p, "rb") as f:
+                if off <= p.stat().st_size:
+                    f.seek(off)
+                out[str(p.relative_to(P.ROOT))] = f.read().decode(errors="replace")
     if play.LAST.exists():
         out[str(play.LAST.relative_to(P.ROOT))] = play.LAST.read_text(errors="replace")
+    return out
+
+
+def nonce_leaks(texts: dict[str, str], nonces: list[str]) -> dict[str, list[str]]:
+    """Where a nonce appears in a form that carries it: the control token (HS<nonce>, any case), or next to the word
+    nonce (HS_CONTROL's `nonce = "..."`, a JSON "nonce" field), or standing alone as a 6-hex word. Six hex digits inside
+    a longer hex run (an address or a hash in a server log) are chance, not a leak."""
+    out = {}
+    for name, text in texts.items():
+        found = []
+        for n in nonces:
+            pats = (rf"(?i)HS{n}", rf"(?i)nonce\W{{0,6}}{n}", rf"(?i)(?<![0-9a-z]){n}(?![0-9a-z])")
+            found += [n for p in pats if re.search(p, text)][:1]
+        if found:
+            out[name] = found
     return out
 
 
@@ -278,6 +304,7 @@ def hygiene(ctx):
     require_given_clear(ev)
     from .playclient_util import build_scratch, drop_scratch, fresh_scratch
     t0 = time.time()
+    sizes0 = log_sizes()
     scratch = fresh_scratch("ctlhyg")
     tmp = Path(tempfile.mkdtemp(prefix="hs-ctlhyg-"))
     s1 = s2 = None
@@ -334,10 +361,10 @@ def hygiene(ctx):
         ev["run2"]["after_exit"] = {"port_answers": port_answers(ev["run2"]["port"]),
                                     "listening": listening(s2.proc.pid) if s2.proc.poll() is None else []}
         ev["fresh_nonce"] = len(nonces) == 2 and nonces[0] != nonces[1]
-        texts = _texts_since(t0) | {"run1 ./play output": s1.output(), "run2 ./play output": s2.output()}
-        ev["searched_for_nonce"] = sorted(texts)
-        ev["nonce_found_in"] = sorted(k for k, v in texts.items() if any(n in v for n in nonces))
-        ev["nonce_in_evidence"] = any(n in json.dumps(ev, default=str) for n in nonces)
+        texts = _texts_since(t0, sizes0) | {"run1 ./play output": s1.output(), "run2 ./play output": s2.output()}
+        ev["searched_for_nonce"] = {k: len(v) for k, v in sorted(texts.items())}
+        ev["nonce_found_in"] = sorted(nonce_leaks(texts, nonces))
+        ev["nonce_in_evidence"] = bool(nonce_leaks({"evidence": json.dumps(ev, default=str)}, nonces))
         ev["remaining_after"] = remaining()
     finally:
         for s in (s1, s2):
@@ -762,8 +789,9 @@ def heal_run() -> dict:
 @check("savesctl.account_name_kept", order=404, capability=CAP, stack="down", tier="full")
 def account_name_kept(ctx):
     """(1) A test run on the title menu, accountName = the test profile's account: two `ctl:S` requests, then Continue,
-    the world, quit: WTF/Config.wtf afterwards has accountName = the test account and no HS... token anywhere in WTF/
-    (the shared saves GUI run). (2) A scratch play client whose Config.wtf has accountName = an HS<6 hex>S token:
+    the world, quit: WTF/Config.wtf afterwards has accountName = the test account and no HS... token anywhere in WTF/,
+    neither in a file nor as a folder or file name (the shared saves GUI run, which also loads a save from the
+    character screen before entering the world). (2) A scratch play client whose Config.wtf has accountName = an HS<6 hex>S token:
     ./play (test mode) starts and writes its client config, and accountName is the default profile's account before
     the client starts."""
     from .saves_gui_checks import session

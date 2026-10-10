@@ -148,16 +148,26 @@ def session() -> dict:
         ev["account_name_cfg"] = config_value(scratch, "accountName")
         wtf_hits = []
         for f in (scratch / "WTF").rglob("*"):
-            if f.is_file() and re.search(rb"HS[0-9A-F]{6}[SL]", f.read_bytes()):
-                wtf_hits.append(str(f.relative_to(scratch)))
+            rel = str(f.relative_to(scratch))
+            if re.search(r"HS[0-9A-F]{6}[SL]", rel.upper()):        # a folder or file named after a token
+                wtf_hits.append(rel)
+            elif f.is_file() and re.search(rb"HS[0-9A-F]{6}[SL]", f.read_bytes().upper()):
+                wtf_hits.append(rel)
         ev["wtf_token_files"] = wtf_hits
         try:
             sv_data = parse_saved_variables(sv.read_text(errors="replace")).get("MoongladeTest") or {}
         except Exception as e:  # noqa: BLE001
             sv_data = {"parse_error": str(e)}
         ev["addon"] = {"saves": sv_data.get("saves"), "again": sv_data.get("again")} if isinstance(sv_data, dict) else sv_data
+        try:
+            ev["addon_settings"] = parse_saved_variables(sv.read_text(errors="replace")).get("MoongladeSettings")
+        except Exception:  # noqa: BLE001
+            ev["addon_settings"] = None
         shots = [p for p in screenshots(scratch) if p.stat().st_mtime >= t_up - 5]
         ev["shots"] = [p.name for p in shots]
+        bind_files = sorted((scratch / "WTF").rglob("bindings-cache.wtf"))
+        ev["bindings_files"] = {str(f.relative_to(scratch)): [l for l in f.read_text(errors="replace").splitlines()
+                                                              if "MOONGLADE" in l] for f in bind_files}
         keep = P.ROOT / "harness" / "out" / "saves-gui"           # git-ignored: the last run's screenshots for a look
         import shutil as _sh
         _sh.rmtree(keep, ignore_errors=True)
@@ -221,7 +231,9 @@ def live_charselect_load(ctx):
     require(v and v[0].startswith("V2:SS:"), "GIVEN not met: the panel didn't list the character's two saves", **ev)
     require(m and m.group(1) == "A", "the load wasn't accepted", **ev)
     ev["load_secs"] = int(m.group(3)) / 10
-    require(u and int(u[0][1:]) == older["level"] and ev["load_secs"] <= 10,
+    um = re.match(r"U(\d+):(\d+)$", u[0]) if u else None
+    ev["list_secs"] = int(um.group(2)) / 10 if um else None
+    require(um and int(um.group(1)) == older["level"] and ev["list_secs"] <= 10,
             "the character list didn't show the saved level within 10 s", **ev)
     require(n and n[0] == "N:" + _adler(f'Loaded "{older["label"]}"'), "the notice doesn't name the loaded save", **ev)
     require(int(m.group(4)) == 0, "a stock connecting or error dialog was seen", **ev)
@@ -252,7 +264,9 @@ def live_charselect_load(ctx):
 def live_charselect_list(ctx):
     """A test run that entered the world, made a manual save and a quicksave, and exited to the character screen: the
     script opens Saves for that character, and the panel lists both new saves at the top with their labels, without
-    restarting the game."""
+    restarting the game. Along the way (the add-on's own record, both world visits): no Lua error, and the default
+    keys F6/F7 bound, set at most once (the first visit handles them, the second finds them handled) and saved once
+    (the account's bindings-cache.wtf has each line once, and no other account folder has them)."""
     ev = _live()
     sv = (ev["addon"] or {}).get("saves") or {}
     ev["addon_saves"] = sv
@@ -261,6 +275,23 @@ def live_charselect_list(ctx):
         replies = [replies[k] for k in sorted(replies)]
     require(any(str(r).startswith("OK\tSAVE") for r in replies) and any(str(r).startswith("OK\tQUICK") for r in replies),
             "GIVEN not met: the in-world manual save and quicksave didn't both succeed", **ev)
+    again = (ev["addon"] or {}).get("again") or {}
+    ev["lua_errors"] = {"first_visit": sv.get("errors"), "second_visit": again.get("errors"),
+                        "messages": [sv.get("error_msgs"), again.get("error_msgs")]}
+    require(sv.get("errors") == 0 and again.get("errors") == 0, "Lua errors in the add-on during the two world visits",
+            **ev)
+    binds = ev["bindings_files"].get(f"WTF/Account/{P.TEST_USER}/bindings-cache.wtf", [])
+    others = {k: v for k, v in ev["bindings_files"].items() if v and k != f"WTF/Account/{P.TEST_USER}/bindings-cache.wtf"}
+    ev["keys"] = {"other_binding_files": others, "first_visit": sv.get("keys"), "changed": sv.get("keys_changed"), "second_visit": again.get("keys"),
+                  "bound": [sv.get("quicksave_key"), sv.get("quickload_key")], "files": binds,
+                  "settings": ev.get("addon_settings")}
+    # (keys_changed is 0 when the account already had them: the client keeps account bindings in the server's
+    # account data, so an earlier run's F6/F7 come back; "set once" is the add-on's keysSet and one line per key)
+    require(sv.get("keys") in (1, 2) and again.get("keys") == "already" and (ev.get("addon_settings") or {}).get("keysSet") == 1
+            and [sv.get("quicksave_key"), sv.get("quickload_key")] == ["F6", "F7"]
+            and binds.count("bind F6 MOONGLADE_QUICKSAVE") == 1 and binds.count("bind F7 MOONGLADE_QUICKLOAD") == 1
+            and not others,
+            "F6/F7 weren't set and saved exactly once", **ev)
     later = [r for r in ev["records"] if any(t.startswith("V") for t in r["rec"]) and not any(t.startswith("J") for t in r["rec"])]
     ev["return_record"] = later[-1] if later else None
     require(later, "no record from the character screen after the world", **ev)
