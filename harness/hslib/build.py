@@ -108,7 +108,7 @@ def patched_pin_state(repo_dir, sha, patches, ignore_untracked_prefix=None) -> l
 
 
 def _expected_links() -> dict:
-    links = {"mod-playerbots": P.BOTS_SRC}
+    links = {"mod-playerbots": P.BOTS_SRC, "mod-autobalance": P.AB_SRC}
     for m in sorted(P.MODULES.iterdir()) if P.MODULES.exists() else []:
         if m.is_dir() and not m.name.startswith("."):
             links[m.name] = m
@@ -146,13 +146,17 @@ def sync_vendor() -> dict:
     lock = P.fork_lock()
     _ensure_clone(P.CORE_SRC, lock["core_repo"], lock["core_branch"], lock["core_sha"])
     _ensure_clone(P.BOTS_SRC, lock["playerbots_repo"], lock["playerbots_branch"], lock["playerbots_sha"])
+    # m4-dungeon-scaling (ADR-0014): mod-autobalance, pinned and unpatched (no patch queue)
+    _ensure_clone(P.AB_SRC, lock["autobalance_repo"], lock["autobalance_branch"], lock["autobalance_sha"])
 
     before = {
         "core": pin_state(P.CORE_SRC, lock["core_sha"], "modules/"),
         "playerbots": patched_pin_state(P.BOTS_SRC, lock["playerbots_sha"], playerbots_patches()),
+        "autobalance": pin_state(P.AB_SRC, lock["autobalance_sha"]),
     }
     before["core_stray_modules"] = stray_module_entries()
-    for repo, sha in ((P.CORE_SRC, lock["core_sha"]), (P.BOTS_SRC, lock["playerbots_sha"])):
+    for repo, sha in ((P.CORE_SRC, lock["core_sha"]), (P.BOTS_SRC, lock["playerbots_sha"]),
+                      (P.AB_SRC, lock["autobalance_sha"])):
         _git(repo, "checkout", "-f", "--detach", sha)
         # -x: ignored files go too (both builds are out-of-tree). core modules/ is pruned separately below.
         _git(repo, "clean", "-fdx", "-e", "/modules/")
@@ -193,6 +197,8 @@ def sync_vendor() -> dict:
         "core_ok": _head(P.CORE_SRC) == lock["core_sha"],
         "playerbots_ok": _head(P.BOTS_SRC) == lock["playerbots_sha"]
                          and not patched_pin_state(P.BOTS_SRC, lock["playerbots_sha"], bots_patches),
+        "autobalance_head": _head(P.AB_SRC),
+        "autobalance_ok": not pin_state(P.AB_SRC, lock["autobalance_sha"]),
     }
     if patches:
         after["patches_applied"] = [p.name for p in patches]
@@ -205,7 +211,7 @@ def sync_vendor() -> dict:
     after["core_stray_modules"] = stray_module_entries()
     if after["core_stray_modules"]:
         raise BuildError(f"stray entries remain in core modules/: {after['core_stray_modules']}")
-    if not (after["core_ok"] and after["playerbots_ok"]):
+    if not (after["core_ok"] and after["playerbots_ok"] and after["autobalance_ok"]):
         raise BuildError(f"vendor not at pinned SHAs after sync: {after}")
     return {"before": before, "after": after, "modules": sorted(links)}
 
@@ -287,7 +293,8 @@ def _resolved_deps() -> dict:
 
 # fork.lock keys that determine the server build. The other pins (Ghidra, Wine runtime, client data, VMaNGOS)
 # don't affect authserver/worldserver, so bumping them must not force a from-empty build.
-BUILD_PINS = ("core_repo", "core_branch", "core_sha", "playerbots_repo", "playerbots_branch", "playerbots_sha")
+BUILD_PINS = ("core_repo", "core_branch", "core_sha", "playerbots_repo", "playerbots_branch", "playerbots_sha",
+              "autobalance_repo", "autobalance_branch", "autobalance_sha")
 
 
 def build_pins(path=None) -> dict:

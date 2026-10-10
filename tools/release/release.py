@@ -227,6 +227,7 @@ def unpack(c: Ctx, name: str) -> Path:
 def vendor_state(c: Ctx) -> list[str]:
     probs = B.patched_pin_state(P.CORE_SRC, c.lock["core_sha"], B.core_patches(), "modules/")
     probs += B.patched_pin_state(P.BOTS_SRC, c.lock["playerbots_sha"], B.playerbots_patches())
+    probs += B.pin_state(P.AB_SRC, c.lock["autobalance_sha"])        # ADR-0014: pinned, no patch queue
     stray = B.stray_module_entries()
     if stray:
         probs.append(f"stray entries in core modules/: {stray}")
@@ -360,7 +361,8 @@ def git_tree_extract(repo: Path, tree: str, paths: tuple[str, ...], dst: Path) -
 def patched_trees(c: Ctx) -> dict:
     out = {}
     for key, repo, sha, patches in (("azerothcore", P.CORE_SRC, c.lock["core_sha"], B.core_patches()),
-                                    ("mod-playerbots", P.BOTS_SRC, c.lock["playerbots_sha"], B.playerbots_patches())):
+                                    ("mod-playerbots", P.BOTS_SRC, c.lock["playerbots_sha"], B.playerbots_patches()),
+                                    ("mod-autobalance", P.AB_SRC, c.lock["autobalance_sha"], [])):
         tree, probs = B.expected_patched_tree(repo, sha, patches)
         if not tree:
             raise ReleaseError(f"{key}: can't build pinned sha + patches: {probs}")
@@ -421,6 +423,33 @@ def _license_files(d: Path) -> list[Path]:
     return hits
 
 
+AB_NOTICE_SRC = "src/AutoBalance.cpp"
+
+
+def autobalance_header(tree: str) -> str:
+    """The leading /* ... */ comment of mod-autobalance's src/AutoBalance.cpp in `tree` (its licence grant)."""
+    text = sh(["git", "-C", P.AB_SRC, "show", f"{tree}:{AB_NOTICE_SRC}"]).stdout
+    start, end = text.find("/*"), text.find("*/")
+    if start != 0 or end < 0 or "GNU General Public License" not in text[:end]:
+        raise ReleaseError(f"mod-autobalance {AB_NOTICE_SRC} doesn't start with its GPL header")
+    return text[:end + 2]
+
+
+def autobalance_notice(c: Ctx, tree: str) -> Path:
+    d = c.work / "tmp-ab-licence"
+    shutil.rmtree(d, ignore_errors=True)
+    d.mkdir(parents=True)
+    f = d / "NOTICE"
+    f.write_text(f"mod-autobalance (https://github.com/azerothcore/mod-autobalance) at {c.lock['autobalance_sha']}\n"
+                 f"The module has no LICENSE file. Its main source file, {AB_NOTICE_SRC}, carries this header:\n\n"
+                 f"{autobalance_header(tree)}\n\n"
+                 "Its other source files carry the AzerothCore header \"license: "
+                 "https://github.com/azerothcore/azerothcore-wotlk/blob/master/LICENSE\" (GPL-2.0); that text is in "
+                 "THIRD_PARTY/azerothcore/LICENSE. The module's source at this commit is a release asset "
+                 "(mod-autobalance-<sha>-with-patches-source.tar.gz; no patches are applied).\n")
+    return f
+
+
 def third_party(c: Ctx, root: Path, delo: dict, mysql: Path, trees: dict) -> dict:
     """THIRD_PARTY/<component>/ licence texts and INDEX.json {component: {files, covers}}."""
     tp = root / "THIRD_PARTY"
@@ -455,6 +484,11 @@ def third_party(c: Ctx, root: Path, delo: dict, mysql: Path, trees: dict) -> dic
     shutil.rmtree(ac, ignore_errors=True)
     add("mod-playerbots", [P.BOTS_SRC / "LICENSE"] if (P.BOTS_SRC / "LICENSE").is_file() else [],
         ["server/bin/worldserver", "sql/modules/mod-playerbots"])
+    # mod-autobalance (ADR-0014): no LICENSE file upstream; the notice is src/AutoBalance.cpp's GPL-2.0-or-later header,
+    # quoted from the pinned tree, and the other files' one-line headers point to AzerothCore's licence
+    add("mod-autobalance", [autobalance_notice(c, trees["mod-autobalance"]["tree"])], ["server/bin/worldserver"],
+        f"mod-autobalance {trees['mod-autobalance']['sha']}: GPL-2.0-or-later (src/AutoBalance.cpp header); the "
+        "files whose header names AzerothCore's licence are under THIRD_PARTY/azerothcore/LICENSE")
     # Oracle MySQL (its LICENSE lists the third-party code it bundles, OpenSSL included)
     add("mysql", [mysql / "LICENSE", mysql / "README"], ["mysql/", "server/lib/libmysqlclient.24.dylib"])
     # python-build-standalone: CPython plus every library linked into it (the build's own licences/ folder)
@@ -574,6 +608,7 @@ def step_payload(c: Ctx) -> dict:
     (stage / "VERSION").write_text(json.dumps({
         "version": c.version, "commit": head, "built": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
         "core_sha": c.lock["core_sha"], "playerbots_sha": c.lock["playerbots_sha"],
+        "autobalance_sha": c.lock["autobalance_sha"],
         "core_tree_with_patches": trees["azerothcore"]["tree"],
         "playerbots_tree_with_patches": trees["mod-playerbots"]["tree"],
         "mysql": Path(c.lock["release_mysql_url"]).name, "python": Path(c.lock["release_python_url"]).name,

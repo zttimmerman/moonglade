@@ -569,6 +569,7 @@ def source_problems(out_dir: Path, payload: Path) -> tuple[list[str], dict]:
         "moonglade": f"moonglade-{ver['version']}-source.tar.gz",
         "azerothcore": f"azerothcore-{lock['core_sha'][:12]}-with-patches-source.tar.gz",
         "mod-playerbots": f"mod-playerbots-{lock['playerbots_sha'][:12]}-with-patches-source.tar.gz",
+        "mod-autobalance": f"mod-autobalance-{lock['autobalance_sha'][:12]}-with-patches-source.tar.gz",
         "mysql": Path(lock["release_mysql_source_url"]).name,
     }
     ev["expected_sources"] = want
@@ -578,7 +579,8 @@ def source_problems(out_dir: Path, payload: Path) -> tuple[list[str], dict]:
     if want["mysql"] in files and _sha256(out_dir / want["mysql"]) != lock["release_mysql_source_sha256"]:
         probs.append("the MySQL source tarball isn't the pinned one")
     trees = {"azerothcore": (P.CORE_SRC, lock["core_sha"], B.core_patches()),
-             "mod-playerbots": (P.BOTS_SRC, lock["playerbots_sha"], B.playerbots_patches())}
+             "mod-playerbots": (P.BOTS_SRC, lock["playerbots_sha"], B.playerbots_patches()),
+             "mod-autobalance": (P.AB_SRC, lock["autobalance_sha"], [])}
     ev["trees"] = {}
     for key, (repo, sha, patches) in trees.items():
         if want[key] not in files:
@@ -605,7 +607,7 @@ def source_problems(out_dir: Path, payload: Path) -> tuple[list[str], dict]:
     return probs, ev
 
 
-REQUIRED_LICENCES = ("azerothcore", "mod-playerbots", "mysql", "openssl@3", "boost", "python")
+REQUIRED_LICENCES = ("azerothcore", "mod-playerbots", "mod-autobalance", "mysql", "openssl@3", "boost", "python")
 
 
 def third_party_problems(payload: Path) -> tuple[list[str], dict]:

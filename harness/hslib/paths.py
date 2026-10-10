@@ -160,6 +160,7 @@ HARNESS = ROOT / "harness"
 VENDOR = ROOT / "vendor"
 CORE_SRC = VENDOR / "azerothcore-wotlk"
 BOTS_SRC = VENDOR / "mod-playerbots"
+AB_SRC = VENDOR / "mod-autobalance"   # m4-dungeon-scaling (ADR-0014): third-party module, pinned, unpatched
 BUILD = ROOT / "build"
 SERVER = ROOT / "server"          # cmake install prefix (release: APP/server, the payload's)
 SERVER_BIN = SERVER / "bin"
@@ -366,6 +367,11 @@ SAVES_ALT = "Hssavalt"
 COMP_USER = "HSCOMP"
 COMP_PASS = "hscomp"
 COMP_CHAR = "Hscomp"
+# m4-dungeon-scaling (scale.*, lock.*; hslib/dungeon.py): the dungeon checks' own account (security 2, like HSCOMP) and
+# its human warrior, so their levels, gear and instance binds never touch the companion checks' character (Hscomp)
+DUNGEON_USER = "HSDUNGEON"
+DUNGEON_PASS = "hsdungeon"
+DUNGEON_CHAR = "Hsdungeon"
 
 
 def fork_lock() -> dict:
