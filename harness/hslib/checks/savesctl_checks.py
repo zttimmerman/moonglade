@@ -255,14 +255,40 @@ def port_answers(port: int) -> bool:
         return False
 
 
-def _texts_since(t0: float) -> dict[str, str]:
-    """Every harness log written during the check (env/logs/*), play-last.json: where a leaked nonce would land."""
+def log_sizes() -> dict[str, int]:
+    """Every harness log's size now (env/logs/*): _texts_since reads only what was written after this."""
+    return {str(p): p.stat().st_size for p in P.LOGS.glob("*") if p.is_file()}
+
+
+def _texts_since(t0: float, start_sizes: dict[str, int] | None = None) -> dict[str, str]:
+    """Every harness log written during the check (env/logs/*) and play-last.json: where a leaked nonce would land.
+    With start_sizes, a log that grew is read from where it stood at the start (an appended log like mysqld.err
+    holds megabytes of older text); a log rewritten since (now smaller) is read whole."""
     out = {}
     for p in sorted(P.LOGS.glob("*")):
         if p.is_file() and p.stat().st_mtime >= t0 - 1 and p.stat().st_size < 50_000_000:
-            out[str(p.relative_to(P.ROOT))] = p.read_text(errors="replace")
+            off = (start_sizes or {}).get(str(p), 0)
+            with open(p, "rb") as f:
+                if off <= p.stat().st_size:
+                    f.seek(off)
+                out[str(p.relative_to(P.ROOT))] = f.read().decode(errors="replace")
     if play.LAST.exists():
         out[str(play.LAST.relative_to(P.ROOT))] = play.LAST.read_text(errors="replace")
+    return out
+
+
+def nonce_leaks(texts: dict[str, str], nonces: list[str]) -> dict[str, list[str]]:
+    """Where a nonce appears in a form that carries it: the control token (HS<nonce>, any case), or next to the word
+    nonce (HS_CONTROL's `nonce = "..."`, a JSON "nonce" field), or standing alone as a 6-hex word. Six hex digits inside
+    a longer hex run (an address or a hash in a server log) are chance, not a leak."""
+    out = {}
+    for name, text in texts.items():
+        found = []
+        for n in nonces:
+            pats = (rf"(?i)HS{n}", rf"(?i)nonce\W{{0,6}}{n}", rf"(?i)(?<![0-9a-z]){n}(?![0-9a-z])")
+            found += [n for p in pats if re.search(p, text)][:1]
+        if found:
+            out[name] = found
     return out
 
 
@@ -278,6 +304,7 @@ def hygiene(ctx):
     require_given_clear(ev)
     from .playclient_util import build_scratch, drop_scratch, fresh_scratch
     t0 = time.time()
+    sizes0 = log_sizes()
     scratch = fresh_scratch("ctlhyg")
     tmp = Path(tempfile.mkdtemp(prefix="hs-ctlhyg-"))
     s1 = s2 = None
@@ -334,10 +361,10 @@ def hygiene(ctx):
         ev["run2"]["after_exit"] = {"port_answers": port_answers(ev["run2"]["port"]),
                                     "listening": listening(s2.proc.pid) if s2.proc.poll() is None else []}
         ev["fresh_nonce"] = len(nonces) == 2 and nonces[0] != nonces[1]
-        texts = _texts_since(t0) | {"run1 ./play output": s1.output(), "run2 ./play output": s2.output()}
-        ev["searched_for_nonce"] = sorted(texts)
-        ev["nonce_found_in"] = sorted(k for k, v in texts.items() if any(n in v for n in nonces))
-        ev["nonce_in_evidence"] = any(n in json.dumps(ev, default=str) for n in nonces)
+        texts = _texts_since(t0, sizes0) | {"run1 ./play output": s1.output(), "run2 ./play output": s2.output()}
+        ev["searched_for_nonce"] = {k: len(v) for k, v in sorted(texts.items())}
+        ev["nonce_found_in"] = sorted(nonce_leaks(texts, nonces))
+        ev["nonce_in_evidence"] = bool(nonce_leaks({"evidence": json.dumps(ev, default=str)}, nonces))
         ev["remaining_after"] = remaining()
     finally:
         for s in (s1, s2):
@@ -619,4 +646,165 @@ def realm_restored(ctx):
     rl = ev["realmlist_in_config"]
     require(rl and ":" not in rl, "WTF/Config.wtf has realmList with a port (or none)", **ev)
     require(is_clear(ev["remaining_after"]), "something is still running", **ev)
+    return ev
+
+
+# ---------------------------------------------------------------- front-menu-saves: the load verb, the build check
+
+def load_verb_run(listener_cls=None) -> dict:
+    """A listener with a stub load action (records its arguments; told to succeed, refuse or stall) and the launcher's
+    validator for stale/unknown entries (a stub list: generation 1, indexes 01-02): challenges for a valid L, a stale
+    generation, an unknown index, a refused load, a load that never finishes within the poll limit, and two
+    overlapping loads."""
+    L = listener_cls or savesctl.Listener
+    calls, mode = [], {"r": (True, "done")}
+    valid = {"101", "102"}
+
+    def act(arg):
+        calls.append(arg)
+        r = mode["r"]
+        if r == "stall":
+            time.sleep(3.0)
+            return False, "the load didn't finish in time"
+        return r
+
+    log = Path(tempfile.mkdtemp(prefix="hs-ctl-load-")) / "savesctl.log"
+    lis = L(log_path=log, linger_s=0.2)
+    lis.actions["L"] = act
+    lis.validators["L"] = lambda a: None if a in valid else "stale or unknown list entry"
+    lis.start()
+    n = lis.nonce
+
+    def send(arg):
+        return _exchange(lis.port, savesctl.challenge(f"HS{n}L{arg}"))["reply"]
+
+    out = {}
+    try:
+        out["valid"] = send("101")
+        out["stale_generation"] = send("001")
+        out["unknown_index"] = send("199")
+        mode["r"] = (False, "That save doesn't exist.")
+        out["refused"] = send("102")
+        mode["r"] = "stall"
+        import threading
+        box = {}
+        th = threading.Thread(target=lambda: box.setdefault("first", send("101")))
+        th.start()
+        time.sleep(0.5)
+        out["overlap_second"] = send("102")
+        th.join()
+        out["stall_first"] = box.get("first")
+    finally:
+        lis.stop()
+        events = [json.loads(l) for l in log.read_text().splitlines()]
+        shutil.rmtree(log.parent, ignore_errors=True)
+    return {"replies": out, "calls": calls, "log": [e for e in events if e.get("event") == "request"],
+            "log_text": json.dumps(events)}
+
+
+@check("savesctl.load_verb", order=50, capability=CAP, stack="any", tier="full")
+def load_verb(ctx):
+    """The listener with a stub load action: only the valid L that succeeds gets ACCEPTED; a stale generation, an
+    unknown index, a refused load, a load that doesn't finish in the poll limit and the second of two overlapping
+    loads get REFUSED; the stub saw exactly one call per non-stale request; the log names the verb and outcome but no
+    save id."""
+    r = load_verb_run()
+    acc, ref = f"0000{savesctl.ACCEPTED:02x}", f"0000{savesctl.REFUSED:02x}"
+    ev = r | {"accepted_hex": acc, "refused_hex": ref}
+    rep = r["replies"]
+    require(rep["valid"] == acc, "the valid load wasn't ACCEPTED", **ev)
+    require(all(rep[k] == ref for k in ("stale_generation", "unknown_index", "refused", "overlap_second", "stall_first")),
+            "a stale, unknown, refused, stalled or overlapping load wasn't REFUSED", **ev)
+    require(r["calls"] == ["101", "102", "101"], "the stub didn't see exactly one call per non-stale, non-overlapping "
+            "request", **ev)
+    require(all(e.get("verb") == "L" and e.get("outcome") in ("accepted", "refused") for e in r["log"] if e.get("verb")),
+            "the log doesn't name the verb and outcome", **ev)
+    require(not re.search(r"\d{8}-\d{6}-(manual|quick|auto|before-load)", r["log_text"]), "a save id is in the log", **ev)
+    return ev
+
+
+def build_run() -> dict:
+    log = Path(tempfile.mkdtemp(prefix="hs-ctl-build-")) / "savesctl.log"
+    lis = savesctl.Listener(log_path=log, linger_s=0.2).start()
+    out = {}
+    try:
+        for label, build, ver in (("12340 3.3.5", 12340, (3, 3, 5)), ("12339 3.3.5", 12339, (3, 3, 5)),
+                                  ("8606 3.3.5", 8606, (3, 3, 5)), ("12340 2.4.3", 12340, (2, 4, 3))):
+            out[label] = _exchange(lis.port, savesctl.challenge(f"HS{lis.nonce}S", build=build, version=ver))["reply"]
+    finally:
+        lis.stop()
+        events = [json.loads(l) for l in log.read_text().splitlines()]
+        shutil.rmtree(log.parent, ignore_errors=True)
+    return {"replies": out, "log": [e for e in events if e.get("event") == "request"]}
+
+
+@check("savesctl.build_refused", order=51, capability=CAP, stack="any", tier="full")
+def build_refused(ctx):
+    """With the right nonce, valid S challenges with builds 12340, 12339 and 8606 and with version 2.4.3: only build
+    12340 at 3.3.5 gets ACCEPTED; the others get REFUSED and are logged with the reason "wrong build"."""
+    r = build_run()
+    acc, ref = f"0000{savesctl.ACCEPTED:02x}", f"0000{savesctl.REFUSED:02x}"
+    ev = r
+    require(r["replies"]["12340 3.3.5"] == acc, "build 12340 at 3.3.5 wasn't ACCEPTED", **ev)
+    others = [k for k in r["replies"] if k != "12340 3.3.5"]
+    require(all(r["replies"][k] == ref for k in others), "another build or version wasn't REFUSED", **ev)
+    wrong = [e for e in r["log"] if e.get("why") == "wrong build"]
+    require(len(wrong) == len(others), "the refusals aren't logged as \"wrong build\"", **ev)
+    return ev
+
+
+def heal_run() -> dict:
+    """Scenario 2: a scratch play client whose Config.wtf has accountName set to a control token; ./play (test mode,
+    stand-in client) starts and writes its client config: accountName is the default profile's account by the time
+    the client starts."""
+    from .playclient_util import build_scratch, drop_scratch, fresh_scratch
+    scratch = fresh_scratch("ctlheal")
+    ev = {}
+    s = None
+    try:
+        build_scratch(scratch)
+        cfg = scratch / "WTF" / "Config.wtf"
+        token = "HS1A2B3CS"
+        text = cfg.read_text() if cfg.exists() else ""
+        text = re.sub(r'(?m)^SET accountName "[^"]*"\r?\n?', "", text) + f'SET accountName "{token}"\r\n'
+        cfg.write_text(text)
+        ev["planted"] = token
+        settings = Path(tempfile.mkdtemp(prefix="hs-ctlheal-")) / "settings.json"
+        settings.write_text(json.dumps({"client": "patched"}))
+        s = StandIn("ctlheal")
+        s.start_play("--allow-test-client-dir", env={"HS_SETTINGS": str(settings), "HS_PLAY_CLIENT_DIR": str(scratch)})
+        up = s.wait_client_up()
+        ev["stand_in_up"] = {k: v for k, v in up.items() if k != "processes"}
+        m = re.search(r'^SET accountName "([^"]*)"', cfg.read_text(), re.M)
+        ev["account_name_at_client_start"] = m.group(1) if m else None
+        s.stop_file.write_text("x")
+        s.proc.wait(timeout=120)
+    finally:
+        if s and s.proc and s.proc.poll() is None:
+            os.killpg(s.proc.pid, signal.SIGKILL)
+        drop_scratch(scratch)
+    return ev
+
+
+@check("savesctl.account_name_kept", order=404, capability=CAP, stack="down", tier="full")
+def account_name_kept(ctx):
+    """(1) A test run on the title menu, accountName = the test profile's account: two `ctl:S` requests, then Continue,
+    the world, quit: WTF/Config.wtf afterwards has accountName = the test account and no HS... token anywhere in WTF/,
+    neither in a file nor as a folder or file name (the shared saves GUI run, which also loads a save from the
+    character screen before entering the world). (2) A scratch play client whose Config.wtf has accountName = an HS<6 hex>S token:
+    ./play (test mode) starts and writes its client config, and accountName is the default profile's account before
+    the client starts."""
+    from .saves_gui_checks import session
+    s = session()
+    ev = {"run": {k: s.get(k) for k in ("account_name_cfg", "wtf_token_files", "session_error")}}
+    first = s.get("records", [{}])[0].get("rec") if s.get("records") else None
+    ev["k_tokens"] = [t for t in (first or []) if t.startswith("K")]
+    require(not s.get("session_error"), "the shared GUI run failed", **ev)
+    require(len(ev["k_tokens"]) >= 2 and all(t[1] == "A" for t in ev["k_tokens"][:2]),
+            "GIVEN not met: the two ctl:S requests weren't both answered", **ev)
+    require(s.get("account_name_cfg") == P.TEST_USER and not s.get("wtf_token_files"),
+            "accountName isn't the test account, or a token is in WTF/", **ev)
+    ev["heal"] = heal_run()
+    require(ev["heal"]["account_name_at_client_start"] == P.TEST_USER.lower() or
+            ev["heal"]["account_name_at_client_start"] == P.TEST_USER, "the token in accountName wasn't healed at start", **ev)
     return ev

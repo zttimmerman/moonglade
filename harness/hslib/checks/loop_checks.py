@@ -274,6 +274,12 @@ def keep_awake(ctx):
            "display_assertions": [l for c in mine for l in _display_assertions(c["pid"])]}
     if not own["display_assertions"]:
         probs.append(f"this run (pid {me}) holds no PreventUserIdleDisplaySleep assertion during the check: {mine}")
+    # `hs keep-awake` holds its own assertion for ~7 s: it runs alongside the nested runs (each case is scoped to its
+    # own pids; quick-tier headroom, nothing asserted differently)
+    import threading
+    box: dict = {}
+    th = threading.Thread(target=lambda: box.setdefault("cmd", _keep_awake_cmd()), daemon=True)
+    th.start()
     nested = {h: _nested_awake(h) for h in ("ok", "error", "sigkill")}
     for h, n in nested.items():
         if not n.get("given_no_assertion_of_run"):
@@ -289,7 +295,8 @@ def keep_awake(ctx):
         probs.append(f"error: the run didn't error as set up (rc={nested['error'].get('rc')})")
     if nested["sigkill"].get("rc") != -signal.SIGKILL:
         probs.append(f"sigkill: rc={nested['sigkill'].get('rc')}, want -9")
-    cmd = _keep_awake_cmd()
+    th.join(timeout=120)
+    cmd = box.get("cmd") or {"timed": {}, "sigterm": {}}
     for n, r in cmd.items():
         if not r.get("held") or not (r.get("after") or {}).get("released"):
             probs.append(f"hs keep-awake ({n}): held={r.get('held')} after={r.get('after')}")

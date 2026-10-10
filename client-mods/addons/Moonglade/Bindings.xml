@@ -1,0 +1,10 @@
+<Bindings>
+	<!-- front-menu-saves: quicksave and quickload (MoongladeSaves.lua). Default keys F6 / F7 are set by the add-on once,
+	     only while free (F5 and F9 are taken in the client's own WTF\DefaultBindings.wtf). -->
+	<Binding name="MOONGLADE_QUICKSAVE" header="MOONGLADE">
+		MoongladeSaves_QuickSave();
+	</Binding>
+	<Binding name="MOONGLADE_QUICKLOAD">
+		MoongladeSaves_QuickLoad();
+	</Binding>
+</Bindings>

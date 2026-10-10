@@ -103,6 +103,9 @@ banner:Hide();
 MOONGLADE_PAUSE_BANNER = banner;
 
 local function askPause(on)
+	-- the in-game Saves window (MoongladeSaves.lua) keeps the pause the game menu started when it opens from it (the
+	-- window shows before the menu hides); the window's own OnHide resumes unless the menu is up again
+	if ( not on and MoongladeSavesFrame and MoongladeSavesFrame:IsShown() ) then return; end
 	local me = UnitName("player");
 	if ( me ) then
 		SendAddonMessage(PAUSE_PREFIX, on and "1" or "0", "WHISPER", me);
@@ -111,6 +114,7 @@ local function askPause(on)
 	if ( not on ) then banner:Hide(); setDim(false); end
 end
 
+MoongladePause_Ask = askPause;
 GameMenuFrame:HookScript("OnShow", function() askPause(true); end);
 GameMenuFrame:HookScript("OnHide", function() askPause(false); end);
 for _, b in ipairs({ GameMenuButtonLogout, GameMenuButtonQuit }) do
@@ -123,7 +127,11 @@ pauseFrame:RegisterEvent("PLAYER_LEAVING_WORLD");
 pauseFrame:SetScript("OnEvent", function(self, event, prefix, message)
 	if ( event == "CHAT_MSG_ADDON" ) then
 		if ( prefix ~= PAUSE_PREFIX ) then return; end
-		if ( message == "paused" and GameMenuFrame:IsShown() ) then banner:Show(); setDim(true); else banner:Hide(); setDim(false); end
+		if ( message == "paused" and (GameMenuFrame:IsShown() or (MoongladeSavesFrame and MoongladeSavesFrame:IsShown())) ) then
+			banner:Show(); setDim(true);
+		else
+			banner:Hide(); setDim(false);
+		end
 		if ( #pauseHooks.acks < 20 ) then table.insert(pauseHooks.acks, message); end
 		if ( MoongladePauseTestAck ) then MoongladePauseTestAck(message); end
 	else
@@ -226,8 +234,8 @@ frame:SetScript("OnEvent", function(self, event, arg1)
 				if ( #test.errorMsgs < 5 ) then table.insert(test.errorMsgs, tostring(msg)); end
 				if ( previous ) then return previous(msg, ...); end
 			end);
-		else
-			MoongladeTest = nil;                -- nothing is saved outside the test hook
+		elseif ( not (type(MoongladeTest) == "table" and MoongladeTest.hook == "saves") ) then
+			MoongladeTest = nil;                -- nothing is saved outside the test hooks (MoongladeSaves.lua: "saves")
 		end
 		return;
 	end

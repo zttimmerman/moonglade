@@ -272,6 +272,7 @@ RUN = _L["run"]
 LOGS = _L["logs"]
 TMP = _L["tmp"]
 LANE_ETC = _L["etc"]
+SAVES = LANE_ROOT / "saves"             # this lane's save store (mod-moonglade Moonglade.Saves.Dir); lane A: PLAYER_SAVES
 MYSQL_DATA = _L["mysql_data"]
 MYSQL_TEMPLATE = _L["mysql_template"]
 MY_CNF = _L["my_cnf"]
@@ -288,6 +289,7 @@ RUN_REGISTRY = GLOBAL_RUN / "harness-runs"     # runreg.RUN_DIR; global so every
 PLAYER_FILE = ENV / "player.json"
 SETTINGS_FILE = ENV / "settings.json"
 PLAYER_BACKUPS = ENV / "backups"
+PLAYER_SAVES = ENV / "saves"           # front-menu-saves: the player's character saves (<ACCOUNT>/<character id>/<save>)
 PLAYER_PLAY_CLIENT = ENV / "client-play"
 
 # Tools and inputs whose place depends on the mode (release-first-launch design 1 and 3). Dev values are today's.
@@ -355,6 +357,12 @@ TEST_PASS = "hstest"
 TEST_CHAR = "Hstester"
 # Companion checks (m2-living-world comp.*): a separate GM-level (security 2) harness account and character, so the
 # HSTEST fixtures stay untouched. playerbots gives GM senders control of bots (PlayerbotSecurity.cpp).
+# front-menu-saves: the saves checks' own test account (security level 3, saves.GM_LEVEL: GM commands on itself), its
+# hunter (with a pet) and an alt (the second character, and the playerbot companion of bots_skip)
+SAVES_USER = "HSSAVES"
+SAVES_PASS = "hssaves"
+SAVES_CHAR = "Hssaver"
+SAVES_ALT = "Hssavalt"
 COMP_USER = "HSCOMP"
 COMP_PASS = "hscomp"
 COMP_CHAR = "Hscomp"

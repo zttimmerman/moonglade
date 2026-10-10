@@ -10,7 +10,13 @@ AuthSession.cpp; harness/hslib/probe/client.py:logon builds the same packet), an
 failure code. The glue reads that code's text from the stock status dialog.
 
 - Token: the account name `HS<nonce><verb><arg>`. The client upper-cases it, so it's `[A-Z0-9]`; the nonce is
-  NONCE_HEX hex digits. Verbs: `S` (status, no argument). `R` (restore) comes with the front-menu-saves change.
+  NONCE_HEX hex digits. Verbs: `S` (status, no argument) and `L<g><nn>` (front-menu-saves: load the save at index
+  `nn` of the character screen's list generation `g`, charsaves.py). An action (Listener.actions[verb]) decides the
+  reply: it returns (ok, why); ACCEPTED only when ok. A validator (Listener.validators[verb]) refuses first without
+  running the action (`L`: a stale generation or an unknown index). `L` runs one at a time: a second `L` while one
+  runs is REFUSED.
+  Connections are served on their own threads (at most MAX_CONCURRENT), so that refusal is immediate.
+- Only the 3.3.5a client (build 12340, version 3.3.5) is served: any other challenge is REFUSED ("wrong build").
 - Reply: three bytes `00 00 <code>` (cmd, error, result, as AuthSession::HandleLogonChallenge sends a failure). Never
   a success (0x00), never a B/salt, so the client never computes or sends an SRP proof; the dummy password never
   leaves it. ACCEPTED for a valid request, REFUSED for a wrong nonce, an unknown verb or a malformed challenge; a
@@ -18,8 +24,9 @@ failure code. The glue reads that code's text from the stock status dialog.
   savesctl.live_codes).
 - One challenge per connection, at most MAX_READ bytes read, and a declared size that must fit a challenge
   (MAX_BODY). After the reply the listener lets the client close first (at most LINGER_S), then closes.
-- Log: one line per connection, naming the verb, the outcome and the source address; never the nonce or the
-  account name (env/logs/savesctl.log, rewritten at each start, and the events in play-last.json).
+- Log: one line per connection, naming the verb, the outcome (and an action's reason) and the source address; never
+  the nonce, the account name, a save id or a path (env/logs/savesctl.log, rewritten at each start, and the events in
+  play-last.json).
 
 Test-only knobs ($HS_SAVESCTL_TEST, JSON; ./play refuses it without --allow-test-client-dir and uses it only for
 --account test): "codes" = the codes valid requests get, in order (then ACCEPTED again), "delay_s" = wait before each
@@ -41,7 +48,10 @@ from . import paths as P
 
 HOST = "127.0.0.1"
 NONCE_HEX = 6
-VERBS = {"S": ""}                 # verb -> its argument's regex ("" = no argument)
+VERBS = {"S": "", "L": "[0-9A-F][0-9]{2}"}   # verb -> its argument's regex ("" = no argument)
+BUILD, VERSION = 12340, (3, 3, 5)  # the only client served (WotLK 3.3.5a)
+MAX_CONCURRENT = 4                # connections served at once (each on its own thread)
+EXCLUSIVE = {"L"}                 # verbs whose action runs one at a time (a second one meanwhile is refused)
 TOKEN_RE = re.compile(r"^HS([0-9A-F]{%d})([A-Z])([A-Z0-9]*)$" % NONCE_HEX)
 
 # Wire code -> the client's status text (its GlueStrings.lua global), as measured live (savesctl.live_codes,
@@ -97,10 +107,10 @@ def parse_challenge(data: bytes) -> dict:
     return {"build": build, "version": version, "game": game, "name": name}
 
 
-def challenge(name: str, build: int = 12340) -> bytes:
+def challenge(name: str, build: int = 12340, version: tuple = (3, 3, 5)) -> bytes:
     """A 3.3.5a logon challenge for `name` (the layout probe.client.logon sends); for the offline checks."""
     I = name.upper().encode()
-    body = (b"WoW\x00" + bytes((3, 3, 5)) + struct.pack("<H", build) + b"68x\x00" + b"niW\x00" + b"SUne"
+    body = (b"WoW\x00" + bytes(version) + struct.pack("<H", build) + b"68x\x00" + b"niW\x00" + b"SUne"
             + struct.pack("<I", 0) + socket.inet_aton("127.0.0.1") + bytes([len(I)]) + I)
     return struct.pack("<BBH", AUTH_LOGON_CHALLENGE, 8, len(body)) + body
 
@@ -134,7 +144,8 @@ class Listener:
         self.test = test or {}
         self.codes = list(self.test.get("codes") or [])
         self.log_path = log_path
-        self.actions = actions or {}         # verb -> callable(arg) (none in this change: S needs none)
+        self.actions = actions or {}         # verb -> callable(arg) -> (ok, why) | bool (S needs none)
+        self.validators: dict = {}           # verb -> callable(arg) -> why it's refused before the action, or None
         self.events: list[dict] = []
         self.sock: socket.socket | None = None
         self.port: int | None = None
@@ -142,6 +153,9 @@ class Listener:
         self.connections = 0
         self.closed_at: float | None = None
         self._lock = threading.Lock()
+        self._slots = threading.BoundedSemaphore(MAX_CONCURRENT)
+        self._busy: set[str] = set()       # exclusive verbs whose action is running
+        self._workers: list[threading.Thread] = []
 
     # -- lifetime
     def start(self) -> "Listener":
@@ -200,19 +214,34 @@ class Listener:
             except OSError:
                 return
             self.connections += 1
-            try:
-                self._handle(conn, addr)
-            except Exception as e:  # noqa: BLE001  (one bad connection never takes the listener down)
-                self._log({"event": "request", "outcome": "error", "why": type(e).__name__, "src": addr[0]})
-            finally:
+            if not self._slots.acquire(blocking=False):           # too many at once: no reply, closed
+                self._log({"event": "request", "outcome": "refused", "why": "busy", "src": addr[0], "reply": None})
                 try:
                     conn.close()
                 except OSError:
                     pass
+                continue
+            t = threading.Thread(target=self._serve_one, args=(conn, addr), name="savesctl-conn", daemon=True)
+            self._workers.append(t)
+            t.start()
             stop_after = self.test.get("stop_after")
             if stop_after is not None and self.connections >= stop_after:
+                for w in self._workers:
+                    w.join(timeout=READ_TIMEOUT_S + LINGER_S + 15)
                 self.stop()
                 return
+
+    def _serve_one(self, conn: socket.socket, addr) -> None:
+        try:
+            self._handle(conn, addr)
+        except Exception as e:  # noqa: BLE001  (one bad connection never takes the listener down)
+            self._log({"event": "request", "outcome": "error", "why": type(e).__name__, "src": addr[0]})
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+            self._slots.release()
 
     def _read(self, conn: socket.socket) -> tuple[bytes, str | None]:
         """One challenge: (packet, None), or (partial, why) for truncated / oversized."""
@@ -275,7 +304,9 @@ class Listener:
                        "reply": REFUSED})
             return
         m = TOKEN_RE.match(c["name"].upper())
-        if not m:
+        if c["build"] != BUILD or c["version"] != VERSION:
+            why = "wrong build"
+        elif not m:
             why = "not a control token"
         elif not secrets.compare_digest(m.group(1), self.nonce):
             why = "wrong nonce"
@@ -292,12 +323,36 @@ class Listener:
             return
         verb = m.group(2)
         act = self.actions.get(verb)
+        ok, why = True, None
+        check = self.validators.get(verb)
+        stale = check(m.group(3)) if check else None
+        if stale:                                   # e.g. a stale list generation: refused before the action runs
+            ok, why, act = False, stale, None
         if act:
-            act(m.group(3))
+            with self._lock:
+                busy = verb in EXCLUSIVE and verb in self._busy
+                if not busy and verb in EXCLUSIVE:
+                    self._busy.add(verb)
+            if busy:
+                ok, why = False, "busy"
+            else:
+                try:
+                    res = act(m.group(3))
+                    ok, why = (res if isinstance(res, tuple) else (res is not False, None))
+                except Exception as e:  # noqa: BLE001  (a failing action is a refusal, never a crash)
+                    ok, why = False, f"action failed ({type(e).__name__})"
+                finally:
+                    with self._lock:
+                        self._busy.discard(verb)
+        if not ok:
+            self._reply(conn, REFUSED)
+            self._log({"event": "request", "outcome": "refused", "verb": verb, "why": why, "src": src,
+                       "build": c["build"], "reply": REFUSED})
+            return
         code = self.codes.pop(0) if self.codes else ACCEPTED
         self._reply(conn, code)
         self._log({"event": "request", "outcome": "accepted", "verb": verb, "src": src, "build": c["build"],
-                   "version": list(c["version"]), "reply": code})
+                   "version": list(c["version"]), "reply": code} | ({"why": why} if why else {}))
 
 
 def from_env(account: str, environ=None) -> Listener:

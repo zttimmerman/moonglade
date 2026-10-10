@@ -72,11 +72,46 @@ def _module_file(root, pkg_parts: list[str], name: str | None):
     return None
 
 
+_IMPORT_TARGETS: dict = {}   # (path, mtime_ns, size) -> that file's hslib import targets: a pure function of its source
+
+
+def _import_targets(f, pkg: list[str]) -> list[tuple]:
+    """The (package parts, name) pairs a source imports from hslib, parsed once per file version in a process
+    (report.gui_tier_rule evaluates the closure 36 times; the parse was ~13 s of the quick tier)."""
+    import ast
+    st = f.stat()
+    key = (str(f), st.st_mtime_ns, st.st_size, tuple(pkg))
+    hit = _IMPORT_TARGETS.get(key)
+    if hit is not None:
+        return hit
+    targets = []
+    for node in ast.walk(ast.parse(f.read_text(), str(f))):
+        if isinstance(node, ast.Import):
+            for a in node.names:
+                parts = a.name.split(".")
+                if parts[0] == "hslib":
+                    targets.append((parts[:-1], parts[-1]) if len(parts) > 1 else ([], "hslib"))
+        elif isinstance(node, ast.ImportFrom):
+            if node.level:
+                base = pkg[: len(pkg) - (node.level - 1)] if node.level > 1 else list(pkg)
+            elif (node.module or "").split(".")[0] == "hslib":
+                base = []
+            else:
+                continue
+            mod = (node.module or "").split(".") if node.module else []
+            full = base + mod
+            if full:
+                targets.append((full[:-1], full[-1]))           # the module itself (or package __init__)
+            for a in node.names:                               # `from pkg import module`
+                targets.append((full, a.name))
+    _IMPORT_TARGETS[key] = targets
+    return targets
+
+
 def import_closure(roots=GUI_ROOTS, root=None) -> list[str]:
     """Repo-relative paths of every hslib module reachable from `roots` by static imports (absolute `hslib.x` and
     relative `from . / .. import x`, including imports inside functions). Raises on a source that doesn't parse
     (callers fail closed)."""
-    import ast
     from pathlib import Path
     root = Path(root or P.ROOT)
     seen: set = set()
@@ -88,30 +123,10 @@ def import_closure(roots=GUI_ROOTS, root=None) -> list[str]:
         seen.add(f)
         rel = f.relative_to(root / "harness").with_suffix("").parts      # e.g. ("hslib", "checks", "polish_checks")
         pkg = list(rel[:-1])                                              # the module's package
-        for node in ast.walk(ast.parse(f.read_text(), str(f))):
-            targets = []
-            if isinstance(node, ast.Import):
-                for a in node.names:
-                    parts = a.name.split(".")
-                    if parts[0] == "hslib":
-                        targets.append((parts[:-1], parts[-1]) if len(parts) > 1 else ([], "hslib"))
-            elif isinstance(node, ast.ImportFrom):
-                if node.level:
-                    base = pkg[: len(pkg) - (node.level - 1)] if node.level > 1 else list(pkg)
-                elif (node.module or "").split(".")[0] == "hslib":
-                    base = []
-                else:
-                    continue
-                mod = (node.module or "").split(".") if node.module else []
-                full = base + mod
-                if full:
-                    targets.append((full[:-1], full[-1]))           # the module itself (or package __init__)
-                for a in node.names:                               # `from pkg import module`
-                    targets.append((full, a.name))
-            for parts, name in targets:
-                m = _module_file(root, parts, name)
-                if m is not None:
-                    todo.append(m)
+        for parts, name in _import_targets(f, pkg):
+            m = _module_file(root, parts, name)
+            if m is not None:
+                todo.append(m)
     return sorted(str(x.relative_to(root)) for x in seen)
 
 
@@ -398,6 +413,12 @@ PDU_ID = "release.player_data_untouched"
 BRACKET_PREFIXES = ("release.", "firstlaunch.")
 BRACKET_DIR = P.OUT / "release-bracket"         # one state file per run id (release.player_data_untouched)
 BRACKET_KEEP_S = 7 * 86400
+
+
+def _player_saves_fingerprint():
+    from . import backups, saves
+    acct = saves.player_account()
+    return backups.fingerprint(P.PLAYER_SAVES / acct) if acct else None
 
 
 def release_bracket_plan(checks, run_id: str | None, state_dir: Path | None = None) -> dict | None:
@@ -739,7 +760,9 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
            "keep_awake": awake, "gui_preflight": preflight, "orphans": orphans,
            "player_marker_sha256_start": player_marker_sha(),
            # save-backups: the player's env/backups/ must be byte-identical at the end (backups.player_untouched)
-           "player_backups_fingerprint_start": backups.fingerprint(backups.PLAYER_ROOT)}
+           "player_backups_fingerprint_start": backups.fingerprint(backups.PLAYER_ROOT),
+           # front-menu-saves: the player's env/saves/<PLAYER>/ must be identical at the end (saves.player_untouched)
+           "player_saves_fingerprint_start": _player_saves_fingerprint()}
     # release-first-launch: release.player_data_untouched's bracket, planned over the whole run (every lane-A segment)
     ctx["run_id"] = ((orphans or {}).get("run") or {}).get("id")
     ctx["release_bracket_plan"] = release_bracket_plan(selected, ctx["run_id"])

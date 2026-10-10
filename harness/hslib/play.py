@@ -164,7 +164,7 @@ def player_login() -> tuple[dict, bool]:
     else:
         pw = "".join(secrets.choice(string.ascii_lowercase + string.digits) for _ in range(10))
         login, new = {"account": default_player(), "password": pw}, True
-    if login["account"].upper() in (P.TEST_USER.upper(), P.GM_USER.upper(), P.COMP_USER.upper()):
+    if login["account"].upper() in (P.TEST_USER.upper(), P.GM_USER.upper(), P.COMP_USER.upper(), P.SAVES_USER.upper()):
         raise PlayerAccountError(f"{pf}: {login['account']} is reserved for the test harness, pick another name")
     for k in ("account", "password"):
         if not _NAME_RE.match(login[k]):
@@ -469,7 +469,7 @@ class Loop:
                                      {"resolution_gate": gate})
         man, ev = launch.prepare(say=say, world_datadir=self.args.world_datadir, accounts=accounts,
                                  profile=world["profile"], population_n=world["population_n"], stages=st,
-                                 write_client_config=gate["apply"])
+                                 write_client_config=gate["apply"], default_account=login["account"])
         self.rec["prepare"] = {k: ev[k] for k in ("restarted_world", "stack", "fixtures", "accounts", "prefix",
                                                   "binaries_match_manifest_before", "resolution", "client_config") if k in ev}
         self.man = man
@@ -498,6 +498,17 @@ class Loop:
                                                            "password": login["password"]}]),
                 default=login["account"], test=hook, about=frontmenu.about_info(),
                 control={"port": self.ctl.port, "nonce": self.ctl.nonce})
+            # front-menu-saves: the character screen's save list (kept current in the play client while the game
+            # runs) and the control listener's load verb
+            from . import charsaves
+            try:
+                self.saves = charsaves.Saves(self.profiles_dir, [login["account"]]).start()
+                self.ctl.validators["L"] = lambda a: None if self.saves.lookup(a) else "stale or unknown list entry"
+                self.ctl.actions["L"] = self.load_action
+                self.rec["charsaves"] = {"started": True, "gen": f"{self.saves.gen:X}", "saves": len(self.saves.index)}
+            except Exception as e:  # noqa: BLE001  (no save list is no reason not to play; the glue shows none)
+                self.saves = None
+                self.rec["charsaves"] = {"started": False, "error": f"{type(e).__name__}: {e}"}
         st.start("launching")
         say("Starting the game client..." if args_ is None else f"Starting the test stand-in client ({name})...")
         proc = launch.start_client(args_, cwd)
@@ -560,6 +571,21 @@ class Loop:
         self.rec["crash_message"] = f"client crash: the client {why}"
         return EXIT_CRASH
 
+    def load_action(self, arg: str) -> tuple[bool, str]:
+        """The control listener's `L` verb (savesctl.py; one at a time): the glue's (generation, index) to the save,
+        then the load over SOAP (charsaves.load_via_soap). (ok, reason); never a save id in the reason."""
+        from . import charsaves
+        target = self.saves.lookup(arg) if getattr(self, "saves", None) else None
+        if not target:
+            return False, "stale or unknown list entry"
+        _account, guid, save_id = target
+        ok, why = charsaves.load_via_soap(guid, save_id)
+        try:
+            self.saves.refresh()
+        except Exception:  # noqa: BLE001
+            pass
+        return ok, why
+
     def cleanup(self) -> list:
         """Close the client (Wine prefix) and stop the stack gracefully. Returns whatever is still running."""
         say("Shutting down... (closing the game and stopping the server; this takes up to a minute)")
@@ -568,6 +594,8 @@ class Loop:
         clean: dict = {}
         if getattr(self, "ctl", None) is not None:      # saves-channel: the control listener closes with the game
             self.rec["savesctl"] = self.rec.get("savesctl", {}) | self.ctl.stop()
+        if getattr(self, "saves", None) is not None:    # front-menu-saves: the save list's poll stops with it
+            self.rec["charsaves"] = self.rec.get("charsaves", {}) | self.saves.stop()
         if launch.prefix_processes():
             sd.send("shutdown_game", "start")
             clean["stop_prefix"] = launch.stop_prefix()

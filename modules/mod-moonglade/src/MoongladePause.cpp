@@ -7,8 +7,8 @@
  * still. Everything about *when* and *how* to pause lives here:
  *   - Toggle: the Moonglade add-on sends SendAddonMessage("MGPAUSE", "1" | "0", "WHISPER", <self>) when the game menu
  *     opens or closes. It arrives as CMSG_MESSAGECHAT, a thread-unsafe opcode handled in World::UpdateSessions (so it
- *     is processed while the maps are paused); Player::Whisper calls OnPlayerCanUseChat(..., receiver) where it is
- *     handled and swallowed. The server answers with an add-on message "MGPAUSE" "paused" | "running" | "refused" |
+ *     is processed while the maps are paused); Player::Whisper calls OnPlayerCanUseChat(..., receiver), where the
+ *     shared add-on parser (MoongladeAddon.h, also used by the saves' "MGSAVE") hands it here and swallows it. The server answers with an add-on message "MGPAUSE" "paused" | "running" | "refused" |
  *     "disabled" so the add-on shows its banner only when the world really paused. "paused" is sent from the first
  *     world tick that runs paused (the switch takes effect at the start of a tick), so nothing the simulation sends
  *     follows it until the resume.
@@ -35,6 +35,7 @@
 #include "GameTime.h"
 #include "Group.h"
 #include "Log.h"
+#include "MoongladeAddon.h"
 #include "ObjectAccessor.h"
 #include "Opcodes.h"
 #include "Pet.h"
@@ -55,7 +56,6 @@ using namespace Acore::ChatCommands;
 namespace
 {
     char const* const OPT_ENABLE = "Moonglade.Pause.Enable";
-    constexpr std::string_view ADDON_PREFIX = "MGPAUSE\t";   // SendAddonMessage prefix + the client's tab separator
 
     bool g_enabled = true;
     ObjectGuid g_pausedBy;            // the character whose request paused the world (empty: console pause)
@@ -65,11 +65,7 @@ namespace
 
     void SendAddonState(Player* player, std::string_view state)
     {
-        WorldPacket data;
-        std::string text(ADDON_PREFIX);
-        text += state;
-        ChatHandler::BuildChatPacket(data, CHAT_MSG_WHISPER, LANG_ADDON, player, player, text);
-        player->SendDirectMessage(&data);
+        MoongladeAddon::Send(player, "MGPAUSE", state);
     }
 
     /// Re-send a unit's visible auras: SMSG_AURA_UPDATE carries the server's (frozen) remaining duration.
@@ -220,27 +216,7 @@ public:
 class MoongladePausePlayerScript : public PlayerScript
 {
 public:
-    MoongladePausePlayerScript() : PlayerScript("MoongladePausePlayerScript",
-        { PLAYERHOOK_CAN_PLAYER_USE_PRIVATE_CHAT, PLAYERHOOK_ON_LOGOUT }) { }
-
-    bool OnPlayerCanUseChat(Player* player, uint32 type, uint32 language, std::string& msg, Player* receiver) override
-    {
-        if (type != CHAT_MSG_WHISPER || language != LANG_ADDON || receiver != player
-            || std::string_view(msg).substr(0, ADDON_PREFIX.size()) != ADDON_PREFIX)
-            return true;
-        std::string_view arg = std::string_view(msg).substr(ADDON_PREFIX.size());
-        if (arg == "1")
-        {
-            if (Pause(player) == PauseResult::Disabled)
-                SendAddonState(player, "disabled");
-        }
-        else if (arg == "0")
-        {
-            if (!Resume())
-                SendAddonState(player, "running");
-        }
-        return false;                 // swallowed: the message never goes out
-    }
+    MoongladePausePlayerScript() : PlayerScript("MoongladePausePlayerScript", { PLAYERHOOK_ON_LOGOUT }) { }
 
     void OnPlayerLogout(Player* player) override
     {
@@ -346,6 +322,20 @@ public:
 
 void AddMoongladePauseScripts()
 {
+    // "MGPAUSE" "1" | "0" from the add-on (the shared parser, MoongladeAddon.h)
+    MoongladeAddon::Register("MGPAUSE", [](Player* player, std::string_view arg)
+    {
+        if (arg == "1")
+        {
+            if (Pause(player) == PauseResult::Disabled)
+                SendAddonState(player, "disabled");
+        }
+        else if (arg == "0")
+        {
+            if (!Resume())
+                SendAddonState(player, "running");
+        }
+    });
     new MoongladePauseWorldScript();
     new MoongladePausePlayerScript();
     new MoongladePauseServerScript();
