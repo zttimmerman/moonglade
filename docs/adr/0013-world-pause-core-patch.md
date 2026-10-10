@@ -28,7 +28,7 @@ Rejected alternatives:
 - **Stopping the server process (SIGSTOP).** It causes a time skip on resume and the client disconnects.
 
 ## Consequences
-- A small patch (~60–100 lines in 4 files) to carry across core pin bumps. `core.patch_applied` covers it.
+- A small patch (as built: ~150 lines in 5 files, one of them the new header `game/Time/WorldPause.h`) to carry across core pin bumps. `build.pin_enforced` checks the whole core queue applies to core_sha; the `pause.*` checks cover its behaviour. (`core.patch_applied` checks only 0001.)
 - Daily resets, mail and the auction house slip by the total paused time. That's acceptable for a single player.
 - Client-animated timers visibly correct on resume. The `[human-verify]` scenario covers how that looks.
 - Measured facts from the prototype (task 1.1) are below.
