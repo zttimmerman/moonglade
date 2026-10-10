@@ -16,6 +16,10 @@ from . import paths as P
 #               era-profile toggle checks and counterexamples (openspec/changes/m3-vanilla-mode).
 #   pause-off   m0 with true pause turned off (Moonglade.Pause.Enable = 0, mod-moonglade), for pause.disabled_noop
 #               (openspec/changes/true-pause).
+#   scaling-off m0 with dungeon scaling off (AutoBalance.Enable.Global = 0, mod-autobalance): the unscaled reference
+#               reads of scale.* and their counterexamples (openspec/changes/m4-dungeon-scaling design.md §2).
+#   lockouts-stock  m0 with the stock lockouts: AccountInstancesPerHour 5 (worldserver.conf.dist) and fresh-after-clear
+#               off (Moonglade.Dungeons.FreshAfterClear = 0), for the lock.* counterexamples.
 # A profile may carry an "era" section: overrides for mod_era_profile.conf, and a "moonglade" section for
 # mod_moonglade.conf. No profile but `wotlk` sets an era section, so the
 # default (vanilla mode on) comes from the module's .conf.dist (era-profile "Default is vanilla mode").
@@ -86,6 +90,43 @@ PROFILES["wotlk"] = {**PROFILES["m0"], "era": {"EraProfile.Enable": "0"}}
 PROFILES["pause-off"] = {**PROFILES["m0"], "moonglade": {"Moonglade.Pause.Enable": "0"}}
 # front-menu-saves (saves.load_ordering): m0 with two character-database workers; the module must refuse saves then
 PROFILES["saves-workers2"] = {**PROFILES["m0"], "world": {"CharacterDatabase.WorkerThreads": "2"}}
+# m4-dungeon-scaling (design.md §2): the module off, every other Moonglade AutoBalance key unchanged
+PROFILES["scaling-off"] = {**PROFILES["m0"], "autobalance": {"AutoBalance.Enable.Global": "0"}}
+# m4-dungeon-scaling (design.md §2): stock lockouts. 5 = worldserver.conf.dist's AccountInstancesPerHour default
+PROFILES["lockouts-stock"] = {**PROFILES["m0"], "world": {"AccountInstancesPerHour": "5"},
+                              "moonglade": {"Moonglade.Dungeons.FreshAfterClear": "0"}}
+
+# m4-dungeon-scaling (design.md §2, ADR-0014): Moonglade's mod-autobalance settings, in every profile (a profile's
+# "autobalance" section layers on top). Keys not listed keep AutoBalance.conf.dist's default. These are module tuning
+# knobs, not WoW data (CLAUDE.md §7); each records why.
+AUTOBALANCE = {
+    # solo scales down to one player (the module default, stated explicitly), normal and heroic 5-player dungeons
+    "AutoBalance.MinPlayers": "1",
+    "AutoBalance.MinPlayers.Heroic": "1",
+    # the difficulty curve (multiplier by player count; ABUtils.cpp getDefaultMultiplier). CurveCeiling 1.0: a party of
+    # five meets the unchanged dungeon and nothing is ever harder than stock (Zach, proposal Q2, 2026-10-10). The
+    # inflection point, floor and boss modifier are tuned by the scale.solo_final_boss runs, recorded in
+    # docs/research/m4-scaling-tuning.md (proposal Q1: a solo fight should feel like a normal group's fight).
+    "AutoBalance.InflectionPoint": "0.5",
+    "AutoBalance.InflectionPoint.CurveFloor": "0.0",
+    "AutoBalance.InflectionPoint.CurveCeiling": "1.0",
+    "AutoBalance.InflectionPoint.BossModifier": "1.0",
+    "AutoBalance.InflectionPointHeroic": "0.5",
+    "AutoBalance.InflectionPointHeroic.CurveFloor": "0.0",
+    "AutoBalance.InflectionPointHeroic.CurveCeiling": "1.0",
+    "AutoBalance.InflectionPointHeroic.BossModifier": "1.0",
+    # companions count as one person each (proposal Q2 default; the module has no per-bot weight)
+    "AutoBalance.playerCountDifficultyOffset": "0",
+    # dungeons keep their own levels (proposal Q3, Zach: no level scaling); also avoids upstream #198
+    "AutoBalance.LevelScaling": "0",
+    # less XP and money when the monsters are weaker (proposal Q4, Zach: yes); the module defaults, stated explicitly
+    "AutoBalance.RewardScaling.Method": '"dynamic"',
+    "AutoBalance.RewardScaling.XP": "1",
+    "AutoBalance.RewardScaling.Money": "1",
+    # no "difficulty changed" chat lines (seamless-experience: no server chatter); `.ab mapstat` still answers
+    "AutoBalance.PlayerChangeNotify": "0",
+}
+AUTOBALANCE_CONF = "AutoBalance.conf"   # vendor/mod-autobalance/conf/AutoBalance.conf.dist, installed to etc/modules
 
 ERA_CONF = "mod_era_profile.conf"     # modules/mod-era-profile/conf/mod_era_profile.conf.dist, installed to etc/modules
 MOONGLADE_CONF = "mod_moonglade.conf"  # modules/mod-moonglade/conf/mod_moonglade.conf.dist, installed to etc/modules
@@ -179,7 +220,8 @@ def _unquote(v: str) -> str:
     return v[1:-1] if len(v) >= 2 and v[0] == v[-1] == '"' else v
 
 
-MODULE_SECTIONS = {"playerbots": "playerbots.conf.dist", "era": ERA_CONF + ".dist", "moonglade": MOONGLADE_CONF + ".dist"}
+MODULE_SECTIONS = {"playerbots": "playerbots.conf.dist", "era": ERA_CONF + ".dist", "moonglade": MOONGLADE_CONF + ".dist",
+                   "autobalance": AUTOBALANCE_CONF + ".dist"}
 
 
 def module_overrides(prof: dict) -> dict[str, dict[str, str]]:
@@ -190,7 +232,9 @@ def module_overrides(prof: dict) -> dict[str, dict[str, str]]:
                                      "AiPlayerbot.CommandServerPort": "0"},
             ERA_CONF + ".dist": dict(prof.get("era", {})),
             # front-menu-saves: the lane's save store (lane A: env/saves, the player's; lane B: its own root)
-            MOONGLADE_CONF + ".dist": {"Moonglade.Saves.Dir": f'"{P.SAVES}"', **prof.get("moonglade", {})}}
+            MOONGLADE_CONF + ".dist": {"Moonglade.Saves.Dir": f'"{P.SAVES}"', **prof.get("moonglade", {})},
+            # m4-dungeon-scaling: Moonglade's AutoBalance settings, then the profile's
+            AUTOBALANCE_CONF + ".dist": {**AUTOBALANCE, **prof.get("autobalance", {})}}
 
 
 def module_env(prof: dict, mods: Path) -> dict[str, str]:
@@ -284,6 +328,11 @@ def write_all(world_datadir: Path | None = None, extra_world: dict | None = None
         "Appender.Players": "2,4,1,Players.log,w",
         "Logger.entities.player": "4,Players",
         "Logger.entities.player.auctionhouse": "2,Players",
+        # m4-dungeon-scaling (design.md §3): no "too many instances" limit. The core refuses a dungeon entry once the
+        # account entered AccountInstancesPerHour instances in an hour (MapMgr.cpp:232-244; .dist default 5; 0 would
+        # block everything). 1000 = one entry every 3.6 s for an hour: beyond any solo pace, still finite against a
+        # runaway script. Profile lockouts-stock puts 5 back.
+        "AccountInstancesPerHour": "1000",
     } | prof["world"] | (extra_world or {})
     render(dist_dir / "authserver.conf.dist", etc / "authserver.conf", auth)
     render(dist_dir / "worldserver.conf.dist", etc / "worldserver.conf", world)
