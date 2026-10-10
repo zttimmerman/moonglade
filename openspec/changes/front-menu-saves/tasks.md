@@ -10,7 +10,7 @@ Estimates are builder-agent wall-clock hours, including build and harness time o
 - [x] 2.4 Autosave triggers (rest, flight, map change, min interval). `MGSAVE` addon-message verbs and replies. `.moonglade save load|status|list` commands. Coordinate the `OnPlayerCanUseChat` parser with `true-pause` if it has merged. (1.5 h)
 
 ## 3. Launcher (run B)
-- [ ] 3.1 `harness/hslib/charsaves.py`: read manifests, build `HS_SAVES` with a generation, refresh it in the chosen Q1 mechanism, map (generation, index) to (character, save), delete on request. `P.PLAYER_SAVES`. (1.5 h)
+- [x] 3.1 `harness/hslib/charsaves.py`: read manifests, build `HS_SAVES` with a generation, refresh it in the chosen Q1 mechanism, map (generation, index) to (character, save), delete on request. `P.PLAYER_SAVES`. (1.5 h)
 - [ ] 3.2 `savesctl.py`: the `L` verb with its action (SOAP load + status poll, one at a time), build-12340 refusal. `play.py` wiring. `clientcfg` heals a token `accountName`. (1.5 h)
 
 ## 4. Client (run B)

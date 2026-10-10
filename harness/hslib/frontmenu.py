@@ -201,7 +201,7 @@ def write(client_dir: Path, profiles: list[dict], default: str | None = None, te
             "control": {"port": control["port"]} if control else None}      # never the nonce
 
 
-EMPTY_SAVES = b"HS_SAVES = { gen = 0, chars = {} };\r\n"
+EMPTY_SAVES = b'HS_SAVES = { gen = "0", chars = {} };\r\nHS_SAVES_END = "0";\r\n'
 
 
 def pad_saves(lua: bytes | None) -> bytes:
