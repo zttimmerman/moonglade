@@ -51,6 +51,9 @@ SMSG_AUTH_RESPONSE = 0x1EE
 SMSG_LOGIN_VERIFY_WORLD = 0x236
 # chat, group, movement acks, combat log, quest sharing, keepalive (task m2 3.1; same Opcodes.h)
 SMSG_NEW_WORLD = 0x03E
+SMSG_TRANSFER_ABORTED = 0x040     # m4-dungeon-scaling: uint32 map, uint8 reason (Player::SendTransferAborted)
+MSG_SET_DUNGEON_DIFFICULTY = 0x329   # m4-dungeon-scaling: uint32 mode (HandleSetDungeonDifficultyOpcode)
+TRANSFER_ABORT_TOO_MANY_INSTANCES = 0x04   # Player.h TransferAbortReason
 SMSG_GROUP_UNINVITE = 0x077
 CMSG_GROUP_DISBAND = 0x07B
 SMSG_GROUP_DESTROYED = 0x07C
