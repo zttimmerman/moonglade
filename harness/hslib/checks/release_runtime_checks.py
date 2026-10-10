@@ -640,6 +640,10 @@ def test_switches_refused(ctx):
             ev["dev_app_rebuilt"] = {"why": cur.get("why"), "rc": rb.returncode, "tail": rb.stderr[-300:]}
         dev_app_ok = bool(A.up_to_date().get("current"))
         bad = []
+        # Every case is an independent process (its own environment, hook file, scratch HOME); they all refuse before
+        # starting anything, so they run side by side (quick-tier headroom; each case's assertion is unchanged) and
+        # are judged afterwards in the order they are listed.
+        jobs = []                                   # (switch, kind, label, fn) in the listed order
         for name, val in vals.items():
             base = _clean_env(**{name: val})
             entries = [
@@ -658,11 +662,7 @@ def test_switches_refused(ctx):
                  release_env(None, **{name: val}), d),
             ]
             for label, args, env, cwd in entries:
-                r = _run(args, env, cwd)
-                ok = r["rc"] != 0 and name in r["out"] and "test switch" in r["out"]
-                ev["cases"].append({"switch": name, "entry": label, "ok": ok, **r})
-                if not ok:
-                    bad.append(f"{label} with {name}")
+                jobs.append((name, "entry", label, lambda args=args, env=env, cwd=cwd: _run(args, env, cwd)))
             # the apps (test hook; the launcher binary run directly, never through LaunchServices): a release app
             # without the flag, with the flag outside a harness run, (for HS_RELEASE_HOME) with the flag but a HOME
             # outside the scratch rule, and the dev app dist/Moonglade.app: each refuses at startup
@@ -680,8 +680,37 @@ def test_switches_refused(ctx):
             if dev_app_ok:
                 app_cases.append(("dev app (test hook)", A.APP, {name: val}, [], False))
             for label, target, env, args, outside in app_cases:
-                hook = d / f"hook-{len(ev['cases'])}.jsonl"
-                res = exec_with_hook(target, hook, env, args, timeout=30, outside_run=outside)
+                hook = d / f"hook-{len(jobs)}.jsonl"
+                jobs.append((name, "app", label, lambda target=target, hook=hook, env=env, args=args, outside=outside:
+                             exec_with_hook(target, hook, env, args, timeout=30, outside_run=outside)))
+            # the release app with the hook, the flag, a scratch HOME and a harness run id that isn't live: the app
+            # passes the switches on, the payload's Python refuses them, and the window names them in plain words
+            # (first-launch window for a HOME not set up, the play loop's error for a set-up one); only logs written
+            for where in ("setup", "play"):
+                ch = d / f"stale-{where}-{len(jobs)}"
+                if where == "play":
+                    ch.mkdir(parents=True)
+                    (ch / "home.json").write_text(json.dumps({"layout": P.HOME_LAYOUT_VERSION,
+                                                              "first_launch": {"complete": True}}) + "\n")
+                env = {**{name: val}, P.RELEASE_HOME_ENV: str(ch), "HS_HARNESS_RUN": "1",
+                       "HS_HARNESS_RUN_ID": "1-0", P.HARNESS_RUN_REGISTRY_ENV: str(P.RUN_REGISTRY)}
+                hook = d / f"hook-{len(jobs)}.jsonl"
+                jobs.append((name, f"stale:{where}:{ch}", f"release app (test hook, flag, run id not live; {where})",
+                             lambda hook=hook, env=env: exec_with_hook(bundle, hook, env, [P.RELEASE_TEST_FLAG],
+                                                                        timeout=60)))
+        from concurrent.futures import ThreadPoolExecutor
+        t_jobs = time.time()
+        with ThreadPoolExecutor(max_workers=8) as pool:
+            results = list(pool.map(lambda j: j[3](), jobs))
+        ev["cases_wall_s"] = round(time.time() - t_jobs, 1)
+        for (name, kind, label, _fn), res in zip(jobs, results):
+            if kind == "entry":
+                r = res
+                ok = r["rc"] != 0 and name in r["out"] and "test switch" in r["out"]
+                ev["cases"].append({"switch": name, "entry": label, "ok": ok, **r})
+                if not ok:
+                    bad.append(f"{label} with {name}")
+            elif kind == "app":
                 refused = [e for e in res["events"] if e.get("kind") == "refused"]
                 ex = [e for e in res["events"] if e.get("kind") == "exit"]
                 ok = (bool(refused) and name in refused[0].get("switches", []) and name in refused[0].get("text", "")
@@ -692,19 +721,9 @@ def test_switches_refused(ctx):
                                     "rc": res["rc"]})
                 if not ok:
                     bad.append(f"{label} with {name}")
-            # the release app with the hook, the flag, a scratch HOME and a harness run id that isn't live: the app
-            # passes the switches on, the payload's Python refuses them, and the window names them in plain words
-            # (first-launch window for a HOME not set up, the play loop's error for a set-up one); only logs written
-            for where in ("setup", "play"):
-                ch = d / f"stale-{where}-{len(ev['cases'])}"
-                if where == "play":
-                    ch.mkdir(parents=True)
-                    (ch / "home.json").write_text(json.dumps({"layout": P.HOME_LAYOUT_VERSION,
-                                                              "first_launch": {"complete": True}}) + "\n")
-                env = {**{name: val}, P.RELEASE_HOME_ENV: str(ch), "HS_HARNESS_RUN": "1",
-                       "HS_HARNESS_RUN_ID": "1-0", P.HARNESS_RUN_REGISTRY_ENV: str(P.RUN_REGISTRY)}
-                hook = d / f"hook-{len(ev['cases'])}.jsonl"
-                res = exec_with_hook(bundle, hook, env, [P.RELEASE_TEST_FLAG], timeout=60)
+            else:
+                _, where, ch = kind.split(":", 2)
+                ch = Path(ch)
                 evs = res["events"]
                 shown = [e for e in evs if (e.get("kind") == "setup_window" and e.get("state") == "error")
                          or (e.get("kind") == "dialog" and e.get("id") == "test_switch_refused")]
@@ -715,8 +734,8 @@ def test_switches_refused(ctx):
                       and "test setting" in text and "refused" in text and res["rc"] not in (0, "timeout")
                       and not any(e.get("kind") in ("stage", "firstlaunch") for e in evs)
                       and all(x in allowed or x == "logs" or x.startswith("logs/") for x in left))
-                ev["cases"].append({"switch": name, "entry": f"release app (test hook, flag, run id not live; {where})",
-                                    "ok": ok, "rc": res["rc"], "shown": shown[-1:], "home_after": left})
+                ev["cases"].append({"switch": name, "entry": label, "ok": ok, "rc": res["rc"], "shown": shown[-1:],
+                                    "home_after": left})
                 if not ok:
                     bad.append(f"release app, run id not live ({where}) with {name}")
         ev["dev_app_tested"] = dev_app_ok
