@@ -19,7 +19,8 @@
  *   - On resume: the player is unrooted, and the client is sent the server's aura durations (player, target, party,
  *     pet) and spell cooldowns, which its own clock ran ahead on while paused (design.md "Prototype (task 1.1)").
  *   - Logging out unpauses first (CMSG_LOGOUT_REQUEST, before its handler starts the logout countdown, which reads
- *     GameTime), and any logout or disconnect of the pausing player resumes the world.
+ *     GameTime), and any logout or disconnect of the pausing player resumes the world (a disconnect is seen on the
+ *     next world tick: WorldScript::OnUpdate).
  *   - Moonglade.Pause.Enable = 0: pause requests do nothing.
  *   - Harness read-outs (GM): `.moonglade pause cooldown <spellId>`, the selected unit's remaining cooldown on the
  *     server (Player::GetSpellCooldownDelay / Creature::GetSpellCooldown); `.moonglade pause unit`, the selected
@@ -185,14 +186,26 @@ public:
     MoongladePauseWorldScript() : WorldScript("MoongladePauseWorldScript",
         { WORLDHOOK_ON_AFTER_CONFIG_LOAD, WORLDHOOK_ON_UPDATE }) { }
 
-    // runs every world tick (with zero elapsed time while paused): the first paused tick acknowledges the pause
+    // runs every world tick (with zero elapsed time while paused): the first paused tick acknowledges the pause, and a
+    // pause whose player has gone or lost its connection ends. (A dropped client's session waits as an "offline
+    // session" until 60 s of GameTime have passed, WorldSessionMgr::UpdateSessions, which never happens while the
+    // clock is stopped; so a crash or a killed client would otherwise leave the world paused for good.)
     void OnUpdate(uint32 /*diff*/) override
     {
-        if (!g_ackPending || !WorldPause::IsTickPaused())
+        if (!WorldPause::IsPaused() || !g_pausedBy)
             return;
-        g_ackPending = false;
-        if (Player* player = ObjectAccessor::FindConnectedPlayer(g_pausedBy))
+        Player* player = ObjectAccessor::FindConnectedPlayer(g_pausedBy);
+        if (!player || player->GetSession()->IsSocketClosed())
+        {
+            LOG_INFO("module", "[mod-moonglade] the pausing player is gone or disconnected; resuming");
+            Resume();
+            return;
+        }
+        if (g_ackPending && WorldPause::IsTickPaused())
+        {
+            g_ackPending = false;
             SendAddonState(player, "paused");
+        }
     }
 
     void OnAfterConfigLoad(bool /*reload*/) override
