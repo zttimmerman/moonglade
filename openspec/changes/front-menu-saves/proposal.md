@@ -62,4 +62,5 @@ Zach wants saves that feel like a single-player RPG ("function similar to … El
 
 ## Spec-change log
 - 2026-10-10 (clarification, orchestrator): in-game `LOAD` (and `DELETE`) name a save by list generation + index from `MGSAVE LIST`, not by save id, so that no save id ever appears in reply lines (`saves.list_wording`). Same pattern as the glue's `L` verb. Found in builder run A.
-- 2026-10-10 (wording): "hearthstone" replaced by "home inn" / "home bind" so tracked files avoid the old project name (`repo.naming`). No behaviour change.
+- 2026-10-10 (wording): the in-game bind item's name, which matches the old project name, was replaced by "home inn" / "home bind" so tracked files pass `repo.naming`. No behaviour change.
+- 2026-10-10 (default keys, per Zach's default "F5/F9 if free, else nearest free"): the client's own default bindings already use F5 and F9, so quicksave is F6 and quickload F7, set once only if still free.
