@@ -69,8 +69,8 @@ If `python3 --version` says less than 3.10 (a new Mac's is 3.9), `./bootstrap` s
 ## 2. Clone and bootstrap
 
 ```sh
-git clone https://github.com/zttimmerman/project-moonglade.git
-cd project-moonglade
+git clone https://github.com/zttimmerman/moonglade.git
+cd moonglade
 ./bootstrap ~/Downloads/YourClient_3.3.5a.zip
 ```
 
