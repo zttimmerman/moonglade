@@ -165,7 +165,8 @@ namespace MoongladeSaves
 
     constexpr uint64 MIN_FREE_BYTES = 2ull * 1024 * 1024 * 1024;     // harness/hslib/backups.py MIN_FREE_BYTES
     constexpr std::string_view MIDDOT = "\xC2\xB7";                  // " · " in labels (UTF-8)
-    constexpr std::string_view TEST_ACCOUNT = "HSTEST";              // harness paths.TEST_USER: test switches only
+    // the harness's test accounts (paths.TEST_USER, paths.SAVES_USER): the only ones the test switches apply to
+    bool IsTestAccount(std::string_view account) { return account == "HSTEST" || account == "HSSAVES"; }
 
     AsyncCallbackProcessor<QueryCallback> g_queries;                 // world thread (OnUpdate)
     AsyncCallbackProcessor<TransactionCallback> g_transactions;      // world thread (OnUpdate)
@@ -630,7 +631,7 @@ namespace MoongladeSaves
             fs::remove_all(tmp, ec);
             return fail("can't write the save file");
         }
-        if (g_test.pauseAfterFirstFileS && m.account == TEST_ACCOUNT)
+        if (g_test.pauseAfterFirstFileS && IsTestAccount(m.account))
         {
             LOG_INFO("module", "[mod-moonglade] saves: test switch: pausing {} s after the first file of {}",
                 g_test.pauseAfterFirstFileS, m.id);
@@ -1039,7 +1040,9 @@ namespace MoongladeSaves
             return "That save doesn't exist.";
         if (!ReadManifest(dir, out.m))
             return "That save is damaged.";
-        if (out.m.account != account || out.m.guid != guid)
+        if (out.m.account != account)
+            return "That save belongs to another account.";
+        if (out.m.guid != guid)
             return "That save belongs to another character.";
         std::string gz;
         if (!ReadFile(dir / "character.json.gz", gz) || Sha256Hex(gz) != out.m.sha256)
@@ -1320,7 +1323,7 @@ namespace MoongladeSaves
                 FinishJob(req.job, req.guid, "refused", "That character entered the world.");
                 return;
             }
-            uint32 failAfter = (g_test.failAfter && req.account == TEST_ACCOUNT) ? g_test.failAfter : 0;
+            uint32 failAfter = (g_test.failAfter && IsTestAccount(req.account)) ? g_test.failAfter : 0;
             uint32 statements = 0;
             CharacterDatabaseTransaction trans = BuildRestore(*save, req.guid, currentName, failAfter, statements);
             uint32 guid = req.guid, job = req.job;
@@ -1760,6 +1763,8 @@ public:
             { "load",      HandleLoad,      SEC_GAMEMASTER, Console::Yes },
             { "list",      HandleList,      SEC_GAMEMASTER, Console::Yes },
             { "interval",  HandleInterval,  SEC_GAMEMASTER, Console::Yes },
+            { "who",       HandleWho,       SEC_GAMEMASTER, Console::Yes },
+            { "trigger",   HandleTrigger,   SEC_GAMEMASTER, Console::Yes },
             { "test",      HandleTest,      SEC_GAMEMASTER, Console::Yes },
         };
         static ChatCommandTable moongladeTable = { { "save", saveTable } };
@@ -1869,6 +1874,56 @@ public:
         return true;
     }
 
+    /// `.moonglade save trigger <guid> <moment>` (console only, harness): an autosave trigger for an online character,
+    /// queued exactly as the hooks queue theirs (saves.refused_in_combat fires one during a fight; saves.bots_skip one
+    /// for a companion), so it is skipped or saved by the same rules.
+    static bool HandleTrigger(ChatHandler* handler, uint32 guid, std::string moment)
+    {
+        if (handler->GetSession())
+        {
+            handler->SendSysMessage("Moonglade save: the trigger switch is console-only");
+            return true;
+        }
+        Player* p = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(guid));
+        if (!p)
+        {
+            handler->PSendSysMessage("Moonglade save: trigger: {} not in the world", guid);
+            return true;
+        }
+        if (p->GetSession()->IsBot())
+        {
+            LOG_INFO("module", "[mod-moonglade] saves: autosave trigger ({}) of {} ignored: AI players never save", moment, guid);
+            handler->PSendSysMessage("Moonglade save: trigger ({}) of {} ignored: AI players never save", moment, guid);
+            return true;
+        }
+        {
+            std::lock_guard<std::mutex> lock(g_autoLock);
+            QueueAuto(p->GetGUID(), moment);
+        }
+        handler->PSendSysMessage("Moonglade save: trigger ({}) of {} queued", moment, guid);
+        return true;
+    }
+
+    /// `.moonglade save who <guid>` (harness read-out): what the server holds in memory for an online character:
+    /// level, money, position and quest statuses ("<quest>:<status>").
+    static bool HandleWho(ChatHandler* handler, uint32 guid)
+    {
+        Player* p = ObjectAccessor::FindConnectedPlayer(ObjectGuid::Create<HighGuid::Player>(guid));
+        if (!p || !p->IsInWorld())
+        {
+            handler->PSendSysMessage("Moonglade save who: {} not in the world", guid);
+            return true;
+        }
+        std::string quests;
+        for (auto const& [qid, st] : p->getQuestStatusMap())
+            quests += (quests.empty() ? "" : ",") + std::to_string(qid) + ":" + std::to_string(uint32(st.Status));
+        handler->PSendSysMessage("Moonglade save who: {} level {} money {} map {} x {:.3f} y {:.3f} z {:.3f} combat {} "
+            "dead {} bot {} quests {}", guid, p->GetLevel(), p->GetMoney(), p->GetMapId(), p->GetPositionX(),
+            p->GetPositionY(), p->GetPositionZ(), p->IsInCombat() ? 1 : 0, p->IsAlive() ? 0 : 1,
+            p->GetSession()->IsBot() ? 1 : 0, quests.empty() ? "-" : quests);
+        return true;
+    }
+
     /// `.moonglade save interval <s>` (console only): the autosave interval until the next restart or config
     /// reload (saves.autosave_triggers uses a short one).
     static bool HandleInterval(ChatHandler* handler, uint32 seconds)
@@ -1904,8 +1959,8 @@ public:
             handler->SendSysMessage("Moonglade save: test failafter <n> | pause <s> | off");
             return true;
         }
-        handler->PSendSysMessage("Moonglade save: test failafter {} pause {} (account {} only)", g_test.failAfter,
-            g_test.pauseAfterFirstFileS, TEST_ACCOUNT);
+        handler->PSendSysMessage("Moonglade save: test failafter {} pause {} (test accounts HSTEST, HSSAVES only)",
+            g_test.failAfter, g_test.pauseAfterFirstFileS);
         return true;
     }
 };

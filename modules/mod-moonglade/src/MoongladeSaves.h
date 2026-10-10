@@ -121,6 +121,9 @@ namespace MoongladeSaves
         "character_stats",
         // reports and logs
         "gm_ticket", "gm_survey", "lag_reports", "spam_reports", "log_arena_memberstats", "pvpstats_players",
+        "log_encounter",
+        // server-mail templates (their item column is an item entry, not an item)
+        "mail_server_template_items",
     };
 }
 

@@ -357,6 +357,12 @@ TEST_PASS = "hstest"
 TEST_CHAR = "Hstester"
 # Companion checks (m2-living-world comp.*): a separate GM-level (security 2) harness account and character, so the
 # HSTEST fixtures stay untouched. playerbots gives GM senders control of bots (PlayerbotSecurity.cpp).
+# front-menu-saves: the saves checks' own test account (security level 3, saves.GM_LEVEL: GM commands on itself), its
+# hunter (with a pet) and an alt (the second character, and the playerbot companion of bots_skip)
+SAVES_USER = "HSSAVES"
+SAVES_PASS = "hssaves"
+SAVES_CHAR = "Hssaver"
+SAVES_ALT = "Hssavalt"
 COMP_USER = "HSCOMP"
 COMP_PASS = "hscomp"
 COMP_CHAR = "Hscomp"

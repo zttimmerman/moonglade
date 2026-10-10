@@ -400,6 +400,12 @@ BRACKET_DIR = P.OUT / "release-bracket"         # one state file per run id (rel
 BRACKET_KEEP_S = 7 * 86400
 
 
+def _player_saves_fingerprint():
+    from . import backups, saves
+    acct = saves.player_account()
+    return backups.fingerprint(P.PLAYER_SAVES / acct) if acct else None
+
+
 def release_bracket_plan(checks, run_id: str | None, state_dir: Path | None = None) -> dict | None:
     """release.player_data_untouched brackets every release.*/firstlaunch.* check of the WHOLE run (not of one
     execute call: a two-lane run calls execute once per segment, and the check sits in a later segment than the
@@ -739,7 +745,9 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
            "keep_awake": awake, "gui_preflight": preflight, "orphans": orphans,
            "player_marker_sha256_start": player_marker_sha(),
            # save-backups: the player's env/backups/ must be byte-identical at the end (backups.player_untouched)
-           "player_backups_fingerprint_start": backups.fingerprint(backups.PLAYER_ROOT)}
+           "player_backups_fingerprint_start": backups.fingerprint(backups.PLAYER_ROOT),
+           # front-menu-saves: the player's env/saves/<PLAYER>/ must be identical at the end (saves.player_untouched)
+           "player_saves_fingerprint_start": _player_saves_fingerprint()}
     # release-first-launch: release.player_data_untouched's bracket, planned over the whole run (every lane-A segment)
     ctx["run_id"] = ((orphans or {}).get("run") or {}).get("id")
     ctx["release_bracket_plan"] = release_bracket_plan(selected, ctx["run_id"])
