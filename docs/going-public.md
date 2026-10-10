@@ -1,5 +1,7 @@
 # Going public: runbook
 
+> **Outcome (2026-10-10):** GitHub Support's purge of the old pull-request refs didn't arrive in time, so Zach chose a fresh repo instead: steps 1 (rewrite, from a mirror without `refs/pull/*`) and the scans ran as below, then only `main` was pushed to the new public repo **`zttimmerman/moonglade`**, which never had pull requests. The old repo `zttimmerman/project-moonglade` stays private. The rest of this runbook is kept as the record of the original plan.
+
 How `zttimmerman/project-moonglade` goes from private to public with a clean history (openspec change `go-public`; Zach's decisions of 2026-10-06: keep this repo, rewrite its history, purge the PR refs, then flip). **Every step below is outward and irreversible. Each one runs only on Zach's explicit go at the time.** Agents prepare and verify; they never push rewritten history, edit PRs, contact GitHub Support or change repo settings.
 
 Run everything from the main checkout (the folder holding `env/`, `client/` and `data/`), in order. Stop at the first step whose verification fails.

@@ -33,8 +33,8 @@ It's a personal project. The source is public under the GPL (GPL-2.0-or-later), 
 eval "$(/opt/homebrew/bin/brew shellenv)"     # add this line to ~/.zprofile to keep it
 
 # 2. clone
-git clone https://github.com/zttimmerman/project-moonglade.git
-cd project-moonglade
+git clone https://github.com/zttimmerman/moonglade.git
+cd moonglade
 
 # 3. set everything up with your own client (a .zip or a folder)
 ./bootstrap ~/Downloads/YourClient_3.3.5a.zip
