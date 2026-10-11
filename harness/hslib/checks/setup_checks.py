@@ -130,6 +130,7 @@ def run_bootstrap(repo: Path, args: list[str], env: dict, timeout: float = 300) 
             "seconds": round(time.time() - t0, 1)}
 
 
+AMPLE_FREE_BYTES = 10**13
 PREFLIGHT_CASES = [
     # (case, client: "good" or a fake key, injection, text the message must contain, failing step)
     ("intel_mac", "good", {"arch": "x86_64"}, ["Apple Silicon"], "preflight"),
@@ -184,6 +185,10 @@ def setup_preflight(ctx):
         fakes["good"] = P.CLIENT
         base_env = scratch_env(HS_HARNESS_RUN="1")
         for case, client, inj, texts, step in PREFLIGHT_CASES:
+            # the disk rule has its own case (low_disk): every other case gets ample free space, so a nearly full
+            # disk on this Mac can't stop a case at the disk rule before the rule it tests (brew_missing_declined)
+            if "free_bytes" not in inj:
+                inj = {**inj, "free_bytes": AMPLE_FREE_BYTES}
             before = tree_fingerprint(repo)
             env = base_env | ({"HS_BOOTSTRAP_TEST": json.dumps(inj)} if inj else {})
             r = run_bootstrap(repo, [str(fakes[client]), "--allow-test-inject"], env)
