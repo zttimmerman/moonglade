@@ -235,3 +235,7 @@ The `hs-change-loop` and `hs-harness-checks` skills get the matching run budget.
   - The quick tier's 3 min budget becomes the unit layer's 2 min budget. This is a tightening.
 - 2026-10-10 (verification move, for review at the gate): the 60 s live "no login before Continue" observation becomes a simulated 60 s unit test plus a 10 s live watch (Open question 2). This is a loosening of the live part.
 - Migration slices will add their own entries here: one per capability whose `Check:` lines are re-pointed, scenario text unchanged unless the entry says otherwise.
+
+## Measurement log
+- 2026-10-11 (tasks 1.1–1.4, prototype; numbers in design.md 12.1): **no-go as designed.** Unit layer projected ≈ 47 s warm with the 4-process pool (each unit test ≤ 0.06 s; C++ build 1.4 s, Lua build 2.4 s): pass. Shared-server slice (4 saves tests, 7 runs): statuses identical, reset median 0.06 s / max 0.07 s, pool −36.6 %, but per-test identity costs 4.6 s, so 3 of 4 tests exceed their projection + 20 %: fail; the pause ports were not done. Replay of #19–#33: selection ≤ 0.18 s, but the import closures select ~all tests for any harness change, and the complete suite is 38.2 min with the m4-dungeon-scaling checks; mean 37.1 min (strict FULL) and 33.3 min (option 2), against the 15 min target: a miss.
+

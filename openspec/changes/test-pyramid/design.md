@@ -389,6 +389,77 @@ The engine (tasks 2.x) lands before slice 1. Until a slice migrates an area, the
 ## 12. As built
 (Filled in by the builders: measured per-test and per-layer times, and any deviation from this design with its reason.)
 
+### 12.1 Go/no-go measurements (tasks 1.1–1.4, 2026-10-11, this Mac, prototype commit on `change/test-pyramid`)
+**Verdict: NO-GO as designed.** 1.1 passes. 1.2 fails one criterion (per-test time over projection + 20 %) and is
+incomplete (the pause tests were not ported). 1.3 shows the per-PR mean far above 15 min, and the complete suite above
+30 min. Details below; nothing was migrated.
+
+**1.1 Unit runners: PASS.**
+| What | Measured |
+|---|---|
+| Python unit tests (20) | 0.70–0.73 s for the suite; slowest test 0.058 s; ≈ 33 ms per test, mostly `UnitCase`'s player-file fingerprint (taken twice per test) |
+| C++ tests (10, `mg_unit`) | run 0.004 s; build cold 1.42 s (clang++, `-isysroot`), cached 0 s (input SHA-256 stamp) |
+| Lua tests (5, Lua 5.1.5) | run 0.016 s; slowest 0.0044 s (the simulated 60 s no-login: 600 × `advance(0.1)`); Lua build 2.39 s once; XML prelude 0.004 s |
+| Static unit-layer checks (51 of appendix A's unit rows, minus the 10 rewritten as true unit tests and `login.backdrop_choice`, which is a live check today) | serial 84.6 s; 4-process pool 24.0 s (slowest `report.keep_awake` 9.3 s) |
+| Projected unit layer, warm | pool 24 + 400 Python tests × 33 ms ≈ 13 + C++ 1 + Lua 1 + rewritten ≈ 5 + startup 3 = **≈ 47 s** (≤ 60 s). Serial static checks would make it ≈ 107 s |
+| Each test ≤ 2 s | yes: max 0.058 s (Python), 0.00002 s (C++), 0.0044 s (Lua) |
+| Server build picks up `src/logic/` | yes: an incremental `hs build` (3 min 0 s wall, cmake re-glob) compiled `modules/mod-moonglade/src/logic/SavesLogic.cpp` (`build/compile_commands.json`, build.log line "Building CXX object modules/CMakeFiles/modules.dir/mod-moonglade/src/logic/SavesLogic.cpp.o"); 7 `MoongladeLogic::` symbols in `server/bin/worldserver` |
+
+Deviations and findings:
+- Lua is built with `make posix CC="cc -isysroot <SDK>"`, not `make macosx`: macosx links readline for the interactive prompt, which the runner never uses, and this Mac's stray `/usr/local/include` shadows the SDK's headers without `-isysroot` (as in app.py and crashtrace.py). The pin: `lua51_sha256=2640fc56…695333`, computed from a fresh download (221213 bytes) and equal to lua.org/ftp's published sha256.
+- Static checks in the pool: `app.bundle_valid` failed only in the pool ("the blocked write isn't in the denial log"): it isn't `parallel_safe`. Eight more static checks fail outside a real `hs run` in both modes (they read run state: `report.keep_awake`, `release.player_data_untouched`'s bracket plan, `lane.refusal`, `release.test_switches_refused`, `release.mode_resolution`, `firstlaunch.preflight`) or the build stamp (`core.patch_applied`, `core.playerbots_patches_applied`: the incremental build above replaced the from-empty stamp; `hs build --clean` restores it). Their times are representative; their statuses need the run context of task 2.1.
+- `CleanLabel` drops a complete multi-byte character that ends exactly at byte 48 (it pops the continuation byte, then the lead byte). Behaviour unchanged by the extraction; the unit test asserts the documented invariants (prefix, ≤ 48 bytes, whole characters). A follow-up, not part of this change.
+- The Lua stub caught two load-order needs on first contact (`CharacterSelect` as a parent frame, `CURRENT_GLUE_SCREEN` from GlueParent.lua's `SetGlueScreen`); the "no login for 60 s" test fails as it should when a scripted Continue at 30 s is injected (counterexample run).
+
+**1.2 Shared-server slice: FAIL (one criterion), incomplete.**
+Ported: the fixture (one `hs up`; per-test identity = account `HSI<base36>` + two characters; reset round with leak detection; batch cleanup) and four saves tests as character-scoped (`saves.manual`, `saves.undo`, `saves.inworld_load`, `saves.item_ids_fresh`, under `saves.as_identity`). Not done: `pause.freeze_matrix`, `pause.disconnect_unpauses` with a per-test character (companion.py has no identity parameter yet), the scratch-spawn respawn test, and the fallback levers.
+| Criterion | Result |
+|---|---|
+| Identical statuses (3× serial, 3× 2-worker pool, 1× reversed) | **PASS**: 28 of 28 pass, no leaked state, cleanup left 0 `HSI%` accounts |
+| Reset median ≤ 1 s, max ≤ 3 s | **PASS**: 30 idle samples median 0.057 s, max 0.078 s; across the 7 runs median 0.057–0.064 s, max 0.073 s |
+| Each ported test ≤ its 9.3 projection + 20 % | **FAIL**: manual 6.5 s (≤ 8.5 ✓), undo 8.5 s (≤ 4.2 ✗), inworld_load 22.4 s serial / 27.3 s pooled or reversed (≤ 21.2 ✗), item_ids_fresh 15.4 s (≤ 13.0 ✗). The cause is the per-test identity: 4.6 s each (account + 2 characters 0.35 s, plus one login/logout per character with 10 000 copper, which fresh characters need: `characters.zone` is 0 until the first login, and a mail needs postage), against the ≈ 1 s design 6 assumed. Without it, three of four fit (manual 1.9, undo 3.9, item 10.8); inworld_load pooled is still 22.7 s |
+| Pool saving recorded | serial 53.1–53.6 s, pooled 33.7–33.8 s: **−36.6 %** on this slice (design assumed −50 % on pooled tests) |
+
+Findings that change the design:
+- Character names allow letters only, and never one letter three times in a row (ObjectMgr::CheckPlayerName → isValidString(…, numericOrSpace=false), ObjectMgr.cpp:9280–9306 at core 7f12e89). `HSI<base36 counter>` (design 6) works for accounts only; characters use `Hs` + letters.
+- `saves.load_atomic` flips a server-global test switch (`.moonglade save test failafter`), so it is exclusive, not character-scoped as design 9.3's pooled list has it.
+- Respawn: the pinned core's command is `.npc set spawntime <secs>` on the selected creature (cs_npc.cpp HandleNpcSetSpawnTimeCommand at 7f12e89). It **writes the world database** (`WORLD_UPD_CREATURE_SPAWN_TIME_SECS`) as well as the live creature, so it needs a scratch spawn and an undo; not run here (no ad-hoc world writes).
+- `.reload config` does re-read `Moonglade.Pause.Enable`, by source: cs_reload.cpp HandleReloadConfigCommand → World::LoadConfigSettings(true) → ConfigMgr::Reload (Config.cpp:470–485, which reloads module configs) → ScriptMgr::OnAfterConfigLoad(true) (World.cpp:301) → MoongladePause.cpp:207–213. Not confirmed live (it needs a conf write mid-run, which is the profile mechanism's job in 3.4).
+
+**1.3 Selector and replay: selection PASS (≤ 10 s); the replay mean is a large miss.**
+- Selection time: 0.14–0.18 s per PR; building the plan and the 37 check-file closures once: ≈ 0.4–0.9 s; the whole 15-PR replay 3.2 s.
+- Priced with the last full run (`harness/out/last-full-run`, 2026-10-11 01:01 UTC, d123522) plus design 9.3/9.4's projections; unit layer 48 s (measured, 12.1).
+- **The import closures select almost everything.** 31 of 37 check files reach 60–64 modules, because `stack.py` imports `lanestack` → `play` → `lanes` → `runner` → … inside functions. Any `harness/hslib` change except a leaf selects ~130–142 tests, so non-FULL PRs (#23, #29, #30, #31) still price at 34–39 min. With module-level imports only (not fail-safe; for scale) closures are 4–26 modules, but more paths become unmapped and the FULL share rises to 80 %.
+- **The complete suite is 38.2 min, not 29.6.** Integration 1715.9 s + journeys 575 s. Without the m4-dungeon-scaling checks (`scale.*`, `lock.*`: 519.5 s at their last-run times, not in the design's projection) it is 1196.4 s + 575 s = 29.5 min, which matches design 9.4.
+
+| PR | FULL? (first reason) | Tests selected | Strict FULL (min) | Option 2 (min) | Design-rule journeys, strict |
+|---|---|---:|---:|---:|---:|
+| #19 save-backups | FULL (`stack.py`) | 142 | 39.0 | 34.3 | 39.0 |
+| #20 seamless-experience | FULL (`config.py` not constants-only; `probe/`) | 142 | 39.0 | 39.0 | 39.0 |
+| #21 easy-setup | FULL (`bootstrap`, `fork.lock`, `build.py`) | 132 | 39.0 | 32.2 | 39.0 |
+| #22 seamless-polish | no | 15 | 11.8 | 11.8 | 10.8 |
+| #23 test-loop-speedups | no (closures) | 142 | 39.0 | 39.0 | 31.3 |
+| #24 power-guard | FULL (`build.py`) | 132 | 39.0 | 31.3 | 39.0 |
+| #25 second-stack | FULL (`config.py`/`paths.py`; `lane.py` unmapped) | 141 | 39.0 | 31.3 | 39.0 |
+| #26 go-public | FULL (deleted `tools/rename-folder.sh` unmapped) | 133 | 39.0 | 31.3 | 39.0 |
+| #27 release-build | FULL (`fork.lock`) | 133 | 39.0 | 31.3 | 39.0 |
+| #28 release-first-launch | FULL (`config.py`, `paths.py`) | 142 | 39.0 | 34.3 | 39.0 |
+| #29 release-signing | no (closures) | 142 | 39.0 | 39.0 | 34.3 |
+| #30 icon-corner-c | no (closures) | 132 | 38.2 | 38.2 | 33.5 |
+| #31 saves-channel | no (closures) | 132 | 38.2 | 38.2 | 33.7 |
+| #32 true-pause | FULL (`patches/core`) | 68 | 39.0 | 32.2 | 39.0 |
+| #33 front-menu-saves | FULL (`config.py` not constants-only) | 142 | 39.0 | 36.0 | 39.0 |
+| **Mean** | 10 of 15 FULL (67 %) | | **37.1** | **33.3** | 35.6 (option 2: 31.8) |
+
+Minutes are unit + selection + integration + journeys; gate checks are excluded as the budget defines them (with them, strict 48.9, option 2 45.1). "Option 2" = the proposal's open question 1 (b): a FULL PR runs the complete integration layer, `journey.first_play` and only the journeys whose covers match its paths. "Design-rule journeys" = design 8's narrower journey rule (a journey whose closure merely contains the path is replaced by `first_play`); the spec's rule 3 and its scenario (f) select those journeys too. Compared with design 8's rough table (mean 22.2, 9 of 15 FULL): FULL share is similar (10 of 15; #23 is no longer FULL, #25/#26/#33 are), but the non-FULL PRs are ~38 min instead of 4–16, and FULL is 39 min instead of 30.4.
+
+Prototype covers (selector.py `FILE_COVERS`) are by check file; `harness/hslib/cli.py` and `camask.py` were added after the first replay showed them unmapped (they are run as subprocesses, so no import closure reaches them).
+
+**What would change the outcome** (for the orchestrator and Zach; none tried here):
+1. Break the import coupling (stack.py → lanestack → play → lanes → runner) so closures shrink, or select by declared `covers` plus module-level imports with a reviewed fail-safe for lazy imports.
+2. Fit the dungeon checks into the 30 min (≈ 8.7 min today) or move most of them to unit tests (DungeonsLogic) and the gate.
+3. Pre-create per-test identities in bulk (in parallel, once per run) instead of 4.6 s per test.
+
 ## Appendix A: every record of the baseline run, where it goes
 `Today` is the baseline `duration_s`. A 0.0 is either a shared session whose time sits on its first check, or a skipped slow check. `Goes to` uses the layers in §2; `J1`–`J6` are, in order, `first_play`, `pause`, `saves`, `login_recovery`, `stock_client` and `app_desktop`.
 

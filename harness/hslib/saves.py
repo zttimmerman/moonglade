@@ -19,6 +19,9 @@ Every world-data choice (creatures, bankers, talents, skills, factions, quests, 
 database or the client's DBCs, written next to it, never from memory (CLAUDE.md §7)."""
 from __future__ import annotations
 
+import contextlib
+import threading
+
 import gzip
 import hashlib
 import json
@@ -59,6 +62,31 @@ UNIT_NPC_FLAG_FLIGHTMASTER = 0x2000
 CREATURE_TYPE_BEAST, CREATURE_TYPE_FLAG_TAMEABLE = 1, 0x1   # SharedDefines.h
 PLAYER_FIELD_COINAGE = W.UNIT_END + 0x03FE                   # UpdateFields.h
 PLAYER_QUEST_LOG_1_1 = W.UNIT_END + 0x000A                   # UpdateFields.h (5 fields per quest log slot)
+
+
+class Identity:
+    """Whose account and characters the saves helpers use (test-pyramid 1.2 prototype: per-test characters). The
+    default is the fixed saves account (P.SAVES_USER with P.SAVES_CHAR and P.SAVES_ALT); a shared-server test runs
+    under its own with `as_identity`, per thread, so two pooled tests never share a character."""
+    def __init__(self, user, password, char, alt):
+        self.user, self.password, self.char, self.alt = user, password, char, alt
+
+
+_IDENT = threading.local()
+
+
+def ident() -> Identity:
+    return getattr(_IDENT, "v", None) or Identity(P.SAVES_USER, P.SAVES_PASS, P.SAVES_CHAR, P.SAVES_ALT)
+
+
+@contextlib.contextmanager
+def as_identity(i: Identity):
+    prev = getattr(_IDENT, "v", None)
+    _IDENT.v = i
+    try:
+        yield i
+    finally:
+        _IDENT.v = prev
 
 
 class SavesError(Exception):
@@ -268,7 +296,7 @@ def before_writes() -> dict:
 # ----------------------------------------------------------------------------- the account and characters
 
 def account_id() -> int | None:
-    v = db.scalar(f"SELECT id FROM account WHERE username='{P.SAVES_USER}'", "auth")
+    v = db.scalar(f"SELECT id FROM account WHERE username='{ident().user}'", "auth")
     return int(v) if v else None
 
 
@@ -286,20 +314,20 @@ def ensure() -> dict:
     """The saves account (security GM_LEVEL) and its two characters, through the server."""
     ev = {}
     if account_id() is None:
-        ev["create"] = gm(f"account create {P.SAVES_USER} {P.SAVES_PASS}")
+        ev["create"] = gm(f"account create {ident().user} {ident().password}")
         _, ok, _ = F.poll(account_id, bool, timeout=15)
         if not ok:
             raise SavesError("saves account not in auth.account after `account create`", **ev)
     acct = account_id()
     if F.access_rows(acct) != [[str(GM_LEVEL), "-1"]]:
-        ev["gmlevel"] = gm(f"account set gmlevel {P.SAVES_USER} {GM_LEVEL} -1")
+        ev["gmlevel"] = gm(f"account set gmlevel {ident().user} {GM_LEVEL} -1")
         _, ok, _ = F.poll(lambda: F.access_rows(acct), lambda v: v == [[str(GM_LEVEL), "-1"]], timeout=15)
         if not ok:
             raise SavesError("saves account security level not set", **ev)
-    missing = [(n, r, c) for n, r, c in ((P.SAVES_CHAR, RACE_DWARF, CLASS_HUNTER), (P.SAVES_ALT, F.RACE_HUMAN, F.CLASS_WARRIOR))
+    missing = [(n, r, c) for n, r, c in ((ident().char, RACE_DWARF, CLASS_HUNTER), (ident().alt, F.RACE_HUMAN, F.CLASS_WARRIOR))
                if not char_row(n)]
     if missing:
-        _, ws, _ = probe.open_world(P.SAVES_USER, P.SAVES_PASS)
+        _, ws, _ = probe.open_world(ident().user, ident().password)
         with ws:
             for n, r, c in missing:
                 code = ws.char_create(n, r, c)
@@ -310,7 +338,7 @@ def ensure() -> dict:
             if not ok:
                 raise SavesError("character not in the database after CHAR_CREATE_SUCCESS", name=n)
         ev["created"] = [n for n, _, _ in missing]
-    return ev | {"account": P.SAVES_USER, "id": acct}
+    return ev | {"account": ident().user, "id": acct}
 
 
 def wait_offline(name: str, timeout: float = 70) -> bool:
@@ -319,7 +347,7 @@ def wait_offline(name: str, timeout: float = 70) -> bool:
 
 
 def store_dir(guid: int) -> Path:
-    return P.SAVES / P.SAVES_USER / str(int(guid))
+    return P.SAVES / ident().user / str(int(guid))
 
 
 def store_ids(guid: int) -> list[str]:
@@ -334,7 +362,7 @@ def store_tmp(guid: int) -> list[str]:
 def clear_store(guid: int) -> list[str]:
     """Remove the saves account's character folder (test data only: never another account's folder)."""
     d = store_dir(guid)
-    if P.SAVES_USER not in d.parts:
+    if ident().user not in d.parts:
         raise SavesError("refusing to clear a folder outside the saves account", dir=str(d))
     gone = store_ids(guid)
     shutil.rmtree(d, ignore_errors=True)
@@ -392,8 +420,8 @@ class Session:
     """A saves-account character in the world through the probe (pumped). Context manager: on exit `.combatstop` and a
     logout (unless the character already left the world, e.g. by an in-game load)."""
 
-    def __init__(self, name: str = P.SAVES_CHAR, tele: str | None = START_TELE):
-        self.name, self.tele = name, tele
+    def __init__(self, name: str | None = None, tele: str | None = START_TELE):
+        self.name, self.tele = name or ident().char, tele
         self.ws = None
         self.guid = None
         self.ev: dict = {}
@@ -404,7 +432,7 @@ class Session:
             raise SavesError("character still online before the session", row=char_row(self.name))
         if self.tele:
             self.ev["tele"] = gm(f"tele name {self.name} {F.tele_row(self.tele)['name']}")
-        _, ws, _ = probe.open_world(P.SAVES_USER, P.SAVES_PASS)
+        _, ws, _ = probe.open_world(ident().user, ident().password)
         self.ws = ws
         try:
             c = next((c for c in ws.char_enum() if c["name"].lower() == self.name.lower()), None)
@@ -646,11 +674,11 @@ def prepare_rich() -> dict:
     its starting gear equipped, fixtures.ITEM_ENTRY in its bags and in its bank, an equipment set, the active
     fixtures.QUEST_ID, a talent, First Aid and a changed reputation; logged out (saved). Returns what was set up."""
     ev = {"ensure": ensure()}
-    if not wait_offline(P.SAVES_CHAR):
+    if not wait_offline(ident().char):
         raise SavesError("character still online")
-    ev["level"] = gm(f"character level {P.SAVES_CHAR} {RICH_LEVEL}")
+    ev["level"] = gm(f"character level {ident().char} {RICH_LEVEL}")
     talent, skill = pick_talent(), pick_skill()
-    with Session(P.SAVES_CHAR) as s:
+    with Session(ident().char) as s:
         g = s.guid
         ev["guid"] = g
         if not db.query(f"SELECT id FROM character_pet WHERE owner = {g}", "characters"):
@@ -700,10 +728,10 @@ def prepare_rich() -> dict:
             time.sleep(0.5)
         ev["additem_bags"] = _self_cmd(s, f".additem {F.ITEM_ENTRY} 2")      # (the first stack went to the bank)
         ev["save2"] = s.cmd(".save")
-        ev["tele_back"] = gm(f"tele name {P.SAVES_CHAR} {F.tele_row(START_TELE)['name']}")
+        ev["tele_back"] = gm(f"tele name {ident().char} {F.tele_row(START_TELE)['name']}")
         time.sleep(1.0)
     ev["session"] = {k: v for k, v in s.ev.items() if k in ("login", "logout", "logout_error")}
-    if not wait_offline(P.SAVES_CHAR):
+    if not wait_offline(ident().char):
         raise SavesError("character didn't log out", **ev)
     ev["given"] = given_rich(ev["guid"])
     return ev

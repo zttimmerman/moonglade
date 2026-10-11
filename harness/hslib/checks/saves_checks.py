@@ -133,7 +133,7 @@ def manual(ctx):
     ev = {"before_writes": S.before_writes()}
     _given_enabled(ev)
     name = f"Manual {int(time.time()) % 100000}"
-    with S.Session(P.SAVES_ALT) as s:
+    with S.Session(S.ident().alt) as s:
         g = s.guid
         before = S.store_ids(g)
         w = S.who(g)
@@ -153,8 +153,8 @@ def manual(ctx):
         ev["manifest"] = m
         sha = hashlib.sha256((d / "character.json.gz").read_bytes()).hexdigest()
         ev["sha256_file"] = sha
-        row = S.char_row(P.SAVES_ALT)
-        require(m["label"] == name and m["name"] == P.SAVES_ALT and m["level"] == row["level"] and m["kind"] == "manual"
+        row = S.char_row(S.ident().alt)
+        require(m["label"] == name and m["name"] == S.ident().alt and m["level"] == row["level"] and m["kind"] == "manual"
                 and m["zone"] == row["zone"] and m["zone_name"], "the manifest doesn't name the character, level, "
                 "zone and the given name", row=row, **ev)
         require(sha == m["sha256"], "the file's sha256 doesn't match the manifest", **ev)
@@ -626,8 +626,8 @@ def item_ids_fresh(ctx):
     ev = {"before_writes": S.before_writes()}
     _given_enabled(ev)
     S.ensure()
-    a, b = _guid(P.SAVES_CHAR), _guid(P.SAVES_ALT)
-    with S.Session(P.SAVES_CHAR) as s:
+    a, b = _guid(S.ident().char), _guid(S.ident().alt)
+    with S.Session(S.ident().char) as s:
         s.ws.set_selection(a)
         s.cmd(".additem 2589 1")
         s.cmd(".save")
@@ -641,10 +641,10 @@ def item_ids_fresh(ctx):
     log_start = (P.LOGS / "Server.log").stat().st_size
     dbe = P.LOGS / "DBErrors.log"
     dbe_start = dbe.stat().st_size if dbe.exists() else 0
-    with S.Session(P.SAVES_CHAR, tele="Stormwind") as s:
-        ev["mail"] = S.mail_item(s, P.SAVES_ALT, x["item"])
+    with S.Session(S.ident().char, tele="Stormwind") as s:
+        ev["mail"] = S.mail_item(s, S.ident().alt, x["item"])
         s.cmd(".save")
-    require(S.wait_offline(P.SAVES_CHAR), "A didn't log out", **ev)
+    require(S.wait_offline(S.ident().char), "A didn't log out", **ev)
     in_mail = db.query(f"SELECT mi.mail_id, mi.item_guid, mi.receiver FROM mail_items mi WHERE mi.item_guid={x['item']}",
                        "characters")
     ev["mail_row"] = in_mail
@@ -670,7 +670,7 @@ def item_ids_fresh(ctx):
         "both_in_inventory_and_mail": db.query("SELECT ci.item FROM character_inventory ci JOIN mail_items mi "
                                                "ON mi.item_guid = ci.item", "characters")}
     logins = {}
-    for n in (P.SAVES_CHAR, P.SAVES_ALT):
+    for n in (S.ident().char, S.ident().alt):
         with S.Session(n, tele=None) as s:
             logins[n] = s.ev.get("login")
     ev["logins"] = logins
@@ -692,17 +692,17 @@ def inworld_load(ctx):
     position, and the worldserver pid is unchanged."""
     ev = {"before_writes": S.before_writes()}
     _given_enabled(ev)
-    g = _guid(P.SAVES_ALT) or (S.ensure() and _guid(P.SAVES_ALT))
-    require(S.wait_offline(P.SAVES_ALT), "GIVEN not met: the alt is online", **ev)
-    ev["level0"] = S.gm(f"character level {P.SAVES_ALT} 6")
-    S.gm(f"tele name {P.SAVES_ALT} Goldshire")
+    g = _guid(S.ident().alt) or (S.ensure() and _guid(S.ident().alt))
+    require(S.wait_offline(S.ident().alt), "GIVEN not met: the alt is online", **ev)
+    ev["level0"] = S.gm(f"character level {S.ident().alt} 6")
+    S.gm(f"tele name {S.ident().alt} Goldshire")
     save = S.take(g, f"earlier level {int(time.time()) % 1000}")
     ev["save"] = {k: save[k] for k in ("id", "level", "zone")}
     pos = db.query(f"SELECT CAST(position_x AS DOUBLE), CAST(position_y AS DOUBLE), map FROM characters WHERE guid={g}",
                    "characters")[0]
-    ev["level1"] = S.gm(f"character level {P.SAVES_ALT} 8")
+    ev["level1"] = S.gm(f"character level {S.ident().alt} 8")
     pid = stack.stack_processes()["worldserver"]
-    with S.Session(P.SAVES_ALT, tele=None) as s:
+    with S.Session(S.ident().alt, tele=None) as s:
         ev["fight"] = _run(lambda: S.engage(s, level=8), ev)
         lst = s.list()
         row = next((r for r in lst["rows"] if r["label"] == save["label"]), None)
@@ -817,11 +817,11 @@ def undo(ctx):
     from before the first load (by content), and at most 3 before-load saves exist for it."""
     ev = {"before_writes": S.before_writes()}
     _given_enabled(ev)
-    g = _guid(P.SAVES_CHAR) or (S.ensure() and _guid(P.SAVES_CHAR))
-    require(S.wait_offline(P.SAVES_CHAR), "GIVEN not met: the hunter is online", **ev)
+    g = _guid(S.ident().char) or (S.ensure() and _guid(S.ident().char))
+    require(S.wait_offline(S.ident().char), "GIVEN not met: the hunter is online", **ev)
     old = S.take(g, "older")
-    S.gm(f"character level {P.SAVES_CHAR} {S.RICH_LEVEL + 3}")
-    S.gm(f"tele name {P.SAVES_CHAR} Stormwind")
+    S.gm(f"character level {S.ident().char} {S.RICH_LEVEL + 3}")
+    S.gm(f"tele name {S.ident().char} Stormwind")
     before = _content(g)
     bl_before = {x for x in S.store_ids(g) if "-before-load" in x}
     ev["first_load"] = S.load(g, old["id"])
