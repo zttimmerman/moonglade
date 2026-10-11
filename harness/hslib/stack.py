@@ -45,6 +45,19 @@ class StackError(RuntimeError):
 
 # ---------------------------------------------------------------- process discovery
 
+def conf_value(etc: Path, name: str) -> str:
+    """The `-c` value a lane's authserver/worldserver gets for `etc/<name>.conf`. AzerothCore parses `-c` as a
+    filesystem path through boost::program_options, which rejects a path with whitespace ("the argument (...) for option
+    '--config' is invalid"; authserver/Main.cpp:296, worldserver/Main.cpp:739). The release HOME is under
+    ~/Library/Application Support, so such a path is passed relative to the servers' working directory instead."""
+    conf = str(etc / f"{name}.conf")
+    if any(ch.isspace() for ch in conf):
+        rel = os.path.relpath(conf, P.SERVER_CWD)
+        if not any(ch.isspace() for ch in rel):
+            return rel
+    return conf
+
+
 def _conf_arg(argv: list[str]) -> str | None:
     """The value of `-c <conf>` (or `-c<conf>`, `--config <conf>`, `--config=<conf>`) in an argv, else None."""
     for i, a in enumerate(argv):
@@ -75,7 +88,7 @@ def stack_processes(lane: str | None = None) -> dict[str, list[int]]:
         for name in ("authserver", "worldserver"):
             if argv and argv[0] == str(P.SERVER_BIN / name):
                 conf = _conf_arg(argv[1:]) or str(P.SERVER_ETC / f"{name}.conf")
-                if conf == str(L["etc"] / f"{name}.conf"):
+                if conf in (str(L["etc"] / f"{name}.conf"), conf_value(L["etc"], name)):
                     found[name].append(pid)
     return found
 
@@ -248,6 +261,9 @@ def spawn_env(name: str) -> dict:
         env |= ac
     if P.MODE == "release":
         env["OPENSSL_CONF"] = str(P.OPENSSL_CONF)
+        # the bundled legacy provider (RC4, the world session cipher); without it a Mac lacking Homebrew's openssl@3
+        # asserts in ARC4.cpp at the first client login
+        env["OPENSSL_MODULES"] = str(P.SERVER_BIN.parent / "lib")
     return env
 
 
@@ -259,7 +275,7 @@ def _spawn(name: str):
     fh = open(LOG[name], "w")
     eh = open(ERRLOG[name], "w")
     P.SERVER_CWD.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.Popen([str(P.SERVER_BIN / name), "-c", str(P.LANE_ETC / f"{name}.conf")],
+    proc = subprocess.Popen([str(P.SERVER_BIN / name), "-c", conf_value(P.LANE_ETC, name)],
                             cwd=P.SERVER_CWD, stdin=subprocess.DEVNULL, stdout=fh, stderr=eh,
                             start_new_session=True, env=env)
     PIDFILE[name].write_text(str(proc.pid))

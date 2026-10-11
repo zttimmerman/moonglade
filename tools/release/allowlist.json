@@ -10,7 +10,7 @@
     {"file": "server/bin/*", "match": "/opt/homebrew/bin/cmake",
      "reason": "AzerothCore's compiled-in default for the CMakeCommand config key (revision.h _CMAKE_COMMAND); informational only, never run"},
     {"file": "server/lib/libcrypto.3.dylib", "match": "/opt/homebrew/(Cellar/openssl@3/[^/]+/lib/(engines-3|ossl-modules)|etc/openssl@3(/(cert\\.pem|certs|ct_log_list\\.cnf|private))?)\"?",
-     "reason": "OpenSSL's compiled-in OPENSSLDIR/ENGINESDIR/MODULESDIR defaults (Homebrew build); the server loads no engines or providers from disk and missing paths are ignored; release-first-launch can pin OPENSSL_CONF"},
+     "reason": "OpenSSL's compiled-in OPENSSLDIR/ENGINESDIR/MODULESDIR defaults (Homebrew build); the server loads no engines; it loads the legacy provider (RC4) from the bundled server/lib/legacy.dylib through OPENSSL_MODULES (stack.spawn_env), and OPENSSL_CONF points at HOME's empty openssl.cnf"},
     {"file": "mysql/lib/libcrypto.3.dylib", "match": "/usr/local/mysql/(lib/(engines-3|ossl-modules)|ssl(/(cert\\.pem|certs|ct_log_list\\.cnf|private))?)\"?",
      "reason": "OpenSSL's compiled-in OPENSSLDIR/ENGINESDIR/MODULESDIR defaults in Oracle's build; only read if those paths exist; Moonglade's mysqld runs with --no-defaults/--defaults-file and no TLS"},
     {"file": "mysql/bin/*", "match": "/usr/local/mysql/(data|etc|share|lib/plugin|lib/private)",

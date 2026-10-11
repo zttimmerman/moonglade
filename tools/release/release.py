@@ -535,8 +535,15 @@ def step_payload(c: Ctx) -> dict:
     shutil.copytree(inst / "etc", stage / "server/etc")
     (stage / "server/lib").mkdir()
     shutil.copy2(mysql / "lib/libmysqlclient.24.dylib", stage / "server/lib/libmysqlclient.24.dylib")
+    # OpenSSL's legacy provider: the servers' session cipher is RC4 (ARC4.cpp), which OpenSSL 3 keeps in legacy.dylib,
+    # loaded from OPENSSL_MODULES (stack.spawn_env sets it to server/lib) or else the build's Homebrew modules dir. A
+    # Mac without Homebrew's openssl@3 asserted in ARC4.cpp at the first client login (v0.1.1, a friend's Mac).
+    ossl_modules = P.BREW / "opt/openssl@3/lib/ossl-modules"
+    if not (ossl_modules / "legacy.dylib").is_file():
+        raise ReleaseError(f"no OpenSSL legacy provider at {ossl_modules / 'legacy.dylib'}")
+    shutil.copy2(ossl_modules / "legacy.dylib", stage / "server/lib/legacy.dylib")
     rec["delocate"] = delocate.fix(stage, "server/lib", ["server/bin/authserver", "server/bin/worldserver"],
-                                   [mysql / "lib"])
+                                   [mysql / "lib", ossl_modules])
     (c.build / "delocate.json").write_text(json.dumps(rec["delocate"], indent=2) + "\n")
     # mysql (Oracle's signed binaries, unmodified)
     m = stage / "mysql"

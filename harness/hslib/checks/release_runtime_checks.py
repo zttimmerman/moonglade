@@ -43,12 +43,14 @@ import tempfile
 import time
 from pathlib import Path
 
-from .. import paths as P
+from .. import paths as P, stack
 from ..registry import check, require
 
 CAP = "release-runtime"
 GOLDEN = Path(__file__).with_name("release_paths_golden.json")
 SCRATCH_ROOT = P.OUT / "release-scratch"          # paths.SCRATCH_PARTS: the only place a scratch HOME may be
+# Scratch HOMEs have a space in their name ("h s"), like the real one (~/Library/Application Support/Moonglade):
+# v0.1.0's first launch failed on a friend's Mac because a server option can't take a path with a space.
 RELEASE_WORK = P.ENV / "release"
 NEW_APP = RELEASE_WORK / "payload" / "Moonglade.app"
 NEW_PAYLOAD = NEW_APP / "Contents" / "Resources" / "Moonglade"
@@ -565,7 +567,7 @@ def mode_resolution(ctx):
         shutil.rmtree(planted)
         # release mode: a scratch app + scratch HOME through the test switch, in this harness run
         app = quick_app(d)
-        home = d / "home"
+        home = d / "home s"
         real_before = real_home_state()
         t = release_table(app, release_env(home), True, d)
         require(t.get("rc") == 0, "the payload's Python couldn't print the release table", **ev, release=t)
@@ -780,7 +782,7 @@ def test_switches_refused(ctx):
         # payload's Python (-I -B -m hslib.play), its log is in the scratch HOME, and PATH has no Homebrew (tasks 2.3,
         # 5.3). The play loop's single-instance lock is held here, so it stops at once ("already running").
         import fcntl
-        home2 = d / "h2"
+        home2 = d / "h2 s"
         (home2 / "run").mkdir(parents=True)
         # a set-up HOME (release-first-launch 3.5: a HOME whose first launch isn't complete gets the first-launch
         # window instead of the play loop; this control is about the play loop)
@@ -833,6 +835,29 @@ def sandbox_profile(scratch: Path) -> str:
         f'(deny file-write* (subpath "{home}"))',
         f'(allow file-write* (subpath "{scratch.resolve()}"))',
     ]) + "\n"
+
+
+RC4_PROBE = """
+import ctypes, sys
+c = ctypes.CDLL(sys.argv[1])
+c.OSSL_PROVIDER_load.restype = ctypes.c_void_p
+c.OSSL_PROVIDER_load.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+c.EVP_CIPHER_fetch.restype = ctypes.c_void_p
+c.EVP_CIPHER_fetch.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+print(int(bool(c.OSSL_PROVIDER_load(None, b"legacy"))), int(bool(c.EVP_CIPHER_fetch(None, b"RC4", None))))
+"""
+
+
+def rc4_probe(app: Path, prof: Path, cwd: Path, server_env: dict) -> str:
+    """'<legacy provider loaded> <RC4 fetched>' (e.g. "1 1") from the payload's libcrypto under the no-Homebrew sandbox,
+    with the OPENSSL_* variables of `server_env` (a server's environment), else the error text."""
+    env = {"PATH": "/usr/bin:/bin"} | {k: v for k, v in server_env.items() if k.startswith("OPENSSL_")}
+    # /usr/bin/python3, not the payload's Python: the payload's interpreter enforces library validation and won't map
+    # the servers' ad-hoc-signed libcrypto ("different Team IDs"); the servers themselves load it fine
+    r = subprocess.run([SANDBOX_EXEC, "-f", str(prof), "/usr/bin/python3", "-I", "-c", RC4_PROBE,
+                        str(app / "server/lib/libcrypto.3.dylib")], capture_output=True, text=True, env=env, cwd=cwd,
+                       timeout=60)
+    return r.stdout.strip() if r.returncode == 0 else f"rc={r.returncode}: {(r.stderr or r.stdout)[-300:]}"
 
 
 def release_fixture_app(d: Path) -> Path:
@@ -926,7 +951,7 @@ def stack_from_payload(ctx):
     d = SCRATCH_ROOT / f"sp-{os.getpid()}"           # short: HOME/run/mysql.sock must fit a 104-byte socket path
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True)
-    home = d / "h"
+    home = d / "h s"
     log = d / "release.log"
     ports = dict(SCRATCH_PORTS)
     try:
@@ -970,6 +995,27 @@ def stack_from_payload(ctx):
                 "the running mysqld isn't the payload's", **ev)
         require(world and world[0]["exe"] == str(app / "server/bin/worldserver") and auth
                 and auth[0]["exe"] == str(app / "server/bin/authserver"), "the servers aren't the payload's", **ev)
+        # a spaced HOME (as ~/Library/Application Support is): the servers' -c must be one they accept (boost rejects
+        # a path with whitespace and the server falls back to its compiled-in config; v0.1.0's first install failed so)
+        errs = {n: (home / f"logs/{n}.err").read_text(errors="replace") if (home / f"logs/{n}.err").exists() else ""
+                for n in ("authserver", "worldserver")}
+        ev["spaced_home"] = {"home": str(home), "has_space": " " in str(home),
+                             "config_arg": {n: (stack._conf_arg(x[0]["argv"][1:]) if x else None) for n, x in (("authserver", auth),
+                                                                                          ("worldserver", world))},
+                             "invalid_config_lines": {n: [l for l in e.splitlines() if "is invalid" in l][:2]
+                                                      for n, e in errs.items()}}
+        require(" " in str(home) and not any(ev["spaced_home"]["invalid_config_lines"].values()),
+                "a server rejected its --config path under a HOME with a space", **ev)
+        # the world session cipher (RC4, ARC4.cpp) needs OpenSSL's legacy provider; this sandbox hides Homebrew, as a
+        # friend's Mac without openssl@3 does. Probe the payload's libcrypto with the worldserver's own OPENSSL_*
+        # environment, and without OPENSSL_MODULES as the counterexample (v0.1.1 asserted at the first client login).
+        ev["rc4"] = {"with_server_env": rc4_probe(app, prof, d, ws_env),
+                     "without_openssl_modules": rc4_probe(app, prof, d, {k: v for k, v in ws_env.items()
+                                                                          if k != "OPENSSL_MODULES"})}
+        require(ev["rc4"]["with_server_env"] == "1 1", "the servers' OpenSSL can't load the legacy provider or RC4 "
+                "without Homebrew (a client login would assert in ARC4.cpp)", **ev)
+        require(ev["rc4"]["without_openssl_modules"] == "0 0", "counterexample: without OPENSSL_MODULES the legacy "
+                "provider still loaded, so the probe can't tell the bundled module from another one", **ev)
         require(ws_env.get("OPENSSL_CONF") == str(home / "etc/openssl.cnf") and (home / "etc/openssl.cnf").is_file()
                 and auth[0]["env"].get("OPENSSL_CONF") == str(home / "etc/openssl.cnf"),
                 "OPENSSL_CONF isn't HOME's openssl.cnf for the servers", **ev)
@@ -1154,7 +1200,7 @@ def app_readonly(ctx):
         ev["mount"] = [l for l in mount_info.splitlines() if str(mnt) in l]
         require(ev["mount"] and "read-only" in ev["mount"][0], "the image isn't mounted read-only", **ev)
         before = tree_hash(mnt)
-        home = d / "h"
+        home = d / "h s"
         prof = d / "release.sb"
         prof.write_text(sandbox_profile(d))
         with LoopbackServer(FL_CACHE) as srv:
