@@ -20,13 +20,13 @@ CAP = "harness-reporting"
 # The scenarios of each journey, in the order their sessions run (the first scenario of a shared session runs it).
 # first_play: the cold session first (./play starts the stack from nothing, Continue, character select, the world, the
 # add-on's report, quit, the stack stopped with its backup); then the other sessions warm on one `hs up`.
+# (login.overlay_progress_reload asserts on the same cold session: its Main Menu -> Continue reload is part of it)
 FIRST_PLAY_COLD = ("login.loading_overlay", "login.charselect_layout", "login.charselect_wording",
-                   "login.overlay_progress", "client.wording_addon")
+                   "login.overlay_progress", "login.overlay_progress_reload", "client.wording_addon")
 FIRST_PLAY_WARM = ("login.auto_login", "login.no_glue_errors", "login.fresh_menu_waits", "client.first_start_settings",
                    "client.resolution_default")
 FIRST_PLAY = FIRST_PLAY_COLD + FIRST_PLAY_WARM
-LOGIN_RECOVERY = ("login.friendly_errors", "login.overlay_progress_reload", "login.backdrop_choice",
-                  "login.cancel_shows_list")
+LOGIN_RECOVERY = ("login.friendly_errors", "login.backdrop_choice", "login.cancel_shows_list")
 SAVES = ("savesctl.live_roundtrip", "savesctl.live_codes", "savesctl.live_down", "savesctl.realm_restored",
          "saves.live_charselect_load", "saves.live_charselect_list", "savesctl.account_name_kept")
 STOCK_CLIENT = ("client.stock_mode",)
@@ -169,9 +169,8 @@ def stock_client(ctx):
 @check("journey.login_recovery", order=462, capability=CAP, stack="up", layer="journey", budget_s=120,
        covers=LOGIN_RECOVERY_COVERS, children=LOGIN_RECOVERY)
 def login_recovery(ctx):
-    """The login screen recovering: the friendly error with the login server down, Try again, the overlay's progress
-    after a reload, the backdrop choice kept across a restart and the menu waiting without a login (the scenarios in
-    LOGIN_RECOVERY)."""
+    """The login screen recovering: the friendly error with the login server down and Try again, the backdrop choice
+    kept across a restart and the menu waiting without a login (the scenarios in LOGIN_RECOVERY)."""
     return run_journey(ctx, LOGIN_RECOVERY, warm=True)
 
 
