@@ -488,6 +488,69 @@ runs and the counterexample run as the other repeats.
 - Not done in part 1 (part 2): `journey.saves` (the live savesctl and character-screen checks are still legacy client checks, 290 s), the rest of `SavesLogic`, the Lua add-on tests (saves and pause), backups kill-safe/restore on the shared server, the remaining slices 3.3, 3.5–3.8, and the `PENDING_SLEEPS` entries of the part-1 areas (reported by `report.no_fixed_sleeps`, not failed).
 - Levers not taken yet: `saves.load_ordering` is character-scoped and could share the pool with `session_b` (−57 s); the four profile restarts (≈ 60 s) could shrink if `pause-respawn` folded into another group.
 
+### 12.3 Part 2 as built (2026-10-11; journeys, part-2 slices, fixes) — the budgets are NOT met
+Measured on this Mac, one lane (lane B refused: 3.88 GB available < 5.0 GB). "Before" is the branch's pr run at
+`e20f3b2` (2026-10-11 08:24 UTC); "after" is the full run at `3c95011` (2026-10-11 13:31–15:59 UTC, wall 8887.9 s).
+
+| Layer | Before (s) | After (s) | Budget (s) | Verdict |
+|---|---:|---:|---:|---|
+| Unit layer (`hs test`, whole tier wall 50.5 s) | 38.9 | 39.0–39.3 | 120 | PASS |
+| Integration (union of spans) | 2567.3 | 2321.4 | 900 | **FAIL** (+1421 s) |
+| Journeys (the six + `client.launch_smoke`) | 1526.0 | 1175.4 | 810 (sum of budgets) | **FAIL** |
+| Acceptance (integration + journeys) | 4093.3 (68.2 min) | 3496.8 (58.3 min) | 1800 | **FAIL** (+28.3 min) |
+| Gate (timed apart) | 6084.0 | 5328.6 | — | reported |
+
+Per journey (budget): `journey.pause` 76.4 (90) pass; `journey.stock_client` 32.1 (60) pass; `journey.login_recovery`
+151.2 (120) miss; `journey.saves` 194.6 (150) miss; `journey.first_play` 229.1 (150) miss; `journey.app_desktop` 453.5
+(240) miss.
+
+Per area, integration (timeline spans; before → after, s): backups 522.3 → 516.9 (kill-safe/restore not migrated);
+play 360.3 → 379.2 (S1–S3 not merged); saves 380.6 → 367.7; dungeons (lock/dng/scale) 334.1 → 332.5; client 194.4 →
+194.8 (includes the run guard `client.player_client_not_rebuilt` 46.9 and `client.launch_smoke` 38.6, which no spec
+delta removes); pause 138.1 → 137.3; fixture start and profile restarts 83.7 → 106.0 (+ one extra stack stop/start:
+with lane B refused its `play.*` checks ran inside the shared segment; fixed after this run in `f73c320`, not yet
+measured); comp 81 → 81.7; era 114.6 → 79.3 (one off/on restart pair for both scenarios); lifecycle 63 → 57.2;
+fixture self-tests 152.1 → 0 (gate); lane.merge + lane.preflight 74.7 → 0 (gate); app 52.7 → 52.6; savesctl 40 → 41.3.
+
+What changed in part 2:
+- **Journeys.** The six named journeys exist (`checks/journey_checks.py`; `journey.pause` from part 1); every legacy
+  client/app scenario is a child of one of them, with its own record and its existing `Check:` id. Warm journeys
+  (`stock_client`, `login_recovery`, `saves`) run with `HS_PLAY_KEEP_STACK` on the shared stack (`play_checks.WARM`:
+  "nothing left running" = nothing besides the same stack, same pids; a deliberate login-server restart is recorded).
+  `first_play` runs its cold session first (./play starts and stops the stack), then one `hs up` for its other sessions,
+  then `hs down`. `app_desktop` stays cold (the app refuses the keep-stack switch, harness-control spec).
+  Deviation: `app.launch_lifecycle`, `app.loading_stages` and `app.shutdown_window` are in `app_desktop` (they share its
+  app session), not in `first_play` as design 10's table has them; `login.overlay_progress_reload` is in `first_play`
+  (it asserts on that cold session's Main Menu -> Continue reload), not `login_recovery`.
+  Not built: the merged single sessions design 9.4 projects (one cold app open for `first_play`, one session for
+  `saves`, one GUI session for `app_desktop`); each journey still runs its scenarios' former sessions back to back.
+- **Live waits.** `login.cancel_shows_list`: 10 s live + the simulated 60 s Lua test run inside the scenario
+  (spec-change log 2026-10-10). `era.toggle_roundtrip` + `era.scope_guard`: one restart pair (`era.session_toggle`,
+  generators driven in lockstep). `saves.load_ordering`: its WorkerThreads = 2 check by a worldserver restart.
+- **Unit layer.** Lua add-on tests on an in-game stub (`addonstub.lua`): 9 pause (menu hooks, banner, dim, strata,
+  Logout/Quit resume, late answers) and 12 saves (window, protocol, refusals, paging, default keys, pause kept);
+  `SavesLogic` gained JsonEscape, IsHexType/IsFloatType, SqlValue, FormatTime, DefaultLabel, SaveRefusal and
+  DisabledReason (6 C++ tests), called by MoongladeSaves.cpp; Python tests for the runner/fixture fixes, the era driver,
+  warm journeys, the lane fallback order and the history scan's email rule. Unit layer: Python 50, C++ 33, Lua 26.
+- **Fixes.** No reset round after `lifecycle.down` (it read the stopped server as leaked state and restarted the world
+  before `first_play`); the leak wording names an interval change only when the interval changed; the release bracket
+  covers the release.*/firstlaunch.* checks the acceptance segments run (unit-layer ones never reach its log);
+  `report.layer_budgets`' "new selected checks" counts acceptance checks only (design 9.1); the summoned final boss of
+  LFG 136 is read by GUID with the selection re-set before each command (the self-AI changes it); the history dry
+  run plants its own self-test commit and the scan ignores image scale suffixes (`icon_512x512@2x.png`);
+  lane.merge, lane.preflight and fixture.* are gate checks (real-stack harness self-tests); lane.preflight's forced
+  lane-B set is two acceptance checks inside lane B's window; with lane B refused, its stack-down checks run after
+  `hs down`.
+- Not done in part 2: backups kill-safe/restore on the shared server; play S1 merge and S2/S3 trims; the config-gate
+  warm run; HSCharSaves.lua / HSSeamless.lua glue tests beyond part 1's front-menu set; `ListGen` and the
+  `ReadSave`/`CheckCharacter` validation in `SavesLogic`; `PENDING_SLEEPS` (69 waits still reported); the passive
+  observer for `client.login_text_clean`; pooling `saves.load_ordering`.
+
+Where the remaining acceptance time goes (after): integration 2321 s = backups 517, play 379, saves 368, dungeons
+333, client 195, pause 137, fixture/profile restarts 106, comp 82, era 79, lifecycle 57, app 53, savesctl 41;
+journeys 1175 s = app_desktop 454, first_play 229, saves 195, login_recovery 151, pause 76, launch_smoke 39,
+stock_client 32. The cold `./play` sessions (backups, play, app_desktop, first_play's cold half) are about 1350 s.
+
 ## Appendix A: every record of the baseline run, where it goes
 `Today` is the baseline `duration_s`. A 0.0 is either a shared session whose time sits on its first check, or a skipped slow check. `Goes to` uses the layers in §2; `J1`–`J6` are, in order, `first_play`, `pause`, `saves`, `login_recovery`, `stock_client` and `app_desktop`.
 

@@ -65,39 +65,39 @@ Each slice is done the same way:
 
 The builder runs `hs test` plus the slice's own tests; no acceptance tier per task.
 
-- [ ] 3.1 backups (≈ 2 h). _Part 1 (2026-10-11): unit done (rotation as a unit check with the dump faked in-process; manifest/verify, refusal reasons, notice text as Python unit tests). Left for part 2: kill-safe and restore driven directly on the shared server (still cold `./play` sessions), `app.backups_window` (3.5)._
+- [ ] 3.1 backups (≈ 2 h). _Part 1 (2026-10-11): unit done (rotation as a unit check with the dump faked in-process; manifest/verify, refusal reasons, notice text as Python unit tests). Left for part 2: kill-safe and restore driven directly on the shared server (still cold `./play` sessions), `app.backups_window` (3.5)._ _Part 2 (2026-10-11): not migrated further: kill-safe and restore still run their own cold `./play` sessions (517 s); `app.backups_window` is a child of `journey.app_desktop`._
   - Unit: rotation, manifest, refusal reasons, notice text.
   - Cold: on-quit + one injected failure.
   - Shared: kill-safe and restore driven directly.
   - `app.backups_window` waits for 3.5.
-- [ ] 3.2 saves + savesctl (≈ 3.5 h). _Part 1 (2026-10-11): integration clustered on fixture identities (`saves.session_a` and `session_b` pooled, `session_interval`, `scope` and `load_ordering` on their own identity); `savesctl.load_verb`/`build_refused` and `saves.addon_static` in the unit layer. Left for part 2: the rest of `SavesLogic`, the Lua add-on/glue tests, `journey.saves` (the live savesctl/charselect checks still run as legacy client checks, counted as journey time)._
+- [ ] 3.2 saves + savesctl (≈ 3.5 h). _Part 1 (2026-10-11): integration clustered on fixture identities (`saves.session_a` and `session_b` pooled, `session_interval`, `scope` and `load_ordering` on their own identity); `savesctl.load_verb`/`build_refused` and `saves.addon_static` in the unit layer. Left for part 2: the rest of `SavesLogic`, the Lua add-on/glue tests, `journey.saves` (the live savesctl/charselect checks still run as legacy client checks, counted as journey time)._ _Part 2 (2026-10-11): `SavesLogic` gained JSON, SQL values, labels, the refusal predicate and the startup reason (6 C++ tests; `ListGen` and the save-validation half not extracted); `unit:lua:test_addon_saves.*` (12) for MoongladeSaves.lua (HSCharSaves.lua not yet); `journey.saves` (warm; 194.6 s against 150); `load_ordering` not pooled (its profile check is now a world restart)._
   - Finish `SavesLogic`: JSON, labels, retention, list format, refusal reasons, combat/dead predicate.
   - Lua tests for `MoongladeSaves.lua` and `HSCharSaves.lua`.
   - Saves integration with the pool.
   - The `savesctl` protocol as unit tests.
   - `journey.saves`.
-- [ ] 3.3 client (≈ 1.5 h).
+- [ ] 3.3 client (≈ 1.5 h). _Part 2 (2026-10-11): `journey.stock_client` (warm, 32.1 s against 60); `client.resolution_default` is a child of `journey.first_play` (its unit half not split out); config gate not warm; `client.launch_smoke` kept: its client-connectivity scenario still names it and no delta removes it._
   - Resolution decision and config gate as unit tests.
   - Warm config-gate run.
   - `journey.stock_client`.
   - Drop `client.launch_smoke`.
-- [ ] 3.4 pause (≈ 2.5 h). _Part 1 (2026-10-11): `PauseLogic` + C++ tests, `pause.freeze_matrix` (one 20 s pause), the scratch-spawn respawn, `disconnect_unpauses` on its own identity, the pause-off profile group, the gate soak, warm `journey.pause`. Left for part 2: the Lua tests for the add-on's menu hooks and banner._
+- [x] 3.4 pause (≈ 2.5 h). _Part 1 (2026-10-11): `PauseLogic` + C++ tests, `pause.freeze_matrix` (one 20 s pause), the scratch-spawn respawn, `disconnect_unpauses` on its own identity, the pause-off profile group, the gate soak, warm `journey.pause`. Left for part 2: the Lua tests for the add-on's menu hooks and banner._ _Part 2 (2026-10-11): the Lua tests for the menu hooks, banner and dim (`unit:lua:test_addon_pause.*`, 9, on the in-game stub `addonstub.lua`)._
   - `PauseLogic` (state machine, cooldown arithmetic) and its C++ tests.
   - Production freeze matrix and respawn.
   - The disabled profile group.
   - Lua tests for the add-on's menu hooks and banner.
   - `journey.pause`.
-- [ ] 3.5 app (≈ 2 h).
+- [ ] 3.5 app (≈ 2 h). _Part 2 (2026-10-11): `journey.app_desktop` (cold; the app refuses the keep-stack switch) runs the former app sessions back to back: 453.5 s against 240; two GUI GIVENs failed in both runs because another app (Chrome, Claude) took activation._
   - `journey.app_desktop` (GUI, stand-in, relocated copy, Backups window restore).
   - Bundle and icon checks to the unit layer.
-- [ ] 3.6 login (≈ 3 h).
+- [ ] 3.6 login (≈ 3 h). _Part 2 (2026-10-11): `journey.first_play` (cold session, then warm: 229.1 s against 150) and `journey.login_recovery` (warm: 151.2 s against 120); the 60 s no-login watch is 10 s live plus the simulated 60 s Lua test run inside the scenario._
   - Lua suites for `HSFrontMenu` and `HSSeamless` (Continue, overlay bar, backdrop choice, no-login clock).
   - `journey.first_play` and `journey.login_recovery`.
   - The spec-change log entry for the 60 s → simulated + 10 s live move.
-- [ ] 3.7 play (≈ 1.5 h).
+- [ ] 3.7 play (≈ 1.5 h). _Part 2 (2026-10-11): not done (S1–S3 not merged: 379 s); with lane B refused its play.* checks now run after `hs down`._
   - Sessions S1–S3, the first-run account.
   - Signal and lock logic as unit tests.
-- [ ] 3.8 The rest (≈ 2 h).
+- [ ] 3.8 The rest (≈ 2 h). _Part 2 (2026-10-11): era off/on restarts shared (`era.session_toggle`, 114.6 → 57.4 s); lane.merge, lane.preflight and fixture.* moved to the gate layer (real-stack harness self-tests)._
   - Lifecycle, control, fixtures, era (merged restarts), comp, core, lane (rules as unit tests, real stacks as gate), report, build, firstlaunch, release, signing, power, re, public, repo, setup.
   - Layer tags and `covers`; `lifecycle.isolated` narrowed to our pids.
 - [x] 3.9 Dungeons, after m4-dungeon-scaling merges (≈ 1 h).
