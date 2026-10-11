@@ -1,7 +1,7 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-11 14:25 (**v0.1.1 building**: fixes first install under a spaced Application Support path; test-pyramid 3.11 phase 2 next)._
+_Updated 2026-10-11 18:00. **v0.1.2 published** (pre-release): it fixes v0.1.1's world-server crash at Play (RC4 needs OpenSSL's legacy provider; the release now bundles it and sets OPENSSL_MODULES). The fix is proven on the downloaded artifact with Homebrew hidden. The hotfix branch `fix/home-path-spaces` (cb245f5) still has to merge: run firstlaunch.flow (it now injects free space) and release.stack_from_payload, then PR. **test-pyramid:** verifier cycle 1 FAIL (name generator crash, logic_scan with `using namespace`, dng.session1 123 s > 90, baseline raised, sleep-lint keying, fixture cleanup after stack down, pr-run bookkeeping, env checks). A fix builder is running in the main checkout (started 17:57, timebox 2 h). Next: a fresh-Mac release check (a real client login, spaced HOME, no Homebrew), then m4-dungeon-companions in day-sized slices. Zach: new tests are mostly unit tests with mocks; fewer, critical-path upper-layer tests._
 
 **Cold start:** read this file, then `openspec list` (Node 20: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`), then `git -C <repo> worktree list`, `git branch -a`, `gh pr list`, then `harness/hs status`. The skills `.claude/skills/hs-*` hold the procedures (change loop, checks, client debugging, RE). User preferences and decisions are in the orchestrator memory notes (plain language for decisions, Gate 1, front-menu vision, logo).
 
