@@ -243,3 +243,14 @@ What was built, where it differs from §1–§7 above, and why. The prototype re
 - **Solo placement:** GM teleport 6 yd from the final boss toward the entrance. For an event boss with no static spawn (Hellfire Ramparts' Vazruden, summoned by Vazruden the Herald after its two Hellfire Sentries die), the probe stands on the first sentry's summon point, cited from the core script (`dungeon.EVENT_STAGE`). A rule based only on the herald's own spawn left the probe 30 yd from the sentries, and the event never started.
 - **Gear:** `.playerbots bot initself=rare`, the quality from `AiPlayerbot.AutoGearQualityLimit` (3). It's re-rolled on each run, so the warrior's health varies (for example 9.8k–17.7k at level 72).
 - **Slow check:** each `scale.solo_final_boss` run takes about 3–4 min for all four dungeons. Counterexample: the floor-0.2 setting, where the same routine records two deaths and no kill for Utgarde Keep, which fails the check's condition.
+
+### Fix round 1 (verifier cycle 1)
+- **No AutoBalance chat at login:**
+  - `AutoBalanceAnnounce.enable = 0`. The `.dist` default (1) made the module announce itself at every login (`ABPlayerScript.cpp:14-15`), and `client.login_text_clean` caught it.
+  - `AutoBalance.reward.enable = 0` is now stated explicitly, because the code default is 1 when the key is missing.
+  - The module's chat output, from its source (every `ChatHandler` send outside the command script): the login announcement and the `PlayerChangeNotify` enter/leave lines are both off. Since `module_env` carries both keys, a lane-B or release worldserver gets them as `AC_*` variables too.
+  - One line has no setting: "leaving_instance_combat_change" (`ABPlayerScript.cpp:224`). It appears only when someone joined or left the dungeon during a fight, once the fight ends. Turning it off would need a module patch; it's left for the human gate.
+- **`scale.module_loaded`** asserts both chat keys are 0, in the rendered conf and in the `AC_*` variables.
+- **Summoned final boss** (Hellfire Ramparts' Vazruden):
+  - It has no spawn id, so the solo routine finds it as the self-AI's target. The probe's own `UNIT_FIELD_TARGET` holds a GUID whose entry (`ObjectGuid::GetEntry`, bits 24–47) is the credit entry. The routine then reads that GUID with `.npc info` and `.ab creaturestat`.
+  - `scale.solo_final_boss` now requires the scaled max health, the multiplier, the deaths and a fight length for every listed dungeon, and a missing read fails it. Measured: Vazruden 3216 max health at ×0.167.
