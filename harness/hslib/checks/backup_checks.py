@@ -50,10 +50,12 @@ def drop(*paths: Path) -> None:
             shutil.rmtree(p, ignore_errors=True)
 
 
-def scratch_client(seed: str) -> dict:
-    """Build the scratch play client and give HSTEST a WTF account folder with run-unique files."""
+def scratch_client(seed: str, build: bool = True) -> dict:
+    """Build the scratch play client and give HSTEST a WTF account folder with run-unique files. `build=False`: only
+    the WTF folder (a restore reads and writes nothing else of the client; test-pyramid part 3: restore_roundtrip no
+    longer builds a whole play client to hold one folder)."""
     shutil.rmtree(SCRATCH_CLIENT, ignore_errors=True)
-    b = clientbuild.build(dest=SCRATCH_CLIENT)
+    b = clientbuild.build(dest=SCRATCH_CLIENT) if build else {"built": False, "bare": True}
     acct = SCRATCH_CLIENT / "WTF" / "Account" / P.TEST_USER
     shutil.rmtree(acct, ignore_errors=True)
     (acct / "SavedVariables").mkdir(parents=True)
@@ -502,145 +504,9 @@ def rotation(ctx):
         drop(root)
 
 
-# ---------------------------------------------------------------- backups.failure_nonblocking
-
-def verify_failed_session(res: dict, root: Path, expect: str) -> dict:
-    out = {"exit_code": res["exit_code"], "record_backup": res["record_backup"],
-           "shutdown_backup": [e for e in res["shutdown_events"] if e["id"] == "shutdown_backup"],
-           "remaining_after": res["remaining_after"], "listed": ids(root), "leftovers": leftovers_in(root)}
-    require(res["exit_code"] == 0, f"./play exited {res['exit_code']} (a failed backup must not fail shutdown)", **out)
-    require(is_clear(res["remaining_after"]), "the stack isn't fully down after a failed backup", **out)
-    require(not out["listed"], "a backup is listed although it failed", **out)
-    require(not out["leftovers"], "temporary backup files remain", **out)
-    rb = res["record_backup"] or {}
-    require(rb.get("ok") is False and expect in str(rb.get("error")), f"play-last.json doesn't record the failure "
-            f"({expect!r})", **out)
-    require(any(e["state"] == "failed" for e in out["shutdown_backup"]), "the shutdown_backup stage isn't 'failed'", **out)
-    return out
-
-
-@check("backups.failure_nonblocking", order=367, capability=CAP, stack="down", layer="integration")
-def failure_nonblocking(ctx):
-    """An injected dump failure, then an injected low-disk reading (1 MB free): each session still ends with exit 0
-    and the stack fully down, no backup listed, no temporary files, the failure (and why) in play-last.json and the
-    shutdown_backup stage 'failed'; the next launch prints a `[notice] Last backup failed ...` line naming that reason
-    (the second session for the first failure, a further launch for the second)."""
-    ev: dict = {}
-    given_clear(ev)
-    root = scratch_root("fail")
-    sessions = []
-    try:
-        # 1. dump failure
-        s1 = Session("bkfail1", root, knobs={"HS_BACKUP_TEST_FAIL": "dump"})
-        sessions.append(s1)
-        up = s1.start()
-        require(up["up"], f"session 1 never came up: {up.get('why')}", output=s1.s.output()[-2000:], **ev)
-        r1 = s1.quit_and_wait()
-        ev["dump_failure"] = r1 | {"verify": verify_failed_session(r1, root, "mysqldump")}
-        # 2. low disk; its start must carry the notice for failure 1
-        s2 = Session("bkfail2", root, knobs={"HS_BACKUP_TEST_FREE_BYTES": str(1 << 20)})
-        sessions.append(s2)
-        up = s2.start()
-        require(up["up"], f"session 2 never came up: {up.get('why')}", output=s2.s.output()[-2000:], **ev)
-        r2 = s2.quit_and_wait()
-        err1 = r1["record_backup"]["error"]
-        ev["low_disk"] = r2 | {"verify": verify_failed_session(r2, root, "not enough free disk space")}
-        ev["notice_for_failure_1"] = r2["notices"]
-        require(any("Last backup failed" in n and err1 in n for n in r2["notices"]),
-                "the next launch didn't print a \"last backup failed\" notice naming the dump failure", **ev)
-        # 3. a further launch (fails fast at the world on purpose: nothing to play) carries the low-disk notice
-        s3 = Session("bkfail3", root, extra=("--allow-test-client-dir", "--world-datadir", "/nonexistent/hs-bk"))
-        sessions.append(s3)
-        s3.t_start = time.time()
-        s3.s.start_play(*s3.extra, env=s3.env)
-        rc3, _ = s3.s.wait_exit(timeout=600)
-        r3 = s3.result(rc3)
-        err2 = r2["record_backup"]["error"]
-        ev["next_launch"] = {k: r3[k] for k in ("exit_code", "notices", "record_backup", "record_outcome", "remaining_after")}
-        require(any("Last backup failed" in n and err2 in n for n in r3["notices"]),
-                "the next launch didn't print a \"last backup failed\" notice naming the low-disk reason", **ev)
-        require(is_clear(r3["remaining_after"]) and not ids(root), "the further launch left something behind", **ev)
-        return ev
-    finally:
-        for s in sessions:
-            s.cleanup()
-        drop(root)
-
-
-# ---------------------------------------------------------------- backups.kill_safe
-
-@check("backups.kill_safe", order=368, capability=CAP, stack="down", layer="integration")
-def kill_safe(ctx):
-    """An earlier backup in the scratch folder; a session whose backup is paused mid-dump (after the first database,
-    test knob) is SIGKILLed: no partial backup is listed, the earlier backup's files still match their checksums
-    (and are unchanged), and the next session removes the leftover temp folder, exits 0, adds a complete backup and
-    leaves nothing running. Then "Killed in the middle of a restore" (killed_restore): a test restore into scratch
-    schemas killed while loading is finished by the next test-shaped ./play; live tables never change."""
-    ev: dict = {}
-    given_clear(ev)
-    root = scratch_root("kill")
-    sessions = []
-    ok = False
-    try:
-        stack.mysql_up()
-        early = B.take("auto", P.TEST_USER, None, root)
-        stack.down()
-        early_files = {rel: B.sha256_file(Path(early["path"]) / rel) for rel in early["files"]}
-        ev["earlier_backup"] = early["id"]
-        s1 = Session("bkkill1", root, knobs={"HS_BACKUP_TEST_PAUSE_S": "240"})
-        sessions.append(s1)
-        up = s1.start()
-        require(up["up"], f"session 1 never came up: {up.get('why')}", output=s1.s.output()[-2000:], **ev)
-        s1.s.stop_file.write_text("quit")
-        t0, tmp = time.time(), None
-        while time.time() - t0 < 300 and s1.s.proc.poll() is None:
-            tmp = next((d for d in root.iterdir() if d.name.startswith(".tmp-") and (d / "paused").exists()), None)
-            if tmp:
-                break
-            time.sleep(0.2)
-        require(tmp, "GIVEN not met: the backup never reached its mid-dump pause", output=s1.s.output()[-2000:], **ev)
-        ev["in_progress"] = {"tmp": tmp.name, "files": sorted(p.name for p in tmp.iterdir()),
-                             "play_pid": s1.s.proc.pid}
-        os.kill(s1.s.proc.pid, signal.SIGKILL)               # the play loop only (as a crash or force quit would)
-        s1.s.proc.wait(timeout=30)
-        ev["after_kill"] = {"listed": ids(root), "leftovers": leftovers_in(root), "stack": stack_clear(),
-                            "earlier_verify": B.verify(Path(early["path"]))}
-        now_files = {rel: B.sha256_file(Path(early["path"]) / rel) for rel in early["files"]}
-        require(ev["after_kill"]["listed"] == [early["id"]], "a partial backup is listed after the kill", **ev)
-        require(ev["after_kill"]["earlier_verify"]["ok"] and now_files == early_files,
-                "the earlier backup's files changed or don't match their checksums", **ev)
-        require(tmp.name in ev["after_kill"]["leftovers"], "GIVEN not met: the kill left no temp folder to heal", **ev)
-        # the next run heals and works normally
-        s2 = Session("bkkill2", root)
-        sessions.append(s2)
-        up = s2.start()
-        ev["next_client_up"] = up
-        require(up["up"], f"the next session never came up: {up.get('why')}", output=s2.s.output()[-2000:], **ev)
-        ev["leftovers_while_next_runs"] = leftovers_in(root)
-        r2 = s2.quit_and_wait()
-        listed = B.list_backups(root)
-        ev["next"] = {k: r2[k] for k in ("exit_code", "record_backup", "record_backup_plan", "record_lock",
-                                         "remaining_after")}
-        ev["next"] |= {"listed": [m["id"] for m in listed], "leftovers": leftovers_in(root),
-                       "verify": {m["id"]: B.verify(Path(m["path"]), m)["ok"] for m in listed}}
-        stale = ((r2["record_backup_plan"] or {}).get("stale_removed") or [])
-        require(any(x.get("dir") == tmp.name and x.get("removed") for x in stale),
-                "the next run didn't remove the leftover temp folder at its start", **ev)
-        require(r2["exit_code"] == 0 and is_clear(r2["remaining_after"]), "the next run didn't end normally", **ev)
-        require(len(listed) == 2 and early["id"] in ev["next"]["listed"] and all(ev["next"]["verify"].values())
-                and not ev["next"]["leftovers"], "the next run didn't add one complete backup next to the earlier one",
-                **ev)
-        ev["killed_restore"] = killed_restore(ev)
-        ok = True
-        return ev
-    finally:
-        for s in sessions:
-            s.cleanup()
-        if any(stack.stack_processes().values()):
-            stack.down()
-        if ok:
-            drop(root)
-
+# ---------------------------------------------------------------- backups.kill_safe's killed restore
+# backups.failure_nonblocking, backups.kill_safe and backups.restore_refusals are scenarios of play.cold_sessions
+# (cold_play_checks.py, test-pyramid part 3): they share its ./play sessions; killed_restore is kill_safe's second half.
 
 def loader_pids() -> list[int]:
     from .. import procs
@@ -893,7 +759,7 @@ def restore_roundtrip(ctx):
     prefix = "hsbk_rt"
     ok = False
     try:
-        ev["scratch_client"] = scratch_client(f"hs-restore-{time.time():.3f}")
+        ev["scratch_client"] = scratch_client(f"hs-restore-{time.time():.3f}", build=False)
         stack.mysql_up()
         live_before = live_stats()
         base = B.take("auto", P.TEST_USER, SCRATCH_CLIENT, root)
@@ -971,96 +837,6 @@ def watch_stack(samples: list, stop: threading.Event) -> threading.Thread:
     th = threading.Thread(target=run, daemon=True)
     th.start()
     return th
-
-
-@check("backups.restore_refusals", order=370, capability=CAP, stack="down", layer="integration")
-def restore_refusals(ctx):
-    """(a) A backup with one byte of one dump changed: the restore (into scratch schemas) exits nonzero naming the
-    damaged file, takes no safety backup, starts nothing, and no scratch or live table changes. (a2) A test-shaped
-    restore naming the live schemas (`--target live`, `--target acore`) and one naming no target are refused with a
-    nonzero exit before anything starts, with no safety backup and every live table unchanged. (b) With a play session
-    running (the play lock held): the restore exits nonzero with "already running", and the session (client, stack,
-    lock) continues unaffected and later exits 0."""
-    ev: dict = {}
-    given_clear(ev)
-    root = scratch_root("refuse2")
-    prefix = "hsbk_rf"
-    sess = None
-    ok = False
-    try:
-        stack.mysql_up()
-        good = B.take("auto", P.TEST_USER, None, root)
-        t = seed_target(good, prefix)
-        live_before, t_before = live_stats(), target_stats(t)
-        stack.down()
-        bad = clone_backup(good, root, datetime.now() - timedelta(hours=1), "auto")
-        f = Path(bad["path"]) / "auth.sql.gz"
-        data = bytearray(f.read_bytes())
-        i = len(data) // 2
-        data[i] ^= 0x01
-        f.unlink()                                          # a clone shares blocks: write a new file, not in place
-        f.write_bytes(bytes(data))
-        ev["damaged"] = {"id": bad["id"], "file": "auth.sql.gz", "byte": i}
-        ids_before = ids(root)
-        runs = {}
-        for name, args in (("damaged", ("restore", bad["id"], "--target", prefix)),
-                           ("live target (--target live)", ("restore", good["id"], "--target", "live")),
-                           ("live target (--target acore)", ("restore", good["id"], "--target", "acore")),
-                           ("no target", ("restore", good["id"]))):
-            samples: list = []
-            stop = threading.Event()
-            th = watch_stack(samples, stop)
-            r = backups_cli(*args, root=root)
-            stop.set()
-            th.join(timeout=5)
-            runs[name] = r | {"stack_seen": [s for s in samples if s][:3], "ids_after": ids(root)}
-        ev["refused_runs"] = runs
-        for name, r in runs.items():
-            js = r["json"] or {}
-            require(r["rc"] != 0 and not js.get("ok"), f"{name}: the restore wasn't refused", **ev)
-            require(not r["stack_seen"], f"{name}: something was started for the refused restore", **ev)
-            require(r["ids_after"] == ids_before, f"{name}: a backup (safety or other) appeared", **ev)
-        require("auth.sql.gz" in str((runs["damaged"]["json"] or {}).get("error")),
-                "the damaged-backup refusal doesn't name the damaged file", **ev)
-        stack.mysql_up()
-        ev["damaged_scratch_differences"] = diff_stats(t_before, target_stats(t))[:10]
-        ev["live_differences"] = diff_stats(live_before, live_stats())[:10]
-        require(not ev["damaged_scratch_differences"], "a scratch table changed although the restore was refused", **ev)
-        require(not ev["live_differences"], "a live table changed", **ev)
-        stack.down()
-
-        # (b) a running session holds the lock
-        sess = Session("bkrefuse", root)
-        up = sess.start()
-        require(up["up"], f"the session never came up: {up.get('why')}", output=sess.s.output()[-2000:], **ev)
-        st_before, lock_before = stack.stack_processes(), play.LOCK.read_text().strip()
-        r2 = backups_cli("restore", good["id"], "--target", prefix, root=root)
-        js2 = r2["json"] or {}
-        time.sleep(2)
-        ev["running_restore"] = r2 | {"stack_before": st_before, "stack_after": stack.stack_processes(),
-                                      "lock_before": lock_before, "lock_after": play.LOCK.read_text().strip(),
-                                      "client_after": play.client_processes(sess.s.bat.name.lower())}
-        require(r2["rc"] != 0 and "already running" in str(js2.get("error")), "the restore wasn't refused with "
-                "\"already running\"", **ev)
-        require(ev["running_restore"]["stack_after"] == st_before and ev["running_restore"]["lock_after"] == lock_before
-                == str(sess.s.proc.pid) and ev["running_restore"]["client_after"] and sess.s.proc.poll() is None,
-                "the running session was affected", **ev)
-        require(not [m for m in B.list_backups(root) if m["kind"] == "before-restore"], "a safety backup was taken", **ev)
-        res = sess.quit_and_wait()
-        ev["session_end"] = {k: res[k] for k in ("exit_code", "remaining_after", "record_backup")}
-        require(res["exit_code"] == 0 and is_clear(res["remaining_after"]), "the session didn't end normally", **ev)
-        ok = True
-        return ev
-    finally:
-        if sess:
-            sess.cleanup()
-        if not stack.stack_processes()["mysqld"]:
-            stack.mysql_up()
-        drop_target(prefix, ev)
-        stack.down()
-        if ok:
-            drop(root)
-
 
 
 # ---------------------------------------------------------------- the app: Backups window, shutdown backup stage

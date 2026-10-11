@@ -405,13 +405,27 @@ def config_gate_run(scratch: Path, own: bool) -> dict:
         s.cleanup()
 
 
-@check("client.config_gate", order=386, capability=CAP, stack="down", layer="integration")
+@check("client.config_gate", order=386, capability=CAP, stack="up", layer="integration")
 def config_gate(ctx):
     """The verifier's case on a scratch copy of the player's client only (his file is never written): a scratch play
     client with the player's Config.wtf minus gxApi, standing in for his own client ($HS_TEST_OWN_CLIENT): a
     harness ./play stand-in run leaves every config file byte-identical and never writes the login file; the same run
     on a copy without the stand-in flag (ungated) does write gxApi, so the run would write if it weren't gated; and
-    the player's own Config.wtf is unchanged."""
+    the player's own Config.wtf is unchanged. Both stand-in runs are warm (test-pyramid part 3): the shared stack
+    with the harness's keep-stack switch; the gate is the play loop's config step, the same with the stack already up."""
+    from . import play_checks as pc
+    up = stack.stack_processes()
+    require(all(up.values()), "GIVEN not met: the shared stack isn't up", stack=up)
+    pc.WARM = {"pids": pc.stack_pids()}
+    try:
+        ev = _config_gate(ctx)
+    finally:
+        pc.WARM = None
+    return ev
+
+
+def _config_gate(ctx):
+    """The scenario itself (config_gate runs it with the shared stack kept)."""
     player_cfg = clientbuild.PLAY / "WTF" / "Config.wtf"
     ev: dict = {"player_config_sha_before": _sha(player_cfg)}
     require_given_clear(ev)

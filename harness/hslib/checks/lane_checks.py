@@ -680,7 +680,9 @@ def lane_merge(ctx):
 
 # forced lane-B set: cheap, stack-free, read-only checks. test-pyramid: acceptance-layer ones (unit-layer checks run in
 # the unit layer and never reach the lanes), and outside the release bracket (release.*/firstlaunch.*)
-FALLBACK_B = ("savesctl.test_actions_refused", "play.startup_failure")   # both in lane B's window [34, 380)
+# (test-pyramid part 3: play.startup_failure became a scenario of play.cold_sessions; harness.prefix_scope, a stack-free
+# Wine-prefix check, took its place)
+FALLBACK_B = ("savesctl.test_actions_refused", "harness.prefix_scope")   # both in lane B's window [34, 380)
 
 
 def decision_cases() -> dict:

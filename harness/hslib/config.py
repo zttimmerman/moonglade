@@ -96,9 +96,11 @@ PROFILES["pause-respawn"] = {**PROFILES["m0"], "world": {"Corpse.Decay.NORMAL": 
 PROFILES["saves-workers2"] = {**PROFILES["m0"], "world": {"CharacterDatabase.WorkerThreads": "2"}}
 # m4-dungeon-scaling (design.md §2): the module off, every other Moonglade AutoBalance key unchanged
 PROFILES["scaling-off"] = {**PROFILES["m0"], "autobalance": {"AutoBalance.Enable.Global": "0"}}
-# test-pyramid (dng.session1/2): m0 with scaling on, as a profile of its own so its group runs after scaling-off's (the
-# sessions compare with the unscaled reference scale.disabled_stock reads under scaling-off in the same run)
-PROFILES["scaling-on"] = {**PROFILES["m0"], "autobalance": {"AutoBalance.Enable.Global": "1"}}
+# test-pyramid (dng.session1/2): m0 (scaling on: AutoBalance.conf.dist's AutoBalance.Enable.Global=1, which m0 keeps)
+# as a profile of its own so its group runs after scaling-off's (the sessions compare with the unscaled reference
+# scale.disabled_stock reads under scaling-off in the same run). Its overrides are m0's exactly (part 3), so the same
+# digest: the journeys after its group need no worldserver restart back to m0 (stack.profile_matches).
+PROFILES["scaling-on"] = {**PROFILES["m0"]}
 # m4-dungeon-scaling (design.md §2): stock lockouts. 5 = worldserver.conf.dist's AccountInstancesPerHour default
 PROFILES["lockouts-stock"] = {**PROFILES["m0"], "world": {"AccountInstancesPerHour": "5"},
                               "moonglade": {"Moonglade.Dungeons.FreshAfterClear": "0",

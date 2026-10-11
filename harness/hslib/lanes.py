@@ -59,13 +59,8 @@ LANE_B = {
     "era.session_toggle": "era.toggle_roundtrip + era.scope_guard on one off/on restart pair of lane B's stack; the "
                           "confs and DBs are lane B's",
     "lifecycle.persist": "`hs down`/`hs up` inherit HS_LANE=b; lane B's characters DB",
-    "play.loop_clean_exit": "./play stand-in in lane B (its run dir, lock, stack and Wine prefix clone)",
-    "play.interrupt_clean_exit": "./play stand-in in lane B",
-    "play.client_crash_cleanup": "./play stand-in in lane B",
-    "play.startup_failure": "./play stand-in in lane B",
-    "play.single_instance": "./play stand-in in lane B (lane B's play.lock)",
-    "play.offline": "./play stand-in in lane B under the sandbox profile",
-    "play.player_account": "./play stand-in in lane B with a scratch HS_PLAYER_FILE (never env/player.json)",
+    # test-pyramid part 3: the former play.* stand-in checks are scenarios of play.cold_sessions, which needs the GUI
+    # (its terminal session's notepad window and Dock state), so it stays in lane A
 }
 
 START_ORDER = 34

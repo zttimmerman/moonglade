@@ -7,8 +7,9 @@ none); the frontmost app from `lsappinfo front`; windows from the window server 
 of these needs a macOS permission. Focus checks need an unlocked GUI session: a locked screen (loginwindow in front)
 is recorded and fails the GIVEN.
 
-Shared sessions: the app checks share one app run (population profile, stack down, notepad), the play checks share
-one terminal ./play run (m0, stack down, notepad). Each check asserts its own clause on that run's evidence; the
+Shared sessions: the app checks share one app run (population profile, stack down, notepad); the terminal ./play
+checks (play.stage_lines, play.world_progress, play.dock_identity) are scenarios of play.cold_sessions' first session
+(cold_play_checks.py, which uses verify_* here). Each check asserts its own clause on that run's evidence; the
 session runs once per harness process (again for each `--only` invocation), so evidence is always from this run.
 """
 from __future__ import annotations
@@ -1161,52 +1162,7 @@ def verify_warm(ev: dict) -> dict:
     return out
 
 
-# ---------------------------------------------------------------- terminal ./play session (m0, stack down, notepad)
-
-def term_session(key: str = "term", settings: dict | None = None) -> dict:
-    if key in _SESSIONS:
-        return _SESSIONS[key]
-    ev: dict = {}
-    _SESSIONS[key] = ev
-    before = remaining()
-    ev["given_nothing_running"] = before
-    require(is_clear(before), "GIVEN not met: something from this repo is already running", **ev)
-    s = GuiStandIn("term")
-    sfile = s.dir / "settings.json"
-    sfile.write_text(json.dumps({"client": "stock", **(settings or {})}))
-    wlog = stack.LOG["worldserver"]
-    lines = Sampler(lambda: S.count_lines(wlog), 0.1)
-    t_start = time.time()
-    try:
-        lines.start()
-        s.start_play(env={"HS_SETTINGS": str(sfile)})
-        win, t_win = wait_window(600, stop_if=lambda: s.proc.poll() is not None)
-        ev |= {"window": win, "t_window": t_win}
-        require(win, "the stand-in's window never appeared under ./play", output=s.output()[-3000:], **ev)
-        time.sleep(1.5)
-        ev["apps_at_window"] = [a for a in lsappinfo_list() if is_ours(a)]
-        ev["shim_log"] = shim_log_lines(t_start, win["pid"])
-        s.stop_file.write_text("quit")
-        rc, _ = s.wait_exit(timeout=300)
-        lines.stop()
-        ev |= {"exit_code": rc, "output": s.output(), "line_samples": lines.samples,
-               "remaining_after": remaining(s), "t_start": round(t_start, 3)}
-        ev["ok"] = True
-        return ev
-    except CheckFail as e:
-        ev["session_error"] = str(e)
-        raise
-    finally:
-        lines.stop()
-        s.cleanup()
-
-
-def _term() -> dict:
-    ev = term_session() if "term" not in _SESSIONS else _SESSIONS["term"]
-    if not ev.get("ok"):
-        raise CheckFail(f"the shared ./play session failed: {ev.get('session_error')}", ev)
-    return ev
-
+# ---------------------------------------------------------------- terminal ./play: the verifiers (cold_play_checks.py runs it)
 
 def _regex_of(node) -> str:
     """A say() argument as a regex: literal text escaped, every formatted value / unknown part `.*`."""
@@ -1253,18 +1209,6 @@ def verify_stage_lines(output: str, templates: list[str]) -> dict:
     return out
 
 
-@check("play.stage_lines", order=391, capability=CAP_PLAY, stack="down", layer="integration")
-def stage_lines(ctx):
-    """./play in a terminal (stand-in): every [play] line matches a [play] line of the play loop before
-    launcher-polish (unchanged), and every [stage] line parses as JSON with a documented id and state. (The existing
-    play.* checks run in the same harness run.)"""
-    ev = _term()
-    out = verify_stage_lines(ev["output"], base_play_templates())
-    require(ev["exit_code"] == 0 and is_clear(ev["remaining_after"]), "./play didn't end cleanly",
-            exit_code=ev["exit_code"], **out)
-    return out
-
-
 def verify_world_progress(output: str, line_samples: list, poll: float = S.WORLD_POLL_S) -> dict:
     evs = [S.parse(l) for l in output.splitlines() if l.startswith(S.PREFIX)]
     world = [e for e in evs if e and e.get("id") == "world" and e.get("state") == "progress"]
@@ -1295,15 +1239,6 @@ def verify_world_progress(output: str, line_samples: list, poll: float = S.WORLD
     return out
 
 
-@check("play.world_progress", order=391, capability=CAP_PLAY, stack="down", layer="integration")
-def world_progress(ctx):
-    """Cold worldserver start under ./play: at least three distinct world fractions strictly between 0 and 1 come
-    before the world is done, each = worldserver.out's line count / the calibration, and that count matches the log's
-    own line count (sampled independently at 10 Hz) within one poll (0.5 s)."""
-    ev = _term()
-    return verify_world_progress(ev["output"], ev["line_samples"])
-
-
 def verify_dock_identity(ev: dict) -> dict:
     np = ev["window"]["pid"]
     stand = [a for a in ev["apps_at_window"] if a["pid"] == np]
@@ -1314,13 +1249,6 @@ def verify_dock_identity(ev: dict) -> dict:
             "the shim log has no icon replacement for the stand-in (this run)", **out)
     require(not any("-> using 1" in l for l in ev["shim_log"]), "the terminal run made the stand-in an accessory app", **out)
     return out
-
-
-@check("play.dock_identity", order=391, capability=CAP_PLAY, stack="down", layer="integration")
-def dock_identity(ctx):
-    """Terminal ./play with the notepad stand-in (no app): the stand-in is a normal Foreground app named Moonglade,
-    and the shim log records the icon replacement for its pid in this run."""
-    return verify_dock_identity(_term())
 
 
 # ---------------------------------------------------------------- performance (real client; not a Dock check)

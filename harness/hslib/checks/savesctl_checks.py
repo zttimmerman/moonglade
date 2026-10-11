@@ -24,7 +24,7 @@ import tempfile
 import time
 from pathlib import Path
 
-from .. import frontmenu, mpq, paths as P, play, savesctl
+from .. import frontmenu, mpq, paths as P, play, savesctl, stack
 from ..registry import check, require
 from .play_checks import PINNED, PLAY, StandIn, is_clear, remaining, require_given_clear
 
@@ -308,16 +308,30 @@ def nonce_leaks(texts: dict[str, str], nonces: list[str]) -> dict[str, list[str]
     return out
 
 
-@check("savesctl.hygiene", order=361, capability=CAP, stack="down", layer="integration")
+@check("savesctl.hygiene", order=361, capability=CAP, stack="up", layer="integration")
 def hygiene(ctx):
-    """./play in test mode (stand-in client, scratch play client, test account): while the game runs, ./play's
+    """./play in test mode (stand-in client, scratch play client, test account; warm on the shared stack with the
+    harness's keep-stack switch, test-pyramid part 3: the listener is ./play's own, not the stack's): while the game runs, ./play's
     control listener is bound to 127.0.0.1 only (lsof) and answers a status request; the port and nonce reach the
     glue in the generated file inside the scratch play client, never client/; after a SIGKILL of ./play the listener
     is gone, and the next run starts cleanly (the stale file removed first) with a fresh nonce; after a normal exit
     the listener is gone too; the nonce is in no harness log, play-last.json, ./play output or this evidence (which is
     what results.json and summary.md carry)."""
-    ev: dict = {"cmd": f"{PLAY} --account test --client-cmd <stand-in .bat> --allow-test-client-dir"}
+    from . import play_checks as pc
+    ev: dict = {"cmd": f"{PLAY} --account test --client-cmd <stand-in .bat> --allow-test-client-dir (keep-stack)"}
+    up = stack.stack_processes()
+    require(all(up.values()), "GIVEN not met: the shared stack isn't up", stack=up)
+    pc.WARM = {"pids": pc.stack_pids()}
+    try:
+        return _hygiene(ctx, ev)
+    finally:
+        pc.WARM = None
+
+
+def _hygiene(ctx, ev: dict) -> dict:
+    from . import play_checks as pc
     require_given_clear(ev)
+    stack_at_start = dict(pc.WARM["pids"])
     from .playclient_util import build_scratch, drop_scratch, fresh_scratch
     t0 = time.time()
     sizes0 = log_sizes()
@@ -407,6 +421,9 @@ def hygiene(ctx):
     require(not ev["nonce_found_in"] and not ev["nonce_in_evidence"], "the nonce leaked into a log or the evidence",
             **ev)
     require(is_clear(ev["remaining_after"]), "something is still running", **ev)
+    ev["shared_stack"] = {"at_start": stack_at_start, "at_end": pc.stack_pids()}
+    require(all(ev["shared_stack"]["at_end"].values()) and ev["shared_stack"]["at_end"] == stack_at_start,
+            "the shared stack didn't stay up with the same pids (a keep-stack run must leave it alone)", **ev)
     return ev
 
 

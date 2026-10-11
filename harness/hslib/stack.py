@@ -375,8 +375,14 @@ def running_profile() -> dict | None:
 
 
 def profile_matches(name: str) -> bool:
+    """The running worldserver runs with profile `name`'s settings: started with it, or with another profile whose
+    overrides are identical (same digest; test-pyramid part 3: `scaling-on` is m0 under another name only so its
+    group runs after scaling-off's, and the journeys after it need no restart back to m0). Never the population
+    profile by digest (its N is recorded separately)."""
     rp = running_profile()
-    return bool(rp) and rp["profile"] == name and rp.get("digest") == config.profile_digest(name)
+    if not rp or not rp.get("digest") or rp.get("digest") != config.profile_digest(name):
+        return False
+    return rp["profile"] == name or "population" not in (rp["profile"], name)
 
 
 def world_matches(name: str, population_n: int | None = None) -> bool:
@@ -423,7 +429,7 @@ def up(world_datadir: Path | None = None, timeout: int | None = None, profile: s
     was_running = bool(stack_processes()["worldserver"])
     if was_running:
         rp = running_profile()
-        if rp["profile"] != name and (profile or os.environ.get("HS_PROFILE")):
+        if rp["profile"] != name and (profile or os.environ.get("HS_PROFILE")) and not profile_matches(name):
             raise StackError(f"worldserver is already running with profile {rp['profile']!r}, not {name!r}; "
                              "`hs down` first (or use stack.ensure_profile)")
         name = rp["profile"]          # keep the rendered confs matching the running worldserver

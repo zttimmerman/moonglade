@@ -422,7 +422,8 @@ def _victim_ready(rid: str) -> dict:
     from .. import stack
     tg = runreg.tagged({rid})
     st = stack.stack_processes()
-    return {"play": [o for o in tg if "hslib.play" in o["cmd"]],
+    # a play loop (with its stand-in), not a `./play --backups` call the victim's checks may make first
+    return {"play": [o for o in tg if "hslib.play" in o["cmd"] and "--client-cmd" in o["cmd"]],
             "stand_in": [o for o in tg if "hs-standin.bat" in o["cmd"].lower()],
             "worldserver": st["worldserver"], "tagged_n": len(tg)}
 
@@ -455,7 +456,7 @@ def _force_clean(pids_play: list[int]) -> dict:
 @check("report.orphans_healed", order=345, capability=CAP, stack="down", layer="gate")
 def orphans_healed(ctx):
     """test-loop-speedups "A killed run's processes don't block the next run": a nested `hs run --only
-    play.loop_clean_exit` (test account, stand-in client) is SIGKILLed while its ./play child and the stack run; the
+    play.cold_sessions` (stand-in client; test-pyramid part 3: it holds the former play.loop_clean_exit) is SIGKILLed while its ./play child and the stack run; the
     next nested `hs run` records those orphans, stops them (./play's SIGTERM path), its check passes, and nothing from
     this repo remains. Then a ./play not started by a harness run (no run id; test account, stand-in) survives a run
     that heals another killed run, and the play checks' GIVEN still refuses while it runs."""
@@ -470,7 +471,7 @@ def orphans_healed(ctx):
     s = None
     try:
         # ---- A: a harness run killed mid-run
-        victim = subprocess.Popen([HS, "run", "--only", "play.loop_clean_exit", "--results-dir", str(d / "victim")],
+        victim = subprocess.Popen([HS, "run", "--only", "play.cold_sessions", "--results-dir", str(d / "victim")],
                                   stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                                   env=_env())
         rid, t0 = None, time.time()
