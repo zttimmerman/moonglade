@@ -1,0 +1,16 @@
+#!/bin/sh
+# Pre-commit: fast, deterministic checks on what is being committed (enable: git config core.hooksPath .githooks).
+set -e
+root=$(git rev-parse --show-toplevel)
+files=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$files" ] && exit 0
+# Python and JSON parse; shell scripts parse
+echo "$files" | grep -E '\.py$' | (cd "$root" && xargs -I{} python3 -c 'import ast,sys; ast.parse(open(sys.argv[1]).read(), sys.argv[1])' {}) \
+  || { echo "pre-commit: Python syntax error" >&2; exit 1; }
+echo "$files" | grep -E '\.json$' | (cd "$root" && xargs -I{} python3 -m json.tool {} >/dev/null) \
+  || { echo "pre-commit: invalid JSON" >&2; exit 1; }
+echo "$files" | grep -E '\.sh$' | (cd "$root" && xargs -I{} bash -n {}) \
+  || { echo "pre-commit: shell syntax error" >&2; exit 1; }
+# Nothing personal in the public repo (scans the staged index; never prints a match)
+PYTHONPATH="$root/harness" python3 -m hslib.publicscan tree >/dev/null \
+  || { echo "pre-commit: public-content scan found a hit (PYTHONPATH=harness python3 -m hslib.publicscan tree)" >&2; exit 1; }

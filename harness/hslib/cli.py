@@ -191,6 +191,8 @@ def main(argv=None) -> int:
                                       "checks; no stack, Wine or client); with -k only the unit tests whose id "
                                       "contains the pattern, without the checks (the builder's inner loop)")
     ut.add_argument("-k", dest="pattern", help="only unit tests whose id contains this (no checks)")
+    ut.add_argument("--tests-only", action="store_true",
+                    help="all unit tests, without the unit-layer checks (the pre-push hook and CI)")
     ut.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)
     ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns + .json (logo on the navy tile) from env/branding/logo-source.jpeg")
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
@@ -313,7 +315,7 @@ def main(argv=None) -> int:
                    ignore_power=a.ignore_power, lanes=a.lanes)
 
     if a.cmd == "test":
-        if a.pattern:
+        if a.pattern or a.tests_only:
             from . import unitrun
             return unitrun.main(a.pattern)
         from . import paths as P
