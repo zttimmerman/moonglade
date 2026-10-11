@@ -668,6 +668,7 @@ SLEEP_ALLOWLIST: dict = {
     'harness/hslib/checks/dungeon_checks.py:PAUSE_S': 'dungeon-scaling spec "Pausing keeps the scaling": paused for 5 s (test-pyramid delta)',
     'harness/hslib/checks/pause_checks.py:RESPAWN_PAUSE_OVER_R_S': 'true-pause "Respawn and leash freeze" / harness-control "Server-side waits are controllable": the respawn pause lasts longer than R',
     'harness/hslib/checks/pause_checks.py:LEASH_PAUSE_OVER_R_S': 'true-pause "Respawn and leash freeze" / harness-control "Server-side waits are controllable": the leash pause lasts longer than R',
+    'harness/hslib/checks/cold_play_checks.py:SANDBOX_REPORTS_S': 'play-launcher "Loop works with the network denied": the claim is that the denial log shows no attempt, so the kernel\'s sandbox reports get time to reach the unified log (moved from play.offline, test-pyramid part 3)',
     'harness/hslib/checks/pause_checks.py:LEASH_SAMPLE_S': 'true-pause "Respawn and leash freeze": the chaser has not evaded after the resume (observed LEASH_SAMPLE_S, the leash would fire at once on the wall clock)',
 }
 # Waits found when the lint landed (2026-10-11), each to be turned into a poll or cited by its area's migration slice

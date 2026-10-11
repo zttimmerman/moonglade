@@ -215,8 +215,14 @@ def drive_n() -> dict:
         win, t_win = wait_window(600, stop_if=lambda: s.proc.poll() is not None)
         ev |= {"window": win, "t_window": t_win}
         require(win, "the stand-in's window never appeared under ./play", output=s.output()[-3000:], **_plain(ev))
-        time.sleep(1.5)                     # as the terminal session always did: the Dock state settles
-        ev["apps_at_window"] = [a for a in lsappinfo_list() if is_ours(a)]
+        # the Dock state settles (was a fixed 1.5 s): poll until the stand-in is listed as a Foreground app (or 5 s)
+        t_ls = time.time()
+        while True:
+            ev["apps_at_window"] = [a for a in lsappinfo_list() if is_ours(a)]
+            if any(a["pid"] == win["pid"] and a.get("type") == "Foreground" for a in ev["apps_at_window"]) \
+                    or time.time() - t_ls > 5:
+                break
+            time.sleep(0.2)
         ev["shim_log"] = shim_log_lines(t_start, win["pid"])
         # play.offline: every long-running process of the loop runs under the profile (inherited from sandbox-exec)
         st = stack.stack_processes()
