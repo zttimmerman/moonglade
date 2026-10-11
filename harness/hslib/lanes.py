@@ -504,7 +504,19 @@ def schedule(selected: list, ctx: dict, guard, *, requested: int | None, tier: s
         say(f"lane B not used ({meta['fallback']}); running every check in lane A")
     if worker is None:
         meta["assignment"]["b_to_a"] = list(planned)          # every planned lane-B check runs in lane A
-        results += ex([c for c in seq if c not in a_seq[:start]])   # serial from here on, B's checks included
+        # serial from here on, B's checks included. The stack-down ones (the play.* stand-in sessions) run once the
+        # shared segment's own `hs down` (lifecycle.down) has stopped the stack, not inside the shared segment (each
+        # would stop the shared stack, and the next shared test start it again). Records are merged in run order.
+        rest = [c for c in seq if c not in a_seq[:start]]
+        cold_b = [c for c in rest if c.id in planned and c.stack == "down" and segment(c) < 2]
+        others = [c for c in rest if c not in cold_b]
+        k = next((i for i, c in enumerate(others) if segment(c) > 6), len(others))
+        meta["cold_b_after_down"] = [c.id for c in cold_b]
+        results += ex(others[:k])
+        if cold_b and not ctx.get("power_stop"):
+            results += ex(cold_b)
+        if not ctx.get("power_stop"):
+            results += ex(others[k:])
         return _merge(results), meta
     # 3. lane A up to the join barrier, with B running
     rest = a_seq[start:]
