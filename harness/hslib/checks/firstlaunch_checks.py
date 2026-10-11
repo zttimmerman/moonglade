@@ -343,6 +343,9 @@ def home_end_state(home: Path) -> tuple[dict, list[str]]:
     return st, probs
 
 
+ENOUGH_FREE = {"free_bytes": 10**13}      # injected free space (the disk rule is firstlaunch.preflight's to check)
+
+
 @check("firstlaunch.flow", order=15, capability=CAP, stack="down", layer="gate")
 def flow(ctx):
     """Fresh scratch HOME to ready through the release app's first-launch window (test hook, scripted pick of
@@ -370,7 +373,10 @@ def flow(ctx):
             hook = d / "hook.jsonl"
             t0 = time.time()
             free_before = shutil.disk_usage(d).free
-            r = exec_with_hook(bundle, hook, {**base_env, P.APP_TEST_CLIENT_PICK_ENV: f"{src};quit"},
+            # preflight's free-space rule has its own check (firstlaunch.preflight); here free space is injected so the
+            # flow doesn't depend on the dev Mac's disk (the client is cloned, so real use is far below the need)
+            r = exec_with_hook(bundle, hook, {**base_env, P.APP_TEST_CLIENT_PICK_ENV: f"{src};quit",
+                                              P.FIRSTLAUNCH_TEST_ENV: json.dumps(ENOUGH_FREE)},
                                [P.RELEASE_TEST_FLAG], timeout=2400)
             ev["run_s"] = round(time.time() - t0, 1)
             evs = r["events"]
@@ -417,7 +423,7 @@ def flow(ctx):
         with LoopbackServer(FL_CACHE) as srv:
             env2 = {**base_env, P.RELEASE_HOME_ENV: str(home2), P.RELEASE_DOWNLOAD_BASE_ENV: srv.base,
                     P.APP_TEST_CLIENT_PICK_ENV: f"{src};quit",
-                    P.FIRSTLAUNCH_TEST_ENV: json.dumps({"corrupt_copy": True})}
+                    P.FIRSTLAUNCH_TEST_ENV: json.dumps({"corrupt_copy": True, **ENOUGH_FREE})}
             r2 = exec_with_hook(bundle, hook2, env2, [P.RELEASE_TEST_FLAG], timeout=600)
         evs2 = r2["events"]
         win2 = [e for e in evs2 if e.get("kind") == "setup_window"]
@@ -434,6 +440,7 @@ def flow(ctx):
         # next launch (the engine, as the window runs it): the client step runs again and verifies; the data step
         # then stops at a closed loopback port (download_failed), so this stays short
         nxt = run_engine(app, home2, ["--client", str(src)], {P.RELEASE_PORTS_ENV: json.dumps(SCRATCH_PORTS),
+                                                               P.FIRSTLAUNCH_TEST_ENV: json.dumps(ENOUGH_FREE),
                                                                P.RELEASE_DOWNLOAD_BASE_ENV: "http://127.0.0.1:9/",
                                                                "TMPDIR": str(d / "tmp") + "/"}, d, timeout=600)
         st = [(e.get("step"), e.get("state")) for e in nxt["events"] if e.get("event") == "step"]
