@@ -65,7 +65,8 @@ ADDON_HOOK = '-- planted by the harness (seamless_checks.py): the wording add-on
 # Run A (login.friendly_errors): the login server is stopped before Continue; the friendly error is photographed,
 # its details opened and photographed; the login server is started again; Try again at RETRY_AT; at character select
 # Play is clicked (entering the world hands the record out).
-RETRY_AT = 80
+RETRY_AT = 55                # design 16.3: was 80; the login server is back by about 40 s (auth_restart.after_client_up_s
+                             # 39.5 in 16.1's run, shots at 32/35 s), so Try again still comes ~15 s after it is up
 GLUE_ERR = {"marker": True,
             "script": [{"t": 4, "act": "shot"}, {"t": CONTINUE_AT, "act": "continue"}, {"t": 32, "act": "shot"},
                        {"t": 34, "act": "details"}, {"t": 35, "act": "shot"}, {"t": RETRY_AT, "act": "retry"}],
