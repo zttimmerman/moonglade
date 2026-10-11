@@ -1034,3 +1034,47 @@ Projected after the move: integration ≈ 863 s (budget 900); journeys ≈ 757 s
 
 Journey re-budget: `journey.saves` goes from 150 to 200 s and `journey.login_recovery` from 120 to 150 s. Each holds two sessions the specs need (part 3, "can't get cheaper"). The cap goes from 14 to 15 min.
 
+
+### 16.1 As built (task 3.11 phase 2, 2026-10-11) — two budgets missed narrowly
+Measured on this Mac, one lane, at `98256bc`. The unit layer is `hs test`. "Non-targeted" is one filtered run of every
+non-targeted integration and journey check (69 ids, `hs run --only ...`, 14:33–15:01 EDT). "Targeted" is one filtered
+run of the 14 targeted checks (15:01–15:21 EDT). The replay is `report.pr_average`'s replay of the last 15 merged PRs,
+priced with these two runs' per-check times instead of the last full run's. Gate checks are not in these numbers.
+
+| Layer | Part 3 (s) | Now (s) | Budget (s) | Verdict |
+|---|---:|---:|---:|---|
+| Unit layer (`hs test` wall 54.4) | 38.2 | 39.6 | 120 | PASS |
+| Integration (union of spans; non-targeted) | 1813.3 | 908.9 | 900 | **FAIL** (+8.9) |
+| Journeys (the six) | 942.7 | 745.9 | 890 (sum of budgets) | 5 of 6 within; `login_recovery` **FAIL** |
+| Integration + journeys | 2756.0 | 1654.8 (27.6 min) | 1800 | PASS |
+| Targeted (14 checks) | — | 1135.3 (18.9 min) | 1200 | PASS |
+| Replay mean, last 15 merged PRs | 22.3 min | 19.1 min | 15 min | **FAIL** (+4.1 min) |
+
+Per journey (budget): `pause` 56.3 (90), `stock_client` 32.5 (60), `first_play` 126.1 (150), `app_desktop` 183.7
+(240; 327.4 before `app.backups_window` moved out), `saves` 194.0 (200), `login_recovery` 153.3 (150, miss by 3.3 s;
+147.8 in part 3, 151.2 in part 2).
+
+Integration by area (s, sum of check times 841.7; the other 67 s are fixture start and profile restarts): saves 185.7,
+dungeons (`dng`) 143.6, pause 136.1, comp 80.1, era 78.7, lifecycle 58.0, app 53.7, client 30.0, scale 19.3,
+savesctl 18.9, the rest 37.6.
+
+Targeted, each (s): `play.cold_sessions` 343.6, `app.backups_window` 150.1, `saves.session_interval` 99.6,
+`backups.restore_roundtrip` 96.4, `saves.load_ordering` 85.3, `backups.on_quit` 74.0,
+`client.player_client_not_rebuilt` 46.5, `lock.*` 169.4 (five), `client.launch_smoke` 38.8,
+`client.login_text_clean` 31.7.
+
+Replay (selection ≤ 0.20 s; FULL 3 of 15; FULL price 26.5 min): per PR (min) #22 12.0, #23 8.2, #24 35.8 (FULL),
+#25 16.5, #26 14.6, #27 16.4, #28 34.8, #29 19.6, #30 9.3, #31 22.9, #32 33.7 (FULL), #33 27.6, #1 0, #2 0,
+#3 35.8 (FULL). Targeted checks picked through `covers` are 7.0 min of the 19.1 mean (12.1 without them). The drivers
+are `play.cold_sessions` (3.05 min of the mean: it covers `polish_checks.py`, `resolution_checks.py`,
+`backup_checks.py`, `stages.py` and `play`, which most app and release PRs touch) and the five `lock.*` checks (1.1 min:
+they cover `build.py`, `era.py`, `pause.py`, `companion.py` and `release_checks.py`, so FULL PRs and release PRs pick
+them through covers), then `app.backups_window` (0.67). Narrowing those covers to each check's own code is what would
+close most of the gap. That is a change to the reviewed list's selection, so it is left for review, not made here.
+
+Run notes: `journey.app_desktop` failed on `app.shim_scope` (known: the install-source zip was replaced) and
+`app.handoff_focus` (GIVEN not met: another app took activation before the game window appeared; not the harness).
+`saves.session_interval` failed once in the targeted run (`saves.autosave_triggers`: after the "inside the interval"
+step, the last two `Arrived` triggers were skipped as "inside the interval" although each came 5.5 s after the last
+save with a 4 s interval) and passed when rerun alone. Unexplained, not chased. Owed gate checks: `lane.preflight`
+PASS (27.8 s), `report.orphans_healed` PASS (122.1 s).
