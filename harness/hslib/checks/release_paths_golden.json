@@ -38,6 +38,12 @@
      "<ROOT>/env/ghidra.zip",
      false
     ],
+    "lua51": [
+     "lua51_url",
+     "lua51_sha256",
+     "<ROOT>/data/downloads/lua-5.1.5.tar.gz",
+     true
+    ],
     "release-mysql": [
      "release_mysql_url",
      "release_mysql_sha256",
@@ -142,6 +148,12 @@
      "ghidra_sha256",
      "<ROOT>/env/ghidra.zip",
      false
+    ],
+    "lua51": [
+     "lua51_url",
+     "lua51_sha256",
+     "<ROOT>/data/downloads/lua-5.1.5.tar.gz",
+     true
     ],
     "release-mysql": [
      "release_mysql_url",

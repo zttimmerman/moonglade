@@ -74,6 +74,12 @@ DEV_ONLY_FILES = {
     "publicscan.py": "public-repo scan of the checkout",
     "runner.py": "the harness runner (results, git state, disk in the checkout)",
     "timingbase.py": "harness timing baseline",
+    # test-pyramid prototypes (unit layer, impact selection): dev test tooling over the checkout
+    "luaprelude.py": "unit layer: Lua prelude from the checkout's glue XML (test-pyramid)",
+    "ownership.py": "impact selection over the checkout's git history (test-pyramid prototype)",
+    "selector.py": "impact selection over the checkout's git history (test-pyramid prototype)",
+    "unitrun.py": "unit layer runner (`hs test`) over the checkout's tests (test-pyramid)",
+    "unittools.py": "unit layer toolchain: Lua 5.1.5 and the C++ test binary built in the checkout (test-pyramid)",
 }
 DEV_ONLY_DIRS = {
     "checks": "harness checks run only from a checkout",

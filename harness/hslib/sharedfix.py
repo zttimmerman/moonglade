@@ -161,3 +161,29 @@ def cleanup_identities(idents: list[S.Identity]) -> dict:
         if d.is_dir() and d.name.startswith("HSI"):
             shutil.rmtree(d, ignore_errors=True)
     return {"duration_s": round(time.time() - t0, 2), "errors": errs}
+
+
+# ---------------------------------------------------------------- bulk fixtures (design 13 rule 4; task 1.6)
+
+def prepare_identity(ident: S.Identity) -> dict:
+    """Account + two characters through the server, then one login/logout each with postage money (a fresh
+    character has no zone until its first login, and a mail needs 30 copper)."""
+    t0 = time.time()
+    with S.as_identity(ident):
+        S.ensure()
+        for n in (ident.char, ident.alt):
+            with S.Session(n, tele=None) as s:
+                s.ws.set_selection(s.guid)
+                s.cmd(".modify money 10000")
+    return {"identity": ident.user, "s": round(time.time() - t0, 2)}
+
+
+def bulk_identities(n: int, workers: int = 8, run_tag: int | None = None) -> dict:
+    """n identities created in parallel at run start; {"identities", "wall_s", "each_s"}."""
+    run_tag = run_tag if run_tag is not None else int(time.time()) % 100000
+    ids = [new_identity(run_tag) for _ in range(n)]
+    t0 = time.time()
+    with ThreadPoolExecutor(workers) as ex:
+        each = list(ex.map(prepare_identity, ids))
+    return {"identities": ids, "wall_s": round(time.time() - t0, 2), "each_s": [e["s"] for e in each],
+            "workers": workers}

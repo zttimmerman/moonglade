@@ -185,7 +185,24 @@ CREATURE_RULE = ("hostile creature near the master: creature_template.faction's 
                  "UNIT_FLAG_IN_COMBAT), so an earlier kill or another unit's fight doesn't block the check")
 
 
+_CANDIDATES: dict = {}
+_CANDIDATES_LOCK = __import__("threading").Lock()
+
+
 def creature_candidates(level: int = LEVEL, tele: str = START_TELE, n: int = 10) -> list[dict]:
+    """CREATURE_RULE's candidates. The query takes ~14 s (a correlated isolation test over every spawn on the map, no
+    spatial index) and reads only the world database's spawns, which no check changes, so it runs once per
+    (level, tele) per process (the largest n asked for; ORDER BY d, guid makes a smaller n its prefix) (test-pyramid 1.6: two pooled sessions ran it at once and both passed their 25 s
+    combat timeout). The rows are copied out, so a caller can't change the cache."""
+    key = (level, tele)
+    with _CANDIDATES_LOCK:
+        have = _CANDIDATES.get(key)
+        if have is None or (have[0] < n and len(have[1]) >= have[0]):     # a shorter list can serve a smaller n
+            _CANDIDATES[key] = (n, _creature_candidates(level, tele, n))
+        return [dict(c, spawn=dict(c["spawn"])) for c in _CANDIDATES[key][1][:n]]
+
+
+def _creature_candidates(level: int, tele: str, n: int) -> list[dict]:
     recs, _ = dbc.read_dbc("FactionTemplate.dbc")
     hostile = sorted(r[0] for r in recs if r[FT_HOSTILE_MASK] & FACTION_MASK_PLAYER)
     t = F.tele_row(tele)

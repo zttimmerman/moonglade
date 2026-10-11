@@ -714,3 +714,81 @@ The prototype showed the plan *moved* tests between layers but didn't *reduce* a
 6. **Pool only what is proven safe.** Tests that flip server-wide switches (`saves.load_atomic`, pause enable) run serially; the pool saving is taken as measured (−37%), not assumed.
 
 Projected after the redesign (to be measured, not trusted): unit ≈47 s; integration ≤12 min; journeys ≈9.6 min; complete suite ≤22 min; typical feature PR ≈8–12 min; foundation PR ≈22 min; replay mean ≤15 min with the narrower FULL rule.
+
+### 13.1 Re-measure after the redesign (tasks 1.5–1.7, 2026-10-11)
+**Verdict: the complete suite and the replay mean now fit, but three criteria of 1.6 miss**: the `dng.session` takes
+142 s (budget 60 s); the run-start fixture phase takes 14.3 s (budget 10 s) once the world-facts query it needs is
+counted; and the first round of runs was not stable (fixed, then 7 of 7 stable). The integration layer projects to
+14.6 min (budget 12 min). Projections for the areas not yet clustered extrapolate the two measured clusters.
+
+**1.5 Ownership selector (prototype `harness/hslib/ownership.py`): selection PASS; replay mean PASS only with clustering.**
+- How the first-cut ownership map is derived (`ownership.generate()`, reviewable):
+  - acceptance tests and layers from appendix A; `scale.*`/`lock.*` form the `dng` area (the boss fight stays gate);
+  - product paths: the check file's covers (`selector.FILE_COVERS`) and design 10's journey covers, minus
+    `mod_moonglade_loader.cpp` (every feature passes through it: smoke set) and the module confs;
+  - module confs are owned **by section**: a changed `Moonglade.Saves.*` line selects the saves area, `Moonglade.Pause.*`
+    pause, `Moonglade.Dungeons.*` dng, `EraProfile.*` era; a key in no known section selects the smoke set;
+  - harness libraries: the check file plus the hslib modules it imports **directly** (one hop), except shared
+    infrastructure, meaning modules imported directly by ≥ 6 of the 31 acceptance check files (`registry`, `paths`, `stack`,
+    `soap`, `play`, `play_checks`, `playclient_util`, `clientbuild`, `db`, `launch`, `procs`, `probe`, `fixtures`,
+    `config`) plus `probe/**`, `stack`, `lanes`, `lanestack`, `runner` by rule; a shared module is still declared by the
+    check file named after it (`play.py` by `play_checks.py`);
+  - an undeclared path selects the smoke set: `journey.first_play` + the cheapest integration test of each of 16 areas;
+  - FULL: `patches/core/**`, `patches/playerbots/**`, `harness/hslib/build.py`, CMake files, and a change to a
+    `core_*`/`playerbots_*` key of fork.lock (other pins select their declared owners).
+- Selection time: ≤ 0.09 s per PR; generating the map 0.02–0.4 s.
+- Replay of #19–#33 and #1–#3 of the new repo (18 PRs), unit layer 48 s, the run-start fixture phase 14.3 s added to
+  every run with a shared-server test, pool saving as measured. FULL share **22 %** (4 of 18: #21, #24 and #3 by `build.py`,
+  #32 by `patches/core`), down from 67 %:
+
+| Integration pricing | Strict FULL | Option 2 | Complete suite |
+|---|---:|---:|---:|
+| No clustering gain (old per-test projections) | 21.0 min | 20.0 min | 39.1 min |
+| **Measured clustering ratio 0.433** (1.6, both clusters) | **13.5 min** | **12.5 min** | **23.0 min** |
+| Design 13's 12 min target (ratio 0.384) | 12.7 min | 11.6 min | 21.3 min |
+
+  Break-even: the mean stays ≤ 15 min while integration runs at ≤ 0.55 of its old projections, and the complete suite stays ≤ 30 min
+  at ≤ 0.68. Sensitivity: #1 and #2 are docs-only (0.8 min each); without them, the 16-PR mean at 0.433 is 15.1 min.
+- Per PR at 0.433, strict (option 2 where it differs): #19 12.4, #20 18.6, #21 23.8 FULL, #22 9.7, #23 8.0, #24 23.8
+  FULL (16.1), #25 9.9, #26 10.1, #27 11.2, #28 20.2, #29 9.6, #30 9.2, #31 10.8, #32 23.8 FULL (20.3), #33 17.1,
+  #1 0.8, #2 0.8, #3 23.8 FULL (16.1). The broad non-FULL PRs (#20, #28, #33) touch the module conf/loader, the
+  add-on and several areas' libraries at once.
+- Smoke set: 4.4 min with unit and fixtures.
+
+**1.6 Clustered sessions: saves PASS; `dng.session` FAIL (142 s vs 60 s); fixtures FAIL (14.3 s vs 10 s); stable after one fix.**
+Prototype `harness/hslib/clusters.py`. One run = bulk fixtures, two saves clusters (each with its own identity; serial,
+or both at once in the pool), then `dng.session` (exclusive: it pauses the world). Runs: 3× serial, 3× pool, 1× reversed (dng first,
+saves clusters in reverse order).
+- Saves cluster (`saves.manual`, `saves.quick_slot`, `saves.inworld_load`, `saves.undo` in one identity's session):
+  median 9.8 s, max 14.4 s (the old per-test projections for these four: 32.3 s; ratio 0.305). Pool: two clusters
+  at once in 9.4–10.3 s each, the same as one alone.
+- `dng.session` (9 scenarios, 3 Deadmines entries): **median 141.7 s, max 143.0 s** (their old times: 317.4 s;
+  ratio 0.446). Per scenario (median): module_loaded 0.8, outdoor_untouched 2.1, solo_weaker 6.5, pause_safe 27.6
+  (the spec's 20 s pause), counts_companions + party_stock 51.1 (adding four companions and waiting for them),
+  partial_kept + partial_kept_dismissed 14.3, fresh_after_clear 31.2 (clearing every encounter). 60 s isn't reachable
+  with the 20 s pause, four companions and a full clear in one session; two or three sessions of ≤ 60 s each,
+  or a 150 s budget, would fit what was measured.
+  Not in the session: `scale.disabled_stock` (profile group), `lock.no_hourly_cap` (six entries), `lock.heroic_*`,
+  `lock.login_inside_kept`, `lock.companion_unstuck`: 202 s today, ≈ 90 s at the measured ratio.
+  **Loosening to review:** in the session `lock.fresh_after_clear` doesn't assert "both companions in the new copy"
+  (they were dismissed for `partial_kept_dismissed` before the clear).
+- Statuses: **first round FAIL**. `saves.inworld_load` errored 7 times in 21 (1 of 6 serial, 6 of 6 pooled: "the character
+  never got into combat"). Cause: companion.CREATURE_RULE's query takes 14.3 s alone (a correlated isolation test over
+  every spawn on the map with no spatial index) and 33 s when two sessions run it at once, more than `saves.engage`'s 25 s
+  timeout. Fix (committed): `companion.creature_candidates` caches its result per process (the spawns are static; a smaller `n` is a prefix of
+  the cached list, `ORDER BY d, guid`), and the fixture phase computes it once at run start, in parallel with the identities.
+  **Second round: all 13 scenario ids passed in all 7 runs** (no leaked state; resets median 0.064 s, max 0.088 s).
+- Bulk fixtures: 2 identities 4.5–4.75 s; 8 in 5.2 s, 16 in 6.1 s (16 workers): within 10 s. **But the run-start phase is
+  14.3 s** with the world-facts query, which runs beside the identities and dominates. To fit the 10 s, cache it across runs
+  keyed by the world database's content, or make it cheaper (a bounding-box rewrite didn't help: 13.7 s, same rows).
+
+**1.7 Go/no-go 2: complete suite PASS (projected 23.0–25.0 min ≤ 30); integration layer 14.6 min > 12 min; per-session
+and fixture budgets miss (above).**
+- Integration, complete: 1874.2 s of old projections × 0.433 measured = 811.5 s, plus the shared overhead 49.2 s and
+  the fixture phase 14.3 s = 875 s = **14.6 min** serial (budget 12). Complete suite: unit 0.8 + integration 14.6 +
+  journeys 9.6 (projected, not measured) = **25.0 min** (the replay pricer, with the measured pool saving applied:
+  23.0 min). Range over the two measured cluster ratios (0.305–0.446): 21.0–25.4 min.
+- Assumptions to watch: the other areas cluster as well as saves and dng did (ratio ≤ 0.55 keeps the PR mean ≤ 15 min); the
+  journeys hit design 9.4's projections; and the cached world-facts query is the only shared slow query (`comp.*` uses the same rule,
+  so it gains too).
+
