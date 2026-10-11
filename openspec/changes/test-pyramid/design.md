@@ -460,6 +460,34 @@ Prototype covers (selector.py `FILE_COVERS`) are by check file; `harness/hslib/c
 2. Fit the dungeon checks into the 30 min (≈ 8.7 min today) or move most of them to unit tests (DungeonsLogic) and the gate.
 3. Pre-create per-test identities in bulk (in parallel, once per run) instead of 4.6 s per test.
 
+### 12.2 Part 1 as built (engine 2.x, slices for pause, saves + savesctl, dungeons, backups unit; 2026-10-11)
+Measured on this Mac, one lane. "Before" is the last full run (`d123522`, 2026-10-11 01:01 UTC); "after" is the
+combined run of the part-1 tests (run 2, 14 min 46 s wall, one `hs up`, four profile restarts), with the per-area
+runs and the counterexample run as the other repeats.
+
+| Area | Before (s) | After (s) | What changed |
+|---|---:|---:|---|
+| pause, integration | 532.9 (10 checks, own sessions) | 136.6 | `pause.freeze_matrix` 41.4 (5 scenarios, one 20 s pause); `respawn_frozen` 50.9 (scratch spawn, 5 s respawn, pause-respawn profile, R + 3 s and R + 5 s pauses); `disconnect_unpauses` 4.5 (own identity, no 90 s offline wait); `disabled_noop` 5.5 (+ the pause-off group restart); taxi 11.6, logout 22.7 unchanged |
+| pause, journey | 83.6 (cold `client.pause_menu`) | 73.7 (warm `journey.pause`, budget 90) | `HS_PLAY_KEEP_STACK` on the shared stack; GIVEN nothing else running, afterwards nothing but the stack, same pids |
+| pause, gate | skipped (slow tier) | 322.4 | `pause.session_alive` (5 min soak), gate layer |
+| saves + savesctl, integration | 435.1 | 392.4 | `saves.session_a` 20.9 pooled with `session_b` 78.0; `session_interval` 93.8 (exclusive: it shortens the server-wide interval); `scope` 66.7 and `load_ordering` 90.6 on their own identities; atomic 18.5, load_atomic 3.5, hygiene 40.0 unchanged |
+| saves + savesctl, unit | (integration before) | 4.5 | `savesctl.load_verb`, `savesctl.build_refused`, `saves.addon_static` |
+| dungeons (scale + lockouts in sessions) | 349.9 | 167.8 | `dng.session1` 83.1 and `dng.session2` 65.2 (budget 90 each, enforced by `report.layer_budgets`); `scale.disabled_stock` 11.9 and `scale.outdoor_untouched` 7.6 without their own restarts |
+| backups | 43.3 (`backups.rotation`) | 3.2 (unit check, dump faked in-process) + 18 Python unit tests in 1.1 s | the rest of the area is still cold (part 2) |
+| **Part-1 integration layer (run 2)** | 1317.8 | **800.5** (incl. `hs up`, fixtures 4.7 s, 4 profile restarts) | ratio 0.61 (design 13.1 assumed 0.433) |
+
+- Unit layer (`hs test`, 4-process pool): 38.5–49.9 s wall; Python 35 tests ≈ 1.1 s, C++ 27 tests (build 2.4 s when its inputs change), Lua 5 tests.
+- Fixture: run-start phase 4.6–4.7 s (identities in parallel; world facts from the cross-run cache: 0.23–0.26 s, keyed by the world DB's content hash; 4.55 s on a cold cache, design 14's ≤ 10 s); resets median 0.064–0.072 s, max 0.084–0.112 s; no leaked state in any run; cleanup 0.2–0.7 s, no stale `HSI%` accounts left.
+- Counterexamples (one run, sabotage reverted): each new or changed test failed on its own scenario (the five freeze children, respawn, disconnect, the disabled profile, `journey.pause`, the three saves sessions, `scope`, `load_ordering`, `scale.pause_safe` in session 1, `lock.fresh_after_clear` in session 2 with `lock.partial_kept_dismissed` blocked by it); unit: Python (backups manifest, refusals, notice), C++ (PauseLogic, DungeonsLogic), `backups.rotation` with `KEEP` changed.
+- Deviations from this design, with the reason:
+  - `dng.session2` order: `lock.partial_kept` (two companions, leave, re-enter: same copy), then `lock.fresh_after_clear` (the same two companions clear the copy: new copy B, both in B), then `lock.partial_kept_dismissed` in B (dismiss both, re-enter alone: same B). Each scenario has its own observation; no companion is re-added (addclass bots aren't re-addable by name), so `fresh_after_clear` asserts both companions in the new copy as its spec says (design 14).
+  - `pause.respawn_frozen` runs in its own profile group `pause-respawn` (5 s normal corpse decay) so the respawn remainder R stays at most 15 s with a 5 s scratch respawn.
+  - `dng.session1/2` run in a `scaling-on` profile group, after `scaling-off`, so the unscaled reference is read once in the same run.
+  - Shared-world hazard found: `saves.prepare_rich` tamed the nearest wolf to the start point, which an earlier test on the shared server may have killed; a dead (or refused) candidate now moves to the rule's next one.
+  - Legacy client checks (not migrated) that start the real client are counted as journey time (`runner.LEGACY_CLIENT`), including the live saves/savesctl checks, `login.backdrop_choice` and `client.resolution_default`.
+- Not done in part 1 (part 2): `journey.saves` (the live savesctl and character-screen checks are still legacy client checks, 290 s), the rest of `SavesLogic`, the Lua add-on tests (saves and pause), backups kill-safe/restore on the shared server, the remaining slices 3.3, 3.5–3.8, and the `PENDING_SLEEPS` entries of the part-1 areas (reported by `report.no_fixed_sleeps`, not failed).
+- Levers not taken yet: `saves.load_ordering` is character-scoped and could share the pool with `session_b` (−57 s); the four profile restarts (≈ 60 s) could shrink if `pause-respawn` folded into another group.
+
 ## Appendix A: every record of the baseline run, where it goes
 `Today` is the baseline `duration_s`. A 0.0 is either a shared session whose time sits on its first check, or a skipped slow check. `Goes to` uses the layers in §2; `J1`–`J6` are, in order, `first_play`, `pause`, `saves`, `login_recovery`, `stock_client` and `app_desktop`.
 

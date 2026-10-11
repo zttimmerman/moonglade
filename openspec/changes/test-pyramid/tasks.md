@@ -31,7 +31,7 @@ Estimates are agent-hours of builder work, without padding (recent changes ran 2
   - If a pass criterion fails (unit per-test time, reset cost, pool flakes, or a selection over 10 s), stop and report to the orchestrator with the numbers before task 2. Don't migrate on a failed prototype.
 
 ## 2. Harness engine
-- [ ] 2.1 Layers and run tiers (≈ 2.5 h).
+- [x] 2.1 Layers and run tiers (≈ 2.5 h).
   - `layer`, `covers`, `scope`, `budget_s` and `parallel_safe` in the registry.
   - `--tier unit|pr|full`, plus `hs test`.
   - Remove the `quick|slow|gui|backups` run tiers and their skip rules.
@@ -39,16 +39,16 @@ Estimates are agent-hours of builder work, without padding (recent changes ran 2
   - Results schema: `meta.layers`, `meta.selection`, `meta.unit`, per-record `layer`.
   - Every existing check gets an interim layer: `stack="down"` checks → cold integration, `stack="up"` → shared integration, slow → gate, `quick` and no-stack → unit.
   - Checks: `report.layers_declared`, `report.unit_layer`, `report.gate_rule`.
-- [ ] 2.2 Impact selection (≈ 2 h).
+- [x] 2.2 Impact selection (≈ 2 h).
   - The production selector from 1.5 (declared ownership, design §13), `report.ownership`, fail-safe cases, selection timing, `meta.selection`.
   - Checks: `report.selection`, and `hs select --replay`.
-- [ ] 2.3 Budgets and reports (≈ 2 h).
+- [x] 2.3 Budgets and reports (≈ 2 h).
   - Per-layer timing.
   - `report.layer_budgets`, `report.pr_average` (`pr-runs.jsonl`, the replay fallback, the merge-with-remedy note), `report.journeys`, `report.no_fixed_sleeps` (lint plus allowlist).
   - `report.coverage` accepts `unit:` ids.
   - `report.timing` per layer.
   - Remove `report.tiers`' nested run and `hs nightly` (code, CLI, spec checks).
-- [ ] 2.4 Shared-server fixture, production version (≈ 2 h).
+- [x] 2.4 Shared-server fixture, production version (≈ 2 h).
   - Profile groups, the 2-worker pool (only if 1.2 passed), end-of-run character cleanup, `HS_PLAY_KEEP_STACK` with its refusals.
   - Checks: `fixture.shared_server`, `fixture.reset_leak`, `fixture.keep_stack_refused`.
   - Each new check gets a counterexample run.
@@ -65,12 +65,12 @@ Each slice is done the same way:
 
 The builder runs `hs test` plus the slice's own tests; no acceptance tier per task.
 
-- [ ] 3.1 backups (≈ 2 h).
+- [ ] 3.1 backups (≈ 2 h). _Part 1 (2026-10-11): unit done (rotation as a unit check with the dump faked in-process; manifest/verify, refusal reasons, notice text as Python unit tests). Left for part 2: kill-safe and restore driven directly on the shared server (still cold `./play` sessions), `app.backups_window` (3.5)._
   - Unit: rotation, manifest, refusal reasons, notice text.
   - Cold: on-quit + one injected failure.
   - Shared: kill-safe and restore driven directly.
   - `app.backups_window` waits for 3.5.
-- [ ] 3.2 saves + savesctl (≈ 3.5 h).
+- [ ] 3.2 saves + savesctl (≈ 3.5 h). _Part 1 (2026-10-11): integration clustered on fixture identities (`saves.session_a` and `session_b` pooled, `session_interval`, `scope` and `load_ordering` on their own identity); `savesctl.load_verb`/`build_refused` and `saves.addon_static` in the unit layer. Left for part 2: the rest of `SavesLogic`, the Lua add-on/glue tests, `journey.saves` (the live savesctl/charselect checks still run as legacy client checks, counted as journey time)._
   - Finish `SavesLogic`: JSON, labels, retention, list format, refusal reasons, combat/dead predicate.
   - Lua tests for `MoongladeSaves.lua` and `HSCharSaves.lua`.
   - Saves integration with the pool.
@@ -81,7 +81,7 @@ The builder runs `hs test` plus the slice's own tests; no acceptance tier per ta
   - Warm config-gate run.
   - `journey.stock_client`.
   - Drop `client.launch_smoke`.
-- [ ] 3.4 pause (≈ 2.5 h).
+- [ ] 3.4 pause (≈ 2.5 h). _Part 1 (2026-10-11): `PauseLogic` + C++ tests, `pause.freeze_matrix` (one 20 s pause), the scratch-spawn respawn, `disconnect_unpauses` on its own identity, the pause-off profile group, the gate soak, warm `journey.pause`. Left for part 2: the Lua tests for the add-on's menu hooks and banner._
   - `PauseLogic` (state machine, cooldown arithmetic) and its C++ tests.
   - Production freeze matrix and respawn.
   - The disabled profile group.
@@ -100,12 +100,12 @@ The builder runs `hs test` plus the slice's own tests; no acceptance tier per ta
 - [ ] 3.8 The rest (≈ 2 h).
   - Lifecycle, control, fixtures, era (merged restarts), comp, core, lane (rules as unit tests, real stacks as gate), report, build, firstlaunch, release, signing, power, re, public, repo, setup.
   - Layer tags and `covers`; `lifecycle.isolated` narrowed to our pids.
-- [ ] 3.9 Dungeons, after m4-dungeon-scaling merges (≈ 1 h).
+- [x] 3.9 Dungeons, after m4-dungeon-scaling merges (≈ 1 h).
   - `DungeonsLogic` with its C++ tests.
   - Its checks placed in layers with `covers`.
 
 ## 4. Rules and docs
-- [ ] 4.1 CLAUDE.md §4, §6, §9 and §10 with the proposal's exact text (orchestrator; Zach approved the change).
+- [x] 4.1 CLAUDE.md §4, §6, §9 and §10 with the proposal's exact text (orchestrator; Zach approved the change).
   - `hs-change-loop` run budget: builder = unit + own test; verifier = one PR-tier run + 3× new/changed + 2–3 spot checks; full ×3 only at milestone gates.
   - `hs-harness-checks`: layers, `covers`, `scope`, no fixed sleeps, unit-test ids.
   - (≈ 1 h)
