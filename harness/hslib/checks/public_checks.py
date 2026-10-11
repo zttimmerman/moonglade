@@ -354,6 +354,27 @@ def _run(cmd: list, timeout=900) -> dict:
             "stdout_tail": mask(r.stdout[-600:]), "stderr_tail": mask(r.stderr[-600:]), "s": round(time.time() - t, 1)}
 
 
+PLANTED_REF = "refs/heads/hs-selftest-planted"
+
+
+def _plant_selftest_commit(mirror: Path, branch: str) -> dict:
+    """A commit in the scratch mirror only (never origin; its push URL is disabled): the branch tip's tree, a message
+    with a `Claude-Session:` trailer and an author/committer email that isn't a noreply address."""
+    tree = _g(mirror, "rev-parse", f"refs/heads/{branch}^{{tree}}").strip()
+    tip = _g(mirror, "rev-parse", f"refs/heads/{branch}").strip()
+    link = "https://claude.ai/code/" + "session_" + "HSSELFTEST0000"      # spelled in pieces (tree scan)
+    who = "hs-selftest@" + "moonglade-selftest.net"
+    env = {**os.environ, "GIT_AUTHOR_NAME": "hs selftest", "GIT_AUTHOR_EMAIL": who,
+           "GIT_COMMITTER_NAME": "hs selftest", "GIT_COMMITTER_EMAIL": who}
+    r = subprocess.run(["git", "-C", str(mirror), "commit-tree", tree, "-p", tip, "-m",
+                        f"public.history_dryrun planted self-test commit\n\nClaude-Session: {link}\n"],
+                       capture_output=True, text=True, env=env)
+    require(r.returncode == 0, "planting the self-test commit failed", stderr=r.stderr[-400:])
+    sha = r.stdout.strip()
+    _g(mirror, "update-ref", PLANTED_REF, sha)
+    return {"ref": PLANTED_REF, "commit": sha[:12], "parent": tip[:12], "has": ["session trailer", "author email"]}
+
+
 @check("public.history_dryrun", order=9, capability=CAP, stack="any", layer="gate")
 def public_history_dryrun(ctx, denylist: Path | None = None, rewrite_cmd: list | None = None):
     """In a scratch dir: tools/go-public/rewrite.sh refuses this checkout and a mirror whose push URL is GitHub,
@@ -397,7 +418,11 @@ def public_history_dryrun(ctx, denylist: Path | None = None, rewrite_cmd: list |
         require(r["rc"] != 0 and "REFUSED" in r["stderr_tail"] and "GitHub" in r["stderr_tail"]
                 and _refs(mirror) == before, "rewrite.sh didn't refuse a GitHub push URL cleanly", **ev)
 
-        # the scan must see the personal data before the rewrite (it can fail on this run's data)
+        # the scan must see the personal data before the rewrite (it can fail on this run's data). The public
+        # history no longer carries a session link (it was rewritten when the repo went public), so the self-test
+        # plants one known case in the scratch mirror: a commit on a scratch branch with a session trailer and a
+        # non-noreply author email. The rewrite must clean it like any other commit (the scan after it covers it).
+        ev["planted"] = _plant_selftest_commit(mirror, branch)
         pre = S.scan_history(mirror, denylist)
         ev["before"] = {k: pre[k] for k in ("refs", "commits", "tags", "blobs", "paths", "hit_count", "denylist_note", "by_pattern",
                                             "by_kind")}

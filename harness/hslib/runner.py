@@ -47,7 +47,9 @@ def segment(c) -> float:
     if c.layer == "gate":
         return 8.5
     if c.layer == "journey":
-        return 7 if c.id == FIRST_PLAY else 5
+        # warm journeys (stack="up": the shared stack stays up) before `hs down`; cold ones (the app's own start, which
+        # refuses the keep-stack switch, and first_play's real cold start) after it
+        return 7 if (c.id == FIRST_PLAY or c.stack == "down") else 5
     if c.stack == "up":
         return 2 if (c.profile or config.DEFAULT_PROFILE) == config.DEFAULT_PROFILE else 3
     return 1
@@ -315,7 +317,9 @@ def execute(checks: list, ctx: dict, ensure=None, quiet: bool = False, guard=Non
                     and (order[j].profile or "") == (c.profile or ""):
                 batch.append(order[j])
                 j += 1
-        if fx is not None and c.layer == "integration" and c.stack == "up":
+        # lifecycle.down ends the shared segment (it stops the stack): no reset round after it, which could only
+        # read a stopped server and call that leaked state
+        if fx is not None and c.layer == "integration" and c.stack == "up" and segment(c) != 6:
             recs = fx.run(batch, ctx, ensure, say)
         else:
             recs = [run_one(c, ctx, ensure)]
@@ -363,7 +367,12 @@ def release_bracket_plan(checks, run_id: str | None, state_dir: Path | None = No
     ids = [c.id for c in sorted(checks, key=run_key)]
     if PDU_ID not in ids:
         return None
-    inner = [i for i in ids if i.startswith(BRACKET_PREFIXES) and i != PDU_ID]
+    # test-pyramid: unit-layer release.*/firstlaunch.* checks run in the unit layer before any segment (never through
+    # execute, so never in the execution log the bracket is judged on); the unit layer's own process sampler fails a
+    # unit check that starts a server or the client, so they can't write the player's databases. The bracket covers
+    # the release.*/firstlaunch.* checks that execute runs.
+    unit = {c.id for c in checks if c.layer == "unit"}
+    inner = [i for i in ids if i.startswith(BRACKET_PREFIXES) and i != PDU_ID and i not in unit]
     rid = run_id or f"pid{os.getpid()}-{int(time.time())}"
     return {"run_id": rid, "inner": inner, "start_check": inner[0] if inner else PDU_ID,
             "end_check": inner[-1] if inner else None, "state_file": str(Path(state_dir or BRACKET_DIR) / f"{rid}.json")}
@@ -684,15 +693,10 @@ def ensure_server_current(ctx: dict) -> dict:
 # journeys of part 2). Until then they keep their integration layer but their time counts as journey time
 # (layer_times; the coordinator's part-1 rule: legacy client checks count against the journey budgets).
 LEGACY_CLIENT = frozenset((
-    "app.backups_window", "app.handoff_focus", "app.launch_lifecycle", "app.loading_stages", "app.names_running",
-    "app.relocatable", "app.reopen_during_loading", "app.reopen_focuses_game", "app.reopen_unminimizes",
-    "app.shim_scope", "app.shutdown_window", "app.single_dock_icon", "app.single_instance",
-    "client.first_start_settings", "client.stock_mode", "client.wording_addon", "client.launch_smoke",
-    "login.auto_login", "login.cancel_shows_list", "login.charselect_layout", "login.charselect_wording",
-    "login.fresh_menu_waits", "login.friendly_errors", "login.loading_overlay", "login.no_glue_errors",
-    "login.overlay_progress", "login.overlay_progress_reload", "login.backdrop_choice", "client.resolution_default",
-    "saves.live_charselect_load", "saves.live_charselect_list", "savesctl.live_roundtrip", "savesctl.live_codes",
-    "savesctl.live_down", "savesctl.realm_restored", "savesctl.account_name_kept"))
+    # test-pyramid part 2: the client/app scenarios are journey children now (journey_checks.py); only this check,
+    # whose scenario (client-connectivity "Client launch smoke test", `hs launch --smoke`) no journey runs, still
+    # starts the real client outside the journey set
+    "client.launch_smoke",))
 
 
 def _union_s(spans: list[tuple]) -> float:

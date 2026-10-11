@@ -513,8 +513,11 @@ def layer_budgets_record(doc: dict) -> dict:
     new_s = None
     if m.get("tier") == "pr":
         new = (m.get("timing") or {}).get("new_checks_s") or {}
+        # design 9.1: the new acceptance checks the selection picked (integration and journeys; gate checks are
+        # timed apart, like the build)
         sel = set(((m.get("selection") or {}).get("selected") or {}))
-        new_s = round(sum(v for k, v in new.items() if k in sel), 1)
+        lay = {r["id"]: r.get("layer") for r in doc.get("checks") or []}
+        new_s = round(sum(v for k, v in new.items() if k in sel and lay.get(k) in ("integration", "journey")), 1)
     probs, rows = budget_problems(m, new_s)
     syn = synthetic_budget_cases()
     bad = [k for k, v in syn["verdict"].items() if not v]

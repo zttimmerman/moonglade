@@ -225,7 +225,7 @@ COVERS = (
 )
 
 
-@check("login.auto_login", order=387, capability=CAP, stack="down", layer="integration")
+# login.auto_login: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def auto_login(ctx):
     """A normal ./play refuses the test switches $HS_GLUE_TEST and $HS_PLAY_SKIP_PATCHES in patched and stock mode
     (exits nonzero, starts nothing); a stale login file and a partial write are removed first. Then one synthetic
@@ -252,7 +252,7 @@ def auto_login(ctx):
     return ev
 
 
-@check("login.no_glue_errors", order=389, capability=CAP, stack="down", layer="integration")
+# login.no_glue_errors: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def no_glue_errors(ctx):
     """Patched client with our GlueXML, menu-waits then Continue: our code runs (marker squares on screen), no Lua
     error is raised at runtime (the test-mode error handler's count, on the login screen and at character select),
@@ -329,7 +329,7 @@ def verify_fresh_menu_waits(ev: dict) -> dict:
     return out
 
 
-@check("login.fresh_menu_waits", order=389, capability=CAP, stack="down", layer="integration")
+# login.fresh_menu_waits: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def fresh_menu_waits(ctx):
     """F25, on the shared Continue run: a freshly built, never-used scratch play client shows no authserver login
     between the client's start and the Continue (connection.log and the account's last_login/online up to the
@@ -420,7 +420,7 @@ def menu_session() -> dict:
         drop_scratch(scratch)
 
 
-@check("login.cancel_shows_list", order=388, capability=CAP, stack="down", layer="integration")
+# login.cancel_shows_list: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def menu_waits(ctx):
     """With no Continue action, no login is attempted for at least 60 s after the menu appears (HSTEST last_login
     unchanged, never online) and the main menu with Continue stays up (marker squares in the client's own
@@ -440,7 +440,7 @@ def menu_waits(ctx):
     return ev
 
 
-@check("login.backdrop_choice", order=390, capability=CAP, stack="down", layer="integration")
+# login.backdrop_choice: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def backdrop_choice(ctx):
     """Picking TBC in the menu is applied (marker: TBC model and music requested by GlueXML), stored in the client's
     own settings when it saves them (WTF/Config.wtf accountList HSBDTBC, written on entering the world), and on the
@@ -688,7 +688,7 @@ def first_start_session(first_start: bool = True, real_run: bool = True) -> dict
         drop_scratch(scratch)
 
 
-@check("client.first_start_settings", order=389, capability="play-client", stack="down", layer="integration")
+# client.first_start_settings: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def first_start_settings(ctx):
     """A play client built from a client with no saved settings (a friend's first bootstrap) gets the first-start
     settings where absent (clientcfg.FIRST_START_SETTINGS + realmName: no intro movie, EULA/TOS accepted, no hardware

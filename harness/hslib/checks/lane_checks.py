@@ -615,7 +615,7 @@ def lane_table(ctx):
 
 # ============================================================================ lane.merge
 
-@check("lane.merge", order=33, capability=CAP, stack="any", layer="integration")
+@check("lane.merge", order=33, capability=CAP, stack="any", layer="gate")
 def lane_merge(ctx):
     """second-stack "Two-lane run matches serial statuses": a nested run of two LANE_B checks (era.default_on,
     era.xp_curve), two lane-A checks inside lane B's window (gm.server_info, sql.world_populated) and one after the
@@ -678,7 +678,9 @@ def lane_merge(ctx):
 
 # ============================================================================ lane.preflight
 
-FALLBACK_B = ("client.config_gen", "client.inspect")     # forced lane-B set: cheap, stack-free, read-only checks
+# forced lane-B set: cheap, stack-free, read-only checks. test-pyramid: acceptance-layer ones (unit-layer checks run in
+# the unit layer and never reach the lanes), and outside the release bracket (release.*/firstlaunch.*)
+FALLBACK_B = ("savesctl.test_actions_refused", "client.real_client_refused")
 
 
 def decision_cases() -> dict:
@@ -713,7 +715,7 @@ def decision_cases() -> dict:
     return out
 
 
-@check("lane.preflight", order=33, capability=CAP, stack="any", layer="integration")
+@check("lane.preflight", order=33, capability=CAP, stack="any", layer="gate")
 def lane_preflight(ctx):
     """second-stack "Low memory falls back to one lane" and "Pressure mid-run moves remaining checks to A": the
     preflight/mid-run rules give the ADR-0011 verdict at and around each threshold (pressure, available memory with

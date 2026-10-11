@@ -169,8 +169,11 @@ def describe(diff: dict) -> list[str]:
         if k == "pause":
             out.append("world left paused" if (v["actual"] or ("",))[0] == "paused" else f"pause state changed: {v['actual']}")
         elif k == "saves":
-            out.append("save interval changed" if "interval" in str(v["actual"]) or "interval" in str(v["expected"])
-                       else "saves settings changed")
+            a, e = v["actual"], v["expected"]
+            if isinstance(a, dict) and isinstance(e, dict) and a.get("interval_s") != e.get("interval_s"):
+                out.append(f"save interval changed ({e.get('interval_s')} -> {a.get('interval_s')} s)")
+            else:
+                out.append(f"saves settings changed: {a}")
         elif k == "online":
             out.append(f"characters left online: {sorted(set(v['actual'] or []) - set(v['expected'] or []))}")
         elif k == "profile":

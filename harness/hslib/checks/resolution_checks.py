@@ -211,7 +211,7 @@ COVERS = (
 )
 
 
-@check("client.resolution_default", order=386, capability=CAP, stack="down", layer="integration")
+# client.resolution_default: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def resolution_default(ctx):
     """A play client with no resolution (injected displays): the first launch writes a resolution with the display's
     full-screen aspect ratio (within 2%) following design.md's native-vs-half decision; after the display changes it

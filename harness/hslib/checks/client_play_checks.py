@@ -229,7 +229,7 @@ def _launched(run: PlayRun, ev_key: str, ev: dict) -> dict:
     return info
 
 
-@check("client.stock_mode", order=386, capability=CAP, stack="down", layer="integration")
+# client.stock_mode: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def stock_mode(ctx):
     """With `client = stock` (scratch settings) the play loop launches the real client/Wow.exe (pristine hash); with
     `client = patched` it launches the play client's Wow.exe (patched hash): a scratch play client built by the same

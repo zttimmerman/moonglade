@@ -88,7 +88,7 @@ def _player_rows_digest() -> dict | None:
         return {"error": f"{type(e).__name__}: {e}"}
 
 
-@check("fixture.shared_server", order=29, capability=CAP, stack="down", layer="integration")
+@check("fixture.shared_server", order=29, capability=CAP, stack="down", layer="gate")
 def shared_server(ctx):
     """A nested run of five character-scoped shared-server tests on the default profile and one on the scaling-off
     profile: its stack timeline shows exactly one stack start for the default-profile tests and one worldserver
@@ -136,7 +136,7 @@ def shared_server(ctx):
     return ev
 
 
-@check("fixture.reset_leak", order=29, capability=CAP, stack="down", layer="integration")
+@check("fixture.reset_leak", order=29, capability=CAP, stack="down", layer="gate")
 def reset_leak(ctx):
     """A nested run of a scratch test that pauses the world and changes the save interval without an undo,
     followed by gm.server_info: the scratch test fails naming "world left paused" and "save interval changed", the
@@ -182,7 +182,7 @@ def _sample_while(proc: subprocess.Popen, timeout: float = 30) -> dict:
     return {"samples": n, "processes_seen": sorted(seen), "rc": proc.wait(timeout=5)}
 
 
-@check("fixture.keep_stack_refused", order=29, capability=CAP, stack="down", layer="integration")
+@check("fixture.keep_stack_refused", order=29, capability=CAP, stack="down", layer="gate")
 def keep_stack_refused(ctx):
     """With HS_PLAY_KEEP_STACK=1: a normal ./play, ./play --account player inside a harness run, and the app's
     play loop (./play as Moonglade.app starts it) each exit nonzero naming the switch before any server or Wine

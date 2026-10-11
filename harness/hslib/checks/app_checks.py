@@ -952,7 +952,7 @@ def bundle_valid(ctx):
         shutil.rmtree(work, ignore_errors=True)
 
 
-@check("app.names_running", order=381, capability=CAP, stack="down", layer="integration", gui=True)
+# app.names_running: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def names_running(ctx):
     """rename-moonglade, the running half of "Built bundle and running app carry the new name": the freshly built app,
     opened through LaunchServices with the notepad stand-in: the launcher's LaunchServices display name is Moonglade
@@ -1180,7 +1180,7 @@ def lifecycle(bundle: Path, ev: dict, tag: str) -> dict:
 
 # ---------------------------------------------------------------- runtime checks
 
-@check("app.launch_lifecycle", order=382, capability=CAP, stack="down", layer="integration")
+# app.launch_lifecycle: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def launch_lifecycle(ctx):
     """`open dist/Moonglade.app` (stand-in client): a "starting" status is recorded, the stack reaches readiness, the
     client is launched by the app's play loop (the app's child, the app launched by LaunchServices, no Terminal),
@@ -1278,7 +1278,7 @@ def verify_failure_stage(ev: dict, text: str, details: str) -> None:
     require(str(A.LOG) in details, "the error dialog's details don't give the log path", dialog=details, **ev)
 
 
-@check("app.single_instance", order=384, capability=CAP, stack="down", layer="integration")
+# app.single_instance: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def single_instance(ctx):
     """(a) With the app running its game, opening the app again records an "already running" message, starts no second
     launcher, play loop, stack or client, and the first session continues and later exits 0. (b) With ./play
@@ -1375,7 +1375,7 @@ def single_instance(ctx):
         first.cleanup()
 
 
-@check("app.relocatable", order=385, capability=CAP, stack="down", layer="integration")
+# app.relocatable: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def relocatable(ctx):
     """A copy of the built app in a temp folder outside dist/ (signature still valid) finds the repo and plays exactly
     as in app.launch_lifecycle: the copy's own launcher runs, starts the repo's play loop, and quits cleanly."""

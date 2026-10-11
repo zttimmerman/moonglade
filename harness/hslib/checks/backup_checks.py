@@ -1159,7 +1159,7 @@ def verify_window_shown(run: dict, root_rows: list[dict]) -> dict:
     return out
 
 
-@check("app.backups_window", order=386, capability=CAP_APP, stack="down", layer="integration")
+# app.backups_window: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def backups_window(ctx):
     """Built app, scratch folder with 3 backups (one of the live databases, one of scratch schemas where the test
     character is a level higher, and a clone as a safety backup), Option reported held (test hook): (1) the Backups

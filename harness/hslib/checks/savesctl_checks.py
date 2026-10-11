@@ -553,7 +553,7 @@ def _connects(conn: str) -> list[str]:
     return re.findall(r"RESPONSE_CONNECTED result: LOGIN_OK (\S+)", conn)
 
 
-@check("savesctl.live_roundtrip", order=395, capability=CAP, stack="down", layer="integration")
+# savesctl.live_roundtrip: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def live_roundtrip(ctx):
     """Real client on the title menu (test run, listener up), the test script sends ctl:S: the listener logs exactly
     one challenge for it, account HS<nonce>S (accepted: the nonce matched), build 12340, from 127.0.0.1, within 5 s
@@ -586,7 +586,7 @@ def live_roundtrip(ctx):
     return ev
 
 
-@check("savesctl.live_codes", order=396, capability=CAP, stack="down", layer="integration")
+# savesctl.live_codes: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def live_codes(ctx):
     """The listener answers successive ctl:S requests with each candidate code (0x03 0x04 0x07 0x08 0x0C 0x10); the
     glue records each one's status text (Adler-32, matched against the installed client's GlueStrings.lua). The
@@ -622,7 +622,7 @@ def live_codes(ctx):
     return ev
 
 
-@check("savesctl.live_down", order=397, capability=CAP, stack="down", layer="integration")
+# savesctl.live_down: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def live_down(ctx):
     """With the listener stopped (closed after its sixth connection), the script's ctl:S: within 10 s the glue records
     "couldn't reach the launcher" (class U) with realmList restored; the listener saw no further challenge; no stock
@@ -645,7 +645,7 @@ def live_down(ctx):
     return ev
 
 
-@check("savesctl.realm_restored", order=398, capability=CAP, stack="down", layer="integration")
+# savesctl.realm_restored: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def realm_restored(ctx):
     """After the control requests the script continues: the login reaches the real login server (127.0.0.1:3724,
     character list received), the test character enters the world (the server's Players.log), and WTF/Config.wtf,
@@ -802,7 +802,7 @@ def heal_run() -> dict:
     return ev
 
 
-@check("savesctl.account_name_kept", order=404, capability=CAP, stack="down", layer="integration")
+# savesctl.account_name_kept: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def account_name_kept(ctx):
     """(1) A test run on the title menu, accountName = the test profile's account: two `ctl:S` requests, then Continue,
     the world, quit: WTF/Config.wtf afterwards has accountName = the test account and no HS... token anywhere in WTF/,
