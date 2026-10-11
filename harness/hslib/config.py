@@ -89,13 +89,15 @@ PROFILES: dict[str, dict[str, dict[str, str]]] = {
 PROFILES["wotlk"] = {**PROFILES["m0"], "era": {"EraProfile.Enable": "0"}}
 # true-pause (pause.disabled_noop): m0 with pausing turned off (mod-moonglade Moonglade.Pause.Enable = 0)
 PROFILES["pause-off"] = {**PROFILES["m0"], "moonglade": {"Moonglade.Pause.Enable": "0"}}
-# test-pyramid (pause.respawn_frozen, harness-control "Server-side waits are controllable in tests"): m0 with a 5 s corpse
-# decay for normal creatures, so a scratch spawn's respawn remainder R (respawn time + corpse delay) is <= 15 s
-PROFILES["pause-respawn"] = {**PROFILES["m0"], "world": {"Corpse.Decay.NORMAL": "5"}}
 # front-menu-saves (saves.load_ordering): m0 with two character-database workers; the module must refuse saves then
 PROFILES["saves-workers2"] = {**PROFILES["m0"], "world": {"CharacterDatabase.WorkerThreads": "2"}}
-# m4-dungeon-scaling (design.md §2): the module off, every other Moonglade AutoBalance key unchanged
-PROFILES["scaling-off"] = {**PROFILES["m0"], "autobalance": {"AutoBalance.Enable.Global": "0"}}
+# m4-dungeon-scaling (design.md §2): the module off, every other Moonglade AutoBalance key unchanged.
+# test-pyramid (pause.respawn_frozen, harness-control "Server-side waits are controllable in tests"; design 16.3): also
+# a 5 s corpse decay for normal creatures, so a scratch spawn's respawn remainder R (respawn time + corpse delay) is
+# <= 15 s. One profile for both saves a worldserver restart per run; neither setting touches what the other group's
+# tests assert (scaling applies only inside instances, and scale.disabled_stock reads creature stats, not corpses).
+PROFILES["scaling-off"] = {**PROFILES["m0"], "autobalance": {"AutoBalance.Enable.Global": "0"},
+                           "world": {"Corpse.Decay.NORMAL": "5"}}
 # test-pyramid (dng.session1/2): m0 (scaling on: AutoBalance.conf.dist's AutoBalance.Enable.Global=1, which m0 keeps)
 # as a profile of its own so its group runs after scaling-off's (the sessions compare with the unscaled reference
 # scale.disabled_stock reads under scaling-off in the same run). Its overrides are m0's exactly (part 3), so the same

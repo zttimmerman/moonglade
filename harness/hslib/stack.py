@@ -333,7 +333,7 @@ def world_up(timeout, on_stage=None):
     if on_stage:                    # worldserver.out was just truncated by _spawn: progress can follow it from here
         on_stage("world", "spawned", log=str(LOG["worldserver"]), pid=proc.pid)
     t0 = time.time()
-    ok = _wait(soap_ready, timeout, interval=2.0, watch_pid=proc.pid)
+    ok = _wait(soap_ready, timeout, interval=0.5, watch_pid=proc.pid)   # design 16.3: was 2 s (each restart waited ~1 s more)
     if not ok:
         try:
             rc = proc.wait(timeout=10)   # reap before reading the log so the final (stderr) lines are on disk
@@ -495,7 +495,7 @@ def stop_worldserver(pid: int) -> dict:
         soap.gm("server shutdown 1", timeout=10)
     except OSError:
         os.kill(pid, signal.SIGTERM)
-    if not _wait(lambda: not alive(pid), 90):
+    if not _wait(lambda: not alive(pid), 90, interval=0.25):     # design 16.3: polled at 0.25 s (was 1 s)
         os.kill(pid, signal.SIGTERM)
         if not _wait(lambda: not alive(pid), 30):
             os.kill(pid, signal.SIGKILL)

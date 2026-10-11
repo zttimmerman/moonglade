@@ -81,7 +81,7 @@ COVERS = (
 
 
 
-@check("pause.respawn_frozen", order=444, capability=CAP, stack="up", layer="integration", profile="pause-respawn",
+@check("pause.respawn_frozen", order=444, capability=CAP, stack="up", layer="integration", profile="scaling-off",
        identity=True)
 def respawn_frozen(ctx):
     """Two pauses, one per GIVEN: the creature with the shortest respawn by rule stands where no creature can chase the
@@ -215,7 +215,7 @@ SCRATCH_RESPAWN_S = 5
 RESPAWN_PAUSE_OVER_R_S = 3
 LEASH_PAUSE_OVER_R_S = 5
 SCRATCH_RULE = ("a scratch spawn (`.npc add`) of pause.RESPAWN_RULE's first creature at that creature's spawn point, "
-                f"respawn time {SCRATCH_RESPAWN_S} s (`.npc set spawntime`), under the pause-respawn profile (5 s corpse "
+                f"respawn time {SCRATCH_RESPAWN_S} s (`.npc set spawntime`), under the scaling-off profile (5 s corpse "
                 "decay, config.PROFILES); removed afterwards with `.npc delete` and checked gone from world.creature and "
                 "characters.creature_respawn")
 

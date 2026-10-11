@@ -506,10 +506,15 @@ class Session(C.Session):
             for n in list(self.companions):
                 self.ws.chat("summon", W.CHAT_MSG_WHISPER, to=n)
             tries += 1
-            time.sleep(4)
-            ms = self.mapstat()
-            if ms.get("players") == n_expected:
-                return {"ok": True, "s": round(time.time() - t0, 1), "players": ms["players"], "tries": tries}
+            # poll the map's count for up to 4 s per round of whispers (was a fixed 4 s wait; design 16.3)
+            t_try = time.time()
+            while True:
+                time.sleep(0.5)
+                ms = self.mapstat()
+                if ms.get("players") == n_expected:
+                    return {"ok": True, "s": round(time.time() - t0, 1), "players": ms["players"], "tries": tries}
+                if time.time() - t_try >= 4:
+                    break
         return {"ok": False, "s": round(time.time() - t0, 1), "players": ms.get("players"), "tries": tries,
                 "mapstat": ms}
 
