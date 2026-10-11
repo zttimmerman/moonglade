@@ -277,7 +277,7 @@ class Build(Step):
         if not (build.read_stamp(build.build_stamp_path()) == build.read_stamp(build.install_stamp_path()) == h):
             return False, "build inputs changed since the last clean build"
         lock = P.fork_lock()
-        for repo, key in ((P.CORE_SRC, "core_sha"), (P.BOTS_SRC, "playerbots_sha")):
+        for repo, key in ((P.CORE_SRC, "core_sha"), (P.BOTS_SRC, "playerbots_sha"), (P.AB_SRC, "autobalance_sha")):
             r = subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], capture_output=True, text=True)
             if r.stdout.strip() != lock[key]:
                 return False, f"{repo.name} isn't at its pinned commit"

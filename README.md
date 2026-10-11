@@ -129,6 +129,20 @@ Every time you quit the game, Moonglade backs up your save while it shuts down (
 
 Add and dismiss companions with chat commands: `.playerbots bot addclass <class>` (e.g. `priest`) and `.playerbots bot remove <name>`. These are the commands the harness checks use (`harness/hslib/companion.py`). They should work on the non-GM `PLAYER` account per the code (`.playerbots bot` is a player-level command and `AiPlayerbot.AddClassCommand` defaults to 1), but the harness doesn't exercise that (its checks use a GM-level test account), so confirm in play. Companions keep their last orders across sessions.
 
+### Dungeons
+
+Dungeons fit the size of your party. Go in alone and the monsters and bosses have less health and hit softer; each companion makes them tougher, until a full party of five meets the normal, unchanged dungeon. Nothing is ever harder than the normal dungeon. When the monsters are weakened, they also give less XP and gold, so a solo run isn't a faster way to level than questing. Monster levels don't change: going back to a low-level dungeon is easy, as in the original game. The scaling comes from the third-party module [mod-autobalance](https://github.com/azerothcore/mod-autobalance) ([ADR-0014](docs/adr/0014-third-party-module-autobalance.md)); how hard a solo fight is was tuned by test runs ([docs/research/m4-scaling-tuning.md](docs/research/m4-scaling-tuning.md)). The count changes only outside a fight, when someone enters or leaves the dungeon.
+
+You can rerun dungeons freely:
+- There's no "you have entered too many instances" limit.
+- When you finish a dungeon (its last boss is dead) and go back in, it's fresh. Heroics work the same way, with no once-a-day lock.
+- If you leave halfway, for example after dying, your progress is still there when you come back, even if you dismissed your companions in between.
+- A companion that was left behind in an older copy of a dungeon comes out by itself, so summoning it brings it to you.
+
+**Turning them off** (there's no Settings switch yet; it comes with the planned difficulty presets): stop Moonglade, then edit the installed defaults the server config is rendered from on every start (the next `harness/hs build` puts them back):
+- Scaling: set `AutoBalance.Enable.Global = 0` in `server/etc/modules/AutoBalance.conf.dist`.
+- Relaxed lockouts: set `Moonglade.Dungeons.FreshAfterClear = 0` in `server/etc/modules/mod_moonglade.conf.dist` (stock lockouts: a finished dungeon stays finished until it resets, and dismissing your companions drops a half-done dungeon). The "too many instances" limit is Moonglade's `AccountInstancesPerHour = 1000` in `harness/hslib/config.py` (stock: 5 per hour).
+
 ## Troubleshooting
 
 - **Everything hangs, even `kill -9` doesn't work on Wine.** Rosetta's translation service (`oahd`) can wedge, which freezes every x86_64 program, Wine included (2026-10-03). Fix: `sudo killall oahd`. If that doesn't help, reboot.

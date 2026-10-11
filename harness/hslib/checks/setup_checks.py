@@ -160,7 +160,7 @@ def setup_preflight(ctx):
     try:
         # belt and braces: if preflight ever let a run through, the build step fails at once instead of cloning
         lock = repo / "fork.lock"
-        lock.write_text(re.sub(r"^(core_repo|playerbots_repo)=.*$", r"\1=file:///nonexistent/hs-preflight-check",
+        lock.write_text(re.sub(r"^(core_repo|playerbots_repo|autobalance_repo)=.*$", r"\1=file:///nonexistent/hs-preflight-check",
                                lock.read_text(), flags=re.M))
         fakes = _fake_clients(fakes_dir)
         fakes["good"] = P.CLIENT
@@ -431,7 +431,7 @@ def _plant_moved(repo: Path) -> dict:
     (repo / "build").mkdir()
     (repo / "build" / "CMakeCache.txt").write_text(text)
     lock = repo / "fork.lock"         # a build that gets past the moved check fails at the clone, fast and offline
-    lock.write_text(re.sub(r"^(core_repo|playerbots_repo)=.*$", r"\1=file:///nonexistent/hs-moved-check",
+    lock.write_text(re.sub(r"^(core_repo|playerbots_repo|autobalance_repo)=.*$", r"\1=file:///nonexistent/hs-moved-check",
                            lock.read_text(), flags=re.M))
     return {"install_record": OLD_REPO, "cmake_cache_dir": OLD_REPO + "/build"}
 

@@ -29,6 +29,9 @@ def pin_enforced(ctx):
     (P.CORE_SRC / "AUTHORS").open("a").write("\nharness-sabotage\n")
     (P.CORE_SRC / "hs_sabotage_untracked.txt").write_text("x")
     (P.BOTS_SRC / "hs_sabotage_untracked.txt").write_text("x")
+    # m4-dungeon-scaling (ADR-0014): mod-autobalance is pinned and unpatched; dirty it with a tracked edit + an untracked file
+    (P.AB_SRC / "README.md").open("a").write("\nharness-sabotage\n")
+    (P.AB_SRC / "hs_sabotage_untracked.txt").write_text("x")
     # gitignored sabotage: a real (non-symlink) module dir in core modules/ (would compile in), an ignored file in bots
     rogue = P.CORE_SRC / "modules" / "mod-hs-rogue"
     rogue.mkdir(exist_ok=True)
@@ -37,24 +40,31 @@ def pin_enforced(ctx):
     patches = build.core_patches()                  # the only uncommitted changes allowed in core (spec)
     bots_patches = build.playerbots_patches()       # ... and in playerbots (ADR-0008)
     before = {"core": build.patched_pin_state(P.CORE_SRC, lock["core_sha"], patches, "modules/"),
-              "playerbots": build.patched_pin_state(P.BOTS_SRC, lock["playerbots_sha"], bots_patches)}
+              "playerbots": build.patched_pin_state(P.BOTS_SRC, lock["playerbots_sha"], bots_patches),
+              "autobalance": build.pin_state(P.AB_SRC, lock["autobalance_sha"])}
     before["core_stray_modules"] = build.stray_module_entries()
-    require(before["core"] and before["playerbots"] and "mod-hs-rogue" in before["core_stray_modules"],
+    require(before["core"] and before["playerbots"] and before["autobalance"]
+            and "mod-hs-rogue" in before["core_stray_modules"],
             "sabotage did not register as unpinned/dirty/stray", before=before)
     r = subprocess.run([str(P.HARNESS / "hs"), "build"], capture_output=True, text=True)
     info = {"after": {"exit": r.returncode, "stderr_tail": r.stderr[-1000:]},
             "modules": sorted(e.name for e in (P.CORE_SRC / "modules").iterdir() if e.is_symlink())}
     require(r.returncode == 0, "`hs build` failed on a sabotaged vendor tree", **info)
     after = {"core": build.patched_pin_state(P.CORE_SRC, lock["core_sha"], patches, "modules/"),
-             "playerbots": build.patched_pin_state(P.BOTS_SRC, lock["playerbots_sha"], bots_patches)}
+             "playerbots": build.patched_pin_state(P.BOTS_SRC, lock["playerbots_sha"], bots_patches),
+             "autobalance": build.pin_state(P.AB_SRC, lock["autobalance_sha"])}
     ev = {"problems_before": before, "problems_after": after, "sync": info["after"], "modules": info["modules"]}
-    require(not after["core"] and not after["playerbots"], "vendor not clean+pinned after sync", **ev)
+    require(not after["core"] and not after["playerbots"] and not after["autobalance"],
+            "vendor not clean+pinned after sync", **ev)
+    require(not (P.AB_SRC / "hs_sabotage_untracked.txt").exists(), "untracked sabotage file survived in autobalance", **ev)
     require(not (P.CORE_SRC / "hs_sabotage_untracked.txt").exists(), "untracked sabotage file survived", **ev)
     require(not rogue.exists(), "rogue (gitignored, non-symlink) module dir survived in core modules/", **ev)
     require(not (P.BOTS_SRC / "hs_sabotage_ignored.log").exists(), "ignored sabotage file survived in playerbots tree", **ev)
     require(not build.stray_module_entries(), "stray entries in core modules/ after build", **ev)
     link = P.CORE_SRC / "modules" / "mod-playerbots"
     require(link.is_symlink() and os.readlink(link) == str(P.BOTS_SRC), "mod-playerbots not linked into core", **ev)
+    link = P.CORE_SRC / "modules" / "mod-autobalance"
+    require(link.is_symlink() and os.readlink(link) == str(P.AB_SRC), "mod-autobalance not linked into core", **ev)
     return ev
 
 
@@ -116,7 +126,8 @@ def clean_build(ctx):
     marker = _marker_state(token)
     lock = P.fork_lock()
     heads = {"core": _git(P.CORE_SRC, "rev-parse", "HEAD").stdout.strip(),
-             "playerbots": _git(P.BOTS_SRC, "rev-parse", "HEAD").stdout.strip()}
+             "playerbots": _git(P.BOTS_SRC, "rev-parse", "HEAD").stdout.strip(),
+             "autobalance": _git(P.AB_SRC, "rev-parse", "HEAD").stdout.strip()}
     bins = {n: os.access(P.SERVER_BIN / n, os.X_OK) for n in ("authserver", "worldserver")}
     c = info.get("clean", {})
     current = build.input_hash()          # recomputed here, independently of the build process
@@ -125,11 +136,13 @@ def clean_build(ctx):
           "input_hash_recomputed": current, "installed_stamp_now": build.read_stamp(build.install_stamp_path()),
           "build_stamp_now": build.read_stamp(build.build_stamp_path()),
           "build_dir_marker": marker, "binaries_executable": bins, "heads": heads,
-          "pinned": {"core": lock["core_sha"], "playerbots": lock["playerbots_sha"]},
+          "pinned": {"core": lock["core_sha"], "playerbots": lock["playerbots_sha"],
+                     "autobalance": lock["autobalance_sha"]},
           "build_log": str(P.OUT / "build.log")}
     require(r.returncode == 0, "clean build failed", **ev)
     require(all(bins.values()), "binaries missing or not executable", **ev)
-    require(heads["core"] == lock["core_sha"] and heads["playerbots"] == lock["playerbots_sha"], "vendor heads != fork.lock", **ev)
+    require(heads["core"] == lock["core_sha"] and heads["playerbots"] == lock["playerbots_sha"]
+            and heads["autobalance"] == lock["autobalance_sha"], "vendor heads != fork.lock", **ev)
     require(c.get("mode") in ("from-empty", "verified-current"), "build reported no clean mode", **ev)
     require(c.get("input_hash") == current, "build's input hash != the hash recomputed by the check", **ev)
     if ctx.get("force_clean"):
@@ -247,7 +260,7 @@ def clean_smart(ctx):
             ov["fork_lock_path"].write_text(new)
             return ov
 
-        for key in ("core_sha", "playerbots_sha", "core_branch"):
+        for key in ("core_sha", "playerbots_sha", "core_branch", "autobalance_sha"):
             flip(f"fork.lock build pin {key} (changed)", edit_pin(key), f"{key} += '-hs-sandbox'")
         # an unrelated pin must NOT change the hash (no from-empty build for a Ghidra/Wine bump)
         unrelated = {}

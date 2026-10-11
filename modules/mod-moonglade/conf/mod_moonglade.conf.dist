@@ -67,4 +67,26 @@ Moonglade.Saves.KeepQuick = 1
 Moonglade.Saves.KeepBeforeLoad = 3
 
 #
+#    Moonglade.Dungeons.FreshAfterClear
+#        Description: Relaxed 5-player dungeon lockouts (openspec/changes/m4-dungeon-scaling; src/MoongladeDungeons.cpp).
+#                     Entering a dungeon (normal or heroic) whose saved copy is finished (its last boss is dead) and
+#                     has no player inside gives a fresh copy; an unfinished copy is kept, also when the party breaks
+#                     up (dismissing companions). Logging in inside a dungeon changes nothing. Re-read on a config
+#                     reload.
+#        Default:     1 - (Fresh after clear, unfinished progress kept)
+#                     0 - (Stock lockouts)
+
+Moonglade.Dungeons.FreshAfterClear = 1
+
+#
+#    Moonglade.Dungeons.FreeStrandedCompanions
+#        Description: A companion (bot) in another copy of a dungeon than its party leader's (for example one that
+#                     logged out inside an older copy) is sent to its home point once a second, so a summon brings it
+#                     to the leader instead of within the old copy. Re-read on a config reload.
+#        Default:     1 - (On)
+#                     0 - (Off: stock behaviour)
+
+Moonglade.Dungeons.FreeStrandedCompanions = 1
+
+#
 ###################################################################################################

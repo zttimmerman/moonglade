@@ -413,6 +413,10 @@ class WorldSession:
             mapid, x, y, z, o = struct.unpack("<Iffff", data[:20])
             self.send(W.MSG_MOVE_WORLDPORT_ACK)    # HandleMoveWorldportAck: empty payload
             self._emit("new_world", map=mapid, x=round(x, 2), y=round(y, 2), z=round(z, 2))
+        elif op == W.SMSG_TRANSFER_ABORTED:
+            # m4-dungeon-scaling (lock.no_hourly_cap): Player::SendTransferAborted, uint32 map + uint8 reason
+            mapid, reason = struct.unpack("<IB", data[:5])
+            self._emit("transfer_aborted", map=mapid, reason=reason)
         elif op == W.SMSG_TIME_SYNC_REQ:
             self.send(W.CMSG_TIME_SYNC_RESP, struct.pack("<II", r.u32(), _ms()))   # counter, client ticks
         elif op == W.SMSG_ATTACKSTART:

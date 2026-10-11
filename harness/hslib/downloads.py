@@ -47,7 +47,7 @@ PINS = {
 RELEASE_CACHE = P.ENV / "release" / "cache"
 RELEASE_PINS = ("release-mysql", "release-mysql-source", "release-python", "release-python-licenses")
 # fork.lock *_url keys that are git remotes (pinned by commit SHA instead of a file hash)
-GIT_URL_KEYS = ("core_repo", "playerbots_repo")
+GIT_URL_KEYS = ("core_repo", "playerbots_repo", "autobalance_repo")
 
 CLIENT_DATA = P.CLIENT_DATA
 CLIENT_DATA_MARKER = CLIENT_DATA / ".hs-client-data.json"
