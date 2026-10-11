@@ -113,6 +113,17 @@ COVERS = (
     "harness/hslib/pause.py",
     "harness/hslib/saves.py",
 )
+# The targeted saves checks (test-pyramid design 16) cover only their own code: the saves module, its add-on reply
+# channel and settings, the saves driver and this file; load_ordering also the glue save list it renders
+# (saves.list_wording: charsaves.py, frontmenu.py). The client add-on doesn't run in them (a headless probe).
+SAVES_TARGETED_COVERS = (
+    "modules/mod-moonglade/src/MoongladeSaves.*",
+    "modules/mod-moonglade/src/logic/Saves*",
+    "modules/mod-moonglade/src/MoongladeAddon.*",
+    "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.Saves",
+    "harness/hslib/checks/saves_checks.py",
+    "harness/hslib/saves.py",
+)
 
 
 @check("saves.table_coverage", order=470, capability=CAP, stack="up", layer="integration")
@@ -753,7 +764,8 @@ def inworld_load(ctx):
     return ev
 
 
-@check("saves.load_ordering", order=484, capability=CAP, stack="up", layer="integration", targeted=True, identity=True)
+@check("saves.load_ordering", order=484, capability=CAP, stack="up", layer="integration", targeted=True, identity=True,
+       covers=SAVES_TARGETED_COVERS + ("harness/hslib/charsaves.py", "harness/hslib/frontmenu.py"))
 def load_ordering(ctx):
     """20 times: the character moves and gains gold (a periodic save pending; in every other round a save of it is
     queued too) and 0.1 s later loads a save in the game: every time the database afterwards holds the save's position and gold, not the pre-load values. The rendered
@@ -1199,7 +1211,7 @@ def session_b(ctx):
 
 
 @check("saves.session_interval", order=473, capability=CAP, stack="up", layer="integration", targeted=True, identity=True,
-       children=('saves.refused_in_combat', 'saves.autosave_triggers', 'saves.bots_skip', 'saves.inworld_list'))
+       covers=SAVES_TARGETED_COVERS, children=('saves.refused_in_combat', 'saves.autosave_triggers', 'saves.bots_skip', 'saves.inworld_list'))
 def session_interval(ctx):
     """The scenarios that shorten the server-wide autosave interval (each restores it, and registers the restore as
     an undo): refused in combat, autosave triggers, companions skip, and the in-game list."""

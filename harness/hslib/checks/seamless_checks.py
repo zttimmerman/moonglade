@@ -1053,7 +1053,10 @@ def _hits(texts: list[dict]) -> list[dict]:
     return out
 
 
-@check("client.login_text_clean", order=129, capability=CAP_CONN, stack="up", layer="integration", targeted=True)
+@check("client.login_text_clean", order=129, capability=CAP_CONN, stack="up", layer="integration", targeted=True,
+       covers=("modules/mod-moonglade/src/MoongladeQuiet.cpp",
+               "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.QuietServerText",
+               "harness/hslib/checks/seamless_checks.py"))   # targeted (design 16): its own code; a headless probe
 def login_text_clean(ctx):
     """A character logs in through the headless probe and stays in the world 30 s: no SMSG_MOTD and no system or chat
     message addressed to it containing server, realm, AzerothCore, playerbot or mod- (case-insensitive). Then the check

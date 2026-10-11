@@ -888,16 +888,15 @@ STEPS = (("play.offline", offline), ("play.loop_clean_exit", loop_clean_exit), (
          ("play.startup_failure", startup_failure), ("backups.failure_nonblocking", failure_nonblocking))
 CHILDREN = tuple(i for i, _ in STEPS)
 
+# A targeted check (test-pyramid design 16): covers name only its own code, the play loop (./play, play.py), the
+# backups and stage lines its children assert on, and this file. The shared check files whose helpers it borrows
+# (play_checks, backup_checks, polish_checks, resolution_checks) are other checks' code; full runs still run it.
 COVERS = (
     "play",
     "harness/hslib/play.py",
     "harness/hslib/backups.py",
     "harness/hslib/stages.py",
     "harness/hslib/checks/cold_play_checks.py",
-    "harness/hslib/checks/play_checks.py",
-    "harness/hslib/checks/backup_checks.py",
-    "harness/hslib/checks/polish_checks.py",
-    "harness/hslib/checks/resolution_checks.py",
 )
 
 
