@@ -26,8 +26,9 @@ IDENTITY_WORKERS = 16
 
 class SharedServer:
     def __init__(self, checks: list):
-        self.char_checks = [c for c in checks if c.scope == "character" and c.layer == "integration"]
+        self.char_checks = [c for c in checks if c.identity and c.layer == "integration"]
         self.base = None
+        self.bases: dict = {}            # profile -> the shared state right after the first test of that profile started
         self.identities: dict = {}
         self.resets: list[dict] = []
         self.leaks: list[dict] = []
@@ -72,10 +73,8 @@ class SharedServer:
         from . import sharedfix
         own = {n for i in self.identities.values() for n in (i.char, i.alt)}
         r = sharedfix.shared_state(own)
-        want = dict(self.base["state"])
+        want = dict(self.bases.get(profile or config.DEFAULT_PROFILE, self.base)["state"])
         got = dict(r["state"])
-        if profile and profile != config.DEFAULT_PROFILE:
-            want["profile"] = profile            # a profile group's tests run under their own profile
         diff = {k: {"expected": want.get(k), "actual": got.get(k)} for k in set(want) | set(got)
                 if want.get(k) != got.get(k)}
         self.resets.append({"after": [x["id"] for x in recs], "s": r["duration_s"], "leak": bool(diff)})
@@ -94,7 +93,7 @@ class SharedServer:
                 info = {"error": f"{type(e).__name__}: {e}"}
             self.restarts.append({"after": [x["id"] for x in recs], "s": round(time.time() - t0, 1), "info": info})
             log(f"fixture: leaked state after {[x['id'] for x in recs]} ({'; '.join(words)}); worldserver restarted")
-            self.base = sharedfix.shared_state()
+            self.bases[profile or config.DEFAULT_PROFILE] = sharedfix.shared_state()
 
     def run(self, batch: list, ctx: dict, ensure, say) -> list[dict]:
         from .runner import run_one
@@ -102,17 +101,27 @@ class SharedServer:
         ensure("up", ctx, batch[0].profile)
         if self.base is None:
             self._start(ctx)
+            self.bases[config.DEFAULT_PROFILE] = self.base
+        prof = batch[0].profile or config.DEFAULT_PROFILE
+        if prof not in self.bases:
+            from . import sharedfix
+            self.bases[prof] = sharedfix.shared_state()
         if time.time() - t0 > 0.5:      # the stack start / profile restart and the run-start fixtures: integration time
             ctx.setdefault("exec_log", []).append({"id": "(fixture)", "start": t0, "end": time.time(), "lane": "a",
                                                    "layer": "integration"})
 
         def one(c):
-            cx = ctx if c.scope != "character" else dict(ctx, identity=self.identities.get(c.id))
-            if c.scope == "character":
-                cx["undo"] = []
-            rec = run_one(c, cx, lambda *_a: None)
+            cx = dict(ctx, identity=self.identities.get(c.id)) if c.identity else ctx
+            cx["undo"] = []
+            ident = self.identities.get(c.id) if c.identity else None
+            if ident is not None:
+                from . import saves as S
+                with S.as_identity(ident):          # saves.py's helpers (and the checks using S.ident()) use it
+                    rec = run_one(c, cx, lambda *_a: None)
+            else:
+                rec = run_one(c, cx, lambda *_a: None)
             rec.setdefault("evidence", {})
-            if c.scope == "character" and self.identities.get(c.id):
+            if c.identity and self.identities.get(c.id):
                 rec["evidence"]["fixture_identity"] = {"account": self.identities[c.id].user,
                                                        "characters": [self.identities[c.id].char,
                                                                       self.identities[c.id].alt]}

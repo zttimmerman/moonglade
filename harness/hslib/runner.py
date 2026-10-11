@@ -680,6 +680,19 @@ def ensure_server_current(ctx: dict) -> dict:
     return out
 
 
+# Checks not yet migrated that start the real client or the app end to end (design.md appendix A: they become the
+# journeys of part 2). Until then they keep their integration layer but their time counts as journey time
+# (layer_times; the coordinator's part-1 rule: legacy client checks count against the journey budgets).
+LEGACY_CLIENT = frozenset((
+    "app.backups_window", "app.handoff_focus", "app.launch_lifecycle", "app.loading_stages", "app.names_running",
+    "app.relocatable", "app.reopen_during_loading", "app.reopen_focuses_game", "app.reopen_unminimizes",
+    "app.shim_scope", "app.shutdown_window", "app.single_dock_icon", "app.single_instance",
+    "client.first_start_settings", "client.stock_mode", "client.wording_addon", "client.launch_smoke",
+    "login.auto_login", "login.cancel_shows_list", "login.charselect_layout", "login.charselect_wording",
+    "login.fresh_menu_waits", "login.friendly_errors", "login.loading_overlay", "login.no_glue_errors",
+    "login.overlay_progress", "login.overlay_progress_reload"))
+
+
 def _union_s(spans: list[tuple]) -> float:
     total, end = 0.0, None
     for a, b in sorted(spans):
@@ -697,15 +710,16 @@ def layer_times(ctx: dict, records: list[dict], unit_s: float | None, selection_
     """meta.layers: wall time per layer (integration = the union of its checks' wall spans, so pooled tests count
     once), each journey's time against its budget, gate time and build time."""
     xl = [e for e in ctx.get("exec_log", []) if "id" in e]
-    spans = lambda layer: [(e["start"], e["end"]) for e in xl if e.get("layer") == layer]
+    spans = lambda layer: [(e["start"], e["end"]) for e in xl if e.get("layer") == layer and e["id"] not in LEGACY_CLIENT]
     journeys = {r["id"]: {"s": r.get("duration_s"), "budget_s": (REGISTRY[r["id"]].budget_s if r["id"] in REGISTRY else None)}
                 for r in records if r.get("layer") == "journey" and r["id"] in REGISTRY and r.get("status") != "skip"}
+    legacy = {e["id"]: round(e["end"] - e["start"], 1) for e in xl if e["id"] in LEGACY_CLIENT}
     integ = _union_s(spans("integration"))
-    jsum = round(sum(v["s"] or 0.0 for v in journeys.values()), 1)
+    jsum = round(sum(v["s"] or 0.0 for v in journeys.values()) + sum(legacy.values()), 1)
     return {"unit": {"wall_s": unit_s, "budget_s": 120.0},
             "selection": {"wall_s": selection_s, "budget_s": 10.0},
             "integration": {"wall_s": integ, "budget_s": 900.0},
-            "journeys": {"wall_s": jsum, "each": journeys},
+            "journeys": {"wall_s": jsum, "each": journeys, "legacy_client_s": legacy},
             "acceptance": {"wall_s": round(integ + jsum, 1), "budget_s": 1800.0},
             "gate": {"wall_s": _union_s(spans("gate"))},
             "build": {"wall_s": build_s}}
@@ -825,6 +839,8 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
         meta["lanes"] = {"mode": 1, "lanes": 1, "fallback": "unit tier: one lane", "preflight": None,
                          "assignment": {"b_planned": [], "b_ran": [], "b_to_a": []}}
     meta["lanes"]["memory_at_run_start"] = mem_start
+    meta["stack_transitions"] = [{k: (v if isinstance(v, (str, int, float, bool)) else "done") for k, v in t.items()}
+                                 for t in ctx.get("stack_transitions", [])]
     if meta["lanes"].get("mode") == 2 and lanes.lane_b_running():   # the worker stops lane B; this is the safety net
         from . import runreg
         meta["lanes"]["final_lane_down"] = runreg.lane_down("b")

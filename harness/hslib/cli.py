@@ -207,6 +207,10 @@ def main(argv=None) -> int:
         if _os.environ.get(_var) and (a.cmd != "run" or _os.environ.get("HS_HARNESS_RUN") != "1"):
             log(f"${_var} is a test switch of report.client_pristine's self-test (nested `hs run` only); unset it")
             return 2
+    from .checks.shared_fixture_checks import SELFTEST_ENV        # fixture.* self-tests: nested `hs run` only
+    if _os.environ.get(SELFTEST_ENV) and _os.environ.get("HS_HARNESS_RUN") != "1":
+        log(f"${SELFTEST_ENV} is a test switch of the fixture.* self-tests (inside a harness run only); unset it")
+        return 2
     from .guienv import PREFLIGHT_TEST_ENV
     for _var in PREFLIGHT_TEST_ENV:                                      # report.gui_preflight's nested runs only
         if _os.environ.get(_var) and (a.cmd != "run" or _os.environ.get("HS_HARNESS_RUN") != "1"):
