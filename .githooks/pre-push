@@ -1,4 +1,6 @@
 #!/bin/sh
-# Pre-push: the unit tests (mocked dependencies; no server, client or Wine). ~40 s.
+# Pre-push: the unit tests (mocked dependencies; no server, client or Wine). About 11 s.
+# Git exports GIT_DIR and friends to hooks. Unset them so tests that make scratch repos never touch this one.
 root=$(git rev-parse --show-toplevel)
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_PREFIX GIT_COMMON_DIR
 exec "$root/harness/hs" test --tests-only

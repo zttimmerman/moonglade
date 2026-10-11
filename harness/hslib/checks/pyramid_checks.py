@@ -10,6 +10,7 @@ import json
 import re
 import shutil
 import statistics
+import os
 import subprocess
 import tempfile
 import time
@@ -279,8 +280,9 @@ def scratch_tree(d: Path, extra: dict | None = None) -> dict:
         f = d / rel
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_text(text)
-    subprocess.run(["git", "init", "-q", str(d)], check=True)
-    subprocess.run(["git", "-C", str(d), "add", "-A"], check=True)
+    env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}   # never the caller's repo (git hooks set GIT_DIR)
+    subprocess.run(["git", "init", "-q", str(d)], check=True, env=env)
+    subprocess.run(["git", "-C", str(d), "add", "-A"], check=True, env=env)
     return files
 
 
