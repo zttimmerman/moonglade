@@ -840,6 +840,8 @@ def error_session() -> dict:
         _wait(lambda: len([p for p in screenshots(scratch) if p.stat().st_mtime >= t_up - 5]) >= 3, 120, step=1)
         ev["auth_down_at_details_shot"] = not stack.port_open(P.AUTH_PORT) and not _auth_pids()
         ev["auth_restart"] = stack.auth_up(timeout=30)
+        from .play_checks import warm_refresh
+        warm_refresh("the friendly-error session restarted the login server")
         ev["auth_restart"]["after_client_up_s"] = round(time.time() - t_up, 1)
         rec = _wait(lambda: glue_record(scratch), LOG_TIMEOUT, step=2)
         ev["glue_record"] = rec

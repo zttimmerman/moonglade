@@ -22,7 +22,9 @@ from .playclient_util import (PlayRun, account_state, build_scratch, clear_logs,
 
 CAP = "login-screen"
 LOGIN_LIMIT = 90               # spec: within 90 s
-WAIT_MENU = 60                 # spec: no login for at least 60 s after the menu appears
+WAIT_MENU = 10                 # the live watch: 10 s after the menu appears (test-pyramid spec-change log, 2026-10-10:
+                               # the spec's 60 s runs on the Lua unit layer's simulated clock, LUA_60S below)
+LUA_60S = "no_login_for_60s_without_continue"     # unit:lua:test_frontmenu.<this>: 60 s of frames, no login
 
 
 def _wait(pred, timeout, step=1.0):
@@ -400,7 +402,7 @@ def menu_session() -> dict:
                 st = account_state(P.TEST_USER)
                 samples.append(st | {"t": round(time.time() - up["t"], 1)})
                 return len([p for p in screenshots(scratch) if p.name not in before]) >= 2
-            _wait(done, WAIT_MENU + 90, step=2)
+            _wait(done, WAIT_MENU + 60, step=2)
             shots = [p for p in screenshots(scratch) if p.name not in before]
             r2["screens"] = [marker(p) for p in shots]
             r2["samples_first_last"] = [samples[0], samples[-1]] if samples else []
@@ -422,13 +424,21 @@ def menu_session() -> dict:
 
 # login.cancel_shows_list: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def menu_waits(ctx):
-    """With no Continue action, no login is attempted for at least 60 s after the menu appears (HSTEST last_login
-    unchanged, never online) and the main menu with Continue stays up (marker squares in the client's own
-    screenshots at ~5 s and ~65 s after the menu showed)."""
+    """With no Continue action, no login is attempted after the menu appears: on the Lua unit layer's simulated clock
+    for 60 s (the front menu's own code under the stub, unit:lua:test_frontmenu.no_login_for_60s_without_continue,
+    run here), and live for WAIT_MENU (10 s; test-pyramid spec-change log 2026-10-10) with the real client (HSTEST
+    last_login unchanged, never online), the main menu with Continue staying up (marker squares in the client's own
+    screenshots at ~5 s and ~15 s after the menu showed)."""
+    from .. import unitrun
+    lua = unitrun.run_lua(pattern=LUA_60S)
+    sim = {"tests": [{k: t.get(k) for k in ("id", "status", "duration_s", "message")} for t in lua.get("tests") or []],
+           "ok": lua.get("ok")}
     if "menu" not in _SESSIONS:
         menu_session()
     sess = _session_ok("menu")
-    ev = dict(sess["run2"]) | {"shared_run": sess["shared_run"]}
+    ev = dict(sess["run2"]) | {"shared_run": sess["shared_run"], "simulated_60s": sim, "live_watch_s": WAIT_MENU}
+    require(sim["tests"] and all(t["status"] == "pass" for t in sim["tests"]),
+            f"the simulated 60 s without Continue (unit:lua:test_frontmenu.{LUA_60S}) didn't pass", **ev)
     require(len(ev["screens"]) >= 2, "the client didn't take both screenshots", **ev)
     require(all(m["main_menu_up"] is True for m in ev["screens"]),
             "the main menu wasn't up in both screenshots", **ev)

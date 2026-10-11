@@ -815,15 +815,15 @@ def load_ordering(ctx):
             "database", **ev)
     require(all(x["ok"] for x in rounds), f"{sum(not x['ok'] for x in rounds)} of 20 loads left pre-load values", **ev)
     # WorkerThreads = 2: refused (the test profile), then the normal profile again
+    # test-pyramid part 2: a worldserver restart with the profile (mysqld and authserver keep running; the setting is
+    # the worldserver's own), not the whole stack down and up twice
     try:
-        stack.down()
-        stack.up(profile="saves-workers2")
+        ev["workers2_restart"] = {k: v for k, v in stack.restart_world("saves-workers2").items() if k != "up"}
         ev["workers2_status"] = _status()
         ev["workers2_log"] = [l for l in (P.LOGS / "Server.log").read_text(errors="replace").splitlines()
                               if "saves disabled" in l][-1:]
     finally:
-        stack.down()
-        stack.up()
+        stack.restart_world()
     require(ev["workers2_status"].startswith("Moonglade saves: disabled") and "WorkerThreads = 2" in ev["workers2_status"]
             and ev["workers2_log"], "with WorkerThreads = 2 the module didn't refuse saves with a logged reason", **ev)
     return ev

@@ -499,7 +499,7 @@ def _phase(name: str, want: str, exp: dict, guid: int) -> dict:
             "character": char_snapshot(guid)}
 
 
-@check("era.toggle_roundtrip", order=146, capability="era-profile", stack="up", layer="integration")
+# era.toggle_roundtrip: a scenario of era.session_toggle (test-pyramid part 2: one off/on restart pair for both)
 def toggle_roundtrip(ctx):
     """With the test character at a known level, XP and quest state (vanilla on), restarting with EraProfile.Enable = 0
     shows the stock spot values and restarting with 1 shows the vanilla ones again, while the character's level, XP,
@@ -509,9 +509,9 @@ def toggle_roundtrip(ctx):
     ev = {"expectations": exp, "known_state": _run(lambda: _set_known_state(src))}
     guid = E.F.char_guid()
     phases = [_phase("before (vanilla on)", "vanilla", exp, guid)]
-    ev["to_wotlk"] = stack.ensure_profile(WOTLK_PROFILE)
+    ev["to_wotlk"] = yield WOTLK_PROFILE
     phases.append(_phase(f"after restart with profile {WOTLK_PROFILE} (EraProfile.Enable = 0)", "stock", exp, guid))
-    ev["to_vanilla"] = stack.ensure_profile(config.DEFAULT_PROFILE)
+    ev["to_vanilla"] = yield config.DEFAULT_PROFILE
     phases.append(_phase(f"after restart with profile {config.DEFAULT_PROFILE} (EraProfile.Enable = 1)", "vanilla",
                          exp, guid))
     ev["phases"] = phases
@@ -654,7 +654,7 @@ def elite_stock_hp(c, off: dict, on: dict) -> dict:
             "violations": viol, "exempt_exp_not_0": exempt}
 
 
-@check("era.scope_guard", order=147, capability="era-profile", stack="up", layer="integration")
+# era.scope_guard: a scenario of era.session_toggle (test-pyramid part 2: one off/on restart pair for both)
 def scope_guard(ctx):
     """Every out-of-scope row of creature_template, quest_template, item_template, trainer_spell and
     player_xp_for_level hashes identically with vanilla mode off and on; the rows that change are exactly the
@@ -668,10 +668,10 @@ def scope_guard(ctx):
                      "elite_hp_needs_review (stay stock)": scope["elite_hp_needs_review"],
                      "expected_changed_rows": {t: len(v) for t, v in scope["rows"].items()}},
           "module_columns": era_cols}
-    ev["to_off"] = stack.ensure_profile(WOTLK_PROFILE)
+    ev["to_off"] = yield WOTLK_PROFILE
     ev["off_log"] = E.module_log_lines()
     off = {t: table_hashes(t, k, era_cols[t]) for t, k in SCOPE_KEYS.items()}
-    ev["to_on"] = stack.ensure_profile(config.DEFAULT_PROFILE)
+    ev["to_on"] = yield config.DEFAULT_PROFILE
     ev["on_log"] = E.module_log_lines()
     on = {t: table_hashes(t, k, era_cols[t]) for t, k in SCOPE_KEYS.items()}
     tables, bad = {}, []
@@ -724,3 +724,58 @@ def scope_guard(ctx):
             **ev)
     require(not bad, "; ".join(bad), **ev)
     return ev
+
+
+# ------------------------------------------------------------------------------------------------ one restart pair
+# test-pyramid part 2 (design 6, "era.toggle_roundtrip and era.scope_guard share their off/on restarts (4 -> 2)"):
+# both scenarios are generators that yield the profile they need next; the session switches once per step and hands
+# the restart's record to each, so each still observes the world after a real restart with that profile.
+
+def drive_together(gens: dict) -> dict:
+    """Run generator scenarios in lockstep: at each step every live one asks for the same profile; one
+    stack.ensure_profile per step. Returns {id: {"status", "evidence"|"message"}}."""
+    from ..registry import CheckFail
+    import time as _t
+    import traceback as _tb
+    out, want, t0 = {}, {}, _t.time()
+
+    def step(i, g, val, first=False):
+        try:
+            want[i] = next(g) if first else g.send(val)
+        except StopIteration as e:
+            want.pop(i, None)
+            out[i] = {"status": "pass", "evidence": e.value or {}}
+        except CheckFail as e:
+            want.pop(i, None)
+            out[i] = {"status": "fail", "message": str(e)[:500], "evidence": e.evidence or {}}
+        except Exception as e:  # noqa: BLE001
+            want.pop(i, None)
+            out[i] = {"status": "error", "message": f"{type(e).__name__}: {e}"[:500],
+                      "evidence": {"traceback": _tb.format_exc()[-3000:]}}
+    for i, g in gens.items():
+        step(i, g, None, first=True)
+    switches = []
+    while want:
+        prof = sorted(set(want.values()))
+        if len(prof) != 1:
+            for i in list(want):
+                out[i] = {"status": "error", "message": f"the scenarios asked for different profiles: {want}",
+                          "evidence": {}}
+                want.pop(i)
+            break
+        rec = stack.ensure_profile(prof[0])
+        switches.append({"profile": prof[0], "at_s": round(_t.time() - t0, 1)})
+        for i in list(want):
+            step(i, gens[i], rec)
+    for v in out.values():
+        v["duration_s"] = round(_t.time() - t0, 1)
+        v.setdefault("evidence", {})["shared_restarts"] = switches
+    return out
+
+
+@check("era.session_toggle", order=146, capability="era-profile", stack="up", layer="integration",
+       children=("era.toggle_roundtrip", "era.scope_guard"))
+def session_toggle(ctx):
+    """era.toggle_roundtrip and era.scope_guard on one off/on restart pair (each scenario its own record)."""
+    return {"children": drive_together({"era.toggle_roundtrip": toggle_roundtrip(ctx),
+                                        "era.scope_guard": scope_guard(ctx)})}

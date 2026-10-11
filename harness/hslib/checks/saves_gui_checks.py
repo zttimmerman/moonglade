@@ -99,12 +99,16 @@ def session() -> dict:
     scratch = run = None
     try:
         require_given_clear(ev)
-        stack.up()
+        from . import play_checks as _pc
+        warm = _pc.WARM is not None          # a warm journey: the shared stack is up and stays up
+        if not warm:
+            stack.up()
         fixtures.ensure()
         guid = int(db.scalar(f"SELECT guid FROM characters WHERE name='{P.TEST_CHAR}'", "characters"))
         ev["guid"] = guid
         ev |= _seed(guid)
-        stack.down()
+        if not warm:
+            stack.down()
         scratch = fresh_scratch("saves")
         build_scratch(scratch)
         sv = addon_sv_path(scratch)

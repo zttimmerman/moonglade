@@ -56,8 +56,8 @@ LANE_B = {
     "era.quest_xp": "lane B's running server and rendered worldserver.conf",
     "era.elites": "lane B's running server and rendered worldserver.conf",
     "era.mounts": "lane B's running server",
-    "era.toggle_roundtrip": "restarts lane B's stack with each era profile; the confs are lane B's",
-    "era.scope_guard": "lane B's stack and DBs",
+    "era.session_toggle": "era.toggle_roundtrip + era.scope_guard on one off/on restart pair of lane B's stack; the "
+                          "confs and DBs are lane B's",
     "lifecycle.persist": "`hs down`/`hs up` inherit HS_LANE=b; lane B's characters DB",
     "play.loop_clean_exit": "./play stand-in in lane B (its run dir, lock, stack and Wine prefix clone)",
     "play.interrupt_clean_exit": "./play stand-in in lane B",

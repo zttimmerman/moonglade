@@ -64,8 +64,10 @@ _USERS = "/" + "Users" + "/"
 _SESSION = r"claude\.ai/code/" + "session_"
 EMAIL_RX = re.compile(rb"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.[A-Za-z]{2,}")
 # Addresses that identify nobody: GitHub/Anthropic noreply addresses and the reserved example domains (RFC 2606).
+# Also an image's scale suffix ("icon_512x512@2x.png", Apple's iconset names): no address has a "<n>x" domain with
+# an image extension for a top-level domain (a false positive the public history still holds, release-signing 9b8aa78).
 EMAIL_OK = re.compile(rb"(?i)(noreply|no-reply)[.@]|@users\.noreply\.github\.com$|@(.+\.)?example\.(com|org|net)$"
-                      rb"|\.(example|test|invalid|localhost)$")
+                      rb"|\.(example|test|invalid|localhost)$|@\d+x\.(png|jpe?g|gif|webp|icns|tiff?)$")
 
 
 def builtin_patterns() -> list[tuple[str, str, re.Pattern]]:

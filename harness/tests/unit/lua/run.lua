@@ -46,6 +46,17 @@ function T.boot(opts)
 	return w
 end
 
+-- boot_addon{ player = "Name", files = {...} }: a fresh in-game world (addonstub.lua) with the Moonglade add-on's
+-- files (default: Moonglade.lua) loaded unchanged, as the client loads them from the TOC.
+local ADDON = repo .. "/client-mods/addons/Moonglade/"
+function T.boot_addon(opts)
+	opts = opts or {}
+	local A = require("addonstub")
+	local w = A.new(opts)
+	for _, f in ipairs(opts.files or { "Moonglade.lua" }) do loadinto(ADDON .. f, w.env) end
+	return w
+end
+
 local files = {}
 for i = 5, #arg do table.insert(files, arg[i]) end
 local run, failed = 0, 0

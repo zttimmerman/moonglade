@@ -59,9 +59,12 @@ class StandIn:
         fh = open(out or self.out, "w")
         # Own session/process group, like a terminal's foreground job, so the check can deliver a Ctrl-C to
         # the whole group (os.killpg) the way a terminal does.
-        self.proc = subprocess.Popen([*(wrap or []), PLAY, "--account", account, "--client-cmd", str(self.bat), *extra],
+        # a warm journey (WARM): the harness's keep-stack switch, which ./play takes only with its test flag
+        warm = ["--allow-test-client-dir"] if warm_env() and "--allow-test-client-dir" not in extra else []
+        self.proc = subprocess.Popen([*(wrap or []), PLAY, "--account", account, "--client-cmd", str(self.bat), *extra,
+                                      *warm],
                                      cwd=P.ROOT, stdin=subprocess.DEVNULL, stdout=fh, stderr=subprocess.STDOUT,
-                                     start_new_session=True, env={**os.environ, **PINNED, **(env or {})})
+                                     start_new_session=True, env={**os.environ, **PINNED, **warm_env(), **(env or {})})
         fh.close()
         return self.proc
 
@@ -99,7 +102,7 @@ class StandIn:
             self.proc.wait()
         if launch.prefix_processes():
             launch.stop_prefix()
-        if any(stack.stack_processes().values()):
+        if any(stack.stack_processes().values()) and WARM is None:
             stack.down()
 
     def cleanup(self):
@@ -123,9 +126,33 @@ def play_processes(exclude=(), lane: str | None = None) -> list[dict]:
             and (lane == "*" or process_lane(pid) == lane)]
 
 
+# test-pyramid part 2, warm journeys (journey_checks.warm): while a warm journey runs, WARM holds the pids of the shared
+# stack it found running. Its sessions then run ./play with the harness's keep-stack switch, and "nothing left running"
+# means nothing besides that same stack (same pids; a different or partly stopped stack still counts as left running).
+WARM: dict | None = None
+
+
+def stack_pids() -> dict:
+    return {k: sorted(p if isinstance(p, int) else p.get("pid", p) for p in v) for k, v in stack.stack_processes().items()}
+
+
+def warm_env() -> dict:
+    """The environment a warm journey's ./play runs with ({} outside one)."""
+    return {play.KEEP_STACK_ENV: "1", "HS_HARNESS_RUN": "1"} if WARM is not None else {}
+
+
+def warm_refresh(why: str) -> None:
+    """A warm session restarted a stack component on purpose (e.g. the login server for the friendly error): the
+    stack the journey keeps is the one running now."""
+    if WARM is not None:
+        WARM["pids"] = stack_pids()
+        WARM.setdefault("refreshed", []).append(why)
+
+
 def remaining(stand_in: StandIn | None = None) -> dict:
     """Everything from this repo that could still be running: stack processes, Wine/Wow.exe processes of this
-    prefix, stack ports, a lingering ./play, and the stand-in's own process."""
+    prefix, stack ports, a lingering ./play, and the stand-in's own process. In a warm journey (WARM) the shared stack
+    it found running, unchanged, doesn't count."""
     st = stack.stack_processes()
     pref = launch.prefix_processes()
     r = {"stack": {k: v for k, v in st.items() if v},
@@ -135,6 +162,8 @@ def remaining(stand_in: StandIn | None = None) -> dict:
          "play_processes": play_processes()}
     if stand_in:
         r["stand_in_processes"] = [p for p in pref if stand_in.bat.name.lower() in p["cmd"].lower()]
+    if WARM is not None and all(st.values()) and stack_pids() == WARM["pids"]:
+        r["stack"], r["ports_open"] = {}, []
     return r
 
 

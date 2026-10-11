@@ -165,7 +165,6 @@ namespace MoongladeSaves
 
 
     constexpr uint64 MIN_FREE_BYTES = 2ull * 1024 * 1024 * 1024;     // harness/hslib/backups.py MIN_FREE_BYTES
-    constexpr std::string_view MIDDOT = "\xC2\xB7";                  // " · " in labels (UTF-8)
     // the harness's test accounts (paths.TEST_USER, paths.SAVES_USER): the only ones the test switches apply to
     bool IsTestAccount(std::string_view account) { return account == "HSTEST" || account == "HSSAVES"; }
 
@@ -180,41 +179,14 @@ namespace MoongladeSaves
         uint32 pauseAfterFirstFileS = 0;
     } g_test;
 
-    std::string JsonEscape(std::string_view in)
-    {
-        std::string out;
-        out.reserve(in.size() + 2);
-        for (unsigned char c : in)
-        {
-            if (c == '"' || c == '\\')
-            {
-                out += '\\';
-                out += char(c);
-            }
-            else if (c < 0x20)
-            {
-                char buf[8];
-                std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-                out += buf;
-            }
-            else
-                out += char(c);
-        }
-        return out;
-    }
+    // pure logic (logic/SavesLogic.cpp, unit-tested on the host): the module calls it, never a copy
+    using MoongladeLogic::JsonEscape;
+    using MoongladeLogic::IsHexType;
+    using MoongladeLogic::IsFloatType;
+    using MoongladeLogic::SqlValue;
+    using MoongladeLogic::FormatTime;
 
     std::string Q(std::string_view s) { return "\"" + JsonEscape(s) + "\""; }
-
-    bool IsHexType(std::string const& type)
-    {
-        return type == "blob" || type == "tinyblob" || type == "mediumblob" || type == "longblob" || type == "binary"
-            || type == "varbinary" || type == "bit";
-    }
-
-    bool IsFloatType(std::string const& type)
-    {
-        return type == "float" || type == "double" || type == "decimal";
-    }
 
     /// SELECT list for a save-set table (alias `t`): every column as text. FLOAT/DOUBLE via DOUBLE, so positions are
     /// exact (the shortest text that reads back as the same double, which is the stored float); binary as hex.
@@ -381,28 +353,11 @@ namespace MoongladeSaves
         return "Somewhere";
     }
 
-    std::string FormatTime(time_t t, char const* fmt, bool utc)
-    {
-        tm tmv{};
-        if (utc)
-            gmtime_r(&t, &tmv);
-        else
-            localtime_r(&t, &tmv);
-        char buf[64];
-        std::strftime(buf, sizeof(buf), fmt, &tmv);
-        return buf;
-    }
-
     /// A save's label as the menus show it: the player's name for it, else "<Zone> · Level <n> · <Ddd HH:MM>";
     /// an autosave starts with its moment ("Rested: Goldshire · Level 5 · Tue 21:04").
     std::string DefaultLabel(std::string const& moment, uint32 zone, uint32 level, time_t t)
     {
-        std::string s;
-        if (!moment.empty())
-            s = moment + ": ";
-        s += ZoneName(zone) + " " + std::string(MIDDOT) + " Level " + std::to_string(level) + " " + std::string(MIDDOT)
-            + " " + FormatTime(t, "%a %H:%M", false);
-        return s;
+        return MoongladeLogic::DefaultLabel(moment, ZoneName(zone), level, t);
     }
 
     /// A player's name for a save: printable, no tabs or '|' (the add-on's separators), at most 48 bytes.
@@ -966,32 +921,6 @@ namespace MoongladeSaves
     uint32 g_nextJob = 1;
     std::unordered_map<uint32, uint32> g_loading;  // character guid -> job (one load per character at a time)
 
-    std::string SqlValue(std::optional<std::string> const& v, std::string const& type)
-    {
-        if (!v)
-            return "NULL";
-        if (IsHexType(type))
-        {
-            for (char c : *v)
-                if (!std::isxdigit(static_cast<unsigned char>(c)))
-                    return "NULL";
-            return "X'" + *v + "'";
-        }
-        std::string out = "'";
-        for (char c : *v)
-        {
-            if (c == '\\' || c == '\'')
-                out += '\\';
-            if (c == '\0')
-            {
-                out += "\\0";
-                continue;
-            }
-            out += c;
-        }
-        return out + "'";
-    }
-
     struct ParsedSave
     {
         Manifest m;
@@ -1327,17 +1256,14 @@ namespace MoongladeSaves
     /// Why a player-requested save is refused now ("" = allowed). Bots never get here.
     std::string RefuseSave(Player* player)
     {
-        if (player->IsInCombat())
-            return "You can't save in combat.";
-        if (!player->IsAlive() || player->HasPlayerFlag(PLAYER_FLAGS_GHOST))
-            return "You can't save while dead.";
-        if (player->m_movementInfo.HasMovementFlag(MovementFlags(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR)))
-            return "You can't save while falling.";
-        if (player->InBattleground() || player->InArena())
-            return "You can't save in a battleground or arena.";
-        if (player->IsBeingTeleported())
-            return "You can't save while travelling between places.";
-        return {};
+        MoongladeLogic::SaveState st;
+        st.inCombat = player->IsInCombat();
+        st.alive = player->IsAlive();
+        st.ghost = player->HasPlayerFlag(PLAYER_FLAGS_GHOST);
+        st.falling = player->m_movementInfo.HasMovementFlag(MovementFlags(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR));
+        st.inBattlegroundOrArena = player->InBattleground() || player->InArena();
+        st.teleporting = player->IsBeingTeleported();
+        return MoongladeLogic::SaveRefusal(st);
     }
 
     void Configure()
@@ -1351,19 +1277,14 @@ namespace MoongladeSaves
         s.workerThreads = sConfigMgr->GetOption<int32>("CharacterDatabase.WorkerThreads", 1);
         bool enable = sConfigMgr->GetOption<bool>("Moonglade.Saves.Enable", true);
         std::error_code ec;
-        if (!enable)
-            s.why = "Moonglade.Saves.Enable = 0";
-        else if (s.workerThreads != 1)
-            s.why = "CharacterDatabase.WorkerThreads = " + std::to_string(s.workerThreads)
-                + " (saves need 1: one FIFO async worker orders a load after every earlier write)";
-        else if (s.dir.empty())
-            s.why = "Moonglade.Saves.Dir is empty";
-        else if (!s.dir.is_absolute())
-            s.why = "Moonglade.Saves.Dir is not an absolute path";
-        else if (fs::create_directories(s.dir, ec), ec)
-            s.why = "Moonglade.Saves.Dir can't be created (" + ec.message() + ")";
-        else
-            s.why.clear();
+        s.why = MoongladeLogic::DisabledReason(enable, s.workerThreads, s.dir.empty());
+        if (s.why.empty())
+        {
+            if (!s.dir.is_absolute())
+                s.why = "Moonglade.Saves.Dir is not an absolute path";
+            else if (fs::create_directories(s.dir, ec), ec)
+                s.why = "Moonglade.Saves.Dir can't be created (" + ec.message() + ")";
+        }
         s.enabled = s.why.empty();
         g_cfg = s;
         if (g_cfg.enabled)

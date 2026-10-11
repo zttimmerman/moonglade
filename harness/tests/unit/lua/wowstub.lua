@@ -14,6 +14,7 @@
 local S = {}
 
 local FRAME_METHODS = {}
+S.methods = FRAME_METHODS      -- addonstub.lua adds the in-game frame methods here
 -- methods are capitalised (the client's widget API); lowercase keys are the stub's own fields. A capitalised name
 -- with no stub raises "unstubbed API: Frame:<name>".
 local Frame = { __index = function(_, k)
