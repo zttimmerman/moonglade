@@ -10,7 +10,7 @@ Estimates are agent-hours of builder work, without padding (recent changes ran 2
   - Confirm with an incremental server build that the module picks up `src/logic/`.
   - **Measure and record in design.md §12:** per-test times per suite, the cold and cached C++ build, the Lua build, and the unit tier's wall time with all 53 static checks (serial and 4-process pool).
   - **Pass criteria:** each test ≤ 2 s; projected unit layer ≤ 60 s warm.
-- [ ] 1.2 Shared-server integration slice (≈ 3 h).
+- [x] 1.2 Shared-server integration slice (≈ 3 h).
   - The fixture: one `hs up`, per-test characters, reset with leak detection, undo registration, timed resets.
   - `pause.freeze_matrix` (5 pause checks → 1) and `pause.disconnect_unpauses` with a per-test character.
   - Respawn on a scratch spawn: first find the pinned core's GM command for a spawn's respawn time, with the source file cited.
@@ -24,9 +24,9 @@ Estimates are agent-hours of builder work, without padding (recent changes ran 2
   - `hs select --replay 15` over #19–#33, priced with the last full run.
   - Record the selection time (≤ 10 s), each PR's selection and reason, and the mean. Compare with design.md §8's rough table.
 - [x] 1.4 Go/no-go note (≈ 0.5 h).
-- [ ] 1.5 Redesign re-measure (design §13): ownership selector + narrower FULL rule, replay #19–#33 + #1–#3 of the new repo; pass = replay mean ≤15 min, selection ≤10 s (≈ 1.5 h).
-- [ ] 1.6 Clustered integration slice: saves cluster (manual, quick, undo, inworld load in one session) and dungeon cluster (`dng.session`) with bulk fixtures; pass = each session ≤60 s, statuses identical 3× serial / 3× pool / 1× reversed, bulk fixtures ≤10 s (≈ 2.5 h).
-- [ ] 1.7 Go/no-go 2: projected complete suite ≤30 min with the measured numbers; stop and report on a miss (≈ 0.5 h).
+- [x] 1.5 Redesign re-measure (design §13): ownership selector + narrower FULL rule, replay #19–#33 + #1–#3 of the new repo; pass = replay mean ≤15 min, selection ≤10 s (≈ 1.5 h).
+- [x] 1.6 Clustered integration slice: saves cluster (manual, quick, undo, inworld load in one session) and dungeon cluster (`dng.session`) with bulk fixtures; pass = each session ≤60 s, statuses identical 3× serial / 3× pool / 1× reversed, bulk fixtures ≤10 s (≈ 2.5 h).
+- [x] 1.7 Go/no-go 2: projected complete suite ≤30 min with the measured numbers; stop and report on a miss (≈ 0.5 h).
   - Write the measured numbers into design.md §12 and the proposal's log.
   - If a pass criterion fails (unit per-test time, reset cost, pool flakes, or a selection over 10 s), stop and report to the orchestrator with the numbers before task 2. Don't migrate on a failed prototype.
 

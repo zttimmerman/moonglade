@@ -792,3 +792,13 @@ and fixture budgets miss (above).**
   journeys hit design 9.4's projections; and the cached world-facts query is the only shared slow query (`comp.*` uses the same rule,
   so it gains too).
 
+
+## 14. Go decision after 1.7 (orchestrator, 2026-10-11)
+
+Zach's targets are met by the measured projection: unit layer about 47 s (≤ 2 min); replay mean 12.5–13.5 min (≈ 15); complete suite 23–25 min (≤ 30). The three misses are against my own sub-budgets, which are rebalanced here without touching Zach's targets:
+- **Integration layer:** ≤ 15 min serial (was 12). The complete suite stays ≤ 30 min, enforced.
+- **`dng.session`:** split into two sessions of ≤ 90 s each, and companions persist across both, so their 51 s setup is paid once. `scale.pause_safe` pauses 5 s, not 20: values are compared to the millisecond, so a 5 s pause still shows any drift. The loosening found in 1.6 is **not accepted**. `lock.fresh_after_clear` must again assert that both companions are in the new copy, by re-summoning them in the second session.
+- **Run-start fixtures:** cache the creature-candidate query across runs, keyed by the world database's content hash, to bring the fixture phase to ≤ 10 s.
+- `release_runtime_checks.py` dev-only list: extending it with the five test-tooling modules is reviewed and accepted (they're harness-only, never in a release payload).
+
+Go for tasks 2.x onwards, re-measuring each layer as it lands.
