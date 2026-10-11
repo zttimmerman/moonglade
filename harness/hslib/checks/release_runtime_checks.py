@@ -1071,6 +1071,8 @@ def stack_from_payload(ctx):
         # OpenSSL) both passed packaging and failed here. The servers run under the no-Homebrew sandbox with the spaced
         # HOME; a throwaway account logs in with the protocol probe through auth, the realm list, the world's
         # AUTH_SESSION (the server's RC4 starts there) and the character list. The account is removed afterwards.
+        require(not ev.get("counterexample_no_openssl_modules") or "OPENSSL_MODULES" not in ws_env,
+                "counterexample: the payload's servers still got OPENSSL_MODULES (switch not honoured)", **ev)
         import secrets
         user, pw = "HSFRESHLOGIN", secrets.token_hex(6)
         made = run_release(app, ["gm", f"account create {user} {pw}"], env, prof, d, 120, log)
