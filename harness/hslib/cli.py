@@ -189,6 +189,11 @@ def main(argv=None) -> int:
                                       "reset only inside a harness run")
     ln.add_argument("action", choices=["init", "status", "down", "reset"])
     ln.add_argument("--force", action="store_true", help="init: rebuild the template even if one exists")
+    ut = sub.add_parser("test", help="the unit layer (test-pyramid): Python, C++ and Lua unit tests; no stack, Wine "
+                                      "or client; results in harness/out/unit/results.json")
+    ut.add_argument("-k", dest="pattern", help="only tests whose id contains this")
+    ut.add_argument("--static", type=int, default=0, metavar="N",
+                    help="also run the unit-layer static checks, in N processes (1 = serially)")
     ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns + .json (logo on the navy tile) from env/branding/logo-source.jpeg")
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
 
@@ -305,6 +310,9 @@ def main(argv=None) -> int:
         return run(only=a.only, leave_up=a.leave_up, tier=a.tier, force_clean=a.force_clean, preflight=pf,
                    ignore_power=a.ignore_power, lanes=a.lanes)
 
+    if a.cmd == "test":
+        from . import unitrun
+        return unitrun.main(a.pattern, a.static)
     if a.cmd == "keep-awake":
         from .util import keep_awake_cli
         return keep_awake_cli(a.hours)

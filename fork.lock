@@ -42,3 +42,9 @@ release_python_sha256=9e01f63bbb08576cd9c8bc2d0564d098cb30c8453a0cd4bcf6aef458f6
 # into python3.13, for THIRD_PARTY/python); sha256 = the release's published SHA256SUMS.
 release_python_licenses_url=https://github.com/astral-sh/python-build-standalone/releases/download/20261003/cpython-3.13.16%2B20261003-aarch64-apple-darwin-pgo%2Blto-full.tar.zst
 release_python_licenses_sha256=ca3eb5bf8110eaed1c3e516be4bd4d52bcf636f8e888359353f274288406bae7
+# Unit-layer Lua runner (openspec/changes/test-pyramid design 5): Lua 5.1.5, the client's Lua version, built with the
+# system cc into env/tools/lua-5.1.5/ by `harness/hs test` (harness/hslib/unittools.py). sha256 computed 2026-10-11
+# from a fresh download (221213 bytes) and equal to the sha256 lua.org publishes for lua-5.1.5.tar.gz at
+# https://www.lua.org/ftp/ ("checksum (sha256)" column).
+lua51_url=https://www.lua.org/ftp/lua-5.1.5.tar.gz
+lua51_sha256=2640fc56a795f29d28ef15e13c34a47e223960b0240e8cb0a82d9b0738695333

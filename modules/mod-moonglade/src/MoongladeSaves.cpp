@@ -11,6 +11,7 @@
  */
 
 #include "MoongladeSaves.h"
+#include "logic/SavesLogic.h"
 
 #include "CharacterPackets.h"
 #include "Chat.h"
@@ -405,28 +406,10 @@ namespace MoongladeSaves
     }
 
     /// A player's name for a save: printable, no tabs or '|' (the add-on's separators), at most 48 bytes.
+    /// (logic/SavesLogic.cpp, unit-tested on the host.)
     std::string CleanLabel(std::string_view in)
     {
-        std::string out;
-        for (unsigned char c : in)
-        {
-            if (c < 0x20 || c == '|' || c == 0x7f)
-                continue;
-            out += char(c);
-        }
-        while (!out.empty() && out.back() == ' ')
-            out.pop_back();
-        size_t start = out.find_first_not_of(' ');
-        out = start == std::string::npos ? std::string() : out.substr(start);
-        if (out.size() > 48)
-        {
-            out.resize(48);
-            while (!out.empty() && (static_cast<unsigned char>(out.back()) & 0xC0) == 0x80)
-                out.pop_back();                       // never cut a UTF-8 sequence in half
-            if (!out.empty() && (static_cast<unsigned char>(out.back()) & 0x80))
-                out.pop_back();
-        }
-        return out;
+        return MoongladeLogic::CleanLabel(in);
     }
 
     struct Manifest
@@ -533,32 +516,17 @@ namespace MoongladeSaves
             : kind == "before-load" ? g_cfg.keepBeforeLoad : 0;
         if (kind == "manual" || keep == 0)
             return;
-        std::vector<std::string> ids;
+        // the retention choice is logic/SavesLogic.cpp's RetentionDeletes (unit-tested on the host); this walks the
+        // folder and deletes
+        std::vector<std::string> names;
         std::error_code ec;
-        std::string suffix = "-" + kind;
         for (auto const& e : fs::directory_iterator(charDir, ec))
+            if (e.is_directory(ec))
+                names.push_back(e.path().filename().string());
+        for (std::string const& id : MoongladeLogic::RetentionDeletes(names, kind, keep))
         {
-            std::string n = e.path().filename().string();
-            if (n.rfind(".tmp-", 0) == 0 || !e.is_directory(ec))
-                continue;
-            // <YYYYMMDD-HHMMSS>-<kind>[-n]
-            if (n.size() > 16 && n.compare(15, suffix.size(), suffix) == 0
-                && (n.size() == 15 + suffix.size() || n[15 + suffix.size()] == '-'))
-                ids.push_back(n);
-        }
-        std::sort(ids.begin(), ids.end(), [](std::string const& a, std::string const& b)
-        {
-            // same second: "-<kind>" before "-<kind>-2" before "-<kind>-10"
-            if (a.substr(0, 15) != b.substr(0, 15))
-                return a < b;
-            auto n = [](std::string const& x) { size_t p = x.rfind('-'); return std::isdigit(static_cast<unsigned char>(x[p + 1])) && p > 15 ? std::stoul(x.substr(p + 1)) : 1ul; };
-            return n(a) < n(b);
-        });
-        while (ids.size() > keep)
-        {
-            fs::remove_all(charDir / ids.front(), ec);
-            LOG_INFO("module", "[mod-moonglade] saves: rotated out {}", ids.front());
-            ids.erase(ids.begin());
+            fs::remove_all(charDir / id, ec);
+            LOG_INFO("module", "[mod-moonglade] saves: rotated out {}", id);
         }
     }
 
