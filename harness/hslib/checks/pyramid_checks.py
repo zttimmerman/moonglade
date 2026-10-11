@@ -679,6 +679,12 @@ def layer_budgets_record(doc: dict) -> dict:
 
 # ============================================================================ report.pr_average (post-run)
 
+def completed_pr_runs(history: list[dict]) -> list[dict]:
+    """The recorded pr runs that count: completed and passing (an aborted or failed run, e.g. one stopped at the
+    unit layer before the acceptance checks ran, would pull the mean down with an acceptance time it never had)."""
+    return [r for r in history if r.get("ok") is True and not r.get("stopped_at_unit_layer")]
+
+
 def pr_average(history: list[dict], replay_fn=None) -> dict:
     """The rolling mean of the last PR_WINDOW pr runs (minutes of integration + journeys); from the PR_MIN_RUNS-th
     run on it fails above PR_MEAN_MAX_MIN; with fewer runs it reports the replay's mean, never failing."""
@@ -716,9 +722,10 @@ def pr_average_record(doc: dict) -> dict:
         hist = [json.loads(l) for l in S.PR_RUNS.read_text().splitlines() if l.strip()]
     except (OSError, ValueError):
         pass
+    hist = completed_pr_runs(hist)
     probs = []
     live = None
-    if m.get("tier") == "pr" and not m.get("filter"):
+    if m.get("tier") == "pr" and not m.get("filter") and not m.get("stopped_at_unit_layer"):
         L = m.get("layers") or {}
         this = {"sha": m.get("repo_sha"), "acceptance_s": (L.get("acceptance") or {}).get("wall_s"),
                 "full": bool((m.get("selection") or {}).get("full"))}

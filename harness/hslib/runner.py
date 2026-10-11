@@ -669,6 +669,20 @@ def filter_refusal(reg: dict, tier: str, only: list[str] | None, selected: list)
     return None
 
 
+def unit_stop_skips(rest: list) -> dict:
+    """A pr run whose unit layer failed stops there: every check after the unit layer that isn't itself unit-layer
+    (acceptance, targeted, gate, and the integration-layer run guards such as release.player_data_untouched, whose
+    bracket never ran) is recorded as not run; unit-layer guards still run (they start nothing)."""
+    return {c.id: UNIT_FAILED_MSG for c in rest if c.layer != "unit"}
+
+
+def records_pr_run(meta: dict, only: list | None) -> bool:
+    """Only a completed, unfiltered pr run goes into harness/out/pr-runs.jsonl (report.pr_average): not one stopped
+    at the unit layer or by the power guard."""
+    return (meta.get("tier") == "pr" and not only and not meta.get("stopped_at_unit_layer")
+            and not (meta.get("power") or {}).get("stop"))
+
+
 # power-guard: the run tiers whose checks are guarded (the unit tier is short and runs on builders' laps)
 POWER_GUARDED_TIERS = ("pr", "full")
 UNIT_POOL = 4
@@ -835,14 +849,15 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
         rest = []
     elif tier == "pr" and not unit_ok:
         log("the unit layer failed: a pr run stops there")
-        skipped = {c.id: UNIT_FAILED_MSG for c in rest if segment(c) < 9}
+        skipped = unit_stop_skips(rest)
+        meta["stopped_at_unit_layer"] = True
     # 2. the server build (accepted fixed cost) before any stack is used
     build_info = {"build_s": 0.0, "skipped": "no acceptance check needs the server"}
     if not skipped and any(c.stack == "up" or c.layer in ("integration", "journey") for c in rest) and tier != "unit":
         build_info = ensure_server_current(ctx)
     meta["server_build"] = build_info
     # 3. the acceptance segments (one or two lanes) and the run guards
-    if tier != "unit" and rest:
+    if tier != "unit" and rest and not meta.get("stopped_at_unit_layer"):
         from . import fixture
         ctx["fixture"] = fixture.SharedServer(rest)
         ctx["pool"] = True
@@ -855,9 +870,12 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
             meta["fixture"] = ctx["fixture"].finish(ctx)
         results += recs
     else:
-        recs = execute([c for c in rest], ctx, ensure=lambda *_a: None, guard=guard) if rest else []
+        # the unit tier, or a pr run stopped at the unit layer: only unit-layer guards run, nothing starts the stack
+        recs = execute([c for c in rest], ctx, ensure=lambda *_a: None, guard=guard, skipped=skipped) if rest else []
         results += recs
-        meta["lanes"] = {"mode": 1, "lanes": 1, "fallback": "unit tier: one lane", "preflight": None,
+        meta["lanes"] = {"mode": 1, "lanes": 1, "preflight": None,
+                         "fallback": ("pr run stopped at the unit layer: one lane" if meta.get("stopped_at_unit_layer")
+                                      else "unit tier: one lane"),
                          "assignment": {"b_planned": [], "b_ran": [], "b_to_a": []}}
     meta["lanes"]["memory_at_run_start"] = mem_start
     meta["stack_transitions"] = [{k: (v if isinstance(v, (str, int, float, bool)) else "done") for k, v in t.items()}
@@ -909,7 +927,7 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     from .util import redact
     doc = redact(doc)                     # no passwords in results.json / summary.md (check output tails etc.)
     write_outputs(doc, P.RESULTS, P.SUMMARY)
-    if tier == "pr" and not only:
+    if records_pr_run(doc["meta"], only):
         from . import selection
         selection.record_pr_run(doc)
     print(P.SUMMARY.read_text())
