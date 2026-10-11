@@ -716,11 +716,15 @@ def layer_times(ctx: dict, records: list[dict], unit_s: float | None, selection_
     journeys = {r["id"]: {"s": r.get("duration_s"), "budget_s": (REGISTRY[r["id"]].budget_s if r["id"] in REGISTRY else None)}
                 for r in records if r.get("layer") == "journey" and r["id"] in REGISTRY and r.get("status") != "skip"}
     legacy = {e["id"]: round(e["end"] - e["start"], 1) for e in xl if e["id"] in LEGACY_CLIENT}
+    # clustered integration sessions with their own budget (design 14: dng.session1/2 at most 90 s each)
+    sessions = {r["id"]: {"s": r.get("duration_s"), "budget_s": REGISTRY[r["id"]].budget_s}
+                for r in records if r.get("layer") == "integration" and r["id"] in REGISTRY
+                and REGISTRY[r["id"]].budget_s and r.get("status") != "skip"}
     integ = _union_s(spans("integration"))
     jsum = round(sum(v["s"] or 0.0 for v in journeys.values()) + sum(legacy.values()), 1)
     return {"unit": {"wall_s": unit_s, "budget_s": 120.0},
             "selection": {"wall_s": selection_s, "budget_s": 10.0},
-            "integration": {"wall_s": integ, "budget_s": 900.0},
+            "integration": {"wall_s": integ, "budget_s": 900.0, "sessions": sessions},
             "journeys": {"wall_s": jsum, "each": journeys, "legacy_client_s": legacy},
             "acceptance": {"wall_s": round(integ + jsum, 1), "budget_s": 1800.0},
             "gate": {"wall_s": _union_s(spans("gate"))},

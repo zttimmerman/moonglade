@@ -463,6 +463,9 @@ def budget_problems(meta: dict, new_selected_s: float | None = None) -> tuple[li
     for j, v in sorted(((L.get("journeys") or {}).get("each") or {}).items()):
         if v.get("budget_s"):
             chk(j, v.get("s"), float(v["budget_s"]))
+    for k, v in sorted(((L.get("integration") or {}).get("sessions") or {}).items()):
+        if v.get("budget_s"):
+            chk(k, v.get("s"), float(v["budget_s"]))
     chk("integration", (L.get("integration") or {}).get("wall_s"), BUDGETS["integration"], full_like)
     chk("acceptance (integration + journeys)", (L.get("acceptance") or {}).get("wall_s"), BUDGETS["acceptance"], full_like)
     if meta.get("tier") == "pr" and not full_like:
@@ -490,12 +493,15 @@ def synthetic_budget_cases() -> dict:
         "e_full_31min_plus_build": budget_problems(meta(layers={"acceptance": {"wall_s": 31 * 60.0}, "build": {"wall_s": 600.0}}))[0],
         "f_pr_130s_new": budget_problems(meta(tier="pr", full_run=False, selection={"full": False}), 130.0)[0],
         "h_full_16min_integration": budget_problems(meta(layers={"integration": {"wall_s": 16 * 60.0}}))[0],
+        "i_session_over_its_budget": budget_problems(meta(layers={"integration": {"wall_s": 600.0, "sessions": {
+            "dng.session1": {"s": 95.0, "budget_s": 90}}}}))[0],
         "g_full_29min_plus_25min_build_gate": budget_problems(meta(layers={"acceptance": {"wall_s": 29 * 60.0},
                                                                           "build": {"wall_s": 900.0}, "gate": {"wall_s": 600.0}}))[0],
     }
     names = {"a_unit_121": "unit", "b_selection_11": "selection", "c_journey_pause_95": "journey.pause",
              "d_full_selection_pr_31min": "acceptance", "e_full_31min_plus_build": "acceptance",
-             "f_pr_130s_new": "new selected checks", "h_full_16min_integration": "integration"}
+             "f_pr_130s_new": "new selected checks", "h_full_16min_integration": "integration",
+             "i_session_over_its_budget": "dng.session1"}
     verdict = {k: bool(cases[k]) and any(n in p for p in cases[k]) for k, n in names.items()}
     verdict["g_passes"] = not cases["g_full_29min_plus_25min_build_gate"]
     return {"cases": cases, "verdict": verdict}

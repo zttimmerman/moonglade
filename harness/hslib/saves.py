@@ -691,9 +691,18 @@ def prepare_rich() -> dict:
                 m = re.search(r"current GUID: GUID Full: 0x([0-9a-fA-F]+)", "\n".join(info))
                 if not m:
                     continue
+                # test-pyramid (shared server): an earlier test may have killed this spawn; a dead one can't be
+                # tamed, so the rule's next candidate is tried (the GIVEN below still requires the pet)
+                hp = re.search(r"\(current\): (\d+)\.", "\n".join(info))
+                if hp and int(hp.group(1)) == 0:
+                    ev.setdefault("beasts_dead", []).append(beast["spawn_id"])
+                    continue
                 s.ws.set_selection(int(m.group(1), 16))
                 ev["pet_create"] = s.cmd(".pet create")
-                break
+                if db.query(f"SELECT id FROM character_pet WHERE owner = {g}", "characters") or \
+                        not any("select" in l.lower() for l in ev["pet_create"]):
+                    break
+                ev.setdefault("beasts_refused", []).append({"spawn_id": beast["spawn_id"], "reply": ev["pet_create"]})
         ev["money"] = _self_cmd(s, f".modify money {RICH_MONEY}")
         ev["additem"] = _self_cmd(s, f".additem {F.ITEM_ENTRY} 3")
         ev["quest"] = _self_cmd(s, f".quest add {F.QUEST_ID}")
