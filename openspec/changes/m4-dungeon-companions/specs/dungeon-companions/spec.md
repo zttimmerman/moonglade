@@ -1,26 +1,5 @@
 ## ADDED Requirements
 
-### Requirement: A dungeon party in one command
-The Moonglade addon SHALL provide `/mg party`. It fills the player's party to five with companions covering the roles the player's own talent spec doesn't (by default a tank, a healer and two damage dealers), and `/mg party clear` removes them. Each companion SHALL join within 3 levels of the player, in its role's talent spec, auto-geared, with its role's strategies. The slash command SHALL send only stock mod-playerbots commands, taken from one table in `MoongladeParty.lua`.
-
-#### Scenario: Party preset fills the roles
-- **GIVEN** the probe character (a damage-dealing spec) at a listed dungeon's target level, with no party
-- **WHEN** the probe sends, in order, the command list parsed from `MoongladeParty.lua` (the same table the slash command uses)
-- **THEN** within 90 s the probe's party lists 4 online companions. Exactly one has the `tank` combat strategy and one has `heal` or `holy heal` (read by whispering `co ?` to each and parsing the reply). The two others have `dps assist`, `threat` and `wait for attack`. Every companion's level is within 3 of the probe's, and every one has all its armour slots filled except shirt and tabard (read from `character_inventory`)
-- Check: `dng.party_preset`
-
-#### Scenario: Role-aware fill
-- **GIVEN** the probe character in a protection (tank) spec
-- **WHEN** it sends the party command list
-- **THEN** no companion has the `tank` strategy, one has a healing strategy, and three are damage dealers
-- Check: `dng.party_preset_tank_player`
-
-#### Scenario: Slash command in the real client
-- **GIVEN** a harness test character logged in with the real client (GUI tier)
-- **WHEN** `/mg party` is typed
-- **THEN** within 90 s the client's party frame shows four members, and `/mg party clear` empties it within 30 s
-- Check: `client.party_slash`
-
 ### Requirement: The tank holds the monsters
 In a dungeon fight the tank companion SHALL take the boss's attacks, and damage-dealing companions SHALL NOT pull it off.
 
