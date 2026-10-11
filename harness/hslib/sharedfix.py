@@ -49,16 +49,37 @@ def _b36(n: int) -> str:
             return out
 
 
+def _triple(name: str) -> bool:
+    """Three identical letters in a row, any case (AzerothCore refuses: CHAR_NAME_THREE_CONSECUTIVE)."""
+    n = name.lower()
+    return any(n[i] == n[i - 1] == n[i - 2] for i in range(2, len(n)))
+
+
+def valid_char_name(name: str) -> bool:
+    """AzerothCore's character-name rules the fixture relies on (ObjectMgr::CheckPlayerName at core 7f12e89):
+    letters only, 2..12 characters, no letter three times in a row."""
+    return 2 <= len(name) <= 12 and name.isascii() and name.isalpha() and not _triple(name)
+
+
+def identity_names(k: int) -> tuple[str, str] | None:
+    """The two character names for counter value k, or None when either full name would break a name rule (the
+    rule applies to the whole name, prefix and suffix included: stem "eftgxx" + "x" -> "Hseftgxxx")."""
+    stem = _letters(k)
+    char, alt = ("Hs" + stem + "x").capitalize(), ("Hs" + stem + "z").capitalize()
+    if not (valid_char_name(char) and valid_char_name(alt)) or char == alt:
+        return None
+    return char, alt
+
+
 def new_identity(run_tag: int) -> S.Identity:
     with _LOCK:
         while True:
             k = run_tag * 1000 + next(_COUNTER)
-            stem = _letters(k)
-            if not any(stem[i] == stem[i - 1] == stem[i - 2] for i in range(2, len(stem))):
+            names = identity_names(k)
+            if names is not None:
                 break
     acct = f"HSI{_b36(k)}".upper()[:16]
-    return S.Identity(acct, "hsi-" + _b36(k), ("Hs" + stem + "x")[:12].capitalize(),
-                      ("Hs" + stem + "z")[:12].capitalize())
+    return S.Identity(acct, "hsi-" + _b36(k), *names)
 
 
 def shared_state(own: set[str] = frozenset()) -> dict:
@@ -192,10 +213,18 @@ def bulk_identities(n: int, workers: int = 8, run_tag: int | None = None) -> dic
     run_tag = run_tag if run_tag is not None else int(time.time()) % 100000
     ids = [new_identity(run_tag) for _ in range(n)]
     t0 = time.time()
+
+    def safe(i):
+        # fail closed per identity: a setup error is reported for the test that would use it, never a crash
+        t1 = time.time()
+        try:
+            return prepare_identity(i)
+        except Exception as e:  # noqa: BLE001
+            return {"identity": i.user, "s": round(time.time() - t1, 2), "error": f"{type(e).__name__}: {e}"[:300]}
     with ThreadPoolExecutor(workers) as ex:
-        each = list(ex.map(prepare_identity, ids))
+        each = list(ex.map(safe, ids))
     return {"identities": ids, "wall_s": round(time.time() - t0, 2), "each_s": [e["s"] for e in each],
-            "workers": workers}
+            "workers": workers, "failed": {e["identity"]: e["error"] for e in each if e.get("error")}}
 
 
 def cleanup_stale() -> dict:

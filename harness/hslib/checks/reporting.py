@@ -15,7 +15,8 @@ CHECK_RE = re.compile(r"Check:\s*`([^`]+)`")
 HUMAN_RE = re.compile(r"\[human-verify\]\s*(\S.{10,})")
 REQ_RE = re.compile(r"^### Requirement:\s*(.+)$", re.M)
 POST_IDS = ("report.coverage", "report.schema", "report.full_run", "report.client_pristine", "report.timing",
-            "report.lanes", "report.unit_layer", "report.layer_budgets", "report.pr_average", "report.journeys")
+            "report.lanes", "report.unit_layer", "report.layer_budgets", "report.pr_average", "report.journeys",
+            "report.fixture_cleanup")
 
 
 ACTIVE_FILE = P.HARNESS / "active-changes"
@@ -248,6 +249,7 @@ def post_run(doc, selected_ids, t_start=None, leave_up=False, pristine_start=Non
     m = doc["meta"]
     out.append(PY.unit_layer_record(doc))
     out.append(PY.journeys_record(doc))
+    out.append(fixture_cleanup_record(doc))
     for r in out:
         r.setdefault("layer", "unit")          # the post-run reports start nothing: unit layer
     t0 = time.time()
@@ -281,6 +283,37 @@ def post_run(doc, selected_ids, t_start=None, leave_up=False, pristine_start=Non
     for r in out:
         r.setdefault("layer", "unit")
     return out
+
+
+def fixture_cleanup_problems(fx: dict | None) -> list[str]:
+    """The shared-server fixture's end-of-run cleanup (meta.fixture): an identity it couldn't set up, a cleanup that
+    errored or left errors, or identities created but never cleaned up."""
+    if not fx:
+        return []
+    probs = []
+    c = fx.get("cleanup")
+    made = bool(fx.get("identities")) or bool(fx.get("identity_setup_failures"))
+    if made and not c:
+        probs.append("the fixture's identities were never cleaned up")
+    if c and c.get("error"):
+        probs.append(f"fixture cleanup failed: {c['error']}"[:200])
+    if c and c.get("errors"):
+        probs.append(f"fixture cleanup errors: {c['errors'][:3]}"[:200])
+    if fx.get("identity_setup_failures"):
+        probs.append(f"fixture identity setup failed for {sorted(fx['identity_setup_failures'])}")
+    if fx.get("start_error"):
+        probs.append(f"fixture start failed: {fx['start_error']}"[:200])
+    return probs
+
+
+def fixture_cleanup_record(doc: dict) -> dict:
+    """report.fixture_cleanup: the shared-server fixture set up and removed its identities without an error."""
+    fx = doc["meta"].get("fixture")
+    probs = fixture_cleanup_problems(fx)
+    ok = not probs
+    return {"id": "report.fixture_cleanup", "capability": "harness-control", "status": "pass" if ok else "fail",
+            "evidence": {"fixture_ran": bool(fx), "cleanup": (fx or {}).get("cleanup"), "problems": probs},
+            "duration_s": 0.0, **({} if ok else {"message": "; ".join(probs)[:300]})}
 
 
 # ----------------------------------------------------------------------------- full-run timing

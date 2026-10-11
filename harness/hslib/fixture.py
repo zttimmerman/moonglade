@@ -35,6 +35,10 @@ class SharedServer:
         self.restarts: list[dict] = []
         self.fixtures: dict | None = None
         self.started = None
+        self.setup_errors: dict = {}     # check id -> {"account", "error"}: its identity's setup failed
+        self.failed_identities: list = []
+        self.start_error: str | None = None
+        self.cleanup: dict | None = None
 
     # -- run start (the first shared-server test): bulk identities and world facts, in parallel
     def _start(self, ctx):
@@ -42,21 +46,46 @@ class SharedServer:
         t0 = time.time()
         self.started = t0
         need = len(self.char_checks)
-        rec: dict = {"identities": need, "stale_cleanup": sharedfix.cleanup_stale()}
-        with ThreadPoolExecutor(2) as ex:
-            fb = ex.submit(sharedfix.bulk_identities, need, IDENTITY_WORKERS) if need else None
-            fw = ex.submit(C.world_facts_warm)
-            if fb is not None:
-                b = fb.result()
-                ids = b["identities"]
-                for c, i in zip(self.char_checks, ids):
-                    self.identities[c.id] = i
-                rec["identities_s"] = b["wall_s"]
-            rec["world_facts"] = fw.result()
+        rec: dict = {"identities": need}
+        try:
+            rec["stale_cleanup"] = sharedfix.cleanup_stale()
+            with ThreadPoolExecutor(2) as ex:
+                fb = ex.submit(sharedfix.bulk_identities, need, IDENTITY_WORKERS) if need else None
+                fw = ex.submit(C.world_facts_warm)
+                if fb is not None:
+                    b = fb.result()
+                    failed = b.get("failed") or {}
+                    for c, i in zip(self.char_checks, b["identities"]):
+                        if i.user in failed:
+                            self.setup_errors[c.id] = {"account": i.user, "error": failed[i.user]}
+                            self.failed_identities.append(i)
+                        else:
+                            self.identities[c.id] = i
+                    rec["identities_s"] = b["wall_s"]
+                    rec["identity_failures"] = self.setup_errors
+                rec["world_facts"] = fw.result()
+        except Exception as e:  # noqa: BLE001  fail closed: the tests needing the fixture fail with this evidence
+            self.start_error = f"{type(e).__name__}: {e}"[:300]
+            rec["error"] = self.start_error
         rec["wall_s"] = round(time.time() - t0, 2)
         self.fixtures = rec
         self.base = sharedfix.shared_state()
-        log(f"fixture: {need} identities, world facts {rec['world_facts'].get('from')} in {rec['wall_s']} s")
+        log(f"fixture: {need} identities ({len(self.setup_errors)} failed), world facts "
+            f"{(rec.get('world_facts') or {}).get('from')} in {rec['wall_s']} s"
+            + (f"; ERROR {self.start_error}" if self.start_error else ""))
+
+    def setup_failure(self, c) -> dict | None:
+        """The fail record for a character-scoped test whose identity couldn't be set up, or None."""
+        if not c.identity:
+            return None
+        why = self.setup_errors.get(c.id) or ({"error": self.start_error} if self.start_error else None)
+        if why is None and self.identities.get(c.id) is None:
+            why = {"error": "no fixture identity was created for this test"}
+        if why is None:
+            return None
+        return {"id": c.id, "capability": c.capability, "description": c.doc, "layer": c.layer, "status": "fail",
+                "message": f"fixture identity setup failed: {why.get('error')}"[:300],
+                "evidence": {"fixture_identity_setup": why}, "duration_s": 0.0}
 
     def _undo(self, ctx: dict) -> list:
         out = []
@@ -113,6 +142,9 @@ class SharedServer:
                                                    "layer": "integration"})
 
         def one(c):
+            bad = self.setup_failure(c)
+            if bad is not None:
+                return bad
             cx = dict(ctx, identity=self.identities.get(c.id)) if c.identity else ctx
             cx["undo"] = []
             ident = self.identities.get(c.id) if c.identity else None
@@ -146,19 +178,32 @@ class SharedServer:
         self._reset(recs, batch[0].profile, ctx)
         return recs
 
-    def finish(self, ctx: dict) -> dict:
+    def cleanup_identities(self) -> dict | None:
+        """Remove every identity this run created (through the server, so the stack must still be up). Runs once:
+        runner.execute calls it before the first check that brings the stack down (lifecycle.down and later), and
+        finish() at the end of the run if it hasn't run yet. An error is kept in the record (report.fixture_cleanup
+        fails on it)."""
         from . import sharedfix
-        cleanup = None
-        if self.identities:
-            try:
-                cleanup = sharedfix.cleanup_identities(list(self.identities.values()))
-            except Exception as e:  # noqa: BLE001
-                cleanup = {"error": f"{type(e).__name__}: {e}"}
+        if self.cleanup is not None:
+            return self.cleanup
+        idents = list(self.identities.values()) + list(self.failed_identities)
+        if not idents:
+            return None
+        try:
+            self.cleanup = sharedfix.cleanup_identities(idents)
+        except Exception as e:  # noqa: BLE001
+            self.cleanup = {"error": f"{type(e).__name__}: {e}"}
+        self.cleanup["at"] = time.time()
+        return self.cleanup
+
+    def finish(self, ctx: dict) -> dict:
+        cleanup = self.cleanup_identities()
         rs = [r["s"] for r in self.resets]
         return {"fixtures": self.fixtures, "resets": self.resets,
                 "reset_median_s": round(statistics.median(rs), 3) if rs else None,
                 "reset_max_s": max(rs) if rs else None, "leaks": self.leaks, "restarts": self.restarts,
                 "identities": {k: {"account": v.user, "characters": [v.char, v.alt]} for k, v in self.identities.items()},
+                "identity_setup_failures": self.setup_errors, "start_error": self.start_error,
                 "cleanup": cleanup}
 
 

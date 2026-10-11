@@ -310,6 +310,11 @@ def execute(checks: list, ctx: dict, ensure=None, quiet: bool = False, guard=Non
         if c.id == br_start and "start" not in (ctx.get("release_bracket") or {}):
             _bracket_fingerprint(ctx, "start", c.id, ensure)
         fx = ctx.get("fixture")
+        # the fixture's identities are removed through the server: before the first check that brings the stack
+        # down (lifecycle.down, then the cold journeys and the release bracket), never after it
+        if fx is not None and segment(c) >= 6 and getattr(fx, "base", None) is not None \
+                and hasattr(fx, "cleanup_identities"):
+            fx.cleanup_identities()
         batch = [c]
         if fx is not None and ctx.get("pool") and c.scope == "character" and c.layer == "integration":
             j = i + 1
