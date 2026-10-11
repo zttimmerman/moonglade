@@ -2,23 +2,23 @@
   "checks": {
     "app.backups_window": {
       "build_s": 0.0,
-      "duration_s": 141.22,
-      "run": "save-backups-verifier2",
-      "s": 141.22,
+      "duration_s": 141.51,
+      "run": "test-pyramid-part3",
+      "s": 141.51,
       "status_in_run": "pass"
     },
     "app.bundle_valid": {
       "build_s": 0.0,
-      "duration_s": 6.67,
-      "run": "save-backups-verifier2",
-      "s": 6.67,
+      "duration_s": 7.11,
+      "run": "test-pyramid-part3",
+      "s": 7.11,
       "status_in_run": "pass"
     },
     "app.handoff_focus": {
       "build_s": 0.0,
-      "duration_s": 0.03,
-      "run": "seamless-experience-verifier1",
-      "s": 0.03,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "app.icon": {
@@ -30,114 +30,114 @@
     },
     "app.launch_lifecycle": {
       "build_s": 0.0,
-      "duration_s": 40.85,
-      "run": "save-backups-verifier2",
-      "s": 40.85,
+      "duration_s": 55.2,
+      "run": "test-pyramid-part3",
+      "s": 55.2,
       "status_in_run": "pass"
     },
     "app.loading_stages": {
       "build_s": 0.0,
-      "duration_s": 0.03,
-      "run": "save-backups-verifier2",
-      "s": 0.03,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "app.loading_stages_warm": {
       "build_s": 0.0,
-      "duration_s": 35.29,
-      "run": "save-backups-verifier2",
-      "s": 35.29,
+      "duration_s": 36.44,
+      "run": "test-pyramid-part3",
+      "s": 36.44,
       "status_in_run": "pass"
     },
     "app.names_running": {
       "build_s": 0.0,
-      "duration_s": 40.94,
-      "run": "save-backups-verifier2",
-      "s": 40.94,
+      "duration_s": 51.38,
+      "run": "test-pyramid-part3",
+      "s": 51.38,
       "status_in_run": "pass"
     },
     "app.relocatable": {
       "build_s": 0.0,
-      "duration_s": 40.97,
-      "run": "save-backups-verifier2",
-      "s": 40.97,
+      "duration_s": 40.88,
+      "run": "test-pyramid-part3",
+      "s": 40.88,
       "status_in_run": "pass"
     },
     "app.reopen_during_loading": {
       "build_s": 0.0,
-      "duration_s": 0.03,
-      "run": "seamless-experience-verifier1",
-      "s": 0.03,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "app.reopen_focuses_game": {
       "build_s": 0.0,
-      "duration_s": 0.03,
-      "run": "seamless-experience-verifier1",
-      "s": 0.03,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "app.reopen_unminimizes": {
       "build_s": 0.0,
-      "duration_s": 0.03,
-      "run": "seamless-experience-verifier1",
-      "s": 0.03,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "app.shim_scope": {
       "build_s": 0.0,
-      "duration_s": 0.05,
-      "run": "save-backups-verifier2",
-      "s": 0.05,
-      "status_in_run": "pass"
+      "duration_s": 0.02,
+      "run": "test-pyramid-part3",
+      "s": 0.02,
+      "status_in_run": "fail"
     },
     "app.shutdown_window": {
       "build_s": 0.0,
-      "duration_s": 43.8,
-      "run": "save-backups-verifier2",
-      "s": 43.8,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "app.single_dock_icon": {
       "build_s": 0.0,
-      "duration_s": 55.21,
-      "run": "save-backups-verifier2",
-      "s": 55.21,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "app.single_instance": {
       "build_s": 0.0,
-      "duration_s": 80.27,
-      "run": "save-backups-verifier2",
-      "s": 80.27,
+      "duration_s": 38.33,
+      "run": "test-pyramid-part3",
+      "s": 38.33,
       "status_in_run": "pass"
     },
     "app.startup_failure": {
       "build_s": 0.0,
-      "duration_s": 11.05,
-      "run": "save-backups-verifier2",
-      "s": 11.05,
+      "duration_s": 12.09,
+      "run": "test-pyramid-part3",
+      "s": 12.09,
       "status_in_run": "pass"
     },
     "backups.failure_nonblocking": {
       "build_s": 0.0,
-      "duration_s": 79.46,
-      "run": "save-backups-verifier2",
-      "s": 79.46,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "backups.kill_safe": {
       "build_s": 0.0,
-      "duration_s": 155.84,
-      "run": "save-backups-verifier2",
-      "s": 155.84,
+      "duration_s": 144.55,
+      "run": "test-pyramid-part3",
+      "s": 144.55,
       "status_in_run": "pass"
     },
     "backups.on_quit": {
       "build_s": 0.0,
-      "duration_s": 67.49,
-      "run": "save-backups-verifier2",
-      "s": 67.49,
+      "duration_s": 73.51,
+      "run": "test-pyramid-part3",
+      "s": 73.51,
       "status_in_run": "pass"
     },
     "backups.player_untouched": {
@@ -149,16 +149,16 @@
     },
     "backups.restore_refusals": {
       "build_s": 0.0,
-      "duration_s": 86.04,
-      "run": "save-backups-verifier2",
-      "s": 86.04,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "backups.restore_roundtrip": {
       "build_s": 0.0,
-      "duration_s": 97.29,
-      "run": "save-backups-verifier2",
-      "s": 97.29,
+      "duration_s": 95.4,
+      "run": "test-pyramid-part3",
+      "s": 95.4,
       "status_in_run": "pass"
     },
     "backups.rotation": {
@@ -205,9 +205,9 @@
     },
     "build.playerbots_active": {
       "build_s": 0.0,
-      "duration_s": 0.09,
-      "run": "save-backups-verifier2",
-      "s": 0.09,
+      "duration_s": 0.03,
+      "run": "test-pyramid-part3",
+      "s": 0.03,
       "status_in_run": "pass"
     },
     "client.build_refuses_pristine": {
@@ -219,9 +219,9 @@
     },
     "client.config_gate": {
       "build_s": 0.0,
-      "duration_s": 68.26,
-      "run": "save-backups-verifier2",
-      "s": 68.26,
+      "duration_s": 18.24,
+      "run": "test-pyramid-part3",
+      "s": 18.24,
       "status_in_run": "pass"
     },
     "client.config_gen": {
@@ -233,9 +233,9 @@
     },
     "client.first_start_settings": {
       "build_s": 0.0,
-      "duration_s": 72.24,
-      "run": "test-loop-speedups",
-      "s": 72.24,
+      "duration_s": 3.34,
+      "run": "test-pyramid-part3",
+      "s": 3.34,
       "status_in_run": "pass"
     },
     "client.inspect": {
@@ -247,16 +247,16 @@
     },
     "client.launch_smoke": {
       "build_s": 0.0,
-      "duration_s": 39.72,
-      "run": "save-backups-verifier2",
-      "s": 39.72,
+      "duration_s": 38.49,
+      "run": "test-pyramid-part3",
+      "s": 38.49,
       "status_in_run": "pass"
     },
     "client.login_text_clean": {
       "build_s": 0.0,
-      "duration_s": 31.94,
-      "run": "seamless-experience",
-      "s": 31.94,
+      "duration_s": 31.7,
+      "run": "test-pyramid-part3",
+      "s": 31.7,
       "status_in_run": "pass"
     },
     "client.patch0001_recorded": {
@@ -265,6 +265,13 @@
       "run": "save-backups-verifier2",
       "s": 0.04,
       "status_in_run": "pass"
+    },
+    "client.pause_menu": {
+      "build_s": 0.0,
+      "duration_s": 77.8,
+      "run": "test-pyramid-part3",
+      "s": 77.8,
+      "status_in_run": "fail"
     },
     "client.play_build": {
       "build_s": 0.0,
@@ -282,9 +289,9 @@
     },
     "client.player_client_not_rebuilt": {
       "build_s": 0.0,
-      "duration_s": 37.23,
-      "run": "test-loop-speedups",
-      "s": 37.23,
+      "duration_s": 37.42,
+      "run": "test-pyramid-part3",
+      "s": 37.42,
       "status_in_run": "pass"
     },
     "client.player_config_untouched": {
@@ -303,37 +310,37 @@
     },
     "client.protocol_badpass": {
       "build_s": 0.0,
-      "duration_s": 5.32,
-      "run": "save-backups-verifier2",
-      "s": 5.32,
+      "duration_s": 5.25,
+      "run": "test-pyramid-part3",
+      "s": 5.25,
       "status_in_run": "pass"
     },
     "client.protocol_probe": {
       "build_s": 0.0,
-      "duration_s": 0.58,
-      "run": "save-backups-verifier2",
-      "s": 0.58,
+      "duration_s": 0.55,
+      "run": "test-pyramid-part3",
+      "s": 0.55,
       "status_in_run": "pass"
     },
     "client.real_client_refused": {
       "build_s": 0.0,
-      "duration_s": 2.49,
-      "run": "save-backups-verifier2",
-      "s": 2.49,
+      "duration_s": 3.57,
+      "run": "test-pyramid-part3",
+      "s": 3.57,
       "status_in_run": "pass"
     },
     "client.realmlist": {
       "build_s": 0.0,
-      "duration_s": 0.08,
-      "run": "save-backups-verifier2",
-      "s": 0.08,
+      "duration_s": 0.02,
+      "run": "test-pyramid-part3",
+      "s": 0.02,
       "status_in_run": "pass"
     },
     "client.resolution_default": {
       "build_s": 0.0,
-      "duration_s": 73.23,
-      "run": "save-backups-verifier2",
-      "s": 73.23,
+      "duration_s": 27.24,
+      "run": "test-pyramid-part3",
+      "s": 27.24,
       "status_in_run": "pass"
     },
     "client.resolution_gate": {
@@ -345,51 +352,51 @@
     },
     "client.stock_mode": {
       "build_s": 0.0,
-      "duration_s": 108.43,
-      "run": "save-backups-verifier2",
-      "s": 108.43,
+      "duration_s": 33.32,
+      "run": "test-pyramid-part3",
+      "s": 33.32,
       "status_in_run": "pass"
     },
     "client.wording_addon": {
       "build_s": 0.0,
-      "duration_s": 0.06,
-      "run": "seamless-experience",
-      "s": 0.06,
+      "duration_s": 0.03,
+      "run": "test-pyramid-part3",
+      "s": 0.03,
       "status_in_run": "pass"
     },
     "comp.add_remove": {
       "build_s": 0.0,
-      "duration_s": 6.02,
-      "run": "save-backups-verifier2",
-      "s": 6.02,
+      "duration_s": 7.03,
+      "run": "test-pyramid-part3",
+      "s": 7.03,
       "status_in_run": "pass"
     },
     "comp.assists": {
       "build_s": 0.0,
-      "duration_s": 59.44,
-      "run": "save-backups-verifier2",
-      "s": 59.44,
+      "duration_s": 32.51,
+      "run": "test-pyramid-part3",
+      "s": 32.51,
       "status_in_run": "pass"
     },
     "comp.follows": {
       "build_s": 0.0,
-      "duration_s": 29.17,
-      "run": "save-backups-verifier2",
-      "s": 29.17,
+      "duration_s": 33.05,
+      "run": "test-pyramid-part3",
+      "s": 33.05,
       "status_in_run": "pass"
     },
     "comp.quest_shared": {
       "build_s": 0.0,
-      "duration_s": 6.35,
-      "run": "save-backups-verifier2",
-      "s": 6.35,
+      "duration_s": 6.63,
+      "run": "test-pyramid-part3",
+      "s": 6.63,
       "status_in_run": "pass"
     },
     "core.login_logout_race": {
       "build_s": 0.0,
-      "duration_s": 5.47,
-      "run": "save-backups-verifier2",
-      "s": 5.47,
+      "duration_s": 5.68,
+      "run": "test-pyramid-part3",
+      "s": 5.68,
       "status_in_run": "pass"
     },
     "core.login_logout_race_baseline": {
@@ -413,326 +420,537 @@
       "s": 0.63,
       "status_in_run": "pass"
     },
+    "dng.session1": {
+      "build_s": 0.0,
+      "duration_s": 83.12,
+      "run": "test-pyramid-part3",
+      "s": 83.12,
+      "status_in_run": "pass"
+    },
+    "dng.session2": {
+      "build_s": 0.0,
+      "duration_s": 64.51,
+      "run": "test-pyramid-part3",
+      "s": 64.51,
+      "status_in_run": "pass"
+    },
     "era.default_on": {
       "build_s": 0.0,
-      "duration_s": 0.85,
-      "run": "save-backups-verifier2",
-      "s": 0.85,
+      "duration_s": 0.8,
+      "run": "test-pyramid-part3",
+      "s": 0.8,
       "status_in_run": "pass"
     },
     "era.elites": {
       "build_s": 0.0,
-      "duration_s": 9.79,
-      "run": "save-backups-verifier2",
-      "s": 9.79,
+      "duration_s": 9.89,
+      "run": "test-pyramid-part3",
+      "s": 9.89,
       "status_in_run": "pass"
     },
     "era.mounts": {
       "build_s": 0.0,
-      "duration_s": 5.02,
-      "run": "save-backups-verifier2",
-      "s": 5.02,
+      "duration_s": 5.13,
+      "run": "test-pyramid-part3",
+      "s": 5.13,
       "status_in_run": "pass"
     },
     "era.quest_xp": {
       "build_s": 0.0,
-      "duration_s": 1.42,
-      "run": "save-backups-verifier2",
-      "s": 1.42,
+      "duration_s": 1.3,
+      "run": "test-pyramid-part3",
+      "s": 1.3,
       "status_in_run": "pass"
     },
     "era.scope_guard": {
       "build_s": 0.0,
-      "duration_s": 45.77,
-      "run": "save-backups-verifier2",
-      "s": 45.77,
+      "duration_s": 57.1,
+      "run": "test-pyramid-part3",
+      "s": 57.1,
+      "status_in_run": "pass"
+    },
+    "era.session_toggle": {
+      "build_s": 0.0,
+      "duration_s": 57.1,
+      "run": "test-pyramid-part3",
+      "s": 57.1,
       "status_in_run": "pass"
     },
     "era.sql_deterministic": {
       "build_s": 0.0,
-      "duration_s": 4.01,
-      "run": "save-backups-verifier2",
-      "s": 4.01,
+      "duration_s": 4.02,
+      "run": "test-pyramid-part3",
+      "s": 4.02,
       "status_in_run": "pass"
     },
     "era.toggle_roundtrip": {
       "build_s": 0.0,
-      "duration_s": 49.97,
-      "run": "save-backups-verifier2",
-      "s": 49.97,
+      "duration_s": 57.1,
+      "run": "test-pyramid-part3",
+      "s": 57.1,
       "status_in_run": "pass"
     },
     "era.xp_curve": {
       "build_s": 0.0,
-      "duration_s": 0.91,
-      "run": "save-backups-verifier2",
-      "s": 0.91,
+      "duration_s": 0.86,
+      "run": "test-pyramid-part3",
+      "s": 0.86,
+      "status_in_run": "pass"
+    },
+    "firstlaunch.client_refusals": {
+      "build_s": 0.0,
+      "duration_s": 8.46,
+      "run": "test-pyramid-part3",
+      "s": 8.46,
       "status_in_run": "pass"
     },
     "fixture.account_character": {
       "build_s": 0.0,
-      "duration_s": 0.56,
-      "run": "save-backups-verifier2",
-      "s": 0.56,
+      "duration_s": 0.51,
+      "run": "test-pyramid-part3",
+      "s": 0.51,
       "status_in_run": "pass"
     },
     "fixture.add_item": {
       "build_s": 0.0,
-      "duration_s": 0.34,
-      "run": "save-backups-verifier2",
-      "s": 0.34,
+      "duration_s": 0.31,
+      "run": "test-pyramid-part3",
+      "s": 0.31,
       "status_in_run": "pass"
     },
     "fixture.instant_logout": {
       "build_s": 0.0,
-      "duration_s": 1.08,
-      "run": "save-backups-verifier2",
-      "s": 1.08,
+      "duration_s": 1.03,
+      "run": "test-pyramid-part3",
+      "s": 1.03,
       "status_in_run": "pass"
     },
     "fixture.level": {
       "build_s": 0.0,
-      "duration_s": 0.35,
-      "run": "save-backups-verifier2",
-      "s": 0.35,
+      "duration_s": 0.3,
+      "run": "test-pyramid-part3",
+      "s": 0.3,
       "status_in_run": "pass"
     },
     "fixture.start_quest": {
       "build_s": 0.0,
-      "duration_s": 0.81,
-      "run": "save-backups-verifier2",
-      "s": 0.81,
+      "duration_s": 0.78,
+      "run": "test-pyramid-part3",
+      "s": 0.78,
       "status_in_run": "pass"
     },
     "fixture.teleport": {
       "build_s": 0.0,
-      "duration_s": 0.32,
-      "run": "save-backups-verifier2",
-      "s": 0.32,
+      "duration_s": 0.28,
+      "run": "test-pyramid-part3",
+      "s": 0.28,
       "status_in_run": "pass"
     },
     "gm.invalid": {
       "build_s": 0.0,
       "duration_s": 0.15,
-      "run": "save-backups-verifier2",
+      "run": "test-pyramid-part3",
       "s": 0.15,
       "status_in_run": "pass"
     },
     "gm.server_info": {
       "build_s": 0.0,
       "duration_s": 0.14,
-      "run": "save-backups-verifier2",
+      "run": "test-pyramid-part3",
       "s": 0.14,
       "status_in_run": "pass"
     },
     "harness.prefix_scope": {
       "build_s": 0.0,
-      "duration_s": 5.11,
-      "run": "save-backups-verifier2",
-      "s": 5.11,
+      "duration_s": 4.54,
+      "run": "test-pyramid-part3",
+      "s": 4.54,
+      "status_in_run": "pass"
+    },
+    "journey.app_desktop": {
+      "build_s": 0.0,
+      "derived": "measured journey.app_desktop minus its app.backups_window child",
+      "duration_s": 327.35,
+      "run": "test-pyramid-part3",
+      "s": 185.84,
+      "status_in_run": "fail"
+    },
+    "journey.first_play": {
+      "build_s": 0.0,
+      "duration_s": 126.98,
+      "run": "test-pyramid-part3",
+      "s": 126.98,
+      "status_in_run": "pass"
+    },
+    "journey.login_recovery": {
+      "build_s": 0.0,
+      "duration_s": 147.81,
+      "run": "test-pyramid-part3",
+      "s": 147.81,
+      "status_in_run": "pass"
+    },
+    "journey.pause": {
+      "build_s": 0.0,
+      "duration_s": 77.85,
+      "run": "test-pyramid-part3",
+      "s": 77.85,
+      "status_in_run": "fail"
+    },
+    "journey.saves": {
+      "build_s": 0.0,
+      "duration_s": 190.76,
+      "run": "test-pyramid-part3",
+      "s": 190.76,
+      "status_in_run": "pass"
+    },
+    "journey.stock_client": {
+      "build_s": 0.0,
+      "duration_s": 33.45,
+      "run": "test-pyramid-part3",
+      "s": 33.45,
       "status_in_run": "pass"
     },
     "lifecycle.down": {
       "build_s": 0.0,
-      "duration_s": 5.93,
-      "run": "save-backups-verifier2",
-      "s": 5.93,
+      "duration_s": 6.0,
+      "run": "test-pyramid-part3",
+      "s": 6.0,
       "status_in_run": "pass"
     },
     "lifecycle.failfast": {
       "build_s": 0.0,
-      "duration_s": 6.38,
-      "run": "save-backups-verifier2",
-      "s": 6.38,
+      "duration_s": 6.39,
+      "run": "test-pyramid-part3",
+      "s": 6.39,
       "status_in_run": "pass"
     },
     "lifecycle.idempotent": {
       "build_s": 0.0,
-      "duration_s": 0.68,
-      "run": "save-backups-verifier2",
-      "s": 0.68,
+      "duration_s": 0.65,
+      "run": "test-pyramid-part3",
+      "s": 0.65,
       "status_in_run": "pass"
     },
     "lifecycle.isolated": {
       "build_s": 0.0,
-      "duration_s": 0.13,
-      "run": "save-backups-verifier2",
-      "s": 0.13,
+      "duration_s": 0.08,
+      "run": "test-pyramid-part3",
+      "s": 0.08,
       "status_in_run": "pass"
     },
     "lifecycle.persist": {
       "build_s": 0.0,
-      "duration_s": 24.91,
-      "run": "save-backups-verifier2",
-      "s": 24.91,
+      "duration_s": 25.03,
+      "run": "test-pyramid-part3",
+      "s": 25.03,
       "status_in_run": "pass"
     },
     "lifecycle.up": {
       "build_s": 0.0,
-      "duration_s": 18.64,
-      "run": "save-backups-verifier2",
-      "s": 18.64,
+      "duration_s": 18.75,
+      "run": "test-pyramid-part3",
+      "s": 18.75,
+      "status_in_run": "pass"
+    },
+    "lock.companion_unstuck": {
+      "build_s": 0.0,
+      "duration_s": 29.27,
+      "run": "test-pyramid-part3",
+      "s": 29.27,
+      "status_in_run": "pass"
+    },
+    "lock.fresh_after_clear": {
+      "build_s": 0.0,
+      "duration_s": 39.28,
+      "run": "test-pyramid-part3",
+      "s": 39.28,
+      "status_in_run": "pass"
+    },
+    "lock.heroic_fresh_after_clear": {
+      "build_s": 0.0,
+      "duration_s": 42.74,
+      "run": "test-pyramid-part3",
+      "s": 42.74,
+      "status_in_run": "pass"
+    },
+    "lock.heroic_partial_kept": {
+      "build_s": 0.0,
+      "duration_s": 20.82,
+      "run": "test-pyramid-part3",
+      "s": 20.82,
+      "status_in_run": "pass"
+    },
+    "lock.login_inside_kept": {
+      "build_s": 0.0,
+      "duration_s": 37.48,
+      "run": "test-pyramid-part3",
+      "s": 37.48,
+      "status_in_run": "pass"
+    },
+    "lock.no_hourly_cap": {
+      "build_s": 0.0,
+      "duration_s": 33.66,
+      "run": "test-pyramid-part3",
+      "s": 33.66,
+      "status_in_run": "pass"
+    },
+    "lock.partial_kept": {
+      "build_s": 0.0,
+      "duration_s": 8.56,
+      "run": "test-pyramid-part3",
+      "s": 8.56,
+      "status_in_run": "pass"
+    },
+    "lock.partial_kept_dismissed": {
+      "build_s": 0.0,
+      "duration_s": 12.95,
+      "run": "test-pyramid-part3",
+      "s": 12.95,
       "status_in_run": "pass"
     },
     "login.auto_login": {
       "build_s": 0.0,
-      "duration_s": 79.83,
-      "run": "save-backups-verifier2",
-      "s": 79.83,
+      "duration_s": 1.26,
+      "run": "test-pyramid-part3",
+      "s": 1.26,
       "status_in_run": "pass"
     },
     "login.backdrop_choice": {
       "build_s": 0.0,
-      "duration_s": 0.02,
-      "run": "save-backups-verifier2",
-      "s": 0.02,
+      "duration_s": 50.91,
+      "run": "test-pyramid-part3",
+      "s": 50.91,
       "status_in_run": "pass"
     },
     "login.cancel_shows_list": {
       "build_s": 0.0,
-      "duration_s": 151.62,
-      "run": "save-backups-verifier2",
-      "s": 151.62,
+      "duration_s": 0.03,
+      "run": "test-pyramid-part3",
+      "s": 0.03,
       "status_in_run": "pass"
     },
     "login.charselect_layout": {
       "build_s": 0.0,
-      "duration_s": 0.04,
-      "run": "test-loop-speedups",
-      "s": 0.04,
+      "duration_s": 0.01,
+      "run": "test-pyramid-part3",
+      "s": 0.01,
       "status_in_run": "pass"
     },
     "login.charselect_wording": {
       "build_s": 0.0,
-      "duration_s": 0.03,
-      "run": "seamless-experience",
-      "s": 0.03,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "login.continue_context": {
       "build_s": 0.0,
-      "duration_s": 1.01,
-      "run": "save-backups-verifier2",
-      "s": 1.01,
+      "duration_s": 1.14,
+      "run": "test-pyramid-part3",
+      "s": 1.14,
       "status_in_run": "pass"
     },
     "login.fresh_menu_waits": {
       "build_s": 0.0,
-      "duration_s": 0.03,
-      "run": "save-backups-verifier2",
-      "s": 0.03,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "login.friendly_errors": {
       "build_s": 0.0,
-      "duration_s": 123.4,
-      "run": "seamless-experience",
-      "s": 123.4,
+      "duration_s": 96.75,
+      "run": "test-pyramid-part3",
+      "s": 96.75,
       "status_in_run": "pass"
     },
     "login.loading_overlay": {
       "build_s": 0.0,
-      "duration_s": 73.7,
-      "run": "seamless-experience",
-      "s": 73.7,
+      "duration_s": 70.44,
+      "run": "test-pyramid-part3",
+      "s": 70.44,
       "status_in_run": "pass"
     },
     "login.no_glue_errors": {
       "build_s": 0.0,
-      "duration_s": 0.02,
-      "run": "save-backups-verifier2",
-      "s": 0.02,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "login.overlay_progress": {
       "build_s": 0.0,
-      "duration_s": 0.04,
-      "run": "test-loop-speedups",
-      "s": 0.04,
+      "duration_s": 0.01,
+      "run": "test-pyramid-part3",
+      "s": 0.01,
       "status_in_run": "pass"
     },
     "login.overlay_progress_reload": {
       "build_s": 0.0,
-      "duration_s": 0.03,
-      "run": "test-loop-speedups",
-      "s": 0.03,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
+      "status_in_run": "pass"
+    },
+    "pause.aura_frozen": {
+      "build_s": 0.0,
+      "duration_s": 40.9,
+      "run": "test-pyramid-part3",
+      "s": 40.9,
+      "status_in_run": "pass"
+    },
+    "pause.bots_frozen": {
+      "build_s": 0.0,
+      "duration_s": 40.9,
+      "run": "test-pyramid-part3",
+      "s": 40.9,
+      "status_in_run": "pass"
+    },
+    "pause.cast_cancelled": {
+      "build_s": 0.0,
+      "duration_s": 40.9,
+      "run": "test-pyramid-part3",
+      "s": 40.9,
+      "status_in_run": "pass"
+    },
+    "pause.combat_frozen": {
+      "build_s": 0.0,
+      "duration_s": 40.9,
+      "run": "test-pyramid-part3",
+      "s": 40.9,
+      "status_in_run": "pass"
+    },
+    "pause.cooldown_frozen": {
+      "build_s": 0.0,
+      "duration_s": 40.9,
+      "run": "test-pyramid-part3",
+      "s": 40.9,
+      "status_in_run": "pass"
+    },
+    "pause.disabled_noop": {
+      "build_s": 0.0,
+      "duration_s": 5.11,
+      "run": "test-pyramid-part3",
+      "s": 5.11,
+      "status_in_run": "pass"
+    },
+    "pause.disconnect_unpauses": {
+      "build_s": 0.0,
+      "duration_s": 4.31,
+      "run": "test-pyramid-part3",
+      "s": 4.31,
+      "status_in_run": "pass"
+    },
+    "pause.freeze_matrix": {
+      "build_s": 0.0,
+      "duration_s": 43.28,
+      "run": "test-pyramid-part3",
+      "s": 43.28,
+      "status_in_run": "pass"
+    },
+    "pause.logout_unpauses": {
+      "build_s": 0.0,
+      "duration_s": 21.8,
+      "run": "test-pyramid-part3",
+      "s": 21.8,
+      "status_in_run": "pass"
+    },
+    "pause.refused_on_taxi": {
+      "build_s": 0.0,
+      "duration_s": 11.68,
+      "run": "test-pyramid-part3",
+      "s": 11.68,
+      "status_in_run": "pass"
+    },
+    "pause.respawn_frozen": {
+      "build_s": 0.0,
+      "duration_s": 47.91,
+      "run": "test-pyramid-part3",
+      "s": 47.91,
       "status_in_run": "pass"
     },
     "play.client_crash_cleanup": {
       "build_s": 0.0,
-      "duration_s": 33.59,
-      "run": "save-backups-verifier2",
-      "s": 33.59,
+      "duration_s": 33.18,
+      "run": "test-pyramid-part3",
+      "s": 33.18,
+      "status_in_run": "pass"
+    },
+    "play.cold_sessions": {
+      "build_s": 0.0,
+      "duration_s": 333.75,
+      "run": "test-pyramid-part3",
+      "s": 333.75,
       "status_in_run": "pass"
     },
     "play.dock_identity": {
       "build_s": 0.0,
-      "duration_s": 39.64,
-      "run": "save-backups-verifier2",
-      "s": 39.64,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "play.interrupt_clean_exit": {
       "build_s": 0.0,
-      "duration_s": 62.89,
-      "run": "save-backups-verifier2",
-      "s": 62.89,
+      "duration_s": 35.36,
+      "run": "test-pyramid-part3",
+      "s": 35.36,
       "status_in_run": "pass"
     },
     "play.loop_clean_exit": {
       "build_s": 0.0,
-      "duration_s": 39.19,
-      "run": "save-backups-verifier2",
-      "s": 39.19,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "play.offline": {
       "build_s": 0.0,
-      "duration_s": 53.6,
-      "run": "save-backups-verifier2",
-      "s": 53.6,
+      "duration_s": 108.74,
+      "run": "test-pyramid-part3",
+      "s": 108.74,
       "status_in_run": "pass"
     },
     "play.player_account": {
       "build_s": 0.0,
-      "duration_s": 95.74,
-      "run": "save-backups-verifier2",
-      "s": 95.74,
+      "duration_s": 2.23,
+      "run": "test-pyramid-part3",
+      "s": 2.23,
       "status_in_run": "pass"
     },
     "play.player_account_untouched": {
       "build_s": 0.0,
-      "duration_s": 1.14,
-      "run": "save-backups-verifier2",
-      "s": 1.14,
+      "duration_s": 1.11,
+      "run": "test-pyramid-part3",
+      "s": 1.11,
       "status_in_run": "pass"
     },
     "play.single_instance": {
       "build_s": 0.0,
-      "duration_s": 37.24,
-      "run": "save-backups-verifier2",
-      "s": 37.24,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "play.stage_lines": {
       "build_s": 0.0,
-      "duration_s": 0.09,
-      "run": "save-backups-verifier2",
-      "s": 0.09,
+      "duration_s": 0.06,
+      "run": "test-pyramid-part3",
+      "s": 0.06,
       "status_in_run": "pass"
     },
     "play.startup_failure": {
       "build_s": 0.0,
-      "duration_s": 8.58,
-      "run": "save-backups-verifier2",
-      "s": 8.58,
+      "duration_s": 8.32,
+      "run": "test-pyramid-part3",
+      "s": 8.32,
       "status_in_run": "pass"
     },
     "play.world_progress": {
       "build_s": 0.0,
-      "duration_s": 0.03,
-      "run": "save-backups-verifier2",
-      "s": 0.03,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
       "status_in_run": "pass"
     },
     "power.bootstrap_resume": {
@@ -819,6 +1037,27 @@
       "s": 0.77,
       "status_in_run": "pass"
     },
+    "release.pins": {
+      "build_s": 0.0,
+      "duration_s": 1.9,
+      "run": "test-pyramid-part3",
+      "s": 1.9,
+      "status_in_run": "pass"
+    },
+    "release.player_data_untouched": {
+      "build_s": 0.0,
+      "duration_s": 4.86,
+      "run": "test-pyramid-part3",
+      "s": 4.86,
+      "status_in_run": "pass"
+    },
+    "release.test_switches_refused": {
+      "build_s": 0.0,
+      "duration_s": 5.52,
+      "run": "test-pyramid-part3",
+      "s": 5.52,
+      "status_in_run": "pass"
+    },
     "repo.agent_guard_hook": {
       "build_s": 0.0,
       "duration_s": 2.23,
@@ -842,16 +1081,16 @@
     },
     "report.client_pristine": {
       "build_s": 0.0,
-      "duration_s": 0.7,
-      "run": "test-loop-speedups",
-      "s": 0.7,
+      "duration_s": 0.05,
+      "run": "test-pyramid-part3",
+      "s": 0.05,
       "status_in_run": "pass"
     },
     "report.coverage": {
       "build_s": 0.0,
-      "duration_s": 0.01,
-      "run": "save-backups-verifier2",
-      "s": 0.01,
+      "duration_s": 0.06,
+      "run": "test-pyramid-part3",
+      "s": 0.06,
       "status_in_run": "pass"
     },
     "report.full_run": {
@@ -875,6 +1114,13 @@
       "s": 11.22,
       "status_in_run": "pass"
     },
+    "report.lanes": {
+      "build_s": 0.0,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
+      "status_in_run": "pass"
+    },
     "report.last_full_run": {
       "build_s": 0.0,
       "duration_s": 0.15,
@@ -891,9 +1137,268 @@
     },
     "report.schema": {
       "build_s": 0.0,
+      "duration_s": 0.02,
+      "run": "test-pyramid-part3",
+      "s": 0.02,
+      "status_in_run": "pass"
+    },
+    "saves.atomic": {
+      "build_s": 0.0,
+      "duration_s": 18.46,
+      "run": "test-pyramid-part3",
+      "s": 18.46,
+      "status_in_run": "pass"
+    },
+    "saves.autosave_triggers": {
+      "build_s": 0.0,
+      "duration_s": 50.69,
+      "run": "test-pyramid-part3",
+      "s": 50.69,
+      "status_in_run": "pass"
+    },
+    "saves.bots_skip": {
+      "build_s": 0.0,
+      "duration_s": 21.79,
+      "run": "test-pyramid-part3",
+      "s": 21.79,
+      "status_in_run": "pass"
+    },
+    "saves.inworld_list": {
+      "build_s": 0.0,
+      "duration_s": 12.22,
+      "run": "test-pyramid-part3",
+      "s": 12.22,
+      "status_in_run": "pass"
+    },
+    "saves.inworld_load": {
+      "build_s": 0.0,
+      "duration_s": 3.5,
+      "run": "test-pyramid-part3",
+      "s": 3.5,
+      "status_in_run": "pass"
+    },
+    "saves.item_ids_fresh": {
+      "build_s": 0.0,
+      "duration_s": 10.79,
+      "run": "test-pyramid-part3",
+      "s": 10.79,
+      "status_in_run": "pass"
+    },
+    "saves.list_wording": {
+      "build_s": 0.0,
+      "duration_s": 1.78,
+      "run": "test-pyramid-part3",
+      "s": 1.78,
+      "status_in_run": "pass"
+    },
+    "saves.live_charselect_list": {
+      "build_s": 0.0,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
+      "status_in_run": "pass"
+    },
+    "saves.live_charselect_load": {
+      "build_s": 0.0,
+      "duration_s": 118.86,
+      "run": "test-pyramid-part3",
+      "s": 118.86,
+      "status_in_run": "pass"
+    },
+    "saves.load_atomic": {
+      "build_s": 0.0,
+      "duration_s": 3.05,
+      "run": "test-pyramid-part3",
+      "s": 3.05,
+      "status_in_run": "pass"
+    },
+    "saves.load_ordering": {
+      "build_s": 0.0,
+      "duration_s": 82.44,
+      "run": "test-pyramid-part3",
+      "s": 82.44,
+      "status_in_run": "pass"
+    },
+    "saves.load_refusals": {
+      "build_s": 0.0,
+      "duration_s": 23.46,
+      "run": "test-pyramid-part3",
+      "s": 23.46,
+      "status_in_run": "pass"
+    },
+    "saves.manual": {
+      "build_s": 0.0,
+      "duration_s": 8.09,
+      "run": "test-pyramid-part3",
+      "s": 8.09,
+      "status_in_run": "pass"
+    },
+    "saves.player_untouched": {
+      "build_s": 0.0,
+      "duration_s": 0.04,
+      "run": "test-pyramid-part3",
+      "s": 0.04,
+      "status_in_run": "error"
+    },
+    "saves.quick_slot": {
+      "build_s": 0.0,
+      "duration_s": 4.0,
+      "run": "test-pyramid-part3",
+      "s": 4.0,
+      "status_in_run": "pass"
+    },
+    "saves.refused_in_combat": {
+      "build_s": 0.0,
+      "duration_s": 9.28,
+      "run": "test-pyramid-part3",
+      "s": 9.28,
+      "status_in_run": "pass"
+    },
+    "saves.roundtrip": {
+      "build_s": 0.0,
+      "duration_s": 37.61,
+      "run": "test-pyramid-part3",
+      "s": 37.61,
+      "status_in_run": "pass"
+    },
+    "saves.scope": {
+      "build_s": 0.0,
+      "duration_s": 67.72,
+      "run": "test-pyramid-part3",
+      "s": 67.72,
+      "status_in_run": "pass"
+    },
+    "saves.session_a": {
+      "build_s": 0.0,
+      "duration_s": 21.82,
+      "run": "test-pyramid-part3",
+      "s": 21.82,
+      "status_in_run": "pass"
+    },
+    "saves.session_b": {
+      "build_s": 0.0,
+      "duration_s": 71.86,
+      "run": "test-pyramid-part3",
+      "s": 71.86,
+      "status_in_run": "pass"
+    },
+    "saves.session_interval": {
+      "build_s": 0.0,
+      "duration_s": 93.98,
+      "run": "test-pyramid-part3",
+      "s": 93.98,
+      "status_in_run": "pass"
+    },
+    "saves.table_coverage": {
+      "build_s": 0.0,
+      "duration_s": 0.04,
+      "run": "test-pyramid-part3",
+      "s": 0.04,
+      "status_in_run": "pass"
+    },
+    "saves.undo": {
+      "build_s": 0.0,
+      "duration_s": 4.45,
+      "run": "test-pyramid-part3",
+      "s": 4.45,
+      "status_in_run": "pass"
+    },
+    "savesctl.account_name_kept": {
+      "build_s": 0.0,
+      "duration_s": 10.5,
+      "run": "test-pyramid-part3",
+      "s": 10.5,
+      "status_in_run": "pass"
+    },
+    "savesctl.hygiene": {
+      "build_s": 0.0,
+      "duration_s": 15.02,
+      "run": "test-pyramid-part3",
+      "s": 15.02,
+      "status_in_run": "pass"
+    },
+    "savesctl.live_codes": {
+      "build_s": 0.0,
+      "duration_s": 0.02,
+      "run": "test-pyramid-part3",
+      "s": 0.02,
+      "status_in_run": "pass"
+    },
+    "savesctl.live_down": {
+      "build_s": 0.0,
       "duration_s": 0.01,
-      "run": "save-backups-verifier2",
+      "run": "test-pyramid-part3",
       "s": 0.01,
+      "status_in_run": "pass"
+    },
+    "savesctl.live_roundtrip": {
+      "build_s": 0.0,
+      "duration_s": 61.25,
+      "run": "test-pyramid-part3",
+      "s": 61.25,
+      "status_in_run": "pass"
+    },
+    "savesctl.realm_restored": {
+      "build_s": 0.0,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
+      "status_in_run": "pass"
+    },
+    "savesctl.test_actions_refused": {
+      "build_s": 0.0,
+      "duration_s": 1.29,
+      "run": "test-pyramid-part3",
+      "s": 1.29,
+      "status_in_run": "pass"
+    },
+    "scale.counts_companions": {
+      "build_s": 0.0,
+      "duration_s": 52.0,
+      "run": "test-pyramid-part3",
+      "s": 52.0,
+      "status_in_run": "pass"
+    },
+    "scale.disabled_stock": {
+      "build_s": 0.0,
+      "duration_s": 11.79,
+      "run": "test-pyramid-part3",
+      "s": 11.79,
+      "status_in_run": "pass"
+    },
+    "scale.module_loaded": {
+      "build_s": 0.0,
+      "duration_s": 5.38,
+      "run": "test-pyramid-part3",
+      "s": 5.38,
+      "status_in_run": "pass"
+    },
+    "scale.outdoor_untouched": {
+      "build_s": 0.0,
+      "duration_s": 7.4,
+      "run": "test-pyramid-part3",
+      "s": 7.4,
+      "status_in_run": "pass"
+    },
+    "scale.party_stock": {
+      "build_s": 0.0,
+      "duration_s": 0.0,
+      "run": "test-pyramid-part3",
+      "s": 0.0,
+      "status_in_run": "pass"
+    },
+    "scale.pause_safe": {
+      "build_s": 0.0,
+      "duration_s": 12.46,
+      "run": "test-pyramid-part3",
+      "s": 12.46,
+      "status_in_run": "pass"
+    },
+    "scale.solo_weaker": {
+      "build_s": 0.0,
+      "duration_s": 6.35,
+      "run": "test-pyramid-part3",
+      "s": 6.35,
       "status_in_run": "pass"
     },
     "setup.preflight": {
@@ -905,16 +1410,16 @@
     },
     "sql.assert_selftest": {
       "build_s": 0.0,
-      "duration_s": 0.09,
-      "run": "save-backups-verifier2",
-      "s": 0.09,
+      "duration_s": 0.03,
+      "run": "test-pyramid-part3",
+      "s": 0.03,
       "status_in_run": "pass"
     },
     "sql.world_populated": {
       "build_s": 0.0,
-      "duration_s": 0.11,
-      "run": "save-backups-verifier2",
-      "s": 0.11,
+      "duration_s": 0.06,
+      "run": "test-pyramid-part3",
+      "s": 0.06,
       "status_in_run": "pass"
     }
   },
@@ -2150,6 +2655,180 @@
       ],
       "wall_s": 2199.1,
       "why": "checks new with this change"
+    },
+    "test-pyramid-part3": {
+      "finished": "2026-10-11T17:50:29+00:00",
+      "lanes": 1,
+      "machine": "arm64",
+      "repo_sha": "ab84fde40f5e0e33c3c97c131e73e9bcf8021bfa",
+      "source": "the part-3 measurement (test-pyramid design 15.1): one filtered pr-tier run of every integration and journey check, 82 ids, kept outside the repo",
+      "started": "2026-10-11T17:04:22+00:00",
+      "used_for": [
+        "app.backups_window",
+        "app.bundle_valid",
+        "app.handoff_focus",
+        "app.launch_lifecycle",
+        "app.loading_stages",
+        "app.loading_stages_warm",
+        "app.names_running",
+        "app.relocatable",
+        "app.reopen_during_loading",
+        "app.reopen_focuses_game",
+        "app.reopen_unminimizes",
+        "app.shim_scope",
+        "app.shutdown_window",
+        "app.single_dock_icon",
+        "app.single_instance",
+        "app.startup_failure",
+        "backups.failure_nonblocking",
+        "backups.kill_safe",
+        "backups.on_quit",
+        "backups.restore_refusals",
+        "backups.restore_roundtrip",
+        "build.playerbots_active",
+        "client.config_gate",
+        "client.first_start_settings",
+        "client.launch_smoke",
+        "client.login_text_clean",
+        "client.pause_menu",
+        "client.player_client_not_rebuilt",
+        "client.protocol_badpass",
+        "client.protocol_probe",
+        "client.real_client_refused",
+        "client.realmlist",
+        "client.resolution_default",
+        "client.stock_mode",
+        "client.wording_addon",
+        "comp.add_remove",
+        "comp.assists",
+        "comp.follows",
+        "comp.quest_shared",
+        "core.login_logout_race",
+        "dng.session1",
+        "dng.session2",
+        "era.default_on",
+        "era.elites",
+        "era.mounts",
+        "era.quest_xp",
+        "era.scope_guard",
+        "era.session_toggle",
+        "era.sql_deterministic",
+        "era.toggle_roundtrip",
+        "era.xp_curve",
+        "firstlaunch.client_refusals",
+        "fixture.account_character",
+        "fixture.add_item",
+        "fixture.instant_logout",
+        "fixture.level",
+        "fixture.start_quest",
+        "fixture.teleport",
+        "gm.invalid",
+        "gm.server_info",
+        "harness.prefix_scope",
+        "journey.app_desktop",
+        "journey.first_play",
+        "journey.login_recovery",
+        "journey.pause",
+        "journey.saves",
+        "journey.stock_client",
+        "lifecycle.down",
+        "lifecycle.failfast",
+        "lifecycle.idempotent",
+        "lifecycle.isolated",
+        "lifecycle.persist",
+        "lifecycle.up",
+        "lock.companion_unstuck",
+        "lock.fresh_after_clear",
+        "lock.heroic_fresh_after_clear",
+        "lock.heroic_partial_kept",
+        "lock.login_inside_kept",
+        "lock.no_hourly_cap",
+        "lock.partial_kept",
+        "lock.partial_kept_dismissed",
+        "login.auto_login",
+        "login.backdrop_choice",
+        "login.cancel_shows_list",
+        "login.charselect_layout",
+        "login.charselect_wording",
+        "login.continue_context",
+        "login.fresh_menu_waits",
+        "login.friendly_errors",
+        "login.loading_overlay",
+        "login.no_glue_errors",
+        "login.overlay_progress",
+        "login.overlay_progress_reload",
+        "pause.aura_frozen",
+        "pause.bots_frozen",
+        "pause.cast_cancelled",
+        "pause.combat_frozen",
+        "pause.cooldown_frozen",
+        "pause.disabled_noop",
+        "pause.disconnect_unpauses",
+        "pause.freeze_matrix",
+        "pause.logout_unpauses",
+        "pause.refused_on_taxi",
+        "pause.respawn_frozen",
+        "play.client_crash_cleanup",
+        "play.cold_sessions",
+        "play.dock_identity",
+        "play.interrupt_clean_exit",
+        "play.loop_clean_exit",
+        "play.offline",
+        "play.player_account",
+        "play.player_account_untouched",
+        "play.single_instance",
+        "play.stage_lines",
+        "play.startup_failure",
+        "play.world_progress",
+        "release.pins",
+        "release.player_data_untouched",
+        "release.test_switches_refused",
+        "report.client_pristine",
+        "report.coverage",
+        "report.lanes",
+        "report.schema",
+        "saves.atomic",
+        "saves.autosave_triggers",
+        "saves.bots_skip",
+        "saves.inworld_list",
+        "saves.inworld_load",
+        "saves.item_ids_fresh",
+        "saves.list_wording",
+        "saves.live_charselect_list",
+        "saves.live_charselect_load",
+        "saves.load_atomic",
+        "saves.load_ordering",
+        "saves.load_refusals",
+        "saves.manual",
+        "saves.player_untouched",
+        "saves.quick_slot",
+        "saves.refused_in_combat",
+        "saves.roundtrip",
+        "saves.scope",
+        "saves.session_a",
+        "saves.session_b",
+        "saves.session_interval",
+        "saves.table_coverage",
+        "saves.undo",
+        "savesctl.account_name_kept",
+        "savesctl.hygiene",
+        "savesctl.live_codes",
+        "savesctl.live_down",
+        "savesctl.live_roundtrip",
+        "savesctl.realm_restored",
+        "savesctl.test_actions_refused",
+        "scale.counts_companions",
+        "scale.disabled_stock",
+        "scale.module_loaded",
+        "scale.outdoor_untouched",
+        "scale.party_stock",
+        "scale.pause_safe",
+        "scale.solo_weaker",
+        "sql.assert_selftest",
+        "sql.world_populated"
+      ],
+      "wall_s": 2767.3,
+      "why": "test-pyramid task 4.2: rejoin to the current check ids after the part 2/3 renames (journeys, sessions, play.cold_sessions); every check this run executed takes its time from it; ids no longer registered (and not a session's scenario) were dropped from checks and checks_lanes2; journey.app_desktop is its time minus app.backups_window's"
     }
   },
   "schema": 2,
