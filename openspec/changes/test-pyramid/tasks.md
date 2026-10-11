@@ -114,6 +114,7 @@ The builder runs `hs test` plus the slice's own tests; no acceptance tier per ta
 
 - [ ] 3.11 Targeted checks (design §16): the `targeted` marker and the reviewed list, selection rule, `report.targeted`, `report.layer_budgets` cases (i)/(j), journey re-budget, `app.backups_window` out of `journey.app_desktop`; the timing baseline rejoined; measure once.
   - _Phase 2 (2026-10-11), design 16.1: measured once. Unit 39.6 s (pass); integration 908.9 s (budget 900, FAIL by 8.9 s); journeys 745.9 s, `login_recovery` 153.3/150 (FAIL), the rest within; integration + journeys 1654.8 s (pass); targeted 1135.3 s (pass); replay mean 19.1 min (budget 15, FAIL; targeted checks picked through covers are 7.0 min of it). Owed gate checks `lane.preflight` and `report.orphans_healed` PASS. Left unticked: two budgets and the replay are missed._
+  - _Covers (2026-10-11), design 16.2: targeted checks cover only their own code; replay 19.1 → 16.1 min (FAIL, budget 15). Integration and `login_recovery` savings not done yet. Left unticked._
 
 ## 4. Rules and docs
 - [x] 4.1 CLAUDE.md §4, §6, §9 and §10 with the proposal's exact text (orchestrator; Zach approved the change).

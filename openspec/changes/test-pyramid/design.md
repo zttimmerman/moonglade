@@ -1078,3 +1078,29 @@ Run notes: `journey.app_desktop` failed on `app.shim_scope` (known: the install-
 step, the last two `Arrived` triggers were skipped as "inside the interval" although each came 5.5 s after the last
 save with a 4 s interval) and passed when rerun alone. Unexplained, not chased. Owed gate checks: `lane.preflight`
 PASS (27.8 s), `report.orphans_healed` PASS (122.1 s).
+
+### 16.2 Targeted covers narrowed (task 3.11, 2026-10-11)
+Each targeted check's `covers` now names only its own code: the product paths it exercises, the harness module that
+holds the behaviour it asserts, and its own check file. `play.cold_sessions` keeps `play`, `play.py`, `backups.py`,
+`stages.py` and its file (dropped: `play_checks.py`, `backup_checks.py`, `polish_checks.py`, `resolution_checks.py`);
+`backups.on_quit` and `backups.restore_roundtrip` take `play`, `backups.py` and `backup_checks.py`, and
+`app.backups_window` also `harness/app/launcher.m` (the window itself, missing before) and `app.py`; `lock.*` drop
+`build.py`, `era.py`, `pause.py`, `companion.py` and `release_checks.py`; `saves.*` drop `backups.py`, `pause.py`,
+`mpq.py`, `frontmenu.py` (kept for `load_ordering`, whose `saves.list_wording` writes the glue list) and the client
+add-on (they drive a headless probe); `client.login_text_clean` takes `MoongladeQuiet.cpp`, its
+`Moonglade.QuietServerText` key and its file instead of the glue and the file's helpers (a headless probe);
+`client.player_client_not_rebuilt` takes `play.py` (where the "player's own client, not rebuilt" decision is),
+`clientbuild.py` and its file instead of setup's bootstrap and download paths. `client.launch_smoke` is unchanged.
+`report.ownership`, `report.selection` and `report.targeted` pass.
+
+Replay repriced with the 16.1 per-check times: **16.1 min** (was 19.1; budget 15, still a **miss** by 1.1 min). Per PR
+(min): #22 12.0, #23 8.2, #24 33.0 (FULL), #25 14.4, #26 9.3, #27 7.0, #28 30.4, #29 11.1, #30 4.0, #31 21.5,
+#32 26.5 (FULL), #33 27.9, #1 0, #2 0, #3 35.8 (FULL). Targeted checks are now 4.0 min of the mean (7.0 before); 2.3 of
+it is `play.cold_sessions`, selected by `harness/hslib/play.py`, the play loop it tests, which six of the 15 PRs
+changed. The rest of the gap is the non-targeted price: FULL is 26.5 min for 3 of 15 PRs.
+Not done in this pass: the integration (908.9/900 s) and `journey.login_recovery` (153.3/150 s) savings.
+`saves.autosave_triggers` flake (16.1), re-read from that run's evidence: the server log has no "autosave trigger"
+line at all for the last two teleports, so they weren't skipped "inside the interval"; the interval clock is set only
+when an autosave starts (`ProcessAutosaves`: a skipped trigger `continue`s before `g_lastAuto` is written), so a
+skipped trigger can't reset it. Open: whether those two teleports reached their maps (the step records no map); not
+reproduced, no fix made.
