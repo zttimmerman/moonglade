@@ -124,7 +124,21 @@ def _describe(lane: str, render: bool) -> dict:
     return json.loads(r.stdout)
 
 
-@check("lane.paths", order=33, capability=CAP, stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "harness/hslib/lanes.py",
+    "harness/hslib/lanestack.py",
+    "harness/hslib/lane.py",
+    "harness/hslib/backups.py",
+    "harness/hslib/checks/lane_checks.py",
+    "harness/hslib/pristine.py",
+    "harness/hslib/runreg.py",
+)
+
+
+@check("lane.paths", order=33, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def lane_paths(ctx):
     """second-stack "Lane B paths and ports": with HS_LANE=b inside this harness run, every runtime path the modules
     use (run, logs, tmp, server confs, pid/lock/profile files, my.cnf, client*.cnf, socket, datadir, Wine prefix) is
@@ -199,7 +213,7 @@ def _tree_mtimes(root: Path) -> dict:
     return out
 
 
-@check("lane.refusal", order=33, capability=CAP, stack="any", tier="quick")
+@check("lane.refusal", order=33, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def lane_refusal(ctx):
     """second-stack "Lane B refused outside a harness run" (HS_LANE part): with HS_LANE=b and no live harness run
     (no run id, or a spoofed HS_HARNESS_RUN=1 with a dead run id), `hs up`, `./play`, `hs lane init`, `hs lane reset`,
@@ -220,7 +234,7 @@ def lane_refusal(ctx):
         ("hs lane init (HS_LANE unset)", [HS, "lane", "init"], {}),
         ("hs lane reset", [HS, "lane", "reset"], {P.LANE_ENV: "b"}),
         ("./bootstrap --check", [BOOTSTRAP, "--check"], {P.LANE_ENV: "b"}),
-        ("hs run", [HS, "run", "--tier", "quick", "--only", "lane.paths"], {P.LANE_ENV: "b"}),
+        ("hs run", [HS, "run", "--tier", "unit", "--only", "lane.paths"], {P.LANE_ENV: "b"}),
         ("hs up (spoofed run id)", [HS, "up"], {P.LANE_ENV: "b", **spoof}),
         ("./play (spoofed run id)", [PLAY, "--account", "test"], {P.LANE_ENV: "b", **spoof}),
         ("hs up (HS_LANE=c)", [HS, "up"], {P.LANE_ENV: "c"}),
@@ -231,7 +245,7 @@ def lane_refusal(ctx):
                    _L.FORCE_ENV: "era.default_on", _L.TIMEOUT_ENV: "5"}
     for sw in _L.TEST_ENV:
         cases += [
-            (f"hs run ({sw})", [HS, "run", "--tier", "quick", "--only", "lane.table"], {sw: switch_vals[sw]}),
+            (f"hs run ({sw})", [HS, "run", "--tier", "unit", "--only", "lane.table"], {sw: switch_vals[sw]}),
             (f"hs up ({sw})", [HS, "up"], {sw: switch_vals[sw]}),
             (f"./play ({sw})", [PLAY, "--account", "test"], {sw: switch_vals[sw]}),
             (f"./bootstrap --check ({sw})", [BOOTSTRAP, "--check"], {sw: switch_vals[sw]}),
@@ -326,7 +340,7 @@ def _grep(path: Path, needle: bytes) -> bool | None:
         return None
 
 
-@check("lane.isolation", order=32, capability=CAP, stack="down", tier="full")
+@check("lane.isolation", order=32, capability=CAP, stack="down", layer="gate")
 def lane_isolation(ctx):
     """second-stack "Lane B leaves the player's files and lane A alone": with fingerprints (size, mtime, SHA-256) of
     env/player.json, env/settings.json, env/backups, env/client-play, client/ and lane A's datadir taken first, lane
@@ -388,7 +402,7 @@ def lane_isolation(ctx):
 
 # ============================================================================ lane.independent_down
 
-@check("lane.independent_down", order=33, capability=CAP, stack="up", tier="full")
+@check("lane.independent_down", order=33, capability=CAP, stack="up", layer="gate")
 def lane_independent_down(ctx):
     """second-stack "A's down leaves B up, and the reverse": with both lanes' stacks up and answering, lane A's
     `hs down` stops only lane A (lane B's mysqld/auth/world keep their pids and answer SOAP and SQL on 3317/7888);
@@ -428,7 +442,7 @@ def lane_independent_down(ctx):
 
 # ============================================================================ lane.orphans
 
-@check("lane.orphans", order=33, capability=CAP, stack="up", tier="full")
+@check("lane.orphans", order=33, capability=CAP, stack="up", layer="gate")
 def lane_orphans(ctx):
     """second-stack "Orphan healing is per lane": a stand-in lane-B worker (HS_LANE=b, tagged with a stand-in run's
     id) starts lane B's stack; the worker and its run are SIGKILLed, leaving lane B running with a dead run file.
@@ -471,7 +485,7 @@ def lane_orphans(ctx):
         require(ev["killed"]["run_file_left"] and ev["killed"]["lane_b_still"],
                 "GIVEN not met: the killed worker's lane B isn't left running", **ev)
         t1 = time.time()
-        r = subprocess.run([HS, "run", "--tier", "quick", "--only", "lane.paths", "--leave-up", "--results-dir", str(d)],
+        r = subprocess.run([HS, "run", "--tier", "unit", "--only", "lane.paths", "--leave-up", "--results-dir", str(d)],
                            capture_output=True, text=True, timeout=1200, env=_a_env(), cwd=P.ROOT)
         try:
             doc = json.loads((d / "results.json").read_text())
@@ -559,13 +573,15 @@ def _lane_summary(n: dict) -> dict:
 
 
 def _ordered(doc: dict) -> bool:
+    """Records in run order (runner.run_key; test-pyramid), unit-phase records first."""
+    from ..runner import run_key
     ids = [r["id"] for r in doc["checks"] if r["id"] in REGISTRY]
-    return ids == sorted(ids, key=lambda i: (REGISTRY[i].order, i))
+    return ids == sorted(ids, key=lambda i: run_key(REGISTRY[i]))
 
 
 # ============================================================================ lane.table
 
-@check("lane.table", order=33, capability=CAP, stack="any", tier="quick")
+@check("lane.table", order=33, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def lane_table(ctx):
     """second-stack "LANE_B table invariants": every LANE_B entry is a registered check with a written reason, and none
     is gui, app.*, client.stock_mode, client.launch_smoke, a baseline/build check, a population/perf check, a
@@ -574,7 +590,7 @@ def lane_table(ctx):
     reg = REGISTRY
     probs = L.table_problems(L.LANE_B, reg)
     no_reason = sorted(i for i, why in L.LANE_B.items() if not (isinstance(why, str) and why.strip()))
-    rows = {i: {"order": reg[i].order, "stack": reg[i].stack, "tier": reg[i].tier, "why": L.LANE_B[i]}
+    rows = {i: {"order": reg[i].order, "stack": reg[i].stack, "layer": reg[i].layer, "why": L.LANE_B[i]}
             for i in sorted(L.LANE_B) if i in reg}
 
     def first(pred):
@@ -584,7 +600,7 @@ def lane_table(ctx):
            "build": first(lambda c: c.id.startswith("build.")), "baseline": "core.login_logout_race_baseline",
            "population": first(lambda c: c.id.startswith("pop.")), "perf": first(lambda c: c.id.startswith("perf.")),
            "order_998": first(lambda c: c.order >= 998), "protection": "play.player_account_untouched",
-           "lane_check": "lane.paths", "before_window": first(lambda c: c.order < L.START_ORDER and c.tier == "full"
+           "lane_check": "lane.paths", "before_window": first(lambda c: c.order < L.START_ORDER and c.layer == "integration"
                                                              and not c.id.startswith(("build.", "lane.", "setup."))),
            "unregistered": "no.such_check"}
     flagged = {k: [p for p in L.table_problems([i], reg)] if i else None for k, i in bad.items()}
@@ -599,7 +615,7 @@ def lane_table(ctx):
 
 # ============================================================================ lane.merge
 
-@check("lane.merge", order=33, capability=CAP, stack="any", tier="full")
+@check("lane.merge", order=33, capability=CAP, stack="any", layer="gate")
 def lane_merge(ctx):
     """second-stack "Two-lane run matches serial statuses": a nested run of two LANE_B checks (era.default_on,
     era.xp_curve), two lane-A checks inside lane B's window (gm.server_info, sql.world_populated) and one after the
@@ -636,7 +652,7 @@ def lane_merge(ctx):
                 "no lane-B timeline for the B checks", **ev)
         require(m1.get("mode") == 1 and not any(r.get("lane") == "b" for r in one["doc"]["checks"]),
                 "the --lanes 1 run used lane B", **ev)
-        require(_ordered(two["doc"]) and _ordered(one["doc"]), "records aren't in (order, id) order", **ev)
+        require(_ordered(two["doc"]) and _ordered(one["doc"]), "records aren't in run order", **ev)
         b_end = max(tl_b[i]["end"] for i in MERGE_B)
         post_start = (tl_a.get(MERGE_POST) or {}).get("start")
         a_win = [tl_a[i] for i in MERGE_A if i in tl_a]
@@ -662,7 +678,11 @@ def lane_merge(ctx):
 
 # ============================================================================ lane.preflight
 
-FALLBACK_B = ("client.config_gen", "client.inspect")     # forced lane-B set: cheap, stack-free, read-only checks
+# forced lane-B set: cheap, stack-free, read-only checks. test-pyramid: acceptance-layer ones (unit-layer checks run in
+# the unit layer and never reach the lanes), and outside the release bracket (release.*/firstlaunch.*)
+# (test-pyramid part 3: play.startup_failure became a scenario of play.cold_sessions; harness.prefix_scope, a stack-free
+# Wine-prefix check, took its place)
+FALLBACK_B = ("savesctl.test_actions_refused", "harness.prefix_scope")   # both in lane B's window [34, 380)
 
 
 def decision_cases() -> dict:
@@ -697,7 +717,7 @@ def decision_cases() -> dict:
     return out
 
 
-@check("lane.preflight", order=33, capability=CAP, stack="any", tier="full")
+@check("lane.preflight", order=33, capability=CAP, stack="any", layer="gate")
 def lane_preflight(ctx):
     """second-stack "Low memory falls back to one lane" and "Pressure mid-run moves remaining checks to A": the
     preflight/mid-run rules give the ADR-0011 verdict at and around each threshold (pressure, available memory with
@@ -774,7 +794,7 @@ def lanes_problems(doc: dict, wall_s: float, serial_ref: dict | None) -> tuple[l
     if len(ids) != len(set(ids)):
         probs.append("a check has more than one record")
     if not _ordered(doc):
-        probs.append("records aren't in (order, id) order")
+        probs.append("records aren't in run order")
     if sorted(b_marked) != sorted(ran):
         probs.append(f"records marked lane b {sorted(b_marked)} != meta.lanes b_ran {sorted(ran)}")
     if set(ran) | set(to_a) != set(planned) or set(ran) & set(to_a):
@@ -824,10 +844,10 @@ def lanes_problems(doc: dict, wall_s: float, serial_ref: dict | None) -> tuple[l
                "note": ev_note}
     elif b_marked or ran:
         probs.append("a one-lane run has lane-B records")
-    full = m.get("full_run") is True and m.get("tier") in ("full", "slow") and not m.get("filter")
+    full = m.get("full_run") is True and m.get("tier") == "full" and not m.get("filter")
     ev["full_run"] = full
     if not full:
-        ev["full_run_rule"] = "not evaluated: not an unfiltered full/slow run"
+        ev["full_run_rule"] = "not evaluated: not an unfiltered full run"
         return probs, ev
     ev["wall_s"] = round(wall_s, 1)
     ev["serial_reference"] = serial_ref

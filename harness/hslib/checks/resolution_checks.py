@@ -200,7 +200,18 @@ def e2e_one(ev: dict, spec: str) -> None:
         drop_scratch(scratch)
 
 
-@check("client.resolution_default", order=386, capability=CAP, stack="down", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "patches/client/**",
+    "harness/hslib/checks/resolution_checks.py",
+    "harness/hslib/frontmenu.py",
+    "harness/hslib/resolution.py",
+)
+
+
+# client.resolution_default: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def resolution_default(ctx):
     """A play client with no resolution (injected displays): the first launch writes a resolution with the display's
     full-screen aspect ratio (within 2%) following design.md's native-vs-half decision; after the display changes it
@@ -336,7 +347,7 @@ def verify_config_step() -> dict:
         drop_scratch(scratch)
 
 
-@check("client.resolution_gate", order=385, capability=CAP, stack="any", tier="quick")
+@check("client.resolution_gate", order=385, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def resolution_gate(ctx):
     """The play loop writes config (the resolution default, and since rename-moonglade cycle 2 every config write:
     realmlist, Config.wtf defaults, the login file) into the player's own env/client-play/ only from a genuine
@@ -394,13 +405,27 @@ def config_gate_run(scratch: Path, own: bool) -> dict:
         s.cleanup()
 
 
-@check("client.config_gate", order=386, capability=CAP, stack="down", tier="full")
+@check("client.config_gate", order=386, capability=CAP, stack="up", layer="integration")
 def config_gate(ctx):
     """The verifier's case on a scratch copy of the player's client only (his file is never written): a scratch play
     client with the player's Config.wtf minus gxApi, standing in for his own client ($HS_TEST_OWN_CLIENT): a
     harness ./play stand-in run leaves every config file byte-identical and never writes the login file; the same run
     on a copy without the stand-in flag (ungated) does write gxApi, so the run would write if it weren't gated; and
-    the player's own Config.wtf is unchanged."""
+    the player's own Config.wtf is unchanged. Both stand-in runs are warm (test-pyramid part 3): the shared stack
+    with the harness's keep-stack switch; the gate is the play loop's config step, the same with the stack already up."""
+    from . import play_checks as pc
+    up = stack.stack_processes()
+    require(all(up.values()), "GIVEN not met: the shared stack isn't up", stack=up)
+    pc.WARM = {"pids": pc.stack_pids()}
+    try:
+        ev = _config_gate(ctx)
+    finally:
+        pc.WARM = None
+    return ev
+
+
+def _config_gate(ctx):
+    """The scenario itself (config_gate runs it with the shared stack kept)."""
     player_cfg = clientbuild.PLAY / "WTF" / "Config.wtf"
     ev: dict = {"player_config_sha_before": _sha(player_cfg)}
     require_given_clear(ev)
@@ -438,7 +463,7 @@ def config_gate(ctx):
 REFUSE_WITHIN_S = 90      # the refusal comes before the server starts (~2 s); 90 s = it's starting things instead
 
 
-@check("client.real_client_refused", order=386, capability=CAP, stack="down", tier="quick")
+@check("client.real_client_refused", order=386, capability=CAP, stack="down", layer="integration")
 def real_client_refused(ctx):
     """A harness-shaped ./play that would start the real Wow.exe in the player's own play client (stand-in flag,
     no --client-cmd) is refused before the server starts (no server or Wine process sampled at 10 Hz while it runs,
@@ -500,7 +525,7 @@ def real_client_refused(ctx):
         drop_scratch(scratch)
 
 
-@check("client.player_config_untouched", order=999, capability=CAP, stack="any", tier="quick")
+@check("client.player_config_untouched", order=999, capability=CAP, stack="any", layer="unit")
 def player_config_untouched(ctx):
     """Last check of every run: the player's own env/client-play/WTF/Config.wtf is byte-identical to the start of
     the run (sha256 recorded by the runner), so no check wrote it; and the launcher's marker file there

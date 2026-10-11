@@ -656,18 +656,28 @@ def client_dir_for(env: dict, test: bool) -> Path | None:
 def load(m: dict, target: dict) -> dict:
     """Replace the target's three databases with the backup's dumps (mysqld running; world/login stopped)."""
     d = Path(m["path"])
-    out = {}
     for key in DATABASES:
+        if target[key] in PROTECTED:
+            raise BackupError(f"{target[key]} is protected")
+
+    def one(key):
         rec = m["databases"][key]
         schema = target[key]
-        if schema in PROTECTED:
-            raise BackupError(f"{schema} is protected")
         t0 = time.time()
         db.query(f"DROP DATABASE IF EXISTS `{schema}`; CREATE DATABASE `{schema}` CHARACTER SET {rec['charset']} "
                  f"COLLATE {rec['collation']};", root=True, timeout=600)
         load_dump(d / rec["file"], schema)
-        out[key] = {"load_s": round(time.time() - t0, 2)}
-    return out
+        return key, {"load_s": round(time.time() - t0, 2)}
+    # the three databases are independent: loaded side by side (test-pyramid part 3; a restore took ~21 s serially,
+    # characters 12.7 + playerbots 6.8). Any failure raises after all have finished (nothing keeps loading behind it).
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(len(DATABASES)) as ex:
+        futs = [ex.submit(one, k) for k in DATABASES]
+        done = [f.exception() or f.result() for f in futs]
+    errs = [x for x in done if isinstance(x, BaseException)]
+    if errs:
+        raise errs[0]
+    return dict(done)
 
 
 LOADER_TAG = "--max-allowed-packet=64M"        # only load_dump's mysql runs with this (orphan detection)

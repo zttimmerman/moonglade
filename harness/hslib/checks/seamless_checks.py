@@ -23,15 +23,17 @@ import os
 import re
 import shutil
 import signal
+import threading
 import time
 import zlib
 from pathlib import Path
 
-from .. import clientbuild, mpq, paths as P, stack
+from .. import clientbuild, mpq, paths as P, play, stack
 from . import clientinput
 from ..registry import check, require
 from .play_checks import is_clear, remaining, require_given_clear
-from .playclient_util import (SEED_SETTINGS, PlayRun, _bmp_pixels, _classify, build_scratch, connection_log, drop_scratch, fresh_scratch,
+from .playclient_util import (SEED_SETTINGS, PlayRun, _bmp_pixels, _classify, account_state, build_scratch, connection_log,
+                              db_ready, drop_scratch, fresh_scratch,
                               glue_logs, marker, screenshots)
 
 CAP_LOGIN = "login-screen"
@@ -51,8 +53,10 @@ CONTINUE_AT = 20
 # Play is clicked; in the world the add-on logs out after 8 s (its test hook).
 MAINMENU_AT = 3
 RELOAD_GAP_S = 2             # "within a few seconds" (login-screen spec, quick second load)
+PRE_CONTINUE_SHOT_AT = 17    # test-pyramid part 3: login.fresh_menu_waits' screenshot just before the Continue
 GLUE_PLAY = {"marker": True,
-             "script": [{"t": 4, "act": "shot"}, {"t": CONTINUE_AT, "act": "continue"}, {"t": CONTINUE_AT, "act": "shot"}],
+             "script": [{"t": 4, "act": "shot"}, {"t": PRE_CONTINUE_SHOT_AT, "act": "shot"},
+                        {"t": CONTINUE_AT, "act": "continue"}, {"t": CONTINUE_AT, "act": "shot"}],
              "charselect": [{"t": 1.5, "act": "csinspect"}, {"t": 2, "act": "shot"}, {"t": MAINMENU_AT, "act": "mainmenu"},
                             {"t": MAINMENU_AT + RELOAD_GAP_S, "act": "continue"}],
              "charselect_again": [{"t": 2, "act": "play"}]}
@@ -61,7 +65,8 @@ ADDON_HOOK = '-- planted by the harness (seamless_checks.py): the wording add-on
 # Run A (login.friendly_errors): the login server is stopped before Continue; the friendly error is photographed,
 # its details opened and photographed; the login server is started again; Try again at RETRY_AT; at character select
 # Play is clicked (entering the world hands the record out).
-RETRY_AT = 80
+RETRY_AT = 55                # design 16.3: was 80; the login server is back by about 40 s (auth_restart.after_client_up_s
+                             # 39.5 in 16.1's run, shots at 32/35 s), so Try again still comes ~15 s after it is up
 GLUE_ERR = {"marker": True,
             "script": [{"t": 4, "act": "shot"}, {"t": CONTINUE_AT, "act": "continue"}, {"t": 32, "act": "shot"},
                        {"t": 34, "act": "details"}, {"t": 35, "act": "shot"}, {"t": RETRY_AT, "act": "retry"}],
@@ -336,7 +341,7 @@ def marker_overlay(path: Path) -> str:
 def shot_info(path: Path) -> dict:
     m = marker(path)
     return {"file": path.name, "mtime": round(path.stat().st_mtime, 3), "lua_errors": m["lua_errors"],
-            "main_menu_up": m["main_menu_up"], "overlay_square": marker_overlay(path), "black": black_fraction(path)}
+            "main_menu_up": m["main_menu_up"], "size": m["size"], "overlay_square": marker_overlay(path), "black": black_fraction(path)}
 
 
 def _wait(pred, timeout, step=1.0):
@@ -390,19 +395,57 @@ def play_session() -> dict:
                 "shared_run": "seamless play (login.loading_overlay + login.charselect_wording + client.wording_addon)"}
     _SESSIONS["play"] = ev
     scratch = run = None
+    sampler = None
     try:
         require_given_clear(ev)
+        # test-pyramid part 3 (design 9.4): this cold session is also the Continue run of login.auto_login,
+        # login.no_glue_errors and login.fresh_menu_waits, and client.first_start_settings' real-client run: a play
+        # client freshly built the way bootstrap builds it (first-start settings from the build, nothing seeded), a
+        # stale login file and a killed write planted, and the account/connection/client sampled while it runs
+        from .. import clientcfg, frontmenu
+        from .login_checks import _config_value, _config_values
+        want, realm = clientcfg.first_start_settings()
+        keys = list(want)
+        ev["first_start"] = {"expected": want, "realm": realm, "given_base_config": _config_values(P.CLIENT, keys)}
         scratch = fresh_scratch("seamless")
-        build = build_scratch(scratch)
+        fs = {"dir": str(scratch), "existed_before_build": scratch.exists()}
+        build = clientbuild.build(dest=scratch)
+        ev["first_start"] |= {"build": {"built": build["built"], "state": build["stamp"].get("state")},
+                              "built_config": _config_values(scratch, keys)}
+        fs |= {"connection_log_before": (scratch / "Logs" / "connection.log").exists(),
+               "screenshots_before": len(screenshots(scratch)),
+               "account_name_in_config_before": _config_value(scratch, "accountName"), "glue_test": GLUE_PLAY}
+        ev["fresh_scratch"] = fs
         ev["scratch"] = {"dir": str(scratch), "outputs": build["stamp"]["outputs"]}
         ev["addon_hook"] = plant_addon_hook(scratch)
-        run = PlayRun("seamless", glue_test=GLUE_PLAY, scratch=scratch)
+        # the test account has played before: its empty account- and character-wide SavedVariables files exist, as
+        # seed_settings makes them (else the client logs "Error loading ...SavedVariables.lua" on its first login);
+        # the first-start settings stay the build's own (Config.wtf untouched)
+        ev["saved_variables_created"] = []
+        for f in (scratch / "WTF" / "Account" / P.TEST_USER / "SavedVariables.lua",
+                  scratch / "WTF" / "Account" / P.TEST_USER / realm["name"] / P.TEST_CHAR / "SavedVariables.lua"):
+            if not f.exists():
+                f.parent.mkdir(parents=True, exist_ok=True)
+                f.write_bytes(b"")
+                ev["saved_variables_created"].append(str(f.relative_to(scratch)))
+        stale = frontmenu.write(scratch, [{"name": "HSSTALE", "account": "HSSTALE", "password": "stale123"}], "HSSTALE")
+        partial = frontmenu.archive_path(scratch).with_name(frontmenu.archive_path(scratch).name + ".hs-new")
+        partial.write_bytes(b"partial write of a killed ./play")          # what a SIGKILL inside write() leaves
+        partial.chmod(0o600)
+        ev["stale_planted"] = [stale["archive"], str(partial.relative_to(scratch))]
+        ev["_partial"] = str(partial)
+        run = PlayRun("seamless", glue_test=GLUE_PLAY, scratch=scratch, seed=False)
         run.start()
         ev["seeded_given"] = run.given
         up = run.wait_client()
         ev["client_up"] = {k: v for k, v in up.items() if k != "t"}
         require(up.get("up"), "the real Wow.exe never came up", output=run.output()[-2500:], **ev)
         t_up = up["t"]
+        ev["db_ready_while_client_runs"] = db_ready()
+        ev["account_at_client_start"] = account_state(P.TEST_USER)
+        ev["config_at_launch"] = _config_values(scratch, keys + ["gxResolution"])
+        sampler = _ContinueSampler(run, scratch, t_up)
+        sampler.start()
         # GIVEN (easy-setup 1.9): the client has had hardware input since it started, or its own idle logout fires
         # the moment the character enters the world (clientinput.py). One Shift press once its window is up (the
         # front menu's first screenshot, at 4 s).
@@ -414,17 +457,26 @@ def play_session() -> dict:
         ev["glue_record"] = rec
         rep = _wait(lambda: addon_report(scratch), REPORT_TIMEOUT, step=2) if rec else None
         ev["addon_report"] = rep
+        sampler.stop()
+        ev["continue_samples"] = sampler.result()
         ev["frame_log"] = glue_logs(scratch)
         shots = [p for p in screenshots(scratch) if p.stat().st_mtime >= t_up - 5]
         ev["screens"] = [shot_info(p) for p in shots]
-        if len(shots) >= 3:          # the character-select shot, kept for a human look (harness/out/, git-ignored)
+        if len(shots) >= 4:          # the character-select shot, kept for a human look (harness/out/, git-ignored)
             P.OUT.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(shots[2], P.OUT / CHARSELECT_SHOT)
+            shutil.copyfile(shots[3], P.OUT / CHARSELECT_SHOT)
             ev["charselect_shot"] = str((P.OUT / CHARSELECT_SHOT).relative_to(P.ROOT))
         ev["t_client_up"] = round(t_up, 3)
         ev["connection_log"] = connection_log(scratch)[-1500:]
+        ev["connection_log_full"] = connection_log(scratch)
         ev["addon_files"] = sorted(str(p.relative_to(scratch)) for p in (scratch / "Interface" / "AddOns" / "Moonglade").glob("*"))
         _finish(run, ev)
+        prec = run.record() or {}
+        ev["play_client_record"] = prec.get("client")
+        ev["profiles_removed"] = (prec.get("cleanup") or {}).get("profiles_removed")
+        ev["partial_left_after"] = partial.exists()
+        text = play.LAST.read_text() if play.LAST.exists() else ""
+        ev["password_in_play_last_json"] = P.TEST_PASS in json.dumps(json.loads(text).get("client", {})) if text else False
         # the server's log after it stopped (complete; it's rewritten only at the next start). The fixture step's own
         # probe logins happen before the client starts, so a login after the client came up is the client's.
         logins = server_logins(P.TEST_CHAR)
@@ -436,10 +488,43 @@ def play_session() -> dict:
         ev["session_error"] = f"{type(e).__name__}: {e}"
         raise
     finally:
+        if sampler is not None:
+            sampler.stop()
         if run is not None:
             run.cleanup()
         ev["scratch_frame_xml"] = framexml_untouched(scratch, ev.get("scratch", {}).get("outputs") or {}) if scratch and scratch.exists() else None
         drop_scratch(scratch)
+
+
+class _ContinueSampler(threading.Thread):
+    """Every second while the cold session runs: the test account's last_login/online, whether the client's own
+    connection.log shows the character list, and whether Wow.exe is alive (login.auto_login, login.no_glue_errors,
+    login.fresh_menu_waits; what login_checks' former Continue run sampled)."""
+
+    def __init__(self, run, scratch: Path, t_up: float):
+        super().__init__(daemon=True)
+        self.run_, self.scratch, self.t_up = run, scratch, t_up
+        self.samples: list = []
+        self.alive: list = []
+        self.stop_ev = threading.Event()
+
+    def run(self):
+        while not self.stop_ev.is_set():
+            st = account_state(P.TEST_USER)
+            conn = connection_log(self.scratch)
+            st |= {"t": round(time.time() - self.t_up, 1), "t_abs": round(time.time(), 2),
+                   "chars_received": bool(re.search(r"COP_GET_CHARACTERS code=\d+ result=TRUE", conn))}
+            self.samples.append(st)
+            self.alive.append(bool(self.run_.wow_alive()))
+            self.stop_ev.wait(1.0)
+
+    def stop(self):
+        self.stop_ev.set()
+        if self.is_alive():
+            self.join(timeout=10)
+
+    def result(self) -> dict:
+        return {"samples": self.samples, "alive": self.alive}
 
 
 def framexml_untouched(scratch: Path, outputs: dict) -> dict:
@@ -459,7 +544,20 @@ def framexml_untouched(scratch: Path, outputs: dict) -> dict:
             "added_outputs": sorted(outputs)}
 
 
-@check("login.loading_overlay", order=391, capability=CAP_LOGIN, stack="down", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "client-mods/glue/**",
+    "modules/mod-moonglade/src/MoongladeQuiet.cpp",
+    "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.QuietServerText",
+    "harness/hslib/checks/clientinput.py",
+    "harness/hslib/checks/seamless_checks.py",
+    "harness/hslib/mpq.py",
+)
+
+
+# login.loading_overlay: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def loading_overlay(ctx):
     """Continue on a scratch patched play client: the "Entering Azeroth..." overlay is shown from the Continue press
     until character select (visible in every frame of that time), the client shows no stock connection dialog (each
@@ -493,11 +591,13 @@ def loading_overlay(ctx):
             "Lua errors (test error handler)", **ev)
     require(not any((v or "").strip() for v in s["frame_log"].values()), "GlueXML.log / FrameXML.log hold errors", **ev)
     # the screenshot taken in the Continue frame: the run's second screenshot ("S" right after the overlay showed)
-    require("S" in ph["tokens"] and rec[:i_c].count("S") == 1,
+    # (test-pyramid part 3: the session's script takes two screenshots before the Continue: the menu at 4 s and
+    # login.fresh_menu_waits' at 17 s; the connecting one is the third)
+    require("S" in ph["tokens"] and rec[:i_c].count("S") == 2,
             "the connecting screenshot wasn't taken while the overlay was up", **ev)
-    require(len(s["screens"]) >= 3, "the client didn't take the menu, connecting and character-select screenshots",
-            **ev)
-    menu, connecting = s["screens"][0], s["screens"][1]
+    require(len(s["screens"]) >= 4, "the client didn't take the menu, pre-Continue, connecting and character-select "
+            "screenshots", **ev)
+    menu, connecting = s["screens"][0], s["screens"][2]
     ev["connecting_shot"] = connecting
     require(connecting["overlay_square"] == "green", "the connecting screenshot's marker doesn't show the overlay", **ev)
     require(connecting["black"]["fraction"] >= 0.9 and menu["black"]["fraction"] < 0.9,
@@ -506,7 +606,7 @@ def loading_overlay(ctx):
     return ev
 
 
-@check("login.charselect_wording", order=392, capability=CAP_LOGIN, stack="down", tier="full")
+# login.charselect_wording: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def charselect_wording(ctx):
     """At character select (test account, its one character) the test hook records the realm name and Change Realm
     hidden and the buttons reading "Play" and "Main Menu"; clicking Play (the button's own click) enters the world:
@@ -547,7 +647,7 @@ def _addon_wording() -> dict[str, str]:
     return {m.group(1): _lua_unescape(m.group(2)) for m in re.finditer(r'(\w+) = "((?:[^"\\]|\\.)*)",', block)}
 
 
-@check("client.wording_addon", order=393, capability=CAP_CONN, stack="down", tier="full")
+# client.wording_addon: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def wording_addon(ctx):
     """A test character enters the world on a scratch patched play client and logs out: the add-on's report (its
     SavedVariables, written at logout) shows it loaded and enabled; every string it replaces is listed, at least
@@ -679,7 +779,7 @@ def _common_record(s: dict, ev: dict) -> list[str]:
     return rec
 
 
-@check("login.overlay_progress", order=392, capability=CAP_LOGIN, stack="down", tier="full")
+# login.overlay_progress: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def overlay_progress(ctx):
     """Continue on a scratch patched play client until character select: the loading bar, read back from its width
     every frame by the test hook, starts empty, never decreases, grows at least once inside the event handler of a
@@ -704,7 +804,7 @@ def overlay_progress(ctx):
     return ev
 
 
-@check("login.overlay_progress_reload", order=392, capability=CAP_LOGIN, stack="down", tier="full")
+# login.overlay_progress_reload: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def overlay_progress_reload(ctx):
     """Zach's repro: Continue -> character select -> Main Menu -> Continue again RELOAD_GAP_S seconds later. The
     first load ends with a full bar; the second load's bar starts empty again, never decreases and ends full at the
@@ -755,7 +855,7 @@ def stock_charselect_gap() -> dict:
 LAYOUT_TOL = 2               # UI units (each GetTop is rounded to the unit)
 
 
-@check("login.charselect_layout", order=392, capability=CAP_LOGIN, stack="down", tier="full")
+# login.charselect_layout: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def charselect_layout(ctx):
     """At character select (realm controls hidden, the test account's one character) the test hook's layout reading
     (GetTop/GetBottom of CharacterSelectCharacterFrame and the character buttons): the gap between the panel's top and
@@ -827,6 +927,8 @@ def error_session() -> dict:
         _wait(lambda: len([p for p in screenshots(scratch) if p.stat().st_mtime >= t_up - 5]) >= 3, 120, step=1)
         ev["auth_down_at_details_shot"] = not stack.port_open(P.AUTH_PORT) and not _auth_pids()
         ev["auth_restart"] = stack.auth_up(timeout=30)
+        from .play_checks import warm_refresh
+        warm_refresh("the friendly-error session restarted the login server")
         ev["auth_restart"]["after_client_up_s"] = round(time.time() - t_up, 1)
         rec = _wait(lambda: glue_record(scratch), LOG_TIMEOUT, step=2)
         ev["glue_record"] = rec
@@ -845,7 +947,7 @@ def error_session() -> dict:
         drop_scratch(scratch)
 
 
-@check("login.friendly_errors", order=394, capability=CAP_LOGIN, stack="down", tier="full")
+# login.friendly_errors: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def friendly_errors(ctx):
     """Login server stopped, Continue: the friendly error appears (no server/realm/connect/authenticat/account in its
     message), with Try again / Back to menu; Show details reveals the client's own stock error text (a GlueStrings.lua
@@ -952,7 +1054,10 @@ def _hits(texts: list[dict]) -> list[dict]:
     return out
 
 
-@check("client.login_text_clean", order=129, capability=CAP_CONN, stack="up", tier="full")
+@check("client.login_text_clean", order=129, capability=CAP_CONN, stack="up", layer="integration", targeted=True,
+       covers=("modules/mod-moonglade/src/MoongladeQuiet.cpp",
+               "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.QuietServerText",
+               "harness/hslib/checks/seamless_checks.py"))   # targeted (design 16): its own code; a headless probe
 def login_text_clean(ctx):
     """A character logs in through the headless probe and stays in the world 30 s: no SMSG_MOTD and no system or chat
     message addressed to it containing server, realm, AzerothCore, playerbot or mod- (case-insensitive). Then the check

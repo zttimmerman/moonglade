@@ -109,7 +109,20 @@ def patch_applied_evidence(patch: Path, vendor_file: Path, install_stamp: Path) 
     return ev
 
 
-@check("core.patch_applied", order=22, capability="server-build", stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "patches/core/**",
+    "patches/playerbots/**",
+    "harness/hslib/baseline.py",
+    "harness/hslib/build.py",
+    "harness/hslib/checks/core_checks.py",
+    "harness/hslib/crashtrace.py",
+)
+
+
+@check("core.patch_applied", order=22, capability="server-build", stack="any", layer="unit", parallel_safe=True)
 def patch_applied(ctx):
     """0001-server-mail-guard-async-player.patch applies cleanly to core_sha (pristine scratch index), the patched
     and the installed source contain the GUID guard, the installed build is stamped with this patch, and the
@@ -209,7 +222,7 @@ def _summ_rows(rows):
             "per_attempt_s": [r["s"] for r in rows]}
 
 
-@check("core.login_logout_race", order=125, capability="server-build", stack="up", tier="full")
+@check("core.login_logout_race", order=125, capability="server-build", stack="up", layer="integration")
 def login_logout_race(ctx):
     """20 probe logins of the test character, each logging out immediately (no settle_login): worldserver keeps
     the same pid, SOAP answers, no new worldserver crash report, every logout completed."""
@@ -256,7 +269,7 @@ def _server_digest() -> str:
 CRASHTRACE_DIR = B.TMP / "crashtrace"
 
 
-@check("core.login_logout_race_baseline", order=126, capability="server-build", stack="up", tier="full")
+@check("core.login_logout_race_baseline", order=126, capability="server-build", stack="up", layer="gate")
 def login_logout_race_baseline(ctx):
     """The pinned core built WITHOUT the patch (baseline/: own worktree, build dir and install) crashes within
     20 immediate login/logout attempts: it dies of SIGSEGV, and the backtrace that THIS crash recorded (crashtrace
@@ -409,7 +422,7 @@ def _apply_queue(repo: Path, sha: str, patches: list[Path], files: list[str]) ->
     return out
 
 
-@check("core.playerbots_patches_applied", order=23, capability="server-build", stack="any", tier="quick")
+@check("core.playerbots_patches_applied", order=23, capability="server-build", stack="any", layer="unit", parallel_safe=True)
 def playerbots_patches_applied(ctx):
     """patches/core/0002 (hook packet copy, ADR-0007) applies after 0001 to core_sha and patches every
     OnPacketReceived site; patches/playerbots/0001 (remove leaves the party, ADR-0008) applies to playerbots_sha;

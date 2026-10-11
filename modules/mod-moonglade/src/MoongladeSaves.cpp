@@ -11,6 +11,7 @@
  */
 
 #include "MoongladeSaves.h"
+#include "logic/SavesLogic.h"
 
 #include "CharacterPackets.h"
 #include "Chat.h"
@@ -164,7 +165,6 @@ namespace MoongladeSaves
 
 
     constexpr uint64 MIN_FREE_BYTES = 2ull * 1024 * 1024 * 1024;     // harness/hslib/backups.py MIN_FREE_BYTES
-    constexpr std::string_view MIDDOT = "\xC2\xB7";                  // " · " in labels (UTF-8)
     // the harness's test accounts (paths.TEST_USER, paths.SAVES_USER): the only ones the test switches apply to
     bool IsTestAccount(std::string_view account) { return account == "HSTEST" || account == "HSSAVES"; }
 
@@ -179,41 +179,14 @@ namespace MoongladeSaves
         uint32 pauseAfterFirstFileS = 0;
     } g_test;
 
-    std::string JsonEscape(std::string_view in)
-    {
-        std::string out;
-        out.reserve(in.size() + 2);
-        for (unsigned char c : in)
-        {
-            if (c == '"' || c == '\\')
-            {
-                out += '\\';
-                out += char(c);
-            }
-            else if (c < 0x20)
-            {
-                char buf[8];
-                std::snprintf(buf, sizeof(buf), "\\u%04x", c);
-                out += buf;
-            }
-            else
-                out += char(c);
-        }
-        return out;
-    }
+    // pure logic (logic/SavesLogic.cpp, unit-tested on the host): the module calls it, never a copy
+    using MoongladeLogic::JsonEscape;
+    using MoongladeLogic::IsHexType;
+    using MoongladeLogic::IsFloatType;
+    using MoongladeLogic::SqlValue;
+    using MoongladeLogic::FormatTime;
 
     std::string Q(std::string_view s) { return "\"" + JsonEscape(s) + "\""; }
-
-    bool IsHexType(std::string const& type)
-    {
-        return type == "blob" || type == "tinyblob" || type == "mediumblob" || type == "longblob" || type == "binary"
-            || type == "varbinary" || type == "bit";
-    }
-
-    bool IsFloatType(std::string const& type)
-    {
-        return type == "float" || type == "double" || type == "decimal";
-    }
 
     /// SELECT list for a save-set table (alias `t`): every column as text. FLOAT/DOUBLE via DOUBLE, so positions are
     /// exact (the shortest text that reads back as the same double, which is the stored float); binary as hex.
@@ -380,53 +353,18 @@ namespace MoongladeSaves
         return "Somewhere";
     }
 
-    std::string FormatTime(time_t t, char const* fmt, bool utc)
-    {
-        tm tmv{};
-        if (utc)
-            gmtime_r(&t, &tmv);
-        else
-            localtime_r(&t, &tmv);
-        char buf[64];
-        std::strftime(buf, sizeof(buf), fmt, &tmv);
-        return buf;
-    }
-
     /// A save's label as the menus show it: the player's name for it, else "<Zone> · Level <n> · <Ddd HH:MM>";
     /// an autosave starts with its moment ("Rested: Goldshire · Level 5 · Tue 21:04").
     std::string DefaultLabel(std::string const& moment, uint32 zone, uint32 level, time_t t)
     {
-        std::string s;
-        if (!moment.empty())
-            s = moment + ": ";
-        s += ZoneName(zone) + " " + std::string(MIDDOT) + " Level " + std::to_string(level) + " " + std::string(MIDDOT)
-            + " " + FormatTime(t, "%a %H:%M", false);
-        return s;
+        return MoongladeLogic::DefaultLabel(moment, ZoneName(zone), level, t);
     }
 
     /// A player's name for a save: printable, no tabs or '|' (the add-on's separators), at most 48 bytes.
+    /// (logic/SavesLogic.cpp, unit-tested on the host.)
     std::string CleanLabel(std::string_view in)
     {
-        std::string out;
-        for (unsigned char c : in)
-        {
-            if (c < 0x20 || c == '|' || c == 0x7f)
-                continue;
-            out += char(c);
-        }
-        while (!out.empty() && out.back() == ' ')
-            out.pop_back();
-        size_t start = out.find_first_not_of(' ');
-        out = start == std::string::npos ? std::string() : out.substr(start);
-        if (out.size() > 48)
-        {
-            out.resize(48);
-            while (!out.empty() && (static_cast<unsigned char>(out.back()) & 0xC0) == 0x80)
-                out.pop_back();                       // never cut a UTF-8 sequence in half
-            if (!out.empty() && (static_cast<unsigned char>(out.back()) & 0x80))
-                out.pop_back();
-        }
-        return out;
+        return MoongladeLogic::CleanLabel(in);
     }
 
     struct Manifest
@@ -533,32 +471,17 @@ namespace MoongladeSaves
             : kind == "before-load" ? g_cfg.keepBeforeLoad : 0;
         if (kind == "manual" || keep == 0)
             return;
-        std::vector<std::string> ids;
+        // the retention choice is logic/SavesLogic.cpp's RetentionDeletes (unit-tested on the host); this walks the
+        // folder and deletes
+        std::vector<std::string> names;
         std::error_code ec;
-        std::string suffix = "-" + kind;
         for (auto const& e : fs::directory_iterator(charDir, ec))
+            if (e.is_directory(ec))
+                names.push_back(e.path().filename().string());
+        for (std::string const& id : MoongladeLogic::RetentionDeletes(names, kind, keep))
         {
-            std::string n = e.path().filename().string();
-            if (n.rfind(".tmp-", 0) == 0 || !e.is_directory(ec))
-                continue;
-            // <YYYYMMDD-HHMMSS>-<kind>[-n]
-            if (n.size() > 16 && n.compare(15, suffix.size(), suffix) == 0
-                && (n.size() == 15 + suffix.size() || n[15 + suffix.size()] == '-'))
-                ids.push_back(n);
-        }
-        std::sort(ids.begin(), ids.end(), [](std::string const& a, std::string const& b)
-        {
-            // same second: "-<kind>" before "-<kind>-2" before "-<kind>-10"
-            if (a.substr(0, 15) != b.substr(0, 15))
-                return a < b;
-            auto n = [](std::string const& x) { size_t p = x.rfind('-'); return std::isdigit(static_cast<unsigned char>(x[p + 1])) && p > 15 ? std::stoul(x.substr(p + 1)) : 1ul; };
-            return n(a) < n(b);
-        });
-        while (ids.size() > keep)
-        {
-            fs::remove_all(charDir / ids.front(), ec);
-            LOG_INFO("module", "[mod-moonglade] saves: rotated out {}", ids.front());
-            ids.erase(ids.begin());
+            fs::remove_all(charDir / id, ec);
+            LOG_INFO("module", "[mod-moonglade] saves: rotated out {}", id);
         }
     }
 
@@ -998,32 +921,6 @@ namespace MoongladeSaves
     uint32 g_nextJob = 1;
     std::unordered_map<uint32, uint32> g_loading;  // character guid -> job (one load per character at a time)
 
-    std::string SqlValue(std::optional<std::string> const& v, std::string const& type)
-    {
-        if (!v)
-            return "NULL";
-        if (IsHexType(type))
-        {
-            for (char c : *v)
-                if (!std::isxdigit(static_cast<unsigned char>(c)))
-                    return "NULL";
-            return "X'" + *v + "'";
-        }
-        std::string out = "'";
-        for (char c : *v)
-        {
-            if (c == '\\' || c == '\'')
-                out += '\\';
-            if (c == '\0')
-            {
-                out += "\\0";
-                continue;
-            }
-            out += c;
-        }
-        return out + "'";
-    }
-
     struct ParsedSave
     {
         Manifest m;
@@ -1359,17 +1256,14 @@ namespace MoongladeSaves
     /// Why a player-requested save is refused now ("" = allowed). Bots never get here.
     std::string RefuseSave(Player* player)
     {
-        if (player->IsInCombat())
-            return "You can't save in combat.";
-        if (!player->IsAlive() || player->HasPlayerFlag(PLAYER_FLAGS_GHOST))
-            return "You can't save while dead.";
-        if (player->m_movementInfo.HasMovementFlag(MovementFlags(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR)))
-            return "You can't save while falling.";
-        if (player->InBattleground() || player->InArena())
-            return "You can't save in a battleground or arena.";
-        if (player->IsBeingTeleported())
-            return "You can't save while travelling between places.";
-        return {};
+        MoongladeLogic::SaveState st;
+        st.inCombat = player->IsInCombat();
+        st.alive = player->IsAlive();
+        st.ghost = player->HasPlayerFlag(PLAYER_FLAGS_GHOST);
+        st.falling = player->m_movementInfo.HasMovementFlag(MovementFlags(MOVEMENTFLAG_FALLING | MOVEMENTFLAG_FALLING_FAR));
+        st.inBattlegroundOrArena = player->InBattleground() || player->InArena();
+        st.teleporting = player->IsBeingTeleported();
+        return MoongladeLogic::SaveRefusal(st);
     }
 
     void Configure()
@@ -1383,19 +1277,14 @@ namespace MoongladeSaves
         s.workerThreads = sConfigMgr->GetOption<int32>("CharacterDatabase.WorkerThreads", 1);
         bool enable = sConfigMgr->GetOption<bool>("Moonglade.Saves.Enable", true);
         std::error_code ec;
-        if (!enable)
-            s.why = "Moonglade.Saves.Enable = 0";
-        else if (s.workerThreads != 1)
-            s.why = "CharacterDatabase.WorkerThreads = " + std::to_string(s.workerThreads)
-                + " (saves need 1: one FIFO async worker orders a load after every earlier write)";
-        else if (s.dir.empty())
-            s.why = "Moonglade.Saves.Dir is empty";
-        else if (!s.dir.is_absolute())
-            s.why = "Moonglade.Saves.Dir is not an absolute path";
-        else if (fs::create_directories(s.dir, ec), ec)
-            s.why = "Moonglade.Saves.Dir can't be created (" + ec.message() + ")";
-        else
-            s.why.clear();
+        s.why = MoongladeLogic::DisabledReason(enable, s.workerThreads, s.dir.empty());
+        if (s.why.empty())
+        {
+            if (!s.dir.is_absolute())
+                s.why = "Moonglade.Saves.Dir is not an absolute path";
+            else if (fs::create_directories(s.dir, ec), ec)
+                s.why = "Moonglade.Saves.Dir can't be created (" + ec.message() + ")";
+        }
         s.enabled = s.why.empty();
         g_cfg = s;
         if (g_cfg.enabled)

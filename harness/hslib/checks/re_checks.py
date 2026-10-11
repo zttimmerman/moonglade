@@ -29,7 +29,19 @@ def _snapshot() -> dict:
     return snap
 
 
-@check("re.ghidra_installed", order=220, capability="client-analysis", stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "harness/ghidra_scripts/**",
+    "fork.lock#ghidra_*",
+    "harness/hslib/checks/re_checks.py",
+    "harness/hslib/ghidra.py",
+    "harness/hslib/mpq.py",
+)
+
+
+@check("re.ghidra_installed", order=220, capability="client-analysis", stack="any", layer="unit", parallel_safe=True)
 def ghidra_installed(ctx):
     """`hs ghidra-install` on an installed tree: exit 0, no download, pinned version, JDK 21+, marker = pinned SHA."""
     r = subprocess.run([str(P.HARNESS / "hs"), "ghidra-install"], capture_output=True, text=True, timeout=600)
@@ -45,7 +57,7 @@ def ghidra_installed(ctx):
     return ev
 
 
-@check("re.ghidra_readonly", order=221, capability="client-analysis", stack="any", tier="full")
+@check("re.ghidra_readonly", order=221, capability="client-analysis", stack="any", layer="gate")
 def ghidra_readonly(ctx):
     """Headless import + report on a copy of Wow.exe: entry point and a string match reported; client/ unchanged."""
     before = _snapshot()
@@ -74,7 +86,7 @@ def ghidra_readonly(ctx):
     return ev
 
 
-@check("re.ghidra_refuses_mismatch", order=223, capability="client-analysis", stack="any", tier="quick")
+@check("re.ghidra_refuses_mismatch", order=223, capability="client-analysis", stack="any", layer="unit", parallel_safe=True)
 def ghidra_refuses_mismatch(ctx):
     """install refuses (a) a download whose SHA-256 differs from the pin and (b) an existing tree with no marker."""
     import tempfile, zipfile as zf
@@ -109,7 +121,7 @@ def ghidra_refuses_mismatch(ctx):
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
 
-@check("re.mpq_readonly", order=222, capability="client-analysis", stack="any", tier="quick")
+@check("re.mpq_readonly", order=222, capability="client-analysis", stack="any", layer="unit", parallel_safe=True)
 def mpq_readonly(ctx):
     """`hs mpq list Data/common.MPQ` has >1000 entries; one listed file extracted into env/re/ is nonempty; client/ unchanged."""
     before = _snapshot()
@@ -141,7 +153,7 @@ def mpq_readonly(ctx):
     return ev
 
 
-@check("re.mpq_write_roundtrip", order=224, capability="client-analysis", stack="any", tier="quick")
+@check("re.mpq_write_roundtrip", order=224, capability="client-analysis", stack="any", layer="unit", parallel_safe=True)
 def mpq_write_roundtrip(ctx):
     """`hs mpq write` builds archives (zlib and stored) that `hs mpq list|extract` read back byte-identical, with
     standard-key encrypted tables; a write into a scratch stand-in client dir is refused with nothing created; the

@@ -377,13 +377,21 @@ class Session(C.Session):
             self.ws.chat("follow", W.CHAT_MSG_WHISPER, to=n)
         return b
 
-    def read_selected_boss(self, guid: int, entry: int) -> dict:
-        """`.npc info` and `.ab creaturestat` on a creature by GUID (a summoned boss has no spawn id to read by)."""
-        self.ws.set_selection(guid)
-        time.sleep(0.3)
-        info = C.parse_npc_info(self.cmd(".npc info", settle=0.5))
-        m = re.search(r"Entry: (\d+)", "\n".join(info.get("raw") or []))
-        stat = parse_creaturestat(self.cmd(".ab creaturestat", settle=0.5))
+    def read_selected_boss(self, guid: int, entry: int, tries: int = 3) -> dict:
+        """`.npc info` and `.ab creaturestat` on a creature by GUID (a summoned boss has no spawn id to read by). The
+        self-AI may change the probe's selection between the two commands, so the selection is set again right before
+        each, up to `tries` times until both read."""
+        info, stat, m = {}, {}, None
+        for _ in range(tries):
+            self.ws.set_selection(guid)
+            time.sleep(0.3)
+            info = C.parse_npc_info(self.cmd(".npc info", settle=0.5))
+            m = re.search(r"Entry: (\d+)", "\n".join(info.get("raw") or []))
+            self.ws.set_selection(guid)
+            time.sleep(0.3)
+            stat = parse_creaturestat(self.cmd(".ab creaturestat", settle=0.5))
+            if m and info.get("max_health") and stat.get("health_multiplier"):
+                break
         return {"guid": guid, "entry": int(m.group(1)) if m else None, "max_health": info.get("max_health"),
                 "health_multiplier": stat.get("health_multiplier"), "creaturestat": stat,
                 "ok": bool(m and int(m.group(1)) == entry and info.get("max_health") and stat.get("health_multiplier"))}
@@ -498,10 +506,15 @@ class Session(C.Session):
             for n in list(self.companions):
                 self.ws.chat("summon", W.CHAT_MSG_WHISPER, to=n)
             tries += 1
-            time.sleep(4)
-            ms = self.mapstat()
-            if ms.get("players") == n_expected:
-                return {"ok": True, "s": round(time.time() - t0, 1), "players": ms["players"], "tries": tries}
+            # poll the map's count for up to 4 s per round of whispers (was a fixed 4 s wait; design 16.3)
+            t_try = time.time()
+            while True:
+                time.sleep(0.5)
+                ms = self.mapstat()
+                if ms.get("players") == n_expected:
+                    return {"ok": True, "s": round(time.time() - t0, 1), "players": ms["players"], "tries": tries}
+                if time.time() - t_try >= 4:
+                    break
         return {"ok": False, "s": round(time.time() - t0, 1), "players": ms.get("players"), "tries": tries,
                 "mapstat": ms}
 
@@ -626,22 +639,28 @@ def solo_final_boss(s: "Session", f: dict, log=None) -> dict:
             u = s.unit(fin["spawns"][0]["spawn_id"], fin["credit_entry"]) if fin["spawns"] else {}
             if not fin["spawns"] and "boss_scaled" not in ev:
                 # a summoned final boss: found as the self-AI's target (the probe's own UNIT_FIELD_TARGET) once its
-                # GUID's entry is the encounter's credit entry, then read by GUID
+                # GUID's entry is the encounter's credit entry, then read by GUID. The self-AI changes the probe's
+                # selection on its own (a read once found `.ab creaturestat` answering "You should select a
+                # creature" right after `.npc info` had read the boss), so every target GUID seen so far is retried
+                # on every poll until one read is complete.
+                lo = hi = 0
+                seen = []
                 for x in s.ws.events_since(mark, "self_values"):
                     fl = x["fields"]
                     if UNIT_FIELD_TARGET in fl or UNIT_FIELD_TARGET + 1 in fl:
-                        a["_tgt_lo"] = fl.get(UNIT_FIELD_TARGET, a.get("_tgt_lo", 0))
-                        a["_tgt_hi"] = fl.get(UNIT_FIELD_TARGET + 1, a.get("_tgt_hi", 0))
-                        g = (a["_tgt_hi"] << 32) | a["_tgt_lo"]
-                        if guid_entry(g) == fin["credit_entry"]:
-                            r = s.read_selected_boss(g, fin["credit_entry"])
-                            a.setdefault("boss_reads", []).append(r)
-                            if r["ok"]:
-                                ev["boss_scaled"] = {"max_health": r["max_health"],
-                                                     "health_multiplier": r["health_multiplier"],
-                                                     "how": "summoned boss, the self-AI's target, read by GUID"}
-                                u = {"health": None, "max_health": r["max_health"]}
-                            break
+                        lo, hi = fl.get(UNIT_FIELD_TARGET, lo), fl.get(UNIT_FIELD_TARGET + 1, hi)
+                        g = (hi << 32) | lo
+                        if g and g not in seen and guid_entry(g) == fin["credit_entry"]:
+                            seen.append(g)
+                for g in seen:
+                    r = s.read_selected_boss(g, fin["credit_entry"])
+                    a.setdefault("boss_reads", []).append(r)
+                    if r["ok"]:
+                        ev["boss_scaled"] = {"max_health": r["max_health"],
+                                             "health_multiplier": r["health_multiplier"],
+                                             "how": "summoned boss, the self-AI's target, read by GUID"}
+                        u = {"health": None, "max_health": r["max_health"]}
+                        break
             rows = s.binds(f["map"])
             mask = rows[0]["mask"] if rows else 0
             alive = s.alive()

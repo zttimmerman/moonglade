@@ -15,7 +15,7 @@ This is a **personal project**. Its source is public under GPL-2.0-or-later; no 
 - **Game version:** WotLK 3.3.5a, build 12340.
 - **Server core:** AzerothCore (WotLK 3.3.5a), forked. Changes go in modules and SQL where possible, core patches only when unavoidable, and each core patch gets an ADR.
 - **Bots:** mod-playerbots. Scaling: a SoloCraft-style module (evaluate the existing one before writing new).
-- **Client:** the Windows 3.3.5a (build 12340) client, run under CrossOver/Wine. The native Mac 3.3.5a client is 32-bit and unusable on modern macOS.
+- **Client:** the Windows 3.3.5a (build 12340) client, run under the pinned WoWSilicon Wine runtime with mtld3d (ADR-0004). The native Mac 3.3.5a client is 32-bit and unusable on modern macOS.
 - **Host:** macOS ARM64. Docker is acceptable for MySQL and/or the server if native builds fight you; record the choice in an ADR.
 - **No client binary patching in v1.** Use config (`Config.wtf`, `realmlist.wtf`) and a launcher script instead. **Read-only** Ghidra analysis of the client is open (Zach, 2026-10-02, ADR-0005): analyze copies under `env/re/`, never modify `client/`. Any binary change still needs an ADR and Zach's explicit yes. **Revertable client patching is open via ADR-0009** (Zach, 2026-10-04): `client/` stays pristine; patches apply only to the derived play client `env/client-play/` from the hash-checked queue `patches/client/`. ADR-0009 approves the mechanism and the first patch (GlueXML signature check) only; every further binary patch needs its own ADR and Zach's yes.
 
@@ -25,14 +25,14 @@ This is delta work on an existing codebase, so use OpenSpec:
 
 - Every unit of work is a change in `openspec/changes/<id>/` with a proposal, spec deltas, and tasks.
 - Every requirement has at least one **scenario** (GIVEN/WHEN/THEN).
-- **Every scenario maps to an automated check in the harness** (section 5), or is explicitly tagged `[human-verify]` with a reason. A scenario with neither is incomplete, and the change cannot be approved.
+- **Every scenario maps to an automated check at the lowest layer that can prove it** (unit, integration, or one of the fixed real-client journeys; see `harness-reporting`), or is explicitly tagged `[human-verify]` with a reason. A scenario with neither is incomplete, and the change cannot be approved. Adding a journey or growing the journey set is a spec change reviewed at the next human gate.
 - Archive a change only after its verifier pass (section 6).
 
 ## 6. Roles and the verifier rule
 
 - **You (orchestrator):** specs, task breakdown, delegation, integration, STATUS.md, ADRs.
-- **Builder subagents:** implement one task against one spec, with a clean context per task.
-- **Verifier subagent:** a fresh context that did not build the change. It receives only the spec deltas, the diff, and harness access. It returns PASS or FAIL per scenario with evidence.
+- **Builder subagents:** implement one task against one spec, with a clean context per task. Builders run the unit layer (`harness/hs test`) plus the one acceptance test they are writing, repeated as needed. They never run an acceptance tier per task.
+- **Verifier subagent:** a fresh context that did not build the change. It receives only the spec deltas, the diff, and harness access. It runs the PR tier once (`harness/hs run --tier pr`: the unit layer, then the integration tests and journeys the change touches, or the complete suite when the selector says FULL), repeats each new or changed test 3×, and returns PASS or FAIL per scenario with evidence. A missed layer budget is a FAIL.
 
 **Builders never grade their own work. You never accept a builder's claim of completion without a verifier PASS.**
 
@@ -51,10 +51,10 @@ Repeat until the current milestone's exit criteria are met:
 
 1. Read STATUS.md and the open changes.
 2. Pick the highest-priority unblocked task.
-3. Delegate to a builder with the spec deltas and task.
-4. Send the result to the verifier.
-5. FAIL: return to the builder with the verifier's evidence. After 3 failed cycles on one task, mark it blocked with a written diagnosis and move to another task. Do not stop the session.
-6. PASS: integrate, run the **full** harness to catch regressions, update STATUS.md, archive the change if all its tasks are done.
+3. Delegate to a builder with the spec deltas and task. The builder's loop is the unit layer plus the test it is writing.
+4. Send the result to the verifier (one PR-tier run).
+5. FAIL: return to the builder with the verifier's evidence. Reproduce the failure at the cheapest layer that shows it (a unit test, else the single failing test) before rerunning anything larger. After 3 failed cycles on one task, mark it blocked with a written diagnosis and move to another task. Do not stop the session.
+6. PASS: integrate. The PR tier is the merge requirement. Its selection runs the complete acceptance suite (FULL) only for core or playerbots patches, their pins in `fork.lock`, and the build; an unowned or shared path runs the smoke set; targeted checks run only when their own code changes; gate checks never run in a PR. Update STATUS.md and archive the change if all its tasks are done. At each milestone gate, run the complete suite (`--tier full`) three times; any failure in any run is P0.
 7. When the milestone's exit criteria are all green, stop at its human gate if it has one; otherwise plan the next milestone's changes and continue.
 
 ## 10. What does NOT count as done
@@ -63,14 +63,14 @@ None of these is evidence of completion:
 
 - "It compiles," "it launches," or "it seems to work."
 - A builder's summary of its own work.
-- Passing a subset of the harness.
+- Passing a hand-picked subset of the harness. (The PR tier's automatic selection is not hand-picked: it is the merge requirement when its selection, its time budgets and the run all pass. A missed time budget is a failure, not a note.)
 - A scenario you rewrote or loosened to make it pass. Changing a spec requires a recorded reason in the change proposal and is reviewed at the next human gate.
 
-If you notice yourself concluding the project is "good enough," check section 8. If an exit criterion is not green, it is not done.
+If you notice yourself concluding the project is "good enough," check KICKOFF.md §8. If an exit criterion is not green, it is not done.
 
 ## 11. When to stop and wait for the human
 
-Stop only for: a human gate in section 8, Gate 1, any action involving client binary modification, anything that would delete or overwrite user data outside the repo, or a fixed decision (section 2) that you believe is wrong. In that last case, write an ADR arguing the change and wait.
+Stop only for: a human gate in KICKOFF.md §8, Gate 1, any action involving client binary modification, anything that would delete or overwrite user data outside the repo, or a fixed decision (section 2) that you believe is wrong. In that last case, write an ADR arguing the change and wait.
 
 Everything else, including blocked tasks, ambiguous specs, and failing tests, you handle by recording it in STATUS.md and continuing with other work.
 

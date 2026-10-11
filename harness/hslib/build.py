@@ -335,10 +335,16 @@ def read_stamp(path) -> str | None:
         return None
 
 
-def _write_stamps(h: str, manifest: dict):
-    doc = json.dumps({"input_hash": h, "written": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
-                      "by": "passing from-empty build (harness/hslib/build.py)", "manifest": manifest}, indent=2)
-    for p in (build_stamp_path(), install_stamp_path()):
+def _write_stamps(h: str, manifest: dict, incremental: bool = False):
+    """A passing from-empty build stamps build/ and the install; a passing incremental build stamps only the install
+    (test-pyramid part 3): the installed binaries were built from these inputs, which core.patch_applied and the run's
+    "is the server current" step read, but no from-empty build vouched for them, so build/ stays unstamped and the
+    next `--clean` (decide_mode: no build stamp) still builds from empty."""
+    by = ("passing incremental build (harness/hslib/build.py; build/ not stamped)" if incremental
+          else "passing from-empty build (harness/hslib/build.py)")
+    doc = json.dumps({"input_hash": h, "written": time.strftime("%Y-%m-%dT%H:%M:%S%z"), "by": by,
+                      "manifest": manifest}, indent=2)
+    for p in ((install_stamp_path(),) if incremental else (build_stamp_path(), install_stamp_path())):
         p.write_text(doc)
 
 
@@ -512,6 +518,9 @@ def build(clean=False, jobs=None, force_clean=False, ignore_power=False, resume=
     c = info["clean"]
     if mode == "from-empty":
         _write_stamps(h, manifest)
+        c["stamp_written"] = {"build": read_stamp(build_stamp_path()), "install": read_stamp(install_stamp_path())}
+    elif mode == "incremental":
+        _write_stamps(h, manifest, incremental=True)
         c["stamp_written"] = {"build": read_stamp(build_stamp_path()), "install": read_stamp(install_stamp_path())}
     elif mode == "verified-current":
         after = installed_digest()

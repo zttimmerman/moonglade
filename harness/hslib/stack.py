@@ -333,7 +333,7 @@ def world_up(timeout, on_stage=None):
     if on_stage:                    # worldserver.out was just truncated by _spawn: progress can follow it from here
         on_stage("world", "spawned", log=str(LOG["worldserver"]), pid=proc.pid)
     t0 = time.time()
-    ok = _wait(soap_ready, timeout, interval=2.0, watch_pid=proc.pid)
+    ok = _wait(soap_ready, timeout, interval=0.5, watch_pid=proc.pid)   # design 16.3: was 2 s (each restart waited ~1 s more)
     if not ok:
         try:
             rc = proc.wait(timeout=10)   # reap before reading the log so the final (stderr) lines are on disk
@@ -375,14 +375,22 @@ def running_profile() -> dict | None:
 
 
 def profile_matches(name: str) -> bool:
+    """The running worldserver runs with profile `name`'s settings: started with it, or with another profile whose
+    overrides are identical (same digest; test-pyramid part 3: `scaling-on` is m0 under another name only so its
+    group runs after scaling-off's, and the journeys after it need no restart back to m0). Never the population
+    profile by digest (its N is recorded separately)."""
     rp = running_profile()
-    return bool(rp) and rp["profile"] == name and rp.get("digest") == config.profile_digest(name)
+    if not rp or not rp.get("digest") or rp.get("digest") != config.profile_digest(name):
+        return False
+    return rp["profile"] == name or "population" not in (rp["profile"], name)
 
 
 def world_matches(name: str, population_n: int | None = None) -> bool:
     """The running worldserver was started with profile `name` and, for the population profile, at N =
     `population_n` (its recorded n and digest both match). False when no worldserver runs."""
     rp = running_profile()
+    if name != "population" and rp and rp["profile"] != "population":
+        return profile_matches(name)          # same settings under another name (scaling-on is m0): no restart
     n = config.population_n(population_n) if name == "population" else None
     return (bool(rp) and rp["profile"] == name and rp.get("n") == n
             and rp.get("digest") == config.profile_digest(name, n))
@@ -423,7 +431,7 @@ def up(world_datadir: Path | None = None, timeout: int | None = None, profile: s
     was_running = bool(stack_processes()["worldserver"])
     if was_running:
         rp = running_profile()
-        if rp["profile"] != name and (profile or os.environ.get("HS_PROFILE")):
+        if rp["profile"] != name and (profile or os.environ.get("HS_PROFILE")) and not profile_matches(name):
             raise StackError(f"worldserver is already running with profile {rp['profile']!r}, not {name!r}; "
                              "`hs down` first (or use stack.ensure_profile)")
         name = rp["profile"]          # keep the rendered confs matching the running worldserver
@@ -468,6 +476,17 @@ def ensure_profile(name: str, timeout: int | None = None) -> dict:
     return out
 
 
+def restart_world(profile: str | None = None, timeout: int | None = None) -> dict:
+    """Restart the worldserver only (mysqld and authserver keep running), with `profile` (test-pyramid: the
+    shared-server fixture's restart after leaked state). Starts everything if the stack is down."""
+    rp = running_profile()
+    out = {"profile": profile or config.DEFAULT_PROFILE, "was": rp}
+    if rp:
+        out["stop_worldserver"] = stop_worldserver(rp["pid"])
+    out["up"] = up(profile=profile or config.DEFAULT_PROFILE, timeout=timeout)
+    return out
+
+
 def stop_worldserver(pid: int) -> dict:
     """Graceful worldserver shutdown (SOAP `server shutdown 1`), SIGTERM/SIGKILL fallback. Also used to swap in the
     unpatched baseline worldserver (core.login_logout_race_baseline) while mysqld + authserver keep running."""
@@ -476,7 +495,7 @@ def stop_worldserver(pid: int) -> dict:
         soap.gm("server shutdown 1", timeout=10)
     except OSError:
         os.kill(pid, signal.SIGTERM)
-    if not _wait(lambda: not alive(pid), 90):
+    if not _wait(lambda: not alive(pid), 90, interval=0.25):     # design 16.3: polled at 0.25 s (was 1 s)
         os.kill(pid, signal.SIGTERM)
         if not _wait(lambda: not alive(pid), 30):
             os.kill(pid, signal.SIGKILL)

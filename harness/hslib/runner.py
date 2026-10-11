@@ -1,4 +1,15 @@
-"""`hs run`: execute checks, write results.json + summary.md."""
+"""`hs run`: execute checks, write results.json + summary.md.
+
+test-pyramid (harness-reporting "Test layers and run tiers"): run tiers are
+- unit: the unit layer only (unit tests + unit-layer checks); never touches the stack (`harness/hs test` is the same);
+- pr: the unit layer first (a failure stops the run there), then impact selection (hslib/selection.py), then the
+  selected integration and journey checks in run order (segment()); the gate checks it selects are listed as owed
+  (meta.selection.gate_owed, summary.md) and never run;
+- full: every check of every layer.
+Run order (segment): unit -> cold integration (stack down) -> `hs up` (lifecycle.up) -> shared integration, default
+profile -> profile groups -> warm journeys -> `hs down` (lifecycle.down) -> journey.first_play -> the release
+bracket and the other gate checks -> run guards (order >= GUARD_ORDER) -> post-run reports.
+"""
 import fnmatch
 import json
 import os
@@ -11,52 +22,51 @@ import traceback
 from datetime import datetime, timezone
 
 from . import config, paths as P, stack
-from .registry import REGISTRY, CheckFail, CheckSkip, load_all, tiers_for
+from .registry import CHILDREN, REGISTRY, RUN_TIERS, CheckFail, CheckSkip, load_all
 from .util import keep_awake, log
 
-# harness-reporting "Slow-tier scenario checks": what a full-tier run records for a scenario-referenced slow check
-SLOW_SKIP_MSG = "slow tier, not run in a full run"
-# harness-reporting "GUI tier": what a full run records for a gui-marked check when no GUI path changed
-GUI_SKIP_MSG = "gui tier, not run in a full run (no GUI path changed)"
 # release-signing: a ci_only check outside the release workflow (GITHUB_ACTIONS != true) reports this skip, never a pass
 CI_ONLY_SKIP_MSG = "not applicable: CI-only (judges a release-workflow run; local builds are never Developer ID signed)"
-# The GUI path rule: a change touching any GUI input runs the gui checks in full runs. launcher-fixes (F26, verifier
-# 2026-10-05): dependency-based. The GUI inputs are the non-Python files below plus the transitive in-repo import
-# closure of GUI_ROOTS (the gui checks and their shared app session, and the code that session runs: the launcher
-# build, the ./play loop, the shim build), computed from the sources at evaluation time, so a new helper they
-# import is covered without editing this list.
-GUI_ROOTS = (
-    "harness/hslib/checks/polish_checks.py",  # the gui checks and their shared app session
-    "harness/hslib/checks/app_checks.py",     # open_app / Hook / build_app used by that session
-    "harness/hslib/play.py",                  # the play loop the app runs (stages, ready -> hand-off, shutdown)
-    "harness/hslib/app.py",                   # builds dist/Moonglade.app
-    "harness/hslib/dockshim.py",              # builds/loads the Dock shim
-    "harness/hslib/__main__.py",              # `harness/hs app` (build_app) and the CLI
-    "harness/hslib/runner.py",                # this rule and the GUI tier itself
-)
-GUI_FILES = (
-    "harness/app/*",                          # launcher.m, dockshim.m
-    "play",                                   # the ./play entry point
-    "harness/hs",                             # the harness entry point (`hs app`, `hs run`)
-    "harness/hslib/checks/lssampler.m",       # the session's LaunchServices sampler (app.single_dock_icon)
-)
-GUI_PATHS = GUI_FILES + GUI_ROOTS             # the fixed part (the closure is added by gui_patterns)
+UNIT_FAILED_MSG = "not run: the unit layer failed (a pr run stops there)"
+GUARD_ORDER = 990            # run guards (player protection, the release bracket check): after everything else
+FIRST_PLAY = "journey.first_play"
+BRACKET_PREFIXES = ("release.", "firstlaunch.")
 
-# harness-reporting "Backups tier" (save-backups, Zach 2026-10-06: "run them only when needed"): what a full run records
-# for a backups-marked check when no backup path changed. The backup path list is FIXED (no import closure: the
-# backups checks drive ./play, so a closure would contain most of the harness and the tier would always run). It is
-# the spec's list plus the backup checks' own file and the bits only they and the Backups window use.
-BACKUPS_SKIP_MSG = "backups tier, not run in a full run (no backup path changed)"
-BACKUP_PATHS = (
-    "harness/hslib/backups.py",               # backups: take / list / verify / rotate / restore / CLI
-    "harness/hslib/play.py",                  # the backup on quit, the gate, --backups dispatch, the notice
-    "harness/hslib/stack.py",                 # stack.down's before_database hook
-    "harness/hslib/stages.py",                # the shutdown_backup stage
-    "harness/app/launcher.m",                 # the Backups window, the notice line
-    "play",                                   # the ./play entry point (./play --backups)
-    "harness/hslib/checks/backup_checks.py",  # the backups-tier checks themselves
-    "harness/hslib/db.py",                    # the mysql client wrapper the dumps and loads go through
-)
+
+def segment(c) -> float:
+    """The check's place in the run order (see the module doc)."""
+    if c.order >= GUARD_ORDER:
+        return 9
+    if c.layer == "unit":
+        return 0
+    if c.id == "lifecycle.up":
+        return 1.5                       # the shared fixture's start: the end of the cold segment
+    if c.id == "lifecycle.down":
+        return 6
+    if c.id.startswith(BRACKET_PREFIXES):
+        return 8                         # release.player_data_untouched's bracket: contiguous, stack down
+    if c.layer == "gate":
+        return 8.5
+    if c.layer == "journey":
+        # warm journeys (stack="up": the shared stack stays up) before `hs down`; cold ones (the app's own start, which
+        # refuses the keep-stack switch, and first_play's real cold start) after it
+        return 7 if (c.id == FIRST_PLAY or c.stack == "down") else 5
+    if c.stack == "up":
+        return 2 if (c.profile or config.DEFAULT_PROFILE) == config.DEFAULT_PROFILE else 3
+    return 1
+
+
+def run_key(c) -> tuple:
+    return (segment(c), c.profile or "", c.order, c.id)
+
+
+def layer_of(cid: str, reg: dict | None = None) -> str | None:
+    reg = REGISTRY if reg is None else reg
+    if cid in reg:
+        return reg[cid].layer
+    if cid in CHILDREN and CHILDREN[cid] in reg:
+        return reg[CHILDREN[cid]].layer
+    return "unit" if cid.startswith("report.") else None
 
 
 def _module_file(root, pkg_parts: list[str], name: str | None):
@@ -108,7 +118,7 @@ def _import_targets(f, pkg: list[str]) -> list[tuple]:
     return targets
 
 
-def import_closure(roots=GUI_ROOTS, root=None) -> list[str]:
+def import_closure(roots=(), root=None) -> list[str]:
     """Repo-relative paths of every hslib module reachable from `roots` by static imports (absolute `hslib.x` and
     relative `from . / .. import x`, including imports inside functions). Raises on a source that doesn't parse
     (callers fail closed)."""
@@ -128,31 +138,6 @@ def import_closure(roots=GUI_ROOTS, root=None) -> list[str]:
             if m is not None:
                 todo.append(m)
     return sorted(str(x.relative_to(root)) for x in seen)
-
-
-def gui_patterns(root=None) -> tuple:
-    """Every GUI input pattern: the fixed files plus the import closure of GUI_ROOTS (evaluated now)."""
-    return tuple(dict.fromkeys(GUI_PATHS + tuple(import_closure(root=root))))
-
-
-def backups_paths_matching(paths: list[str] | None) -> list[str] | None:
-    """The changed paths on the backup path list (exact paths, no closure); None (unknown) stays None."""
-    if paths is None:
-        return None
-    return sorted(p for p in paths if p in BACKUP_PATHS)
-
-
-def backups_rule(root=None) -> dict:
-    """The backup path rule for this checkout: {"changed_backup_paths": [...] or None (git failed: counts as
-    changed), "base_ref", "base", "error", "paths"}."""
-    c = changed_paths(root)
-    return {"base_ref": c["base_ref"], "base": c["base"], "error": c["error"],
-            "changed_backup_paths": backups_paths_matching(c["paths"]), "paths": list(BACKUP_PATHS)}
-
-
-def backups_changed(rule: dict | None) -> bool:
-    """A backup path changed, or it can't be told (fail closed)."""
-    return rule is None or rule.get("changed_backup_paths") is None or bool(rule["changed_backup_paths"])
 
 
 def _now():
@@ -207,53 +192,19 @@ def changed_paths(root=None) -> dict:
     return out
 
 
-def gui_paths_matching(paths: list[str] | None, patterns=None) -> list[str] | None:
-    """The changed paths that fall under the GUI path rule (default patterns: gui_patterns(), i.e. with the import
-    closure); None (unknown) stays None."""
-    if paths is None:
-        return None
-    patterns = gui_patterns() if patterns is None else patterns
-    return sorted(p for p in paths if any(fnmatch.fnmatch(p, g) for g in patterns))
-
-
-def gui_rule(root=None) -> dict:
-    """The GUI path rule for this checkout: {"changed_gui_paths": [...] or None (git failed, or the import closure
-    couldn't be computed: counts as changed), "base_ref", "base", "error", "changed_paths_count", "patterns"}."""
-    c = changed_paths(root)
-    try:
-        pats = gui_patterns()
-    except (OSError, SyntaxError, ValueError) as e:      # fail closed
-        return {"base_ref": c["base_ref"], "base": c["base"], "error": f"GUI import closure: {type(e).__name__}: {e}",
-                "changed_paths_count": None if c["paths"] is None else len(c["paths"]), "changed_gui_paths": None,
-                "patterns": list(GUI_PATHS)}
-    return {"base_ref": c["base_ref"], "base": c["base"], "error": c["error"],
-            "changed_paths_count": None if c["paths"] is None else len(c["paths"]),
-            "changed_gui_paths": gui_paths_matching(c["paths"], pats), "patterns": list(pats)}
-
-
-def gui_changed(rule: dict) -> bool:
-    """A GUI path changed, or it can't be told (fail closed)."""
-    return rule.get("changed_gui_paths") is None or bool(rule["changed_gui_paths"])
 
 
 def is_full_run(tier: str, only: list[str] | None) -> bool:
-    """A run is *full* only if it is unfiltered and its tier is full or slow (harness-reporting)."""
-    return not only and tier in ("full", "slow")
+    """A run is *full* only if it is unfiltered and its tier is full (harness-reporting)."""
+    return not only and tier == "full"
 
 
 def tolerated_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
-    """The only non-pass statuses that don't fail a run (any other skip fails it):
-    - report.full_run = skip on a run that isn't full (harness-reporting "Single-command full run");
-    - a scenario-referenced slow check that a full-tier run recorded as skip "slow tier" (harness-reporting
-      "Slow-tier scenario checks"): the runner listed it in meta.slow_tier_skipped and the registry says slow."""
+    """The only non-pass statuses that don't fail a run (any other skip fails it): report.full_run = skip on a run that
+    isn't full (harness-reporting "Single-command full run"), and a ci_only check's "not applicable" skip outside CI."""
     if rec["id"] == "report.full_run" and rec["status"] == "skip" and meta.get("full_run") is False:
         return True
-    reg = REGISTRY if reg is None else reg
-    c = reg.get(rec["id"])
-    if (rec["status"] == "skip" and meta.get("tier") == "full" and c is not None and c.tier == "slow"
-            and rec["id"] in meta.get("slow_tier_skipped", []) and rec.get("message") == SLOW_SKIP_MSG):
-        return True
-    return is_gui_skip(rec, meta, reg) or is_backups_skip(rec, meta, reg) or is_ci_only_skip(rec, meta, reg)
+    return is_ci_only_skip(rec, meta, reg)
 
 
 def is_ci_only_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
@@ -265,32 +216,9 @@ def is_ci_only_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
             and rec.get("message") == CI_ONLY_SKIP_MSG)
 
 
-def is_backups_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
-    """A by-design backups-tier skip (harness-reporting "Backups tier"): a backups-marked check that a full-tier run
-    recorded as skip with BACKUPS_SKIP_MSG, listed by the runner in meta.backups_tier_skipped, on a run whose backup
-    path rule found no changed backup path. A check raising CheckSkip with the same message isn't listed there."""
-    reg = REGISTRY if reg is None else reg
-    c = reg.get(rec["id"])
-    rule = meta.get("backups_rule") or {}
-    return (rec["status"] == "skip" and meta.get("tier") == "full" and c is not None and c.backups
-            and rec["id"] in meta.get("backups_tier_skipped", []) and rec.get("message") == BACKUPS_SKIP_MSG
-            and rule.get("changed_backup_paths") == [])
-
-
-def is_gui_skip(rec: dict, meta: dict, reg: dict | None = None) -> bool:
-    """A by-design GUI skip (harness-reporting "GUI tier"): a gui-marked check that a full/slow-tier run recorded as
-    skip with GUI_SKIP_MSG, listed by the runner in meta.gui_tier_skipped, on a run whose GUI rule found no changed
-    GUI path. A check raising CheckSkip with the same message is not listed there, so it can't forge one."""
-    reg = REGISTRY if reg is None else reg
-    c = reg.get(rec["id"])
-    rule = meta.get("gui_rule") or {}
-    return (rec["status"] == "skip" and meta.get("tier") in ("full", "slow") and c is not None and c.gui
-            and rec["id"] in meta.get("gui_tier_skipped", []) and rec.get("message") == GUI_SKIP_MSG
-            and rule.get("changed_gui_paths") == [])
-
-
 def run_ok(doc: dict, reg: dict | None = None) -> bool:
-    """A run passes when every record passes or is a tolerated skip."""
+    """A run passes when every record passes or is a tolerated skip, and every layer budget held (report.layer_budgets
+    is a record)."""
     return all(r["status"] == "pass" or tolerated_skip(r, doc["meta"], reg) for r in doc["checks"])
 
 
@@ -300,74 +228,77 @@ def referenced_ids() -> set[str]:
     return {i for _, _, ids, _ in reporting.scenarios() for i in ids}
 
 
-def slow_tier_skips(reg: dict, tier: str, only: list[str] | None, referenced: set[str]) -> list:
-    """Slow checks a full-tier run records as skip: tier slow, referenced by a gating scenario, and matching the
-    filter. Quick and slow runs record none (quick runs don't cover scenarios; slow runs execute them)."""
-    if tier != "full":
+def _child_records(c, rec: dict) -> list[dict]:
+    """A clustered session's scenario results (evidence["children"]: {id: {status, message?, evidence, duration_s}})
+    as their own records; a declared child without a result is an error record."""
+    if not c.children:
         return []
-    return sorted((c for c in reg.values()
-                   if c.tier == "slow" and c.id in referenced
-                   and (not only or any(fnmatch.fnmatch(c.id, g) for g in only))),
-                  key=lambda c: (c.order, c.id))
+    got = (rec.get("evidence") or {}).get("children") or {}
+    out = []
+    for cid in c.children:
+        r = got.get(cid)
+        if r is None:
+            why = rec.get("message") or "the session didn't record this scenario"
+            r = {"status": "error" if rec["status"] in ("pass", "fail", "error") else rec["status"],
+                 "message": f"no result from {c.id}: {why}"[:300], "evidence": {"session": c.id}}
+        out.append({"id": cid, "capability": c.capability, "description": f"(scenario of {c.id})", "layer": c.layer,
+                    "parent": c.id, "status": r["status"], "duration_s": round(float(r.get("duration_s") or 0.0), 2),
+                    "evidence": r.get("evidence") or {"session": c.id},
+                    **({"message": r["message"]} if r.get("message") else {})})
+    return out
 
 
-def gui_tier_skips(reg: dict, tier: str, only: list[str] | None, changed: bool) -> list:
-    """GUI checks a full/slow-tier run records as skip: gui-marked, in the run's tiers, matching the filter, and only
-    when no GUI path changed (`changed` False). `--tier gui` and quick runs record none."""
-    if tier not in ("full", "slow") or changed:
-        return []
-    tiers = tiers_for(tier)
-    return sorted((c for c in reg.values()
-                   if c.gui and c.tier in tiers and (not only or any(fnmatch.fnmatch(c.id, g) for g in only))),
-                  key=lambda c: (c.order, c.id))
+def run_one(c, ctx: dict, ensure) -> dict:
+    """One check: ensure its stack state, run it, and return its record (children not included)."""
+    rec = {"id": c.id, "capability": c.capability, "description": c.doc, "layer": c.layer}
+    t0 = time.time()
+    try:
+        ensure(c.stack, ctx, c.profile)
+        ev = c.fn(ctx) or {}
+        rec |= {"status": "pass", "evidence": ev}
+        if c.children:
+            bad = [k for k, v in ((ev.get("children") or {}).items()) if v.get("status") != "pass"]
+            missing = [k for k in c.children if k not in (ev.get("children") or {})]
+            if bad or missing:
+                rec |= {"status": "fail", "message": f"scenario(s) failing: {bad}" + (f"; missing: {missing}" if missing else "")}
+    except CheckFail as e:
+        rec |= {"status": "fail", "message": str(e), "evidence": e.evidence}
+    except CheckSkip as e:
+        rec |= {"status": "skip", "message": str(e), "evidence": {"skip_reason": str(e), **e.evidence}}
+    except Exception as e:  # noqa: BLE001
+        excerpt = getattr(e, "log_excerpt", "")
+        rec |= {"status": "error", "message": f"{type(e).__name__}: {e}",
+                "evidence": {"traceback": traceback.format_exc()[-3000:], **({"log_excerpt": excerpt} if excerpt else {})}}
+    rec["duration_s"] = round(time.time() - t0, 2)
+    rec["_t"] = (t0, time.time())
+    return rec
 
 
-def backups_tier_skips(reg: dict, tier: str, only: list[str] | None, changed: bool) -> list:
-    """Backups-marked checks a full-tier run records as skip: in the run's tiers, matching the filter, and only when
-    no backup path changed. Slow runs (the periodic sweep), `--tier backups` and quick runs record none."""
-    if tier != "full" or changed:
-        return []
-    tiers = tiers_for(tier)
-    return sorted((c for c in reg.values()
-                   if c.backups and c.tier in tiers and (not only or any(fnmatch.fnmatch(c.id, g) for g in only))),
-                  key=lambda c: (c.order, c.id))
-
-
-def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: bool = False,
-            gui_skips: list = (), backups_skips: list = (), guard=None) -> list[dict]:
-    """Run `checks` in (order, id) sequence, recording `slow_skips` as skip ("slow tier") and `gui_skips` as skip
-    ("gui tier") in their place. `ensure(stack_want, ctx, profile)` brings the stack to each check's required state
-    (default _ensure_stack). `quiet` suppresses the per-check log lines (synthetic runs of the report.* rules).
+def execute(checks: list, ctx: dict, ensure=None, quiet: bool = False, guard=None, skipped: dict | None = None
+            ) -> list[dict]:
+    """Run `checks` in run order (run_key). `ensure(stack_want, ctx, profile)` brings the stack to each check's required
+    state (default _ensure_stack). `quiet` suppresses the per-check log lines (synthetic runs of the report.* rules).
     `guard` (power.Guard; power-guard) is checked before each executed check, outside its timed duration; a power stop
-    ends the loop with ctx["power_stop"] set and the checks so far returned."""
+    ends the loop with ctx["power_stop"] set and the checks so far returned. `skipped` {id: message}: checks recorded
+    as skip without running. Character-scoped shared-server checks run two at a time (fixture.run_pooled) when
+    ctx["pool"] is set; the shared-server fixture resets and checks shared state between them (ctx["fixture"])."""
     ensure = ensure or _ensure_stack
     say = (lambda _m: None) if quiet else log
-    skip_ids = {c.id for c in slow_skips}
-    gui_ids = {c.id for c in gui_skips}
-    bk_ids = {c.id for c in backups_skips}
+    skipped = skipped or {}
     results = []
     plan = ctx.get("release_bracket_plan")      # run-scoped (_run plans it from the whole run's selection)
     br_start, br_end = (plan.get("start_check"), plan.get("end_check")) if plan else (None, None)
     xlog = ctx.setdefault("exec_log", [])        # the run's actual lane-A execution sequence, across every execute
-    for c in sorted([*checks, *slow_skips, *gui_skips, *backups_skips], key=lambda c: (c.order, c.id)):
-        rec = {"id": c.id, "capability": c.capability, "description": c.doc}
-        if c.id in skip_ids:
-            rec |= {"status": "skip", "message": SLOW_SKIP_MSG, "duration_s": 0.0,
-                    "evidence": {"skip_reason": SLOW_SKIP_MSG, "tier": c.tier, "slow_tier": True}}
-            say(f"SKIP  {c.id}  {SLOW_SKIP_MSG}")
-            results.append(rec)
-            continue
-        if c.id in gui_ids:
-            rec |= {"status": "skip", "message": GUI_SKIP_MSG, "duration_s": 0.0,
-                    "evidence": {"skip_reason": GUI_SKIP_MSG, "tier": c.tier, "gui_tier": True}}
-            say(f"SKIP  {c.id}  {GUI_SKIP_MSG}")
-            results.append(rec)
-            continue
-        if c.id in bk_ids:
-            rec |= {"status": "skip", "message": BACKUPS_SKIP_MSG, "duration_s": 0.0,
-                    "evidence": {"skip_reason": BACKUPS_SKIP_MSG, "tier": c.tier, "backups_tier": True}}
-            say(f"SKIP  {c.id}  {BACKUPS_SKIP_MSG}")
-            results.append(rec)
+    order = sorted(checks, key=run_key)
+    i = 0
+    while i < len(order):
+        c = order[i]
+        if c.id in skipped:
+            rec = {"id": c.id, "capability": c.capability, "description": c.doc, "layer": c.layer, "status": "skip",
+                   "message": skipped[c.id], "duration_s": 0.0, "evidence": {"skip_reason": skipped[c.id]}}
+            say(f"SKIP  {c.id}  {skipped[c.id]}")
+            results += [rec] + _child_records(c, rec)
+            i += 1
             continue
         if guard is not None:
             from .power import PowerStop
@@ -378,39 +309,50 @@ def execute(checks: list, ctx: dict, slow_skips: list = (), ensure=None, quiet: 
                 break
         if c.id == br_start and "start" not in (ctx.get("release_bracket") or {}):
             _bracket_fingerprint(ctx, "start", c.id, ensure)
-        t0 = time.time()
-        try:
-            ensure(c.stack, ctx, c.profile)
-            ev = c.fn(ctx) or {}
-            rec |= {"status": "pass", "evidence": ev}
-        except CheckFail as e:
-            rec |= {"status": "fail", "message": str(e), "evidence": e.evidence}
-        except CheckSkip as e:
-            rec |= {"status": "skip", "message": str(e), "evidence": {"skip_reason": str(e), **e.evidence}}
-        except Exception as e:  # noqa: BLE001
-            excerpt = getattr(e, "log_excerpt", "")
-            rec |= {"status": "error", "message": f"{type(e).__name__}: {e}",
-                    "evidence": {"traceback": traceback.format_exc()[-3000:], **({"log_excerpt": excerpt} if excerpt else {})}}
-        rec["duration_s"] = round(time.time() - t0, 2)
-        if ctx.get("lane_timeline") is not None:          # second-stack: two-lane runs record when each check ran
-            ctx["lane_timeline"][c.id] = {"start": t0, "end": time.time(), "lane": P.LANE}
-        xlog.append({"id": c.id, "start": t0, "end": time.time(), "lane": P.LANE})
-        say(f"{rec['status'].upper():5} {c.id} ({rec['duration_s']}s){'  ' + rec.get('message', '') if rec['status'] != 'pass' else ''}")
-        results.append(rec)
-        br = ctx.get("release_bracket")
-        if br is not None and "start" in br and "end" not in br:
-            br["ran"].append(c.id)
-            if c.id == br_end:
-                _bracket_fingerprint(ctx, "end", c.id, ensure)
-            else:
-                _bracket_save(ctx)
+        fx = ctx.get("fixture")
+        # the fixture's identities are removed through the server: before the first check that brings the stack
+        # down (lifecycle.down, then the cold journeys and the release bracket), never after it
+        if fx is not None and segment(c) >= 6 and getattr(fx, "base", None) is not None \
+                and hasattr(fx, "cleanup_identities"):
+            fx.cleanup_identities()
+        batch = [c]
+        if fx is not None and ctx.get("pool") and c.scope == "character" and c.layer == "integration":
+            j = i + 1
+            while j < len(order) and order[j].scope == "character" and order[j].layer == "integration" \
+                    and order[j].id not in skipped and segment(order[j]) == segment(c) \
+                    and (order[j].profile or "") == (c.profile or ""):
+                batch.append(order[j])
+                j += 1
+        # lifecycle.down ends the shared segment (it stops the stack): no reset round after it, which could only
+        # read a stopped server and call that leaked state
+        if fx is not None and c.layer == "integration" and c.stack == "up" and segment(c) != 6:
+            recs = fx.run(batch, ctx, ensure, say)
+        else:
+            recs = [run_one(c, ctx, ensure)]
+        for rec in recs:
+            t0, t1 = rec.pop("_t", (time.time(), time.time()))
+            if ctx.get("lane_timeline") is not None:          # second-stack: two-lane runs record when each check ran
+                ctx["lane_timeline"][rec["id"]] = {"start": t0, "end": t1, "lane": P.LANE}
+            xlog.append({"id": rec["id"], "start": t0, "end": t1, "lane": P.LANE, "layer": rec.get("layer")})
+            say(f"{rec['status'].upper():5} {rec['id']} ({rec['duration_s']}s){'  ' + rec.get('message', '') if rec['status'] != 'pass' else ''}")
+            cc = REGISTRY.get(rec["id"]) or next((b for b in batch if b.id == rec["id"]), None)
+            results.append(rec)
+            if cc is not None:
+                results += _child_records(cc, rec)
+            br = ctx.get("release_bracket")
+            if br is not None and "start" in br and "end" not in br:
+                br["ran"].append(rec["id"])
+                if rec["id"] == br_end:
+                    _bracket_fingerprint(ctx, "end", rec["id"], ensure)
+                else:
+                    _bracket_save(ctx)
+        i += len(batch)
     return results
 
 
 PDU_ID = "release.player_data_untouched"
 
 
-BRACKET_PREFIXES = ("release.", "firstlaunch.")
 BRACKET_DIR = P.OUT / "release-bracket"         # one state file per run id (release.player_data_untouched)
 BRACKET_KEEP_S = 7 * 86400
 
@@ -425,13 +367,18 @@ def release_bracket_plan(checks, run_id: str | None, state_dir: Path | None = No
     """release.player_data_untouched brackets every release.*/firstlaunch.* check of the WHOLE run (not of one
     execute call: a two-lane run calls execute once per segment, and the check sits in a later segment than the
     checks it brackets). `checks` is the run's whole selection. The start fingerprint is taken right before the first
-    of them in (order, id) sequence, the end right after the last; with none of them, the start is taken right before
+    of them in run order (run_key), the end right after the last; with none of them, the start is taken right before
     the check itself and there is no end. The state (fingerprints and what ran between them) is kept in ctx and
     persisted, keyed by the run id, under the run's output dir. None when the check isn't in this run."""
-    ids = [c.id for c in sorted(checks, key=lambda c: (c.order, c.id))]
+    ids = [c.id for c in sorted(checks, key=run_key)]
     if PDU_ID not in ids:
         return None
-    inner = [i for i in ids if i.startswith(BRACKET_PREFIXES) and i != PDU_ID]
+    # test-pyramid: unit-layer release.*/firstlaunch.* checks run in the unit layer before any segment (never through
+    # execute, so never in the execution log the bracket is judged on); the unit layer's own process sampler fails a
+    # unit check that starts a server or the client, so they can't write the player's databases. The bracket covers
+    # the release.*/firstlaunch.* checks that execute runs.
+    unit = {c.id for c in checks if c.layer == "unit"}
+    inner = [i for i in ids if i.startswith(BRACKET_PREFIXES) and i != PDU_ID and i not in unit]
     rid = run_id or f"pid{os.getpid()}-{int(time.time())}"
     return {"run_id": rid, "inner": inner, "start_check": inner[0] if inner else PDU_ID,
             "end_check": inner[-1] if inner else None, "state_file": str(Path(state_dir or BRACKET_DIR) / f"{rid}.json")}
@@ -497,12 +444,6 @@ def _bracket_fingerprint(ctx: dict, which: str, cid: str, ensure) -> None:
     _bracket_save(ctx)
 
 
-def backups_tier_s(records: list[dict], reg: dict | None = None) -> float:
-    """Seconds spent in executed backups-marked checks (harness-reporting "Backups tier": reported separately and
-    left out of the timing guard's wall-time comparison)."""
-    reg = REGISTRY if reg is None else reg
-    return round(sum(float(r.get("duration_s") or 0.0) for r in records
-                     if r.get("status") != "skip" and r["id"] in reg and reg[r["id"]].backups), 1)
 
 
 # harness-reporting "Full-run timing is recorded and guarded" (seamless-experience, Zach 2026-10-07: "catch real
@@ -565,8 +506,7 @@ def load_timing_baseline(path: Path | None = None) -> dict:
 
 def timing_summary(records: list[dict], wall_s: float | None, reg: dict | None = None,
                    baseline: dict | None | str = "file", paused_s: float = 0.0) -> dict:
-    """harness-reporting "Full-run timing": per-check wall time, their sum, the run's wall time, the 10 slowest, the
-    backups tier's total, the time spent building server binaries (per check and total), and the executed checks that
+    """harness-reporting "Full-run timing": per-check wall time, their sum, the run's wall time, the 10 slowest, the time spent building server binaries (per check and total), and the executed checks that
     aren't in the per-check baseline with their times, plus a warning for each one over NEW_CHECK_WARN_S."""
     if baseline == "file":
         try:
@@ -577,7 +517,6 @@ def timing_summary(records: list[dict], wall_s: float | None, reg: dict | None =
     top = sorted(per.items(), key=lambda kv: (-kv[1], kv[0]))[:10]
     build = {r["id"]: check_build_s(r) for r in records if r.get("status") != "skip" and check_build_s(r) > 0}
     out = {"per_check_s": per, "checks_sum_s": round(sum(per.values()), 1),
-           "backups_tier_s": backups_tier_s(records, reg),
            "total_wall_s": None if wall_s is None else round(wall_s, 1),
            "top10": [{"id": i, "s": v} for i, v in top],
            "build_s": round(sum(build.values()), 1), "build_by_check_s": build,
@@ -597,40 +536,52 @@ def timing_summary(records: list[dict], wall_s: float | None, reg: dict | None =
     return out
 
 
-def select(reg: dict, tier: str, only: list[str] | None, gui_skip_ids: set | frozenset = frozenset()) -> list:
-    """Checks a run executes: those of the tier's check tiers (gui: only gui-marked ones; backups: only backups-marked
-    ones) matching the filter, minus the ones recorded as GUI / backups-tier skips (`gui_skip_ids` holds both)."""
-    tiers = tiers_for(tier)
-    return sorted(
-        (c for c in reg.values()
-         if c.tier in tiers and (tier != "gui" or c.gui) and (tier != "backups" or c.backups)
-         and c.id not in gui_skip_ids
-         and (not only or any(fnmatch.fnmatch(c.id, g) for g in only))),
-        key=lambda c: (c.order, c.id),
-    )
 
 
-def gui_preflight_decision(tier: str, only: list[str] | None, ignore: bool, probe, rule_fn=None) -> dict:
-    """`hs run`'s start-up preflight (B32; test-loop-speedups "The GUI preflight only guards runs that need the
-    screen"). Only unfiltered full/slow/gui runs are guarded. A locked screen or a sleeping display refuses only when
-    GUI-marked checks will execute: always for `--tier gui`, and for full/slow when the GUI path rule (`rule_fn`,
-    default gui_rule) says a GUI path changed or can't tell (fail closed). Low battery on battery power always
-    refuses. `ignore` (--ignore-gui-preflight) overrides both.
-    Returns {"guarded", "state" (the probe), "gui_due", "gui_rule_changed", "refuse" (one line or None)}; the run
-    records it in meta.gui_preflight."""
-    out = {"tier": tier, "guarded": not (only or tier not in ("full", "slow", "gui")), "ignored": bool(ignore),
-           "state": None, "gui_due": None, "gui_rule_changed": None, "refuse": None}
+# ---------------------------------------------------------------- selection of what a run executes
+
+def select(reg: dict, tier: str, only: list[str] | None, chosen: set | None = None) -> list:
+    """Checks a run executes, in run order: tier unit -> the unit layer; pr -> the unit layer plus `chosen` (impact
+    selection) plus the run guards (a targeted run guard only when `chosen` has it); full -> everything. `--only` globs
+    filter any tier (a filtered pr run runs exactly the filter's checks, without impact selection)."""
+    if tier not in RUN_TIERS:
+        raise ValueError(f"unknown tier {tier!r}; expected one of {RUN_TIERS}")
+
+    def wanted(c):
+        if only:
+            return any(fnmatch.fnmatch(c.id, g) for g in only) and (tier != "unit" or c.layer == "unit")
+        if tier == "unit":
+            return c.layer == "unit"
+        if tier == "full":
+            return True
+        if c.layer == "gate":
+            return False                  # a pr run never runs a gate check (listed as owed in meta.selection)
+        if chosen is not None and c.id in chosen:
+            return True
+        return c.layer == "unit" or (segment(c) == 9 and not c.targeted)
+    return sorted((c for c in reg.values() if wanted(c)), key=run_key)
+
+
+def gui_preflight_decision(tier: str, only: list[str] | None, ignore: bool, probe, gui_due_fn=None) -> dict:
+    """`hs run`'s start-up preflight (harness-reporting "The GUI preflight only guards runs that need the screen").
+    Only unfiltered pr/full runs are guarded; unit runs never. A locked screen or a sleeping display refuses only when
+    the run's selection includes a GUI-marked check (`gui_due_fn()`: always for a full run with any GUI check; for a
+    pr run, the impact selection); low battery on battery power always refuses. `ignore` (--ignore-gui-preflight)
+    overrides both. Returns {"guarded", "state", "gui_due", "gui_checks_due", "refuse"} (meta.gui_preflight)."""
+    out = {"tier": tier, "guarded": not (only or tier not in ("pr", "full")), "ignored": bool(ignore),
+           "state": None, "gui_due": None, "gui_checks_due": None, "refuse": None}
     if not out["guarded"]:
         return out
     from .guienv import preflight_problem
     state = probe()
     out["state"] = state
-    if tier == "gui":
-        out["gui_due"] = True
-    else:
-        rule = (rule_fn or gui_rule)()
-        out["gui_rule_changed"] = rule.get("changed_gui_paths")
-        out["gui_due"] = gui_changed(rule)
+    try:
+        due = (gui_due_fn or (lambda: gui_checks_due(tier)))()
+    except Exception as e:  # noqa: BLE001  fail closed: unknown counts as due
+        due = None
+        out["gui_due_error"] = f"{type(e).__name__}: {e}"
+    out["gui_checks_due"] = due
+    out["gui_due"] = due is None or bool(due)
     why = preflight_problem(state, gui_due=out["gui_due"])
     if why and not ignore:
         out["refuse"] = (f"[hs] refusing to start an unfiltered {tier} run: {why}; "
@@ -640,27 +591,38 @@ def gui_preflight_decision(tier: str, only: list[str] | None, ignore: bool, prob
     return out
 
 
+def gui_checks_due(tier: str) -> list[str] | None:
+    """The GUI-marked checks an unfiltered run of `tier` would execute (None: can't tell)."""
+    reg = load_all()
+    gui = sorted(c.id for c in reg.values() if c.gui)
+    if tier == "full":
+        return gui
+    from . import selection
+    s = selection.select_for_run(reg)
+    return sorted(i for i in gui if i in selection.pr_chosen(s, reg))
+
+
 def preflight_from_env(tier: str, only: list[str] | None, ignore: bool) -> dict:
-    """gui_preflight_decision with the real probe and rule, or report.gui_preflight's stubs from the environment."""
-    import os
+    """gui_preflight_decision with the real probe and selection, or report.gui_preflight's stubs from the environment
+    ($HS_TEST_GUI_PROBE: the screen state; $HS_TEST_GUI_DUE: "yes" | "no" | "unknown", the selection's GUI checks)."""
     from . import guienv
-    probe, rule_fn = guienv.probe, None
+    probe, due_fn = guienv.probe, None
     if os.environ.get("HS_TEST_GUI_PROBE"):
         stub = json.loads(os.environ["HS_TEST_GUI_PROBE"])
         probe = lambda: stub
-    if os.environ.get("HS_TEST_GUI_RULE"):
-        v = os.environ["HS_TEST_GUI_RULE"]
-        paths = {"changed": ["harness/app/launcher.m"], "unchanged": [], "unknown": None}[v]
-        rule_fn = lambda: {"changed_gui_paths": paths, "error": None, "stub": v}
-    return gui_preflight_decision(tier, only, ignore, probe, rule_fn)
+    if os.environ.get("HS_TEST_GUI_DUE"):
+        v = os.environ["HS_TEST_GUI_DUE"]
+        val = {"yes": ["journey.app_desktop"], "no": [], "unknown": None}[v]
+        due_fn = lambda: val
+    return gui_preflight_decision(tier, only, ignore, probe, due_fn)
 
 
-def gui_preflight(tier: str, only: list[str] | None, ignore: bool, probe, rule_fn=None) -> str | None:
+def gui_preflight(tier: str, only: list[str] | None, ignore: bool, probe, gui_due_fn=None) -> str | None:
     """The one-line refusal of gui_preflight_decision, or None to go ahead."""
-    return gui_preflight_decision(tier, only, ignore, probe, rule_fn)["refuse"]
+    return gui_preflight_decision(tier, only, ignore, probe, gui_due_fn)["refuse"]
 
 
-def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "full",
+def run(only: list[str] | None = None, leave_up: bool = False, tier: str = "pr",
         force_clean: bool = False, preflight: dict | None = None, ignore_power: bool = False,
         lanes: int | None = None) -> int:
     # test-loop-speedups: a run file (env/run/harness-runs/) tags this run's subprocesses, so a later run can heal
@@ -701,14 +663,103 @@ def filter_refusal(reg: dict, tier: str, only: list[str] | None, selected: list)
         hint = " (a comma list is one glob; pass --only once per glob)" if any("," in g for g in dead) else ""
         return f"refusing the run: --only {', '.join(repr(g) for g in dead)} matches no check{hint}"
     if not selected and not any(fnmatch.fnmatch(i, g) for i in POST_IDS for g in only):
-        other = sorted({reg[i].tier for i in reg if any(fnmatch.fnmatch(i, g) for g in only)})
+        other = sorted({reg[i].layer or "?" for i in reg if any(fnmatch.fnmatch(i, g) for g in only)})
         return (f"refusing the run: the filter {only} selects no check to execute in tier {tier} "
-                f"(its checks are tier {', '.join(other)}{'; use --tier ' + other[-1] if other else ''})")
+                f"(its checks are layer {', '.join(other)}; tier unit runs only the unit layer)")
     return None
 
 
-# power-guard: the run tiers whose checks are guarded (quick is short and runs on builders' laps)
-POWER_GUARDED_TIERS = ("full", "slow", "gui")
+def unit_stop_skips(rest: list) -> dict:
+    """A pr run whose unit layer failed stops there: every check after the unit layer that isn't itself unit-layer
+    (acceptance, targeted, gate, and the integration-layer run guards such as release.player_data_untouched, whose
+    bracket never ran) is recorded as not run; unit-layer guards still run (they start nothing)."""
+    return {c.id: UNIT_FAILED_MSG for c in rest if c.layer != "unit"}
+
+
+def records_pr_run(meta: dict, only: list | None) -> bool:
+    """Only a completed, unfiltered pr run goes into harness/out/pr-runs.jsonl (report.pr_average): not one stopped
+    at the unit layer or by the power guard."""
+    return (meta.get("tier") == "pr" and not only and not meta.get("stopped_at_unit_layer")
+            and not (meta.get("power") or {}).get("stop"))
+
+
+# power-guard: the run tiers whose checks are guarded (the unit tier is short and runs on builders' laps)
+POWER_GUARDED_TIERS = ("pr", "full")
+UNIT_POOL = 4
+
+
+def ensure_server_current(ctx: dict) -> dict:
+    """Before the acceptance segments: when the installed server wasn't built from the current build inputs (module
+    sources, patches, pins), an incremental `hs build` brings it up to date (the accepted fixed cost of a C++ change).
+    Its wall time is the run's build layer."""
+    from . import build
+    t0 = time.time()
+    try:
+        want, have = build.input_hash(), build.read_stamp(build.install_stamp_path())
+    except Exception as e:  # noqa: BLE001
+        return {"error": f"{type(e).__name__}: {e}", "build_s": 0.0}
+    if want == have:
+        return {"current": True, "build_s": 0.0}
+    if any(stack.stack_processes().values()):
+        stack.down()
+    out = {"current": False, "input_hash": want[:12], "installed": (have or "")[:12]}
+    try:
+        out["build"] = {k: v for k, v in build.build().items() if k in ("mode", "jobs", "seconds")}
+    except Exception as e:  # noqa: BLE001  the integration tests then run against the old binaries and say so
+        out["error"] = f"{type(e).__name__}: {e}"
+    out["build_s"] = round(time.time() - t0, 1)
+    return out
+
+
+# Checks not yet migrated that start the real client or the app end to end count as journey time (layer_times; the
+# coordinator's part-1 rule). Empty since test-pyramid design 16: client.launch_smoke, the last one, is a targeted
+# integration check, timed with the targeted checks.
+LEGACY_CLIENT: frozenset = frozenset()
+
+
+def _union_s(spans: list[tuple]) -> float:
+    total, end = 0.0, None
+    for a, b in sorted(spans):
+        if end is None or a > end:
+            total += b - a
+            end = b
+        elif b > end:
+            total += b - end
+            end = b
+    return round(total, 1)
+
+
+def layer_times(ctx: dict, records: list[dict], unit_s: float | None, selection_s: float | None,
+                build_s: float, reg: dict | None = None) -> dict:
+    """meta.layers: wall time per layer (integration = the union of its checks' wall spans, so pooled tests count
+    once), each journey's time against its budget, gate time and build time. Targeted integration checks (design 16)
+    are timed apart (`targeted`, the union of their spans, budget 20 min in a full run) and are not integration time,
+    so the 15/30 min budgets exclude them (harness-reporting "Every layer is timed and budgeted")."""
+    reg = REGISTRY if reg is None else reg
+    from .registry import TARGETED_BUDGET_S
+    tgt = lambda i: i in reg and reg[i].targeted
+    xl = [e for e in ctx.get("exec_log", []) if "id" in e]
+    spans = lambda layer: [(e["start"], e["end"]) for e in xl if e.get("layer") == layer and e["id"] not in LEGACY_CLIENT
+                           and not tgt(e["id"])]
+    journeys = {r["id"]: {"s": r.get("duration_s"), "budget_s": (reg[r["id"]].budget_s if r["id"] in reg else None)}
+                for r in records if r.get("layer") == "journey" and r["id"] in reg and r.get("status") != "skip"}
+    legacy = {e["id"]: round(e["end"] - e["start"], 1) for e in xl if e["id"] in LEGACY_CLIENT}
+    # clustered integration sessions with their own budget (design 14: dng.session1/2 at most 90 s each)
+    sessions = {r["id"]: {"s": r.get("duration_s"), "budget_s": reg[r["id"]].budget_s}
+                for r in records if r.get("layer") == "integration" and r["id"] in reg
+                and reg[r["id"]].budget_s and r.get("status") != "skip"}
+    integ = _union_s(spans("integration"))
+    jsum = round(sum(v["s"] or 0.0 for v in journeys.values()) + sum(legacy.values()), 1)
+    targeted = {e["id"]: round(e["end"] - e["start"], 1) for e in xl if tgt(e["id"])}
+    return {"unit": {"wall_s": unit_s, "budget_s": 120.0},
+            "selection": {"wall_s": selection_s, "budget_s": 10.0},
+            "integration": {"wall_s": integ, "budget_s": 900.0, "sessions": sessions},
+            "journeys": {"wall_s": jsum, "each": journeys, "legacy_client_s": legacy},
+            "acceptance": {"wall_s": round(integ + jsum, 1), "budget_s": 1800.0},
+            "targeted": {"wall_s": _union_s([(e["start"], e["end"]) for e in xl if tgt(e["id"])]),
+                         "budget_s": TARGETED_BUDGET_S, "each": targeted},
+            "gate": {"wall_s": _union_s(spans("gate"))},
+            "build": {"wall_s": build_s}}
 
 
 def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None, ignore_power=False,
@@ -727,13 +778,15 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     for _v in power.TEST_ENV:            # read by the guard above; never inherited by the checks' own subprocesses
         _os.environ.pop(_v, None)
     reg = load_all()
-    rule = gui_rule() if tier in ("full", "slow") else None
-    gui_skips = gui_tier_skips(reg, tier, only, gui_changed(rule)) if rule is not None else []
-    bk_rule = backups_rule() if tier == "full" else None
-    bk_skips = backups_tier_skips(reg, tier, only, backups_changed(bk_rule)) if bk_rule is not None else []
-    selected = select(reg, tier, only, {c.id for c in gui_skips} | {c.id for c in bk_skips})
-    slow_skips = slow_tier_skips(reg, tier, only, referenced_ids())
     full = is_full_run(tier, only)
+    sel_meta = None
+    if tier == "pr" and not only:
+        from . import selection
+        sel_meta = selection.select_for_run(reg)
+        # FULL: the complete acceptance suite; never a gate check (they are listed as owed, "Gate-layer checks")
+        selected = select(reg, tier, only, selection.pr_chosen(sel_meta, reg))
+    else:
+        selected = select(reg, tier, only)
     refuse = filter_refusal(reg, tier, only, selected)
     if refuse:
         log(refuse)
@@ -742,9 +795,7 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     du = shutil.disk_usage(P.ROOT)
     meta = {
         "started": _now(), "repo_sha": _git_sha(), "fork_lock": P.fork_lock(), "full_run": full,
-        "tier": tier, "force_clean": force_clean, "slow_tier_skipped": [c.id for c in slow_skips],
-        "gui_tier_skipped": [c.id for c in gui_skips], "gui_rule": rule,
-        "backups_tier_skipped": [c.id for c in bk_skips], "backups_rule": bk_rule,
+        "tier": tier, "force_clean": force_clean, "selection": sel_meta,
         "keep_awake": awake, "gui_preflight": preflight, "orphans": orphans,
         "ci": _os.environ.get("GITHUB_ACTIONS") == "true",
         "filter": only or [], "host": {"platform": platform.platform(), "machine": platform.machine(),
@@ -752,7 +803,6 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     }
     # launcher-fixes: every check's subprocesses know they're a harness run (./play then never writes the player's own
     # play client's resolution), and client.player_config_untouched compares the player's config with this
-    import os
     os.environ["HS_HARNESS_RUN"] = "1"
     from .checks.resolution_checks import player_config_sha, player_marker_sha
     from . import backups
@@ -777,28 +827,72 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     # report.client_pristine compares at the end
     from .checks.pristine_checks import start_record
     pristine_start = start_record()
-    if rule is not None:
-        log(f"GUI rule: {'GUI checks run' if gui_changed(rule) else 'GUI checks skipped by design'} "
-            f"(changed GUI paths: {rule['changed_gui_paths']}{'; ' + rule['error'] if rule['error'] else ''})")
-    if bk_rule is not None:
-        log(f"Backups rule: {'backups checks run' if backups_changed(bk_rule) else 'backups checks skipped by design'} "
-            f"(changed backup paths: {bk_rule['changed_backup_paths']}{'; ' + bk_rule['error'] if bk_rule['error'] else ''})")
-    # second-stack: one or two lanes (lanes.schedule; --lanes 1 is exactly the serial execute)
-    results, meta["lanes"] = lanes.schedule(selected, ctx, slow_skips, gui_skips, bk_skips, guard, requested=lanes_req,
-                                            tier=tier, only=only, switches=lane_switches, battery=lane_battery,
-                                            battery_seq=battery_seq, ignore_power=ignore_power, mem_start=mem_start,
-                                            say=log)
+    if sel_meta is not None:
+        log(f"selection: {'FULL (' + '; '.join(sel_meta['full_reasons'][:3]) + ')' if sel_meta['full'] else str(len(sel_meta['selected'])) + ' acceptance test(s)'}"
+            f" in {sel_meta['duration_s']} s from {len(sel_meta.get('paths') or [])} changed path(s)")
+
+    # 1. the unit layer (unit tests + unit-layer checks; never the stack)
+    from . import unitrun
+    unit_checks = [c for c in selected if c.layer == "unit" and segment(c) < 9]
+    results: list[dict] = []
+    t_unit = time.time()
+    run_tests = not only or tier == "unit"
+    unit_doc = unitrun.unit_layer(unit_checks, ctx, run_tests=run_tests, workers=UNIT_POOL, say=log, guard=guard)
+    results += unit_doc.pop("records")
+    meta["unit"] = unit_doc
+    unit_s = round(time.time() - t_unit, 1)
+    unit_ok = unit_doc["ok"]
+    rest = [c for c in selected if c not in unit_checks]
+    skipped = {}
+    if ctx.get("power_stop"):
+        skipped = {}
+        rest = []
+    elif tier == "pr" and not unit_ok:
+        log("the unit layer failed: a pr run stops there")
+        skipped = unit_stop_skips(rest)
+        meta["stopped_at_unit_layer"] = True
+    # 2. the server build (accepted fixed cost) before any stack is used
+    build_info = {"build_s": 0.0, "skipped": "no acceptance check needs the server"}
+    if not skipped and any(c.stack == "up" or c.layer in ("integration", "journey") for c in rest) and tier != "unit":
+        build_info = ensure_server_current(ctx)
+    meta["server_build"] = build_info
+    # 3. the acceptance segments (one or two lanes) and the run guards
+    if tier != "unit" and rest and not meta.get("stopped_at_unit_layer"):
+        from . import fixture
+        ctx["fixture"] = fixture.SharedServer(rest)
+        ctx["pool"] = True
+        try:
+            recs, meta["lanes"] = lanes.schedule(rest, ctx, guard, requested=lanes_req, tier=tier, only=only,
+                                                 switches=lane_switches, battery=lane_battery,
+                                                 battery_seq=battery_seq, ignore_power=ignore_power,
+                                                 mem_start=mem_start, say=log, skipped=skipped)
+        finally:
+            meta["fixture"] = ctx["fixture"].finish(ctx)
+        results += recs
+    else:
+        # the unit tier, or a pr run stopped at the unit layer: only unit-layer guards run, nothing starts the stack
+        recs = execute([c for c in rest], ctx, ensure=lambda *_a: None, guard=guard, skipped=skipped) if rest else []
+        results += recs
+        meta["lanes"] = {"mode": 1, "lanes": 1, "preflight": None,
+                         "fallback": ("pr run stopped at the unit layer: one lane" if meta.get("stopped_at_unit_layer")
+                                      else "unit tier: one lane"),
+                         "assignment": {"b_planned": [], "b_ran": [], "b_to_a": []}}
     meta["lanes"]["memory_at_run_start"] = mem_start
-    if meta["lanes"]["mode"] == 2 and lanes.lane_b_running():   # the worker stops lane B; this is the safety net
+    meta["stack_transitions"] = [{k: (v if isinstance(v, (str, int, float, bool)) else "done") for k, v in t.items()}
+                                 for t in ctx.get("stack_transitions", [])]
+    if meta["lanes"].get("mode") == 2 and lanes.lane_b_running():   # the worker stops lane B; this is the safety net
         from . import runreg
         meta["lanes"]["final_lane_down"] = runreg.lane_down("b")
     meta["power"] = {"guarded": guard is not None, **(guard.record() if guard is not None else {})}
     paused = guard.paused_s() if guard is not None else 0.0
+    meta["layers"] = layer_times(ctx, results, unit_s, (sel_meta or {}).get("duration_s"), build_info.get("build_s", 0.0))
+    meta["timeline"] = [{k: e.get(k) for k in ("id", "start", "end", "lane", "layer")}
+                        for e in ctx.get("exec_log", []) if "id" in e]
     if ctx.get("power_stop"):
         # power-guard "Stop cleanly": no later check runs; the results so far are written and the run fails
         meta["power"]["stop"] = ctx["power_stop"]
         log(ctx["power_stop"]["message"])
-        if not leave_up and any(stack.stack_processes().values()):
+        if not leave_up and tier != "unit" and any(stack.stack_processes().values()):
             ctx.setdefault("stack_transitions", []).append({"down(final)": stack.down()})
         doc = {"meta": meta | {"finished": _now()}, "checks": results}
         doc["meta"]["wall_s"] = round(time.time() - t_start, 1)
@@ -810,7 +904,9 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
         print(P.SUMMARY.read_text())
         return power.STOP_EXIT
 
-    if not leave_up and any(stack.stack_processes().values()):
+    # a unit run never touches the stack (harness-reporting "Unit tier runs fast, starts nothing"): not even to stop
+    # one another run is using
+    if not leave_up and tier != "unit" and any(stack.stack_processes().values()):
         ctx.setdefault("stack_transitions", []).append({"down(final)": stack.down()})
 
     doc = {"meta": meta | {"finished": _now()}, "checks": results}
@@ -819,8 +915,11 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     from .checks import reporting
     for rec in reporting.post_run(doc, selected_ids=[c.id for c in selected], t_start=t_start,
                                   leave_up=leave_up, pristine_start=pristine_start):
+        rec.setdefault("layer", "unit")
         doc["checks"].append(rec)
-    doc["meta"]["finished"] = _now()      # after the post-run checks (report.tiers may run a nested quick tier)
+    for rec in doc["checks"]:
+        rec.setdefault("layer", layer_of(rec["id"]) or "unit")
+    doc["meta"]["finished"] = _now()
     doc["meta"]["wall_s"] = round(time.time() - t_start, 1)
     doc["meta"]["timing"] = timing_summary(doc["checks"], doc["meta"]["wall_s"], paused_s=paused)
     doc["meta"]["counts"] = {s: sum(1 for r in doc["checks"] if r["status"] == s) for s in ("pass", "fail", "error", "skip")}
@@ -828,8 +927,12 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     from .util import redact
     doc = redact(doc)                     # no passwords in results.json / summary.md (check output tails etc.)
     write_outputs(doc, P.RESULTS, P.SUMMARY)
+    if records_pr_run(doc["meta"], only):
+        from . import selection
+        selection.record_pr_run(doc)
     print(P.SUMMARY.read_text())
     return 0 if doc["meta"]["ok"] else 1
+
 
 
 # test-loop-speedups "The last full run's results are kept": every unfiltered full-tier run also writes here; no other
@@ -838,7 +941,7 @@ LAST_FULL_RUN = P.OUT / "last-full-run"
 
 
 def keeps_last_full_run(meta: dict) -> bool:
-    """An unfiltered full-tier run (not quick, slow, gui, backups or filtered)."""
+    """An unfiltered full-tier run (not unit, pr or filtered)."""
     return meta.get("full_run") is True and meta.get("tier") == "full" and not meta.get("filter")
 
 
@@ -872,7 +975,7 @@ def timing_lines(doc) -> list[str]:
     t = doc["meta"].get("timing") or {}
     rt = next((r for r in doc["checks"] if r["id"] == TIMING_SELF), None)
     ev = (rt or {}).get("evidence") or {}
-    out = [f"- Timing: build {t.get('build_s', '?')} s, backups tier {t.get('backups_tier_s', '?')} s, "
+    out = [f"- Timing: build {t.get('build_s', '?')} s, "
            f"new checks {len(t.get('new_checks_s') or {})} ({t.get('new_checks_sum_s', '?')} s)"
            + (f"; baseline checks {ev['now_sum_s']} s vs {ev['baseline_sum_s']} s "
               f"(limit {ev['limit_s']} s, ratio {ev['ratio']})" if "now_sum_s" in ev else "")]
@@ -914,6 +1017,7 @@ def summary_md(doc) -> str:
         *timing_lines(doc),
         *power_lines(doc),
         *lane_lines(doc),
+        *layer_lines(doc),
         "",
         "| Check | Status | Time | Note |",
         "|---|---|---|---|",
@@ -922,3 +1026,38 @@ def summary_md(doc) -> str:
         note = (r.get("message") or "").replace("|", "\\|").replace("\n", " ")[:140]
         lines.append(f"| `{r['id']}` | {r['status'].upper()} | {r.get('duration_s', 0)}s | {note} |")
     return "\n".join(lines) + "\n"
+
+def layer_lines(doc) -> list[str]:
+    """summary.md: each layer's time against its budget (harness-reporting "Every layer is timed and budgeted")."""
+    L = doc["meta"].get("layers") or {}
+    if not L:
+        return []
+    def f(k):
+        v = L.get(k) or {}
+        b = v.get("budget_s")
+        return f"{k} {v.get('wall_s')} s" + (f" (budget {b:.0f} s)" if b else "")
+    out = ["- Layers: " + ", ".join(f(k) for k in ("unit", "selection", "integration", "journeys", "acceptance", "targeted",
+                                                   "gate", "build") if k in L)]
+    for j, v in sorted(((L.get("journeys") or {}).get("each") or {}).items()):
+        out.append(f"  - {j}: {v.get('s')} s (budget {v.get('budget_s')} s)")
+    s = doc["meta"].get("selection")
+    if s:
+        n_acc = len([i for i in (s.get("selected") or {}) if i not in (s.get("gate_owed") or {})])
+        out.append(f"- Selection: {'FULL: ' + '; '.join(s.get('full_reasons') or [])[:200] if s.get('full') else str(n_acc) + ' acceptance test(s)'}"
+                   f" ({s.get('duration_s')} s; smoke set: {bool(s.get('smoke_paths'))})")
+        out += owed_lines(s)
+        nsel = sorted(i for i, v in (s.get("targeted") or {}).items() if v == "targeted, not selected")
+        if nsel:
+            out.append(f"- Targeted checks not selected ({len(nsel)}; run when their own code changes and in full "
+                       f"runs): {', '.join(nsel)}")
+    return out
+
+
+def owed_lines(sel: dict) -> list[str]:
+    """summary.md: the gate checks a pr run's paths selected, which it doesn't run ("Gate-layer checks")."""
+    owed = sel.get("gate_owed") or {}
+    if not owed:
+        return []
+    return [f"- Gate checks owed ({len(owed)}; not run in a pr run, run in the next full run):"] + \
+        [f"  - `{i}`: {'; '.join(r)[:200]}" for i, r in sorted(owed.items())]
+

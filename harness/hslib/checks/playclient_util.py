@@ -142,13 +142,17 @@ class PlayRun:
         self.settings.write_text(json.dumps({"client": mode}))
         self.out = self.tmp / "play.out"
         self.scratch = scratch
-        self.env = {**os.environ, **PINNED, "HS_SETTINGS": str(self.settings), **(extra_env or {})}
+        from .play_checks import warm_env
+        extra_env = {**warm_env(), **(extra_env or {})}       # a warm journey: the shared stack stays up
+        self.env = {**os.environ, **PINNED, "HS_SETTINGS": str(self.settings), **extra_env}
         self.env.pop("HS_PLAY_CLIENT_DIR", None)
         self.env.pop("HS_GLUE_TEST", None)
         if scratch:
             self.env["HS_PLAY_CLIENT_DIR"] = str(scratch)
         if glue_test is not None:
             self.env["HS_GLUE_TEST"] = json.dumps(glue_test)
+        # test-pyramid warm journeys: ./play leaves the shared stack up (HS_PLAY_KEEP_STACK), and so does cleanup()
+        self.keep_stack = bool((extra_env or {}).get("HS_PLAY_KEEP_STACK"))
         self.proc: subprocess.Popen | None = None
         self.t0 = 0.0
         self.seeded = self.given = None
@@ -230,7 +234,7 @@ class PlayRun:
             self.proc.wait()
         if launch.prefix_processes():
             launch.stop_prefix()
-        if any(stack.stack_processes().values()):
+        if any(stack.stack_processes().values()) and not self.keep_stack:
             stack.down()
         from .. import clientbuild, frontmenu
         target = self.scratch or clientbuild.PLAY

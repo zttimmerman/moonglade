@@ -30,9 +30,9 @@
   },
   "app.launch_lifecycle": {
    "build_s": 0.0,
-   "duration_s": 40.85,
-   "run": "save-backups-verifier2",
-   "s": 40.85,
+   "duration_s": 55.2,
+   "run": "test-pyramid-part3",
+   "s": 55.2,
    "status_in_run": "pass"
   },
   "app.loading_stages": {
@@ -93,23 +93,23 @@
   },
   "app.shutdown_window": {
    "build_s": 0.0,
-   "duration_s": 43.8,
-   "run": "save-backups-verifier2",
-   "s": 43.8,
+   "duration_s": 0.0,
+   "run": "test-pyramid-part3",
+   "s": 0.0,
    "status_in_run": "pass"
   },
   "app.single_dock_icon": {
    "build_s": 0.0,
-   "duration_s": 55.21,
-   "run": "save-backups-verifier2",
-   "s": 55.21,
+   "duration_s": 0.0,
+   "run": "test-pyramid-part3",
+   "s": 0.0,
    "status_in_run": "pass"
   },
   "app.single_instance": {
    "build_s": 0.0,
-   "duration_s": 80.27,
-   "run": "save-backups-verifier2",
-   "s": 80.27,
+   "duration_s": 38.33,
+   "run": "test-pyramid-part3",
+   "s": 38.33,
    "status_in_run": "pass"
   },
   "app.startup_failure": {
@@ -121,9 +121,9 @@
   },
   "backups.failure_nonblocking": {
    "build_s": 0.0,
-   "duration_s": 79.46,
-   "run": "save-backups-verifier2",
-   "s": 79.46,
+   "duration_s": 0.0,
+   "run": "test-pyramid-part3",
+   "s": 0.0,
    "status_in_run": "pass"
   },
   "backups.kill_safe": {
@@ -149,9 +149,9 @@
   },
   "backups.restore_refusals": {
    "build_s": 0.0,
-   "duration_s": 86.04,
-   "run": "save-backups-verifier2",
-   "s": 86.04,
+   "duration_s": 0.0,
+   "run": "test-pyramid-part3",
+   "s": 0.0,
    "status_in_run": "pass"
   },
   "backups.restore_roundtrip": {
@@ -219,9 +219,9 @@
   },
   "client.config_gate": {
    "build_s": 0.0,
-   "duration_s": 68.26,
-   "run": "save-backups-verifier2",
-   "s": 68.26,
+   "duration_s": 18.24,
+   "run": "test-pyramid-part3",
+   "s": 18.24,
    "status_in_run": "pass"
   },
   "client.config_gen": {
@@ -233,9 +233,9 @@
   },
   "client.first_start_settings": {
    "build_s": 0.0,
-   "duration_s": 72.24,
-   "run": "test-loop-speedups",
-   "s": 72.24,
+   "duration_s": 3.34,
+   "run": "test-pyramid-part3",
+   "s": 3.34,
    "status_in_run": "pass"
   },
   "client.inspect": {
@@ -264,6 +264,13 @@
    "duration_s": 0.04,
    "run": "save-backups-verifier2",
    "s": 0.04,
+   "status_in_run": "pass"
+  },
+  "client.pause_menu": {
+   "build_s": 0.0,
+   "duration_s": 55.49,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 55.49,
    "status_in_run": "pass"
   },
   "client.play_build": {
@@ -331,9 +338,9 @@
   },
   "client.resolution_default": {
    "build_s": 0.0,
-   "duration_s": 73.23,
-   "run": "save-backups-verifier2",
-   "s": 73.23,
+   "duration_s": 27.24,
+   "run": "test-pyramid-part3",
+   "s": 27.24,
    "status_in_run": "pass"
   },
   "client.resolution_gate": {
@@ -345,9 +352,9 @@
   },
   "client.stock_mode": {
    "build_s": 0.0,
-   "duration_s": 108.43,
-   "run": "save-backups-verifier2",
-   "s": 108.43,
+   "duration_s": 33.32,
+   "run": "test-pyramid-part3",
+   "s": 33.32,
    "status_in_run": "pass"
   },
   "client.wording_addon": {
@@ -366,9 +373,9 @@
   },
   "comp.assists": {
    "build_s": 0.0,
-   "duration_s": 59.44,
-   "run": "save-backups-verifier2",
-   "s": 59.44,
+   "duration_s": 32.51,
+   "run": "test-pyramid-part3",
+   "s": 32.51,
    "status_in_run": "pass"
   },
   "comp.follows": {
@@ -413,6 +420,20 @@
    "s": 0.63,
    "status_in_run": "pass"
   },
+  "dng.session1": {
+   "build_s": 0.0,
+   "duration_s": 75.49,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 75.49,
+   "status_in_run": "pass"
+  },
+  "dng.session2": {
+   "build_s": 0.0,
+   "duration_s": 60.98,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 60.98,
+   "status_in_run": "pass"
+  },
   "era.default_on": {
    "build_s": 0.0,
    "duration_s": 0.85,
@@ -443,9 +464,16 @@
   },
   "era.scope_guard": {
    "build_s": 0.0,
-   "duration_s": 45.77,
-   "run": "save-backups-verifier2",
-   "s": 45.77,
+   "duration_s": 57.1,
+   "run": "test-pyramid-part3",
+   "s": 57.1,
+   "status_in_run": "pass"
+  },
+  "era.session_toggle": {
+   "build_s": 0.0,
+   "duration_s": 53.76,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 53.76,
    "status_in_run": "pass"
   },
   "era.sql_deterministic": {
@@ -457,9 +485,9 @@
   },
   "era.toggle_roundtrip": {
    "build_s": 0.0,
-   "duration_s": 49.97,
-   "run": "save-backups-verifier2",
-   "s": 49.97,
+   "duration_s": 57.1,
+   "run": "test-pyramid-part3",
+   "s": 57.1,
    "status_in_run": "pass"
   },
   "era.xp_curve": {
@@ -467,6 +495,13 @@
    "duration_s": 0.91,
    "run": "save-backups-verifier2",
    "s": 0.91,
+   "status_in_run": "pass"
+  },
+  "firstlaunch.client_refusals": {
+   "build_s": 0.0,
+   "duration_s": 8.19,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 8.19,
    "status_in_run": "pass"
   },
   "fixture.account_character": {
@@ -532,6 +567,48 @@
    "s": 5.11,
    "status_in_run": "pass"
   },
+  "journey.app_desktop": {
+   "build_s": 0.0,
+   "duration_s": 178.27,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 178.27,
+   "status_in_run": "fail"
+  },
+  "journey.first_play": {
+   "build_s": 0.0,
+   "duration_s": 125.29,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 125.29,
+   "status_in_run": "pass"
+  },
+  "journey.login_recovery": {
+   "build_s": 0.0,
+   "duration_s": 122.87,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 122.87,
+   "status_in_run": "pass"
+  },
+  "journey.pause": {
+   "build_s": 0.0,
+   "duration_s": 55.55,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 55.55,
+   "status_in_run": "pass"
+  },
+  "journey.saves": {
+   "build_s": 0.0,
+   "duration_s": 193.9,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 193.9,
+   "status_in_run": "pass"
+  },
+  "journey.stock_client": {
+   "build_s": 0.0,
+   "duration_s": 32.64,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 32.64,
+   "status_in_run": "pass"
+  },
   "lifecycle.down": {
    "build_s": 0.0,
    "duration_s": 5.93,
@@ -574,25 +651,81 @@
    "s": 18.64,
    "status_in_run": "pass"
   },
+  "lock.companion_unstuck": {
+   "build_s": 0.0,
+   "duration_s": 28.6,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 28.6,
+   "status_in_run": "pass"
+  },
+  "lock.fresh_after_clear": {
+   "build_s": 0.0,
+   "duration_s": 35.02,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 35.02,
+   "status_in_run": "pass"
+  },
+  "lock.heroic_fresh_after_clear": {
+   "build_s": 0.0,
+   "duration_s": 42.88,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 42.88,
+   "status_in_run": "pass"
+  },
+  "lock.heroic_partial_kept": {
+   "build_s": 0.0,
+   "duration_s": 20.94,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 20.94,
+   "status_in_run": "pass"
+  },
+  "lock.login_inside_kept": {
+   "build_s": 0.0,
+   "duration_s": 38.1,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 38.1,
+   "status_in_run": "pass"
+  },
+  "lock.no_hourly_cap": {
+   "build_s": 0.0,
+   "duration_s": 33.83,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 33.83,
+   "status_in_run": "pass"
+  },
+  "lock.partial_kept": {
+   "build_s": 0.0,
+   "duration_s": 9.1,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 9.1,
+   "status_in_run": "pass"
+  },
+  "lock.partial_kept_dismissed": {
+   "build_s": 0.0,
+   "duration_s": 13.1,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 13.1,
+   "status_in_run": "pass"
+  },
   "login.auto_login": {
    "build_s": 0.0,
-   "duration_s": 79.83,
-   "run": "save-backups-verifier2",
-   "s": 79.83,
+   "duration_s": 1.26,
+   "run": "test-pyramid-part3",
+   "s": 1.26,
    "status_in_run": "pass"
   },
   "login.backdrop_choice": {
    "build_s": 0.0,
-   "duration_s": 0.02,
-   "run": "save-backups-verifier2",
-   "s": 0.02,
+   "duration_s": 50.91,
+   "run": "test-pyramid-part3",
+   "s": 50.91,
    "status_in_run": "pass"
   },
   "login.cancel_shows_list": {
    "build_s": 0.0,
-   "duration_s": 151.62,
-   "run": "save-backups-verifier2",
-   "s": 151.62,
+   "duration_s": 0.03,
+   "run": "test-pyramid-part3",
+   "s": 0.03,
    "status_in_run": "pass"
   },
   "login.charselect_layout": {
@@ -658,6 +791,83 @@
    "s": 0.03,
    "status_in_run": "pass"
   },
+  "pause.aura_frozen": {
+   "build_s": 0.0,
+   "duration_s": 38.7,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 38.7,
+   "status_in_run": "pass"
+  },
+  "pause.bots_frozen": {
+   "build_s": 0.0,
+   "duration_s": 38.7,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 38.7,
+   "status_in_run": "pass"
+  },
+  "pause.cast_cancelled": {
+   "build_s": 0.0,
+   "duration_s": 38.7,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 38.7,
+   "status_in_run": "pass"
+  },
+  "pause.combat_frozen": {
+   "build_s": 0.0,
+   "duration_s": 38.7,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 38.7,
+   "status_in_run": "pass"
+  },
+  "pause.cooldown_frozen": {
+   "build_s": 0.0,
+   "duration_s": 38.7,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 38.7,
+   "status_in_run": "pass"
+  },
+  "pause.disabled_noop": {
+   "build_s": 0.0,
+   "duration_s": 5.46,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 5.46,
+   "status_in_run": "pass"
+  },
+  "pause.disconnect_unpauses": {
+   "build_s": 0.0,
+   "duration_s": 4.26,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 4.26,
+   "status_in_run": "pass"
+  },
+  "pause.freeze_matrix": {
+   "build_s": 0.0,
+   "duration_s": 41.12,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 41.12,
+   "status_in_run": "pass"
+  },
+  "pause.logout_unpauses": {
+   "build_s": 0.0,
+   "duration_s": 21.88,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 21.88,
+   "status_in_run": "pass"
+  },
+  "pause.refused_on_taxi": {
+   "build_s": 0.0,
+   "duration_s": 11.79,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 11.79,
+   "status_in_run": "pass"
+  },
+  "pause.respawn_frozen": {
+   "build_s": 0.0,
+   "duration_s": 49.05,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 49.05,
+   "status_in_run": "pass"
+  },
   "play.client_crash_cleanup": {
    "build_s": 0.0,
    "duration_s": 33.59,
@@ -665,39 +875,46 @@
    "s": 33.59,
    "status_in_run": "pass"
   },
+  "play.cold_sessions": {
+   "build_s": 0.0,
+   "duration_s": 334.96,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 334.96,
+   "status_in_run": "pass"
+  },
   "play.dock_identity": {
    "build_s": 0.0,
-   "duration_s": 39.64,
-   "run": "save-backups-verifier2",
-   "s": 39.64,
+   "duration_s": 0.0,
+   "run": "test-pyramid-part3",
+   "s": 0.0,
    "status_in_run": "pass"
   },
   "play.interrupt_clean_exit": {
    "build_s": 0.0,
-   "duration_s": 62.89,
-   "run": "save-backups-verifier2",
-   "s": 62.89,
+   "duration_s": 35.36,
+   "run": "test-pyramid-part3",
+   "s": 35.36,
    "status_in_run": "pass"
   },
   "play.loop_clean_exit": {
    "build_s": 0.0,
-   "duration_s": 39.19,
-   "run": "save-backups-verifier2",
-   "s": 39.19,
+   "duration_s": 0.0,
+   "run": "test-pyramid-part3",
+   "s": 0.0,
    "status_in_run": "pass"
   },
   "play.offline": {
    "build_s": 0.0,
-   "duration_s": 53.6,
-   "run": "save-backups-verifier2",
-   "s": 53.6,
+   "duration_s": 108.74,
+   "run": "test-pyramid-part3",
+   "s": 108.74,
    "status_in_run": "pass"
   },
   "play.player_account": {
    "build_s": 0.0,
-   "duration_s": 95.74,
-   "run": "save-backups-verifier2",
-   "s": 95.74,
+   "duration_s": 2.23,
+   "run": "test-pyramid-part3",
+   "s": 2.23,
    "status_in_run": "pass"
   },
   "play.player_account_untouched": {
@@ -709,9 +926,9 @@
   },
   "play.single_instance": {
    "build_s": 0.0,
-   "duration_s": 37.24,
-   "run": "save-backups-verifier2",
-   "s": 37.24,
+   "duration_s": 0.0,
+   "run": "test-pyramid-part3",
+   "s": 0.0,
    "status_in_run": "pass"
   },
   "play.stage_lines": {
@@ -819,6 +1036,27 @@
    "s": 0.77,
    "status_in_run": "pass"
   },
+  "release.pins": {
+   "build_s": 0.0,
+   "duration_s": 2.04,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 2.04,
+   "status_in_run": "pass"
+  },
+  "release.player_data_untouched": {
+   "build_s": 0.0,
+   "duration_s": 4.8,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 4.8,
+   "status_in_run": "pass"
+  },
+  "release.test_switches_refused": {
+   "build_s": 0.0,
+   "duration_s": 5.68,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 5.68,
+   "status_in_run": "pass"
+  },
   "repo.agent_guard_hook": {
    "build_s": 0.0,
    "duration_s": 2.23,
@@ -838,13 +1076,6 @@
    "duration_s": 0.51,
    "run": "test-loop-speedups",
    "s": 0.51,
-   "status_in_run": "pass"
-  },
-  "report.backups_tier_rule": {
-   "build_s": 0.0,
-   "duration_s": 0.47,
-   "run": "save-backups-verifier2",
-   "s": 0.47,
    "status_in_run": "pass"
   },
   "report.client_pristine": {
@@ -875,13 +1106,6 @@
    "s": 0.43,
    "status_in_run": "pass"
   },
-  "report.gui_tier_rule": {
-   "build_s": 0.0,
-   "duration_s": 7.36,
-   "run": "save-backups-verifier2",
-   "s": 7.36,
-   "status_in_run": "pass"
-  },
   "report.keep_awake": {
    "build_s": 0.0,
    "duration_s": 11.22,
@@ -889,18 +1113,18 @@
    "s": 11.22,
    "status_in_run": "pass"
   },
+  "report.lanes": {
+   "build_s": 0.0,
+   "duration_s": 0.0,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 0.0,
+   "status_in_run": "pass"
+  },
   "report.last_full_run": {
    "build_s": 0.0,
    "duration_s": 0.15,
    "run": "test-loop-speedups",
    "s": 0.15,
-   "status_in_run": "pass"
-  },
-  "report.nightly": {
-   "build_s": 0.0,
-   "duration_s": 1.04,
-   "run": "test-loop-speedups",
-   "s": 1.04,
    "status_in_run": "pass"
   },
   "report.orphans_healed": {
@@ -917,25 +1141,263 @@
    "s": 0.01,
    "status_in_run": "pass"
   },
-  "report.slow_tier_rule": {
+  "saves.atomic": {
    "build_s": 0.0,
-   "duration_s": 0.03,
-   "run": "save-backups-verifier2",
-   "s": 0.03,
+   "duration_s": 17.58,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 17.58,
    "status_in_run": "pass"
   },
-  "report.tiers": {
+  "saves.autosave_triggers": {
    "build_s": 0.0,
-   "duration_s": 91.37,
-   "run": "save-backups-verifier2",
-   "s": 91.37,
+   "duration_s": 50.51,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 50.51,
    "status_in_run": "pass"
   },
-  "report.tiers_declared": {
+  "saves.bots_skip": {
    "build_s": 0.0,
-   "duration_s": 0.15,
-   "run": "save-backups-verifier2",
-   "s": 0.15,
+   "duration_s": 21.77,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 21.77,
+   "status_in_run": "pass"
+  },
+  "saves.inworld_list": {
+   "build_s": 0.0,
+   "duration_s": 12.22,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 12.22,
+   "status_in_run": "pass"
+  },
+  "saves.inworld_load": {
+   "build_s": 0.0,
+   "duration_s": 3.72,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 3.72,
+   "status_in_run": "pass"
+  },
+  "saves.item_ids_fresh": {
+   "build_s": 0.0,
+   "duration_s": 10.73,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 10.73,
+   "status_in_run": "pass"
+  },
+  "saves.list_wording": {
+   "build_s": 0.0,
+   "duration_s": 1.77,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 1.77,
+   "status_in_run": "pass"
+  },
+  "saves.live_charselect_list": {
+   "build_s": 0.0,
+   "duration_s": 0.0,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 0.0,
+   "status_in_run": "pass"
+  },
+  "saves.live_charselect_load": {
+   "build_s": 0.0,
+   "duration_s": 119.95,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 119.95,
+   "status_in_run": "pass"
+  },
+  "saves.load_atomic": {
+   "build_s": 0.0,
+   "duration_s": 3.1,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 3.1,
+   "status_in_run": "pass"
+  },
+  "saves.load_ordering": {
+   "build_s": 0.0,
+   "duration_s": 83.3,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 83.3,
+   "status_in_run": "pass"
+  },
+  "saves.load_refusals": {
+   "build_s": 0.0,
+   "duration_s": 23.41,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 23.41,
+   "status_in_run": "pass"
+  },
+  "saves.manual": {
+   "build_s": 0.0,
+   "duration_s": 8.22,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 8.22,
+   "status_in_run": "pass"
+  },
+  "saves.player_untouched": {
+   "build_s": 0.0,
+   "duration_s": 3.58,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 3.58,
+   "status_in_run": "pass"
+  },
+  "saves.quick_slot": {
+   "build_s": 0.0,
+   "duration_s": 4.02,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 4.02,
+   "status_in_run": "pass"
+  },
+  "saves.refused_in_combat": {
+   "build_s": 0.0,
+   "duration_s": 9.57,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 9.57,
+   "status_in_run": "pass"
+  },
+  "saves.roundtrip": {
+   "build_s": 0.0,
+   "duration_s": 38.15,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 38.15,
+   "status_in_run": "pass"
+  },
+  "saves.scope": {
+   "build_s": 0.0,
+   "duration_s": 61.98,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 61.98,
+   "status_in_run": "pass"
+  },
+  "saves.session_a": {
+   "build_s": 0.0,
+   "duration_s": 22.14,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 22.14,
+   "status_in_run": "pass"
+  },
+  "saves.session_b": {
+   "build_s": 0.0,
+   "duration_s": 72.29,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 72.29,
+   "status_in_run": "pass"
+  },
+  "saves.session_interval": {
+   "build_s": 0.0,
+   "duration_s": 94.08,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 94.08,
+   "status_in_run": "pass"
+  },
+  "saves.table_coverage": {
+   "build_s": 0.0,
+   "duration_s": 0.04,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 0.04,
+   "status_in_run": "pass"
+  },
+  "saves.undo": {
+   "build_s": 0.0,
+   "duration_s": 4.42,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 4.42,
+   "status_in_run": "pass"
+  },
+  "savesctl.account_name_kept": {
+   "build_s": 0.0,
+   "duration_s": 10.07,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 10.07,
+   "status_in_run": "pass"
+  },
+  "savesctl.hygiene": {
+   "build_s": 0.0,
+   "duration_s": 16.41,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 16.41,
+   "status_in_run": "pass"
+  },
+  "savesctl.live_codes": {
+   "build_s": 0.0,
+   "duration_s": 0.02,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 0.02,
+   "status_in_run": "pass"
+  },
+  "savesctl.live_down": {
+   "build_s": 0.0,
+   "duration_s": 0.01,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 0.01,
+   "status_in_run": "pass"
+  },
+  "savesctl.live_roundtrip": {
+   "build_s": 0.0,
+   "duration_s": 63.74,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 63.74,
+   "status_in_run": "pass"
+  },
+  "savesctl.realm_restored": {
+   "build_s": 0.0,
+   "duration_s": 0.0,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 0.0,
+   "status_in_run": "pass"
+  },
+  "savesctl.test_actions_refused": {
+   "build_s": 0.0,
+   "duration_s": 1.25,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 1.25,
+   "status_in_run": "pass"
+  },
+  "scale.counts_companions": {
+   "build_s": 0.0,
+   "duration_s": 43.93,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 43.93,
+   "status_in_run": "pass"
+  },
+  "scale.disabled_stock": {
+   "build_s": 0.0,
+   "duration_s": 12.0,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 12.0,
+   "status_in_run": "pass"
+  },
+  "scale.module_loaded": {
+   "build_s": 0.0,
+   "duration_s": 5.46,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 5.46,
+   "status_in_run": "pass"
+  },
+  "scale.outdoor_untouched": {
+   "build_s": 0.0,
+   "duration_s": 7.48,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 7.48,
+   "status_in_run": "pass"
+  },
+  "scale.party_stock": {
+   "build_s": 0.0,
+   "duration_s": 0.0,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 0.0,
+   "status_in_run": "pass"
+  },
+  "scale.pause_safe": {
+   "build_s": 0.0,
+   "duration_s": 12.62,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 12.62,
+   "status_in_run": "pass"
+  },
+  "scale.solo_weaker": {
+   "build_s": 0.0,
+   "duration_s": 6.51,
+   "run": "test-pyramid-verifier-acc2",
+   "s": 6.51,
    "status_in_run": "pass"
   },
   "setup.preflight": {
@@ -1857,13 +2319,6 @@
    "s": 0.56,
    "status_in_run": "pass"
   },
-  "report.backups_tier_rule": {
-   "build_s": 0.0,
-   "duration_s": 0.53,
-   "run": "second-stack",
-   "s": 0.53,
-   "status_in_run": "pass"
-  },
   "report.client_pristine": {
    "build_s": 0.0,
    "duration_s": 0.75,
@@ -1892,13 +2347,6 @@
    "s": 0.43,
    "status_in_run": "pass"
   },
-  "report.gui_tier_rule": {
-   "build_s": 0.0,
-   "duration_s": 10.04,
-   "run": "second-stack",
-   "s": 10.04,
-   "status_in_run": "pass"
-  },
   "report.keep_awake": {
    "build_s": 0.0,
    "duration_s": 11.36,
@@ -1920,13 +2368,6 @@
    "s": 0.15,
    "status_in_run": "pass"
   },
-  "report.nightly": {
-   "build_s": 0.0,
-   "duration_s": 1.29,
-   "run": "second-stack",
-   "s": 1.29,
-   "status_in_run": "pass"
-  },
   "report.orphans_healed": {
    "build_s": 0.0,
    "duration_s": 51.79,
@@ -1939,27 +2380,6 @@
    "duration_s": 0.01,
    "run": "second-stack",
    "s": 0.01,
-   "status_in_run": "pass"
-  },
-  "report.slow_tier_rule": {
-   "build_s": 0.0,
-   "duration_s": 0.04,
-   "run": "second-stack",
-   "s": 0.04,
-   "status_in_run": "pass"
-  },
-  "report.tiers": {
-   "build_s": 0.0,
-   "duration_s": 139.78,
-   "run": "second-stack",
-   "s": 139.78,
-   "status_in_run": "pass"
-  },
-  "report.tiers_declared": {
-   "build_s": 0.0,
-   "duration_s": 0.14,
-   "run": "second-stack",
-   "s": 0.14,
    "status_in_run": "pass"
   },
   "setup.preflight": {
@@ -2233,6 +2653,123 @@
     "setup.preflight"
    ],
    "wall_s": 2199.1,
+   "why": "checks new with this change"
+  },
+  "test-pyramid-part3": {
+   "finished": "2026-10-11T17:50:29+00:00",
+   "lanes": 1,
+   "machine": "arm64",
+   "repo_sha": "ab84fde40f5e0e33c3c97c131e73e9bcf8021bfa",
+   "source": "the part-3 measurement (test-pyramid design 15.1): one filtered pr-tier run of every integration and journey check, 82 ids, kept outside the repo",
+   "started": "2026-10-11T17:04:22+00:00",
+   "used_for": [
+    "app.launch_lifecycle",
+    "app.shutdown_window",
+    "app.single_dock_icon",
+    "app.single_instance",
+    "backups.failure_nonblocking",
+    "backups.restore_refusals",
+    "client.config_gate",
+    "client.first_start_settings",
+    "client.resolution_default",
+    "client.stock_mode",
+    "comp.assists",
+    "era.scope_guard",
+    "era.toggle_roundtrip",
+    "login.auto_login",
+    "login.backdrop_choice",
+    "login.cancel_shows_list",
+    "play.dock_identity",
+    "play.interrupt_clean_exit",
+    "play.loop_clean_exit",
+    "play.offline",
+    "play.player_account",
+    "play.single_instance"
+   ],
+   "wall_s": 2767.3,
+   "why": "checks this change rewrote or merged (proposal measurement log, verifier cycle F4)"
+  },
+  "test-pyramid-verifier-acc2": {
+   "finished": "2026-10-11T21:08:06+00:00",
+   "machine": "arm64",
+   "repo_sha": "1fc426fcd086f0443c7bc94274f7701e09a6a1a6",
+   "source": "the verifier's pr-tier run of 1fc426f (82 ids, kept outside the repo)",
+   "started": "2026-10-11T20:23:29+00:00",
+   "used_for": [
+    "client.pause_menu",
+    "dng.session1",
+    "dng.session2",
+    "era.session_toggle",
+    "firstlaunch.client_refusals",
+    "journey.app_desktop",
+    "journey.first_play",
+    "journey.login_recovery",
+    "journey.pause",
+    "journey.saves",
+    "journey.stock_client",
+    "lock.companion_unstuck",
+    "lock.fresh_after_clear",
+    "lock.heroic_fresh_after_clear",
+    "lock.heroic_partial_kept",
+    "lock.login_inside_kept",
+    "lock.no_hourly_cap",
+    "lock.partial_kept",
+    "lock.partial_kept_dismissed",
+    "pause.aura_frozen",
+    "pause.bots_frozen",
+    "pause.cast_cancelled",
+    "pause.combat_frozen",
+    "pause.cooldown_frozen",
+    "pause.disabled_noop",
+    "pause.disconnect_unpauses",
+    "pause.freeze_matrix",
+    "pause.logout_unpauses",
+    "pause.refused_on_taxi",
+    "pause.respawn_frozen",
+    "play.cold_sessions",
+    "release.pins",
+    "release.player_data_untouched",
+    "release.test_switches_refused",
+    "report.lanes",
+    "saves.atomic",
+    "saves.autosave_triggers",
+    "saves.bots_skip",
+    "saves.inworld_list",
+    "saves.inworld_load",
+    "saves.item_ids_fresh",
+    "saves.list_wording",
+    "saves.live_charselect_list",
+    "saves.live_charselect_load",
+    "saves.load_atomic",
+    "saves.load_ordering",
+    "saves.load_refusals",
+    "saves.manual",
+    "saves.player_untouched",
+    "saves.quick_slot",
+    "saves.refused_in_combat",
+    "saves.roundtrip",
+    "saves.scope",
+    "saves.session_a",
+    "saves.session_b",
+    "saves.session_interval",
+    "saves.table_coverage",
+    "saves.undo",
+    "savesctl.account_name_kept",
+    "savesctl.hygiene",
+    "savesctl.live_codes",
+    "savesctl.live_down",
+    "savesctl.live_roundtrip",
+    "savesctl.realm_restored",
+    "savesctl.test_actions_refused",
+    "scale.counts_companions",
+    "scale.disabled_stock",
+    "scale.module_loaded",
+    "scale.outdoor_untouched",
+    "scale.party_stock",
+    "scale.pause_safe",
+    "scale.solo_weaker"
+   ],
+   "wall_s": 2676.3,
    "why": "checks new with this change"
   }
  },

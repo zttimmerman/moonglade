@@ -3,7 +3,16 @@ from .. import db, paths as P, soap
 from ..registry import check, require
 
 
-@check("gm.server_info", order=60, capability="harness-control", stack="up", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "modules/mod-moonglade/src/MoongladeAddon.*",
+    "harness/hslib/checks/control_checks.py",
+)
+
+
+@check("gm.server_info", order=60, capability="harness-control", stack="up", layer="integration")
 def server_info(ctx):
     """`hs gm "server info"` exits 0 with revision + player count."""
     import subprocess
@@ -15,7 +24,7 @@ def server_info(ctx):
     return ev
 
 
-@check("gm.invalid", order=61, capability="harness-control", stack="up", tier="quick")
+@check("gm.invalid", order=61, capability="harness-control", stack="up", layer="integration")
 def invalid(ctx):
     """Unknown GM command exits nonzero and surfaces the server's error text."""
     import subprocess
@@ -26,7 +35,7 @@ def invalid(ctx):
     return ev
 
 
-@check("sql.world_populated", order=70, capability="harness-control", stack="up", tier="quick")
+@check("sql.world_populated", order=70, capability="harness-control", stack="up", layer="integration")
 def world_populated(ctx):
     """creature_template has > 1000 rows."""
     ev = db.assert_scalar("SELECT COUNT(*) FROM creature_template", ">", 1000, "world")
@@ -34,7 +43,7 @@ def world_populated(ctx):
     return ev
 
 
-@check("sql.assert_selftest", order=71, capability="harness-control", stack="up", tier="quick")
+@check("sql.assert_selftest", order=71, capability="harness-control", stack="up", layer="integration")
 def assert_selftest(ctx):
     """A deliberately false assertion reports FAIL with expected and actual."""
     ev = db.assert_scalar("SELECT COUNT(*) FROM creature_template", "<", 0, "world")
@@ -43,7 +52,7 @@ def assert_selftest(ctx):
     return {"selftest_assertion": ev, "behaviour": "false assertion correctly reported as failing"}
 
 
-@check("client.realmlist", order=80, capability="client-connectivity", stack="up", tier="quick")
+@check("client.realmlist", order=80, capability="client-connectivity", stack="up", layer="integration")
 def realmlist(ctx):
     """Exactly one realm at 127.0.0.1:8085, gamebuild 12340."""
     rows = db.query("SELECT id, name, address, port, gamebuild FROM realmlist", "auth")

@@ -130,6 +130,7 @@ def run_bootstrap(repo: Path, args: list[str], env: dict, timeout: float = 300) 
             "seconds": round(time.time() - t0, 1)}
 
 
+AMPLE_FREE_BYTES = 10**13
 PREFLIGHT_CASES = [
     # (case, client: "good" or a fake key, injection, text the message must contain, failing step)
     ("intel_mac", "good", {"arch": "x86_64"}, ["Apple Silicon"], "preflight"),
@@ -147,7 +148,25 @@ PREFLIGHT_CASES = [
 ]
 
 
-@check("setup.preflight", order=31, capability="easy-setup", stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "Brewfile",
+    "bootstrap",
+    "fork.lock#*_url",
+    "fork.lock#*_sha256",
+    "fork.lock#ghidra_version",
+    "harness/hslib/baseline.py",
+    "harness/hslib/build.py",
+    "harness/hslib/checks/setup_checks.py",
+    "harness/hslib/clientinst.py",
+    "harness/hslib/downloads.py",
+    "harness/hslib/pristine.py",
+)
+
+
+@check("setup.preflight", order=31, capability="easy-setup", stack="any", layer="unit", parallel_safe=True)
 def setup_preflight(ctx):
     """In a scratch copy of the repo, ./bootstrap stops before changing anything (scratch tree byte-for-byte unchanged),
     exits nonzero and names the problem and the fix for: an Intel Mac, an old macOS, no Rosetta, no Command Line Tools,
@@ -166,6 +185,10 @@ def setup_preflight(ctx):
         fakes["good"] = P.CLIENT
         base_env = scratch_env(HS_HARNESS_RUN="1")
         for case, client, inj, texts, step in PREFLIGHT_CASES:
+            # the disk rule has its own case (low_disk): every other case gets ample free space, so a nearly full
+            # disk on this Mac can't stop a case at the disk rule before the rule it tests (brew_missing_declined)
+            if "free_bytes" not in inj:
+                inj = {**inj, "free_bytes": AMPLE_FREE_BYTES}
             before = tree_fingerprint(repo)
             env = base_env | ({"HS_BOOTSTRAP_TEST": json.dumps(inj)} if inj else {})
             r = run_bootstrap(repo, [str(fakes[client]), "--allow-test-inject"], env)
@@ -223,7 +246,7 @@ NETWORK_CALLERS = {"harness/hslib/downloads.py": "pinned downloads (PINS, sha256
                                                  "person to run; never runs it"}
 
 
-@check("build.downloads_pinned", order=32, capability="server-build", stack="any", tier="quick")
+@check("build.downloads_pinned", order=32, capability="server-build", stack="any", layer="unit", parallel_safe=True)
 def downloads_pinned(ctx):
     """Every download URL in fork.lock (all *_url keys but the git remotes) has a sha256 pin, and every download path
     goes through those pins; in a scratch copy of the repo, a cached file with a wrong hash is refused for each pin
@@ -362,7 +385,7 @@ def portability_scan(root: Path, files: list[str]) -> dict:
             "patterns": [l for l, _ in pats]}
 
 
-@check("repo.portable", order=33, capability="easy-setup", stack="any", tier="quick")
+@check("repo.portable", order=33, capability="easy-setup", stack="any", layer="unit", parallel_safe=True)
 def repo_portable(ctx):
     """No tracked (or new, unignored) file has a home path, this Mac's user name, home folder or hostname, the repo's
     absolute path, the dev Mac's repo-folder convention or an nvm install path, except the reviewed allowlist; and in a
@@ -436,7 +459,7 @@ def _plant_moved(repo: Path) -> dict:
     return {"install_record": OLD_REPO, "cmake_cache_dir": OLD_REPO + "/build"}
 
 
-@check("build.moved_repo", order=21, capability="server-build", stack="down", tier="full")
+@check("build.moved_repo", order=21, capability="server-build", stack="down", layer="gate")
 def moved_repo(ctx):
     """A scratch copy whose install record and CMakeCache name another folder: `hs up` and ./play refuse before
     starting anything, naming the old and the new folder and `harness/hs build --force-clean`; `hs build` discards the
@@ -531,7 +554,8 @@ def _perturb_inputs(scratch: Path) -> dict:
     raise RuntimeError("no patch with sources to perturb")
 
 
-@check("client.player_client_not_rebuilt", order=998, capability="play-launcher", stack="down", tier="full")
+@check("client.player_client_not_rebuilt", order=998, capability="play-launcher", stack="down", layer="integration", targeted=True,
+       covers=("harness/hslib/play.py", "harness/hslib/clientbuild.py", "harness/hslib/checks/setup_checks.py"))
 def player_client_not_rebuilt(ctx):
     """The player's env/client-play/ build (folder inode; hs-build.json, Wow.exe and every patch output: SHA-256, inode,
     mtime) is identical to the start of the run. Probe: a harness-shaped ./play stand-in run on a scratch play client
@@ -706,7 +730,7 @@ def _verify_install(clone: Path, tag: str, ev: dict) -> dict:
         and (clone / "env/wowsilicon-r17/.wine-runtime/bin/wine").exists()
     rdir = clone / "harness" / "out" / f"inspect-{tag}"      # the runner writes results inside its own repo
     shutil.rmtree(rdir, ignore_errors=True)
-    r = subprocess.run([str(clone / "harness/hs"), "run", "--tier", "quick", "--only", "client.inspect",
+    r = subprocess.run([str(clone / "harness/hs"), "run", "--tier", "unit", "--only", "client.inspect",
                         "--results-dir", str(rdir)], capture_output=True, text=True, env=scratch_env(HS_HARNESS_RUN="1"),
                        cwd=clone, timeout=600)
     try:
@@ -827,7 +851,7 @@ def _kill_during(clone: Path, client: Path, env: dict, step: str, out: Path, min
             "processes_left_after_kill": _clone_processes(clone)}
 
 
-@check("setup.fresh_clone", order=12, capability="easy-setup", stack="down", tier="slow")
+@check("setup.fresh_clone", order=12, capability="easy-setup", stack="down", layer="gate")
 def fresh_clone(ctx):
     """A fresh `git clone` of HEAD in harness/out/setup-scratch/clone, with the Homebrew deps installed and a cache of the
     pinned downloads: `./bootstrap <the dev Mac's client/> --yes` exits 0 with a built server, server data, the

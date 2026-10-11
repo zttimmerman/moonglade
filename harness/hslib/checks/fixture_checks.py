@@ -19,7 +19,18 @@ def _fx(fn, *a):
         require(False, str(e), **e.evidence)
 
 
-@check("fixture.account_character", order=100, capability="harness-control", stack="up", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "harness/hslib/fixtures.py",
+    "harness/hslib/fixture.py",
+    "harness/hslib/sharedfix.py",
+    "harness/hslib/checks/fixture_checks.py",
+)
+
+
+@check("fixture.account_character", order=100, capability="harness-control", stack="up", layer="integration")
 def account_character(ctx):
     """Fixture setup run twice leaves exactly one test account and one test character, both server-created.
     The account is first deleted through the server (SOAP `account delete`) so this run's evidence shows the
@@ -46,7 +57,7 @@ def account_character(ctx):
     return ev
 
 
-@check("fixture.level", order=110, capability="harness-control", stack="up", tier="quick")
+@check("fixture.level", order=110, capability="harness-control", stack="up", layer="integration")
 def level(ctx):
     """Harness sets the test character to level 10 → characters.level is 10."""
     if F.char_state(F.char_guid() or 0).get("level") == F.LEVEL:
@@ -59,7 +70,7 @@ def level(ctx):
     return ev
 
 
-@check("fixture.teleport", order=111, capability="harness-control", stack="up", tier="quick")
+@check("fixture.teleport", order=111, capability="harness-control", stack="up", layer="integration")
 def teleport(ctx):
     """Harness teleports the test character to Goldshire → saved map/coords within 50 yd of its game_tele row."""
     ev = _fx(F.teleport, F.TELE_NAME)
@@ -72,7 +83,7 @@ def teleport(ctx):
     return ev
 
 
-@check("fixture.add_item", order=112, capability="harness-control", stack="up", tier="quick")
+@check("fixture.add_item", order=112, capability="harness-control", stack="up", layer="integration")
 def add_item(ctx):
     """Harness gives the test character an item by entry → the entry is owned by it (inventory or mail) in the DB."""
     ev = _fx(F.add_item, F.ITEM_ENTRY)
@@ -83,7 +94,7 @@ def add_item(ctx):
     return ev
 
 
-@check("fixture.start_quest", order=113, capability="harness-control", stack="up", tier="quick")
+@check("fixture.start_quest", order=113, capability="harness-control", stack="up", layer="integration")
 def start_quest(ctx):
     """Harness starts a quest by ID → character_queststatus has it for the character with an incomplete status (3)."""
     q = _fx(F.describe_quest, F.QUEST_ID)
@@ -100,7 +111,7 @@ def start_quest(ctx):
     return ev
 
 
-@check("client.protocol_probe", order=120, capability="client-connectivity", stack="up", tier="quick")
+@check("client.protocol_probe", order=120, capability="client-connectivity", stack="up", layer="integration")
 def protocol_probe(ctx):
     """Probe: SRP6 logon proof OK, realm list has localhost, world auth OK, enum lists the test character,
     player login yields SMSG_LOGIN_VERIFY_WORLD with the character's map and position."""
@@ -135,7 +146,7 @@ def protocol_probe(ctx):
     return ev
 
 
-@check("client.protocol_badpass", order=121, capability="client-connectivity", stack="up", tier="quick")
+@check("client.protocol_badpass", order=121, capability="client-connectivity", stack="up", layer="integration")
 def protocol_badpass(ctx):
     """Wrong password: challenge accepted (account exists) but the logon proof is rejected with AC's
     proof rejection (WOW_FAIL_UNKNOWN_ACCOUNT 0x04 after a successful challenge), no session key is issued, and the world server refuses a session."""
@@ -202,7 +213,7 @@ def _rbac_list(output: str) -> dict:
             "sec_level": int(sec.group(1)) if sec else None, "sec_name": sec.group(2) if sec else None}
 
 
-@check("fixture.instant_logout", order=122, capability="harness-control", stack="up", tier="quick")
+@check("fixture.instant_logout", order=122, capability="harness-control", stack="up", layer="integration")
 def instant_logout(ctx):
     """Probe logout of the test character (not resting) is instant (SMSG_LOGOUT_RESPONSE instant=1, completes in
     < 5 s, no 20 s timer); the test account holds only the instant-logout permission and is still security level 0."""
@@ -252,7 +263,7 @@ def instant_logout(ctx):
     return ev
 
 
-@check("lifecycle.persist", order=150, capability="server-lifecycle", stack="up", tier="full")
+@check("lifecycle.persist", order=150, capability="server-lifecycle", stack="up", layer="integration")
 def persist(ctx):
     """Level changed via the harness survives `hs down` + `hs up`."""
     guid_ev = _fx(F.ensure)

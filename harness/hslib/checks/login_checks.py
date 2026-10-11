@@ -22,7 +22,9 @@ from .playclient_util import (PlayRun, account_state, build_scratch, clear_logs,
 
 CAP = "login-screen"
 LOGIN_LIMIT = 90               # spec: within 90 s
-WAIT_MENU = 60                 # spec: no login for at least 60 s after the menu appears
+WAIT_MENU = 10                 # the live watch: 10 s after the menu appears (test-pyramid spec-change log, 2026-10-10:
+                               # the spec's 60 s runs on the Lua unit layer's simulated clock, LUA_60S below)
+LUA_60S = "no_login_for_60s_without_continue"     # unit:lua:test_frontmenu.<this>: 60 s of frames, no login
 
 
 def _wait(pred, timeout, step=1.0):
@@ -122,97 +124,69 @@ def _session_ok(key: str) -> dict:
 
 
 def continue_session() -> dict:
-    """One Continue run (memoised): stale login file + partial write planted in a fresh scratch play client, real
-    Wow.exe via ./play, one Continue; evidence for login.auto_login and login.no_glue_errors."""
+    """The Continue run's evidence for login.auto_login, login.no_glue_errors and login.fresh_menu_waits (memoised):
+    since test-pyramid part 3 (design 9.4) it is journey.first_play's cold session (seamless_checks.play_session: a
+    freshly built scratch play client with a stale login file and a partial write planted, the real Wow.exe via ./play,
+    a screenshot at 17 s, one Continue at 20 s, the account, connection.log and Wow.exe sampled every second)."""
     if "continue" in _SESSIONS:
         return _SESSIONS["continue"]
-    ev: dict = {"account": P.TEST_USER, "glue_test": CONTINUE_GLUE,
-                "input": "no keystrokes or input helpers; one Continue click by the GlueXML test hook",
-                "shared_run": "continue (login.auto_login + login.no_glue_errors)"}
+    from .seamless_checks import CONTINUE_AT, PRE_CONTINUE_SHOT_AT
+    assert (CONTINUE_AT, PRE_CONTINUE_SHOT_AT) == (CONTINUE_AT_S, PRE_CONTINUE_SHOT_S)
+    ev: dict = {"account": P.TEST_USER, "input": "no keystrokes or input helpers; one Continue click by the GlueXML "
+                "test hook", "shared_run": "journey.first_play's cold session (seamless_checks.play_session)"}
     _SESSIONS["continue"] = ev
-    scratch = run = None
     try:
-        require_given_clear(ev)
-        scratch = fresh_scratch("login")
-        ev["fresh_scratch"] = {"dir": str(scratch), "existed_before_build": scratch.exists()}
-        # a login file left behind by a killed ./play: the next run must remove it before anything else
-        ev["fresh_scratch"]["seeded"] = build_scratch(scratch)["seeded"]
-        ev["fresh_scratch"] |= {"connection_log_before": (scratch / "Logs" / "connection.log").exists(),
-                                "screenshots_before": len(screenshots(scratch)),
-                                "account_name_in_config_before": _config_value(scratch, "accountName"),
-                                "glue_test": CONTINUE_GLUE}
-        stale = frontmenu.write(scratch, [{"name": "HSSTALE", "account": "HSSTALE", "password": "stale123"}], "HSSTALE")
-        partial = frontmenu.archive_path(scratch).with_name(frontmenu.archive_path(scratch).name + ".hs-new")
-        partial.write_bytes(b"partial write of a killed ./play")          # what a SIGKILL inside write() leaves
-        partial.chmod(0o600)
-        ev["stale_planted"] = [stale["archive"], str(partial.relative_to(scratch))]
-        run = PlayRun("login", glue_test=CONTINUE_GLUE, scratch=scratch)
-        run.start()
-        up = run.wait_client()
-        ev["client_up"] = {k: v for k, v in up.items() if k not in ("t",)}
-        require(up.get("up"), "the real Wow.exe never came up", output=run.output()[-2500:], **ev)
-        ev["db_ready_while_client_runs"] = db_ready()
-        # baseline once the client is up: the play loop's own fixture step (before the client starts) may log the
-        # test account in through the protocol probe, so only a newer last_login counts
-        base = account_state(P.TEST_USER)
-        ev["account_at_client_start"] = base
-        ev["t_client_up"] = round(up["t"], 3)
-        samples, alive = [], []
+        from .seamless_checks import _session_ok as seamless_ok, play_session
+        play_session()
+        s = seamless_ok("play")
+        cs = s.get("continue_samples") or {"samples": [], "alive": []}
+        base = s.get("account_at_client_start") or {}
         hit = charsel = None
-        t_wait = time.time()
-        while time.time() - t_wait < max(LOGIN_LIMIT, CHARSELECT_WAIT):
-            st = account_state(P.TEST_USER)
-            conn = connection_log(scratch)
-            alive.append(bool(run.wow_alive()))
-            st |= {"t": round(time.time() - up["t"], 1),
-                   "chars_received": bool(re.search(r"COP_GET_CHARACTERS code=\d+ result=TRUE", conn))}
-            samples.append(st)
-            ev.setdefault("account_samples_abs", []).append(
-                [round(time.time(), 2), st.get("last_login"), st.get("online"), bool(conn.strip())])
-            if run.proc.poll() is not None:          # the client quit and ./play shut down: stop waiting
-                hit = hit or {"play_exited": run.proc.returncode, **st}
-                break
+        for st in cs["samples"]:
             if hit is None and (st.get("last_login") or 0) > (base.get("last_login") or 0) \
-                    and st.get("online") == 1 and st["chars_received"]:
+                    and st.get("online") == 1 and st.get("chars_received"):
                 hit = st
-            if st["chars_received"]:
+            if st.get("chars_received"):
                 charsel = charsel or st
-            if hit is not None and charsel is not None:
-                break
-            time.sleep(1)
-        ev["samples"] = samples[-5:]
-        ev["login_seen"] = hit
-        ev["login_seen_within_limit"] = bool(hit and "play_exited" not in hit and hit["t"] <= LOGIN_LIMIT)
-        ev["reached_character_list"] = charsel is not None
-        ev["connection_log"] = connection_log(scratch)[-1500:]
-        t = time.time()
-        while time.time() - t < CHARSELECT_ALIVE_S:
-            alive.append(bool(run.wow_alive()))
-            time.sleep(1)
-        ev["alive_samples"] = {"n": len(alive), "dead": alive.count(False)}
-        _wait(lambda: len(screenshots(scratch)) >= 2, 30)
-        shots = screenshots(scratch)
-        ev["screen"] = marker(shots[0]) if shots else None
-        ev["screens"] = [marker(p) for p in shots]
-        ev["screenshot_mtimes"] = [round(p.stat().st_mtime, 3) for p in shots]
-        ev["connection_log_full"] = connection_log(scratch)
-        ev["logs"] = glue_logs(scratch)
-        _finish(run, ev)
-        ev["stale_removed"] = ((ev["play_record"].get("client") or {}).get("stale_profiles_removed"))
-        ev["profiles_used"] = ((ev["play_record"].get("client") or {}).get("profiles") or {}).get("profiles")
-        ev["partial_left_after"] = partial.exists()
-        _no_secret(ev)
+        rec_client = s.get("play_client_record") or {}
+        ev |= {"glue_test": s["fresh_scratch"]["glue_test"], "fresh_scratch": s["fresh_scratch"],
+               "stale_planted": s.get("stale_planted"), "client_up": s.get("client_up"),
+               "db_ready_while_client_runs": s.get("db_ready_while_client_runs"), "account_at_client_start": base,
+               "t_client_up": s.get("t_client_up"), "samples": cs["samples"][-5:],
+               "account_samples_abs": [[x.get("t_abs"), x.get("last_login"), x.get("online"), None]
+                                       for x in cs["samples"]],
+               "login_seen": hit, "login_seen_within_limit": bool(hit and hit["t"] <= LOGIN_LIMIT),
+               "reached_character_list": charsel is not None,
+               "alive_samples": {"n": len(cs["alive"]), "dead": cs["alive"].count(False)},
+               "screens": s.get("screens") or [], "screen": (s.get("screens") or [None])[0],
+               "screenshot_mtimes": [x["mtime"] for x in s.get("screens") or []],
+               "connection_log": (s.get("connection_log_full") or "")[-1500:],
+               "connection_log_full": s.get("connection_log_full") or "", "logs": s.get("frame_log"),
+               "play_record": s.get("play_record"), "remaining_after": s.get("remaining_after"),
+               "stale_removed": rec_client.get("stale_profiles_removed"),
+               "profiles_used": (rec_client.get("profiles") or {}).get("profiles"),
+               "partial_left_after": s.get("partial_left_after"), "profiles_removed": s.get("profiles_removed"),
+               "password_in_play_last_json": s.get("password_in_play_last_json")}
         return ev
-    except Exception as e:  # noqa: BLE001  (recorded for both checks; the first caller re-raises)
+    except Exception as e:  # noqa: BLE001  (recorded for every scenario of the run; the first caller re-raises)
         ev["session_error"] = f"{type(e).__name__}: {e}"
         raise
-    finally:
-        if run is not None:
-            run.cleanup()
-        drop_scratch(scratch)
 
 
-@check("login.auto_login", order=387, capability=CAP, stack="down", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "client-mods/glue/**",
+    "patches/client/**",
+    "harness/hslib/checks/login_checks.py",
+    "harness/hslib/checks/pristine_checks.py",
+    "harness/hslib/clientcfg.py",
+    "harness/hslib/frontmenu.py",
+)
+
+
+# login.auto_login: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def auto_login(ctx):
     """A normal ./play refuses the test switches $HS_GLUE_TEST and $HS_PLAY_SKIP_PATCHES in patched and stock mode
     (exits nonzero, starts nothing); a stale login file and a partial write are removed first. Then one synthetic
@@ -239,7 +213,7 @@ def auto_login(ctx):
     return ev
 
 
-@check("login.no_glue_errors", order=389, capability=CAP, stack="down", tier="full")
+# login.no_glue_errors: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def no_glue_errors(ctx):
     """Patched client with our GlueXML, menu-waits then Continue: our code runs (marker squares on screen), no Lua
     error is raised at runtime (the test-mode error handler's count, on the login screen and at character select),
@@ -316,7 +290,7 @@ def verify_fresh_menu_waits(ev: dict) -> dict:
     return out
 
 
-@check("login.fresh_menu_waits", order=389, capability=CAP, stack="down", tier="full")
+# login.fresh_menu_waits: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def fresh_menu_waits(ctx):
     """F25, on the shared Continue run: a freshly built, never-used scratch play client shows no authserver login
     between the client's start and the Continue (connection.log and the account's last_login/online up to the
@@ -387,7 +361,7 @@ def menu_session() -> dict:
                 st = account_state(P.TEST_USER)
                 samples.append(st | {"t": round(time.time() - up["t"], 1)})
                 return len([p for p in screenshots(scratch) if p.name not in before]) >= 2
-            _wait(done, WAIT_MENU + 90, step=2)
+            _wait(done, WAIT_MENU + 60, step=2)
             shots = [p for p in screenshots(scratch) if p.name not in before]
             r2["screens"] = [marker(p) for p in shots]
             r2["samples_first_last"] = [samples[0], samples[-1]] if samples else []
@@ -407,15 +381,23 @@ def menu_session() -> dict:
         drop_scratch(scratch)
 
 
-@check("login.cancel_shows_list", order=388, capability=CAP, stack="down", tier="full")
+# login.cancel_shows_list: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def menu_waits(ctx):
-    """With no Continue action, no login is attempted for at least 60 s after the menu appears (HSTEST last_login
-    unchanged, never online) and the main menu with Continue stays up (marker squares in the client's own
-    screenshots at ~5 s and ~65 s after the menu showed)."""
+    """With no Continue action, no login is attempted after the menu appears: on the Lua unit layer's simulated clock
+    for 60 s (the front menu's own code under the stub, unit:lua:test_frontmenu.no_login_for_60s_without_continue,
+    run here), and live for WAIT_MENU (10 s; test-pyramid spec-change log 2026-10-10) with the real client (HSTEST
+    last_login unchanged, never online), the main menu with Continue staying up (marker squares in the client's own
+    screenshots at ~5 s and ~15 s after the menu showed)."""
+    from .. import unitrun
+    lua = unitrun.run_lua(pattern=LUA_60S)
+    sim = {"tests": [{k: t.get(k) for k in ("id", "status", "duration_s", "message")} for t in lua.get("tests") or []],
+           "ok": lua.get("ok")}
     if "menu" not in _SESSIONS:
         menu_session()
     sess = _session_ok("menu")
-    ev = dict(sess["run2"]) | {"shared_run": sess["shared_run"]}
+    ev = dict(sess["run2"]) | {"shared_run": sess["shared_run"], "simulated_60s": sim, "live_watch_s": WAIT_MENU}
+    require(sim["tests"] and all(t["status"] == "pass" for t in sim["tests"]),
+            f"the simulated 60 s without Continue (unit:lua:test_frontmenu.{LUA_60S}) didn't pass", **ev)
     require(len(ev["screens"]) >= 2, "the client didn't take both screenshots", **ev)
     require(all(m["main_menu_up"] is True for m in ev["screens"]),
             "the main menu wasn't up in both screenshots", **ev)
@@ -427,7 +409,7 @@ def menu_waits(ctx):
     return ev
 
 
-@check("login.backdrop_choice", order=390, capability=CAP, stack="down", tier="full")
+# login.backdrop_choice: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def backdrop_choice(ctx):
     """Picking TBC in the menu is applied (marker: TBC model and music requested by GlueXML), stored in the client's
     own settings when it saves them (WTF/Config.wtf accountList HSBDTBC, written on entering the world), and on the
@@ -468,7 +450,7 @@ def _dbc_class_names_raw(path: Path) -> dict[int, str]:
     return out
 
 
-@check("login.continue_context", order=128, capability=CAP, stack="up", tier="full")
+@check("login.continue_context", order=128, capability=CAP, stack="up", layer="integration")
 def continue_context(ctx):
     """The launcher's line under Continue names the account's most recently played character (latest logout_time) as
     "<name> · Level <n> <class>" with the class from ChrClasses.dbc (a renamed class in a scratch DBC shows up), adds
@@ -631,28 +613,35 @@ def first_start_session(first_start: bool = True, real_run: bool = True) -> dict
         if not real_run:
             return ev
         # THEN (real client): the front menu shows without the intro movie or the EULA/TOS screens, and one Continue
-        # reaches the character list without the realm list
-        clear_logs(scratch)
-        run = PlayRun("firststart", glue_test=FIRST_START_GLUE, scratch=scratch, seed=False)
-        run.start()
-        up = run.wait_client()
-        ev["client_up"] = {k: v for k, v in up.items() if k not in ("t",)}
-        require(up.get("up"), "the real Wow.exe never came up", output=run.output()[-2500:], **ev)
-        ev["config_at_launch"] = _config_values(scratch, keys + ["gxResolution"])
-        shot = _wait(lambda: screenshots(scratch), FIRST_START_MENU_S)
-        ev["menu_shot_after_s"] = round(time.time() - up["t"], 1) if shot else None
-        chars = _wait(lambda: re.search(r"COP_GET_CHARACTERS code=\d+ result=TRUE", connection_log(scratch)),
-                      FIRST_START_CHARS_S)
-        _wait(lambda: len(screenshots(scratch)) >= 2, 30)
-        shots = screenshots(scratch)
-        ev["screens"] = [marker(p) for p in shots]
-        conn = connection_log(scratch)
+        # reaches the character list without the realm list. test-pyramid part 3 (design 9.4): the real run is
+        # journey.first_play's cold session, whose play client is built exactly this way (clientbuild.build, nothing
+        # seeded); its build and GIVEN are recorded there and checked here too
+        from .seamless_checks import _session_ok as seamless_ok, play_session
+        play_session()
+        s = seamless_ok("play")
+        fs = s["first_start"]
+        ev["cold_session_build"] = fs
+        wrong2 = {k: fs["built_config"][k] for k in keys if fs["built_config"][k] != want[k]}
+        require(not any(fs["given_base_config"].values()) and fs["build"]["built"] and not wrong2,
+                f"the cold session's freshly built play client lacks or differs in {wrong2}", **ev)
+        ev["client_up"] = s.get("client_up")
+        ev["config_at_launch"] = s.get("config_at_launch") or {}
+        t_up = s.get("t_client_up") or 0
+        ev["screens"] = s.get("screens") or []
+        ev["menu_shot_after_s"] = round(ev["screens"][0]["mtime"] - t_up, 1) if ev["screens"] else None
+        conn = s.get("connection_log_full") or ""
+        cs = (s.get("continue_samples") or {}).get("samples") or []
+        first_chars = next((x["t"] for x in cs if x.get("chars_received")), None)
+        chars = first_chars is not None and ev["menu_shot_after_s"] is not None \
+            and ev["menu_shot_after_s"] <= FIRST_START_MENU_S and first_chars - ev["menu_shot_after_s"] <= FIRST_START_CHARS_S
+        ev["chars_after_client_up_s"] = first_chars
         ev["connection_log"] = conn[-2000:]
         ev["realm_list_polls"] = len(re.findall(r"COP_GET_REALMS", conn))
-        ev["logs"] = glue_logs(scratch)
-        _finish(run, ev)
+        ev["logs"] = s.get("frame_log")
+        ev["remaining_after"] = s.get("remaining_after")
         first = ev["screens"][0] if ev["screens"] else {}
-        require(first.get("main_menu_up") is True,
+        require(first.get("main_menu_up") is True and ev["menu_shot_after_s"] is not None
+                and ev["menu_shot_after_s"] <= FIRST_START_MENU_S,
                 "no screenshot of the front menu within the limit (the intro movie or the EULA/Terms of Use screens "
                 "came first)", **ev)
         require(chars, "Continue didn't reach the character list (the realm list came up, or the login failed)", **ev)
@@ -675,7 +664,7 @@ def first_start_session(first_start: bool = True, real_run: bool = True) -> dict
         drop_scratch(scratch)
 
 
-@check("client.first_start_settings", order=389, capability="play-client", stack="down", tier="full")
+# client.first_start_settings: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def first_start_settings(ctx):
     """A play client built from a client with no saved settings (a friend's first bootstrap) gets the first-start
     settings where absent (clientcfg.FIRST_START_SETTINGS + realmName: no intro movie, EULA/TOS accepted, no hardware

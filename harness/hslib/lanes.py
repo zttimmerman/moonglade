@@ -56,16 +56,11 @@ LANE_B = {
     "era.quest_xp": "lane B's running server and rendered worldserver.conf",
     "era.elites": "lane B's running server and rendered worldserver.conf",
     "era.mounts": "lane B's running server",
-    "era.toggle_roundtrip": "restarts lane B's stack with each era profile; the confs are lane B's",
-    "era.scope_guard": "lane B's stack and DBs",
+    "era.session_toggle": "era.toggle_roundtrip + era.scope_guard on one off/on restart pair of lane B's stack; the "
+                          "confs and DBs are lane B's",
     "lifecycle.persist": "`hs down`/`hs up` inherit HS_LANE=b; lane B's characters DB",
-    "play.loop_clean_exit": "./play stand-in in lane B (its run dir, lock, stack and Wine prefix clone)",
-    "play.interrupt_clean_exit": "./play stand-in in lane B",
-    "play.client_crash_cleanup": "./play stand-in in lane B",
-    "play.startup_failure": "./play stand-in in lane B",
-    "play.single_instance": "./play stand-in in lane B (lane B's play.lock)",
-    "play.offline": "./play stand-in in lane B under the sandbox profile",
-    "play.player_account": "./play stand-in in lane B with a scratch HS_PLAYER_FILE (never env/player.json)",
+    # test-pyramid part 3: the former play.* stand-in checks are scenarios of play.cold_sessions, which needs the GUI
+    # (its terminal session's notepad window and Dock state), so it stays in lane A
 }
 
 START_ORDER = 34
@@ -140,8 +135,6 @@ def forbidden(c) -> str | None:
         return "a player-protection check"
     if c.id.startswith(("lane.", "report.")):
         return "drives lane B itself or reports on the whole run"
-    if c.backups:
-        return "a backups-tier check"
     if not (START_ORDER <= c.order < JOIN_ORDER):
         return f"order {c.order} is outside lane B's window [{START_ORDER}, {JOIN_ORDER})"
     return None
@@ -161,12 +154,13 @@ def table_problems(table, reg: dict) -> list[str]:
 
 
 def is_join_point(c) -> bool:
-    """Lane A waits for lane B before running `c`."""
-    return c.order >= JOIN_ORDER or c.gui or c.id.startswith("app.") or c.order >= PROTECT_ORDER
+    """Lane A waits for lane B before running `c` (test-pyramid: by run segment; runner.segment)."""
+    from .runner import segment
+    return segment(c) >= 5 or c.gui or c.id.startswith("app.") or c.order >= PROTECT_ORDER
 
 
 def lanes_default(tier: str, only) -> int:
-    return 2 if (not only and tier in ("full", "slow")) else 1
+    return 2 if (not only and tier == "full") else 1
 
 
 def b_ids(selected: list, forced: str | None = None) -> list[str]:
@@ -418,26 +412,34 @@ def lane_b_running() -> bool:
     return any(stack.stack_processes("b").values()) or bool(launch.prefix_processes(prefix=P.layout("b")["wineprefix"]))
 
 
-def schedule(selected: list, ctx: dict, slow_skips, gui_skips, bk_skips, guard, *, requested: int | None, tier: str,
-             only, switches: dict, battery, battery_seq: str | None, ignore_power: bool, mem_start: dict,
-             say) -> tuple[list[dict], dict]:
-    """Run the checks in one or two lanes. Returns (records in (order, id) order, meta.lanes)."""
+def schedule(selected: list, ctx: dict, guard, *, requested: int | None, tier: str, only, switches: dict, battery,
+             battery_seq: str | None, ignore_power: bool, mem_start: dict, say, skipped: dict | None = None
+             ) -> tuple[list[dict], dict]:
+    """Run the acceptance checks in one or two lanes. Returns (records in run order, meta.lanes).
+    test-pyramid: the barriers follow the run order (runner.run_key), not the order numbers: lane B starts when lane A
+    reaches the shared-server segment (its stack is up) and joins before the first check that is_join_point (warm
+    journeys, `hs down`, first_play, gate, gui/app checks, run guards)."""
     from . import stack
-    from .runner import execute
+    from .runner import execute, run_key, segment
+    skipped = skipped or {}
     n = requested or lanes_default(tier, only)
     meta = {"requested": requested, "default": lanes_default(tier, only),
-            "default_rule": "2 for unfiltered full/slow runs, else 1 (`--lanes` overrides)", "lanes": n, "mode": 1,
+            "default_rule": "2 for unfiltered full runs, else 1 (`--lanes` overrides)", "lanes": n, "mode": 1,
             "table": sorted(LANE_B), "forced": switches.get(FORCE_ENV), "barriers": {
-                "start_after_order_below": START_ORDER, "join_before": f"order >= {JOIN_ORDER}, gui, app.*, "
-                                                                       f"order >= {PROTECT_ORDER}"},
+                "start": "the first shared-server check (run order)",
+                "join_before": "warm journeys, hs down, first_play, gate, gui, app.*, run guards"},
             "assignment": {"b_planned": [], "b_ran": [], "b_to_a": []}, "preflight": None, "fallback": None,
             "fallback_kind": None,     # preflight | midrun | timeout | worker_failed (the Phase 2 gate counts these)
             "b": None}
+    seq = sorted(selected, key=run_key)
+
+    def ex(checks):
+        return execute(checks, ctx, guard=guard, skipped=skipped)
     if n == 1:
         meta["fallback"] = "--lanes 1" if requested == 1 else "one lane by default for this run"
-        return execute(selected, ctx, slow_skips, gui_skips=gui_skips, backups_skips=bk_skips, guard=guard), meta
+        return _merge(ex(seq)), meta
     forced = switches.get(FORCE_ENV)
-    planned = b_ids(selected, forced)
+    planned = [i for i in b_ids(selected, forced) if i not in skipped]
     from .registry import REGISTRY
     bad = table_problems(planned, REGISTRY)
     if bad:
@@ -446,22 +448,14 @@ def schedule(selected: list, ctx: dict, slow_skips, gui_skips, bk_skips, guard, 
     meta["assignment"]["b_planned"] = planned
     if not planned:
         meta["fallback"] = meta["fallback"] or "no lane-B check selected"
-        return execute(selected, ctx, slow_skips, gui_skips=gui_skips, backups_skips=bk_skips, guard=guard), meta
+        return _merge(ex(seq)), meta
     by_id = {c.id: c for c in selected}
-    a_checks = [c for c in selected if c.id not in planned]
-    skips = {"slow": list(slow_skips), "gui": list(gui_skips), "bk": list(bk_skips)}
+    a_seq = [c for c in seq if c.id not in planned]
     meta["timeline_a"] = ctx.setdefault("lane_timeline", {})     # when each lane-A check ran (lane.merge)
     results: list[dict] = []
-
-    def run_seg(checks, lo, hi):
-        """A's checks and skip records with lo <= order < hi (hi None = no bound)."""
-        inside = lambda c: c.order >= lo and (hi is None or c.order < hi)
-        return execute([c for c in checks if inside(c)], ctx, [c for c in skips["slow"] if inside(c)],
-                       gui_skips=[c for c in skips["gui"] if inside(c)],
-                       backups_skips=[c for c in skips["bk"] if inside(c)], guard=guard)
-
+    start = next((k for k, c in enumerate(a_seq) if segment(c) >= 2), len(a_seq))
     # 1. before the start barrier
-    results += run_seg(a_checks, -10**9, START_ORDER)
+    results += ex(a_seq[:start])
     if ctx.get("power_stop"):
         meta["fallback"] = "the power guard stopped the run before lane B started"
         return _merge(results), meta
@@ -505,19 +499,26 @@ def schedule(selected: list, ctx: dict, slow_skips, gui_skips, bk_skips, guard, 
         say(f"lane B not used ({meta['fallback']}); running every check in lane A")
     if worker is None:
         meta["assignment"]["b_to_a"] = list(planned)          # every planned lane-B check runs in lane A
-        results += run_seg(selected, START_ORDER, None)      # serial from here on, B's checks included
+        # serial from here on, B's checks included. The stack-down ones (the play.* stand-in sessions) run once the
+        # shared segment's own `hs down` (lifecycle.down) has stopped the stack, not inside the shared segment (each
+        # would stop the shared stack, and the next shared test start it again). Records are merged in run order.
+        rest = [c for c in seq if c not in a_seq[:start]]
+        cold_b = [c for c in rest if c.id in planned and c.stack == "down" and segment(c) < 2]
+        others = [c for c in rest if c not in cold_b]
+        k = next((i for i, c in enumerate(others) if segment(c) > 6), len(others))
+        meta["cold_b_after_down"] = [c.id for c in cold_b]
+        results += ex(others[:k])
+        if cold_b and not ctx.get("power_stop"):
+            results += ex(cold_b)
+        if not ctx.get("power_stop"):
+            results += ex(others[k:])
         return _merge(results), meta
     # 3. lane A up to the join barrier, with B running
-    rest = sorted((c for c in a_checks if c.order >= START_ORDER), key=lambda c: (c.order, c.id))
-    join_c = next((c for c in rest if is_join_point(c)), None)
-    hi = None if join_c is None else join_c.order
-    # checks with the join check's order but sorting before it (same order, smaller id) run before the join too
-    pre_join = [c for c in rest if join_c is None or (c.order, c.id) < (join_c.order, join_c.id)]
-    post_join = [c for c in rest if c not in pre_join]
-    results += execute(pre_join, ctx, [c for c in skips["slow"] if c.order >= START_ORDER and (hi is None or c.order < hi)],
-                       gui_skips=[c for c in skips["gui"] if c.order >= START_ORDER and (hi is None or c.order < hi)],
-                       backups_skips=[c for c in skips["bk"] if c.order >= START_ORDER and (hi is None or c.order < hi)],
-                       guard=guard)
+    rest = a_seq[start:]
+    jk = next((k for k, c in enumerate(rest) if is_join_point(c)), len(rest))
+    join_c = rest[jk] if jk < len(rest) else None
+    pre_join, post_join = rest[:jk], rest[jk:]
+    results += ex(pre_join)
     if ctx.get("power_stop"):
         meta["b"] |= {"stopped_by_power_guard": worker.stop("the power guard stopped the run")}
     # 4. join
@@ -556,19 +557,24 @@ def schedule(selected: list, ctx: dict, slow_skips, gui_skips, bk_skips, guard, 
     # 5. lane B's leftovers in lane A, then the rest
     if left:
         say(f"lane B: running its {len(left)} unfinished check(s) in lane A: {', '.join(left)}")
-        results += execute([by_id[i] for i in left], ctx, guard=guard)
+        results += ex([by_id[i] for i in left])
         if ctx.get("power_stop"):
             return _merge(results), meta
-    results += execute(post_join, ctx, [c for c in skips["slow"] if hi is not None and c.order >= hi],
-                       gui_skips=[c for c in skips["gui"] if hi is not None and c.order >= hi],
-                       backups_skips=[c for c in skips["bk"] if hi is not None and c.order >= hi], guard=guard)
+    results += ex(post_join)
     return _merge(results), meta
 
 
 def _merge(records: list[dict]) -> list[dict]:
-    """Records in (order, id) order, as a serial run writes them."""
-    from .registry import REGISTRY
-    return sorted(records, key=lambda r: (REGISTRY[r["id"]].order if r["id"] in REGISTRY else 10**9, r["id"]))
+    """Records in run order (runner.run_key), children right after their session."""
+    from .registry import CHILDREN, REGISTRY
+    from .runner import run_key
+
+    def k(r):
+        i = r["id"]
+        c = REGISTRY.get(i) or REGISTRY.get(CHILDREN.get(i, ""))
+        return (run_key(c), 0 if i in REGISTRY else 1, i) if c else ((99,), 0, i)
+    # stable: a session's children keep the order the session recorded them in
+    return sorted(records, key=k)
 
 
 def summary_line(meta: dict) -> str:

@@ -16,7 +16,20 @@ def _git(repo, *a):
     return subprocess.run(["git", "-C", str(repo), *a], capture_output=True, text=True)
 
 
-@check("build.pin_enforced", order=10, capability="server-build", stack="down", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "Brewfile",
+    "harness/hs",
+    "fork.lock#*_url",
+    "fork.lock#*_sha256",
+    "harness/hslib/build.py",
+    "harness/hslib/checks/build_checks.py",
+)
+
+
+@check("build.pin_enforced", order=10, capability="server-build", stack="down", layer="gate")
 def pin_enforced(ctx):
     """`hs build` on dirty + unpinned vendor trees forces them back to fork.lock before building."""
     lock = P.fork_lock()
@@ -116,7 +129,7 @@ def _summ(info: dict) -> dict:
     return c
 
 
-@check("build.clean", order=20, capability="server-build", stack="down", tier="full")
+@check("build.clean", order=20, capability="server-build", stack="down", layer="gate")
 def clean_build(ctx):
     """`hs build --clean` yields executable authserver + worldserver at pinned SHAs: from empty when the
     build inputs changed (or with --force-clean), else verified-current (stamp == input hash, no-op rebuild)."""
@@ -181,7 +194,7 @@ def _verified_current_run(ctx) -> tuple[dict, list]:
     return info, runs
 
 
-@check("build.clean_smart", order=21, capability="server-build", stack="down", tier="full")
+@check("build.clean_smart", order=21, capability="server-build", stack="down", layer="gate")
 def clean_smart(ctx):
     """With unchanged inputs, `build.clean` is verified-current (stamp == H, no-op incremental, no from-empty
     build); any changed input (sandbox copies / overrides, never the real modules/) flips the mode to from-empty."""
@@ -288,7 +301,7 @@ def clean_smart(ctx):
     return ev
 
 
-@check("build.playerbots_active", order=75, capability="server-build", stack="up", tier="quick")
+@check("build.playerbots_active", order=75, capability="server-build", stack="up", layer="integration")
 def playerbots_active(ctx):
     """mod-playerbots initialized at startup, its DB tables exist, and its GM command is recognized."""
     logtxt = ""

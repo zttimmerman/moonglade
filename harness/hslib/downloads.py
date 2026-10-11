@@ -43,6 +43,8 @@ PINS = {
     "release-python": ("release_python_url", "release_python_sha256", P.ENV / "release/cache/python.tar.gz", True),
     "release-python-licenses": ("release_python_licenses_url", "release_python_licenses_sha256",
                                 P.ENV / "release/cache/python-full.tar.zst", True),
+    # test-pyramid: the unit layer's Lua 5.1 (kept: `hs test` rebuilds it offline from this copy)
+    "lua51": ("lua51_url", "lua51_sha256", P.DOWNLOADS / "lua-5.1.5.tar.gz", True),
 }
 RELEASE_CACHE = P.ENV / "release" / "cache"
 RELEASE_PINS = ("release-mysql", "release-mysql-source", "release-python", "release-python-licenses")

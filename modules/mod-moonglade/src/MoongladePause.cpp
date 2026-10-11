@@ -47,6 +47,7 @@
 #include "WorldPacket.h"
 #include "WorldPause.h"
 #include "WorldSession.h"
+#include "logic/PauseLogic.h"
 
 #include <string>
 #include <string_view>
@@ -85,11 +86,13 @@ namespace
         uint32 now = uint32(GameTime::GetGameTimeMS().count());
         for (auto const& [spellId, cd] : player->GetSpellCooldownMap())
         {
-            if (!cd.needSendToClient || cd.end <= now)
+            uint32 left = 0;     // the decision is logic/PauseLogic.cpp's ResyncCooldown (unit-tested on the host)
+            MoongladeLogic::CooldownAction act = MoongladeLogic::ResyncCooldown(cd.needSendToClient, cd.end, now,
+                                                                                pausedMs, &left);
+            if (act == MoongladeLogic::CooldownAction::Skip)
                 continue;
-            uint32 left = cd.end - now;
             WorldPacket data;
-            if (left > pausedMs)
+            if (act == MoongladeLogic::CooldownAction::Modify)
             {
                 data.Initialize(SMSG_MODIFY_COOLDOWN, 4 + 8 + 4);
                 data << uint32(spellId);
@@ -122,21 +125,26 @@ namespace
 
     PauseResult Pause(Player* player)
     {
-        if (!g_enabled)
-            return PauseResult::Disabled;
-        if (WorldPause::IsPaused())
-            return PauseResult::AlreadyPaused;
-        if (player)
+        // the decision is logic/PauseLogic.cpp's DecidePause (unit-tested on the host)
+        switch (MoongladeLogic::DecidePause(g_enabled, WorldPause::IsPaused(), player != nullptr,
+                                            player && player->IsInFlight(), player && player->GetTransport()))
         {
-            // the client moves a passenger itself; pausing there would desync it (spike Q3)
-            if (player->IsInFlight() || player->GetTransport())
-            {
+            case MoongladeLogic::PauseDecision::Disabled:
+                return PauseResult::Disabled;
+            case MoongladeLogic::PauseDecision::AlreadyPaused:
+                return PauseResult::AlreadyPaused;
+            case MoongladeLogic::PauseDecision::Refused:
+                // the client moves a passenger itself; pausing there would desync it (spike Q3)
                 ChatHandler(player->GetSession()).SendSysMessage("You can't pause while travelling.");
                 SendAddonState(player, "refused");
                 return PauseResult::Refused;
-            }
+            case MoongladeLogic::PauseDecision::Paused:
+                break;
+        }
+        if (player)
+        {
             player->InterruptNonMeleeSpells(false);
-            g_weRooted = !player->HasUnitState(UNIT_STATE_ROOT);
+            g_weRooted = MoongladeLogic::ModuleRoots(player->HasUnitState(UNIT_STATE_ROOT));
             if (g_weRooted)
                 player->SetControlled(true, UNIT_STATE_ROOT);
             g_pausedBy = player->GetGUID();
@@ -191,13 +199,13 @@ public:
         if (!WorldPause::IsPaused() || !g_pausedBy)
             return;
         Player* player = ObjectAccessor::FindConnectedPlayer(g_pausedBy);
-        if (!player || player->GetSession()->IsSocketClosed())
+        if (MoongladeLogic::ResumeForOwner(true, true, player && !player->GetSession()->IsSocketClosed()))
         {
             LOG_INFO("module", "[mod-moonglade] the pausing player is gone or disconnected; resuming");
             Resume();
             return;
         }
-        if (g_ackPending && WorldPause::IsTickPaused())
+        if (MoongladeLogic::SendAck(g_ackPending, WorldPause::IsTickPaused()))
         {
             g_ackPending = false;
             SendAddonState(player, "paused");

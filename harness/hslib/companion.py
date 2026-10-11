@@ -17,6 +17,7 @@ Never the PLAYER account (env/player.json) and never the HSTEST fixture account:
 
 Every world-data choice (quest, creature, teleport points) is made by SQL/DBC rules written here, never from memory
 (CLAUDE.md §7)."""
+import json
 import math
 import re
 import time
@@ -64,13 +65,36 @@ def dist(a: dict, b: dict) -> float:
 
 # ----------------------------------------------------------------------------- account + character
 
+# test-pyramid: a shared-server test may run the companion helpers on its own fixture character (as_identity);
+# the default is the companion harness account and character.
+_IDENT = __import__("threading").local()
+
+
+def _id() -> tuple:
+    return getattr(_IDENT, "v", None) or (P.COMP_USER, P.COMP_PASS, P.COMP_CHAR)
+
+
+class as_identity:
+    """with as_identity(user, password, character): the companion helpers use that account and character."""
+    def __init__(self, user: str, password: str, char: str):
+        self.v = (user, password, char)
+
+    def __enter__(self):
+        self.prev = getattr(_IDENT, "v", None)
+        _IDENT.v = self.v
+        return self
+
+    def __exit__(self, *exc):
+        _IDENT.v = self.prev
+
+
 def account_id() -> int | None:
-    v = db.scalar(f"SELECT id FROM account WHERE username='{P.COMP_USER}'", "auth")
+    v = db.scalar(f"SELECT id FROM account WHERE username='{_id()[0]}'", "auth")
     return int(v) if v else None
 
 
 def char_row() -> dict | None:
-    rows = db.query(f"SELECT guid, account, level, online, map, zone FROM characters WHERE name='{P.COMP_CHAR}'",
+    rows = db.query(f"SELECT guid, account, level, online, map, zone FROM characters WHERE name='{_id()[2]}'",
                     "characters")
     if not rows:
         return None
@@ -81,32 +105,35 @@ def char_row() -> dict | None:
 def ensure_account() -> dict:
     ev = {}
     if account_id() is None:
-        ev["create"] = gm(f"account create {P.COMP_USER} {P.COMP_PASS}").evidence()
+        ev["create"] = gm(f"account create {_id()[0]} {_id()[1]}").evidence()
         _, ok, _ = F.poll(account_id, bool, timeout=15)
         if not ok:
             raise CompanionError("companion account not in auth.account after `account create`", **ev)
     acct = account_id()
     access = F.access_rows(acct)
-    if access != [[str(GM_LEVEL), "-1"]]:
-        ev["gmlevel"] = gm(f"account set gmlevel {P.COMP_USER} {GM_LEVEL} -1").evidence()
+    # a fixture identity (as_identity) keeps a higher level it was created with (the saves identities are level 3)
+    keep_higher = getattr(_IDENT, "v", None) is not None and len(access) == 1 and access[0][1] == "-1" \
+        and int(access[0][0]) > GM_LEVEL
+    if access != [[str(GM_LEVEL), "-1"]] and not keep_higher:
+        ev["gmlevel"] = gm(f"account set gmlevel {_id()[0]} {GM_LEVEL} -1").evidence()
         access, ok, _ = F.poll(lambda: F.access_rows(acct), lambda v: v == [[str(GM_LEVEL), "-1"]], timeout=15)
         if not ok:
             raise CompanionError("companion account security level not set", access=access, **ev)
-    return ev | {"account": P.COMP_USER, "id": acct, "account_access": access}
+    return ev | {"account": _id()[0], "id": acct, "account_access": access}
 
 
 def ensure_character() -> dict:
     if char_row():
-        return {"character": P.COMP_CHAR, "created": False}
-    lr, ws, _ = probe.open_world(P.COMP_USER, P.COMP_PASS)
+        return {"character": _id()[2], "created": False}
+    lr, ws, _ = probe.open_world(_id()[0], _id()[1])
     with ws:
-        code = ws.char_create(P.COMP_CHAR, F.RACE_HUMAN, F.CLASS_WARRIOR)
+        code = ws.char_create(_id()[2], F.RACE_HUMAN, F.CLASS_WARRIOR)
         if code != W.CHAR_CREATE_SUCCESS:
             raise CompanionError("CMSG_CHAR_CREATE rejected", result=f"0x{code:02X} {W.RESPONSE_NAMES.get(code, '?')}")
     _, ok, _ = F.poll(char_row, bool, timeout=15)
     if not ok:
         raise CompanionError("companion character not in characters DB after CHAR_CREATE_SUCCESS")
-    return {"character": P.COMP_CHAR, "created": True}
+    return {"character": _id()[2], "created": True}
 
 
 def prepare_offline(level: int = LEVEL, tele: str = START_TELE) -> dict:
@@ -117,12 +144,12 @@ def prepare_offline(level: int = LEVEL, tele: str = START_TELE) -> dict:
         raise CompanionError("companion character still online; offline preparation needs it logged out", row=row)
     ev = {}
     if row["level"] != level:
-        ev["level"] = gm(f"character level {P.COMP_CHAR} {level}").evidence()
+        ev["level"] = gm(f"character level {_id()[2]} {level}").evidence()
         _, ok, _ = F.poll(lambda: char_row()["level"], lambda v: v == level, timeout=15)
         if not ok:
             raise CompanionError("companion level not saved", **ev)
     t = F.tele_row(tele)
-    ev["tele"] = gm(f"tele name {P.COMP_CHAR} {t['name']}").evidence()
+    ev["tele"] = gm(f"tele name {_id()[2]} {t['name']}").evidence()
     return ev | {"tele_row": t}
 
 
@@ -185,7 +212,71 @@ CREATURE_RULE = ("hostile creature near the master: creature_template.faction's 
                  "UNIT_FLAG_IN_COMBAT), so an earlier kill or another unit's fight doesn't block the check")
 
 
+_CANDIDATES: dict = {}
+_CANDIDATES_LOCK = __import__("threading").Lock()
+
+
 def creature_candidates(level: int = LEVEL, tele: str = START_TELE, n: int = 10) -> list[dict]:
+    """CREATURE_RULE's candidates. The query takes ~14 s (a correlated isolation test over every spawn on the map, no
+    spatial index) and reads only the world database's spawns, which no check changes, so it runs once per
+    (level, tele) per process (the largest n asked for; ORDER BY d, guid makes a smaller n its prefix) (test-pyramid 1.6: two pooled sessions ran it at once and both passed their 25 s
+    combat timeout). The rows are copied out, so a caller can't change the cache."""
+    key = (level, tele)
+    with _CANDIDATES_LOCK:
+        have = _CANDIDATES.get(key)
+        if have is None or (have[0] < n and len(have[1]) >= have[0]):     # a shorter list can serve a smaller n
+            _CANDIDATES[key] = (n, _creature_candidates(level, tele, n))
+        return [dict(c, spawn=dict(c["spawn"])) for c in _CANDIDATES[key][1][:n]]
+
+
+# Across runs (test-pyramid design 14): the candidates are cached on disk keyed by a hash of the world database content
+# they come from (CHECKSUM TABLE of creature, creature_template and game_tele, plus FactionTemplate.dbc), so the run-start
+# fixture phase reads them instead of running the ~14 s query; any change to those tables changes the key.
+WORLD_FACTS_KEYS = ((LEVEL, START_TELE, 20),)
+WORLD_FACTS_DIR = P.OUT / "world-facts"
+
+
+def world_hash() -> str:
+    import hashlib
+    rows = db.query("CHECKSUM TABLE creature, creature_template, game_tele", "world")
+    h = hashlib.sha256(json.dumps(sorted([list(map(str, r)) for r in rows])).encode())
+    h.update((dbc.DBC_DIR / "FactionTemplate.dbc").read_bytes())
+    return h.hexdigest()
+
+
+def world_facts_warm() -> dict:
+    """Fill the in-process candidate cache for WORLD_FACTS_KEYS from the on-disk cache of this world database's
+    content, or compute and store it. Returns {"from": "cache" | "computed", "s", "hash"}."""
+    t0 = time.time()
+    h = world_hash()
+    f = WORLD_FACTS_DIR / f"{h}.json"
+    try:
+        data = json.loads(f.read_text())
+        src = "cache"
+    except (OSError, ValueError):
+        data = {}
+        src = "computed"
+    out = {}
+    for level, tele, n in WORLD_FACTS_KEYS:
+        k = f"{level}|{tele}|{n}"
+        rows = data.get(k)
+        if rows is None:
+            rows = _creature_candidates(level, tele, n)
+        with _CANDIDATES_LOCK:
+            _CANDIDATES[(level, tele)] = (n, rows)
+        out[k] = rows
+    if src == "computed":
+        WORLD_FACTS_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps(out))
+        tmp.replace(f)
+        for old in WORLD_FACTS_DIR.glob("*.json"):           # keep only this world's facts
+            if old != f:
+                old.unlink(missing_ok=True)
+    return {"from": src, "s": round(time.time() - t0, 2), "hash": h[:12]}
+
+
+def _creature_candidates(level: int, tele: str, n: int) -> list[dict]:
     recs, _ = dbc.read_dbc("FactionTemplate.dbc")
     hostile = sorted(r[0] for r in recs if r[FT_HOSTILE_MASK] & FACTION_MASK_PLAYER)
     t = F.tele_row(tele)
@@ -355,11 +446,11 @@ class Session:
         self.ev["account"] = ensure_account()
         self.ev["character"] = ensure_character()
         self.ev["prepare"] = prepare_offline(self.level, self.tele)
-        lr, ws, wev = probe.open_world(P.COMP_USER, P.COMP_PASS)
+        lr, ws, wev = probe.open_world(_id()[0], _id()[1])
         self.ws = ws
         try:
             chars = ws.char_enum()
-            c = next((c for c in chars if c["name"].lower() == P.COMP_CHAR.lower()), None)
+            c = next((c for c in chars if c["name"].lower() == _id()[2].lower()), None)
             if not c:
                 raise CompanionError("companion character not in char enum", enum=chars)
             self.guid = c["guid"]
@@ -398,12 +489,12 @@ class Session:
         """An earlier session may have left the master dead (a ghost is never attacked, and can't share quests).
         `.pinfo` (cs_misc.cpp HandlePInfoCommand, LANG_PINFO_CHR_ALIVE 'Alive ?: Yes/No'); if dead, `.revive` on self
         (HandleReviveCommand: ResurrectPlayer at 100% health for a non-player security level)."""
-        pinfo = soap.gm(f"pinfo {P.COMP_CHAR}").output
+        pinfo = soap.gm(f"pinfo {_id()[2]}").output
         alive = re.search(r"Alive \?: (\w+)", pinfo)
         ev = {"alive_before": alive.group(1) if alive else None}
         if alive and alive.group(1) != "Yes":
             ev["revive"] = self.ws.command(".revive", settle=0.5, timeout=5)
-            pinfo = soap.gm(f"pinfo {P.COMP_CHAR}").output
+            pinfo = soap.gm(f"pinfo {_id()[2]}").output
             alive = re.search(r"Alive \?: (\w+)", pinfo)
             ev["alive_after"] = alive.group(1) if alive else None
             if ev["alive_after"] != "Yes":

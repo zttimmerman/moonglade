@@ -268,6 +268,27 @@ HARNESS_ENV = ("HS_HARNESS_RUN", "HS_LANE", "HS_PLAYER_FILE", "HS_PLAYER_DEFAULT
 # branch can be exercised end to end without ever touching env/client-play/. It can only make the gate stricter
 # (another directory counts as the player's), and main() refuses it without --allow-test-client-dir.
 OWN_CLIENT_TEST_ENV = "HS_TEST_OWN_CLIENT"
+# test-pyramid (harness-control "Warm journeys reuse a running stack only in the harness"): leave an already-running
+# stack up at exit. Only inside a harness run ($HS_HARNESS_RUN=1), with the harness test flag (--allow-test-client-dir)
+# and the test account; anything else refuses it before anything starts.
+KEEP_STACK_ENV = "HS_PLAY_KEEP_STACK"
+
+
+def keep_stack_refusal(args, environ=None) -> str | None:
+    env = os.environ if environ is None else environ
+    if not env.get(KEEP_STACK_ENV):
+        return None
+    why = []
+    if env.get("HS_HARNESS_RUN") != "1":
+        why.append("outside a harness run")
+    if not getattr(args, "allow_test_client_dir", False):
+        why.append("without the harness test flag")
+    if getattr(args, "account", "player") != "test":
+        why.append("for the player's account")
+    if not why:
+        return None
+    return (f"{KEEP_STACK_ENV} is set ({', '.join(why)}): that's a test switch for the harness, not for playing. "
+            f"Unset it (`unset {KEEP_STACK_ENV}`) and run ./play again.")
 
 
 def players_own_play_client(d: Path, environ=None, player_dir: Path | None = None) -> bool:
@@ -333,6 +354,7 @@ class Loop:
         self.backup_plan = backup_plan or {"root": None, "why": "no plan"}
         self.signum: int | None = None
         self.cleaning = False
+        self.keep_stack = False                  # set in run() when KEEP_STACK_ENV applies and the stack was up
         self.rec: dict = {"pid": os.getpid(), "started": _now(), "argv": sys.argv[1:],
                           "client_cmd": str(args.client_cmd) if args.client_cmd else None,
                           "client_started": False, "steps": []}
@@ -431,6 +453,9 @@ class Loop:
 
     # -- the loop
     def run(self) -> int:
+        if os.environ.get(KEEP_STACK_ENV) and all(stack.stack_processes().values()):
+            self.keep_stack = True
+            self.rec["keep_stack"] = {"pids_at_start": stack.stack_processes()}
         self.backup_notice()
         args_, cwd, name = client_command(self.args.client_cmd)
         if self.args.account == "test":
@@ -606,13 +631,16 @@ class Loop:
         if getattr(self, "profiles_dir", None):        # the generated login file lives only while the game runs
             from . import frontmenu
             clean["profiles_removed"] = frontmenu.remove(self.profiles_dir)
-        clean["down"] = stack.down(on_stage=sd.on_stack, before_database=self.backup_hook())
-        remaining = self.leftovers()
-        if remaining:                       # one more pass, e.g. a component that came up during an aborted start
+        if self.keep_stack:                  # a harness warm run: the stack it found running stays up
+            clean["down"] = {"kept_running": stack.stack_processes()}
+        else:
+            clean["down"] = stack.down(on_stage=sd.on_stack, before_database=self.backup_hook())
+        remaining = self.leftovers(self.keep_stack)
+        if remaining and not self.keep_stack:   # one more pass, e.g. a component that came up during an aborted start
             clean["down_retry"] = stack.down()
             if launch.prefix_processes():
                 clean["stop_prefix_retry"] = launch.stop_prefix()
-            remaining = self.leftovers()
+            remaining = self.leftovers(self.keep_stack)
         clean["remaining"] = remaining
         if self.rec.get("client_started") and getattr(self, "man", None):
             clean["binaries_match_manifest_after"] = launch._binary_hashes(self.man) == launch.expected_binaries(self.man)
@@ -621,11 +649,11 @@ class Loop:
         return remaining
 
     @staticmethod
-    def leftovers() -> list:
-        st = stack.stack_processes()
+    def leftovers(keep_stack: bool = False) -> list:
+        st = {} if keep_stack else stack.stack_processes()
         return ([{"component": k, "pids": v} for k, v in st.items() if v]
                 + [{"component": "wine", **p} for p in launch.prefix_processes()]
-                + [{"component": "port", "port": p} for p in P.STACK_PORTS if stack.port_open(p)])
+                + ([] if keep_stack else [{"component": "port", "port": p} for p in P.STACK_PORTS if stack.port_open(p)]))
 
 
 def _parse(argv):
@@ -669,6 +697,10 @@ def main(argv=None) -> int:
         from . import backups
         return backups.cli([a for a in argv if a != "--backups"])
     args = _parse(argv)
+    keep_why = keep_stack_refusal(args)
+    if keep_why:
+        say(keep_why)
+        return EXIT_FAIL
     if os.environ.get("HS_CLIENT_DIR") and not args.allow_test_client_dir:
         say(f"HS_CLIENT_DIR is set ({os.environ['HS_CLIENT_DIR']}): that points the game at a test copy of the client, "
             "not your real one. Unset it (`unset HS_CLIENT_DIR`) and run ./play again.")

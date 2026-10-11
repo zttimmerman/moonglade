@@ -372,7 +372,23 @@ def workflow_mutations(text: str) -> dict[str, str]:
 
 # ================================================================================================ mode_setting
 
-@check("signing.mode_setting", order=ORDER, capability=CAP, stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "tools/release/**",
+    ".github/workflows/*",
+    "branding/*",
+    "harness/hslib/checks/firstlaunch_checks.py",
+    "harness/hslib/checks/release_checks.py",
+    "harness/hslib/checks/release_runtime_checks.py",
+    "harness/hslib/checks/reporting.py",
+    "harness/hslib/checks/signing_checks.py",
+    "harness/hslib/notarycheck.py",
+)
+
+
+@check("signing.mode_setting", order=ORDER, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def mode_setting(ctx):
     """The sign step follows tools/release/signing.json: ad-hoc signs a fixture with no secrets; developer-id without
     credentials, unknown/missing modes and a config outside the allowed folders are refused before signing; the
@@ -533,7 +549,7 @@ def _clone(app: Path, d: Path) -> Path:
     return dst
 
 
-@check("signing.bundle_layout", order=ORDER, capability=CAP, stack="any", tier="slow")
+@check("signing.bundle_layout", order=ORDER, capability=CAP, stack="any", layer="gate")
 def bundle_layout(ctx):
     """Bundle id io.github.zttimmerman.moonglade, executable Moonglade, every Mach-O in an allowed place, code
     locations Mach-O only, no redistribution wording; planted counterexamples fail."""
@@ -630,7 +646,7 @@ def signature_problems(app: Path, oracle: dict) -> tuple[list[str], dict]:
     return probs, {"bundle": b, "files": files}
 
 
-@check("signing.adhoc_signature", order=ORDER, capability=CAP, stack="any", tier="slow")
+@check("signing.adhoc_signature", order=ORDER, capability=CAP, stack="any", layer="gate")
 def adhoc_signature(ctx):
     """Every signature in the packaged ad-hoc app verifies, with the runtime flag and the role's exact entitlements;
     Oracle's files keep Oracle's signature and recorded cdhash; the bundle's requirement is pinned; a flipped byte in
@@ -727,7 +743,7 @@ def run_smoke(app: Path, d: Path, tag: str) -> dict:
                       if "version" in str(s.get("step"))]}
 
 
-@check("signing.entitlements_needed", order=ORDER, capability=CAP, stack="any", tier="slow")
+@check("signing.entitlements_needed", order=ORDER, capability=CAP, stack="any", layer="gate")
 def entitlements_needed(ctx):
     """For every key in tools/release/entitlements/*.plist, a scratch clone of this run's packaged app has that
     role's executables re-signed without it and the flow its design.md entry names (the release smoke) runs from the
@@ -798,7 +814,7 @@ def gatekeeper_verdict(out: str, rc: int) -> dict:
             "ok": rc != 0 and "rejected" in out and not accepted_src}
 
 
-@check("signing.gatekeeper_adhoc", order=ORDER, capability=CAP, stack="any", tier="slow")
+@check("signing.gatekeeper_adhoc", order=ORDER, capability=CAP, stack="any", layer="gate")
 def gatekeeper_adhoc(ctx):
     """A clonefile copy of this run's packaged ad-hoc app with a com.apple.quarantine attribute (never opened, so no
     dialog): `spctl --assess --type execute -vv` exits nonzero with "rejected" and names no notarization or Developer
@@ -853,7 +869,7 @@ def _string_offset(data: bytes) -> int:
     return i
 
 
-@check("signing.stable_identity", order=ORDER, capability=CAP, stack="any", tier="slow")
+@check("signing.stable_identity", order=ORDER, capability=CAP, stack="any", layer="gate")
 def stable_identity(ctx):
     """Two ad-hoc release apps with different code hashes (this run's packaged app, and a clone with a changed
     launcher byte and a different VERSION re-signed by the sign step) both satisfy the first one's designated
@@ -941,7 +957,7 @@ def seal_problems(bundle: Path, recorded: dict) -> tuple[list[str], dict]:
                    "changed": changed[:10], "verify": v.stderr.decode(errors="replace").strip()[-300:]}
 
 
-@check("signing.seal_survives_use", order=ORDER, capability=CAP, stack="down", tier="slow")
+@check("signing.seal_survives_use", order=ORDER, capability=CAP, stack="down", layer="gate")
 def seal_survives_use(ctx):
     """The run's shared first-launch fixture app, after first launch, the stand-in play loop and a backup ran from it
     (run here if the run's earlier checks didn't): the bundle verifies (--deep --strict), every payload Mach-O verifies
@@ -1033,7 +1049,7 @@ def run_one_liner(line: str, app: Path) -> dict:
     return {"argv": [*argv[:-1], "<scratch app>"], "rc": r.returncode, "err": r.stderr.strip()[-200:]}
 
 
-@check("signing.open_instructions", order=ORDER, capability=CAP, stack="any", tier="quick")
+@check("signing.open_instructions", order=ORDER, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def open_instructions(ctx):
     """docs/setup.md ("Opening it the first time") and tools/release/notes/{ad-hoc,developer-id}.md: the ad-hoc text
     names Privacy & Security, "Open Anyway", "each new version" and the exact one-liner; the Developer ID text doesn't
@@ -1093,11 +1109,9 @@ def ci_only_skip_selftest() -> dict:
     from ..registry import Check
     from ..runner import CI_ONLY_SKIP_MSG, run_ok, tolerated_skip
     from .reporting import full_run_record
-    reg = {"selftest.ci_only": Check("selftest.ci_only", lambda c: None, 1, "t", tier="slow", tier_declared=True,
-                                     ci_only=True),
-           "selftest.plain": Check("selftest.plain", lambda c: None, 1, "t", tier="slow", tier_declared=True)}
-    base = {"tier": "slow", "full_run": True, "filter": [], "slow_tier_skipped": [], "gui_tier_skipped": [],
-            "backups_tier_skipped": []}
+    reg = {"selftest.ci_only": Check("selftest.ci_only", lambda c: None, 1, "t", layer="gate", ci_only=True),
+           "selftest.plain": Check("selftest.plain", lambda c: None, 1, "t", layer="gate")}
+    base = {"tier": "full", "full_run": True, "filter": []}
     cases = {   # name: (id, message, meta.ci, expected tolerated)
         "ci_only_outside_ci_exact": ("selftest.ci_only", CI_ONLY_SKIP_MSG, False, True),
         "not_ci_only_exact": ("selftest.plain", CI_ONLY_SKIP_MSG, False, False),
@@ -1118,7 +1132,7 @@ def ci_only_skip_selftest() -> dict:
     return {"ok": ok, "cases": out}
 
 
-@check("signing.notarized", order=ORDER, capability=CAP, stack="any", tier="slow", ci_only=True)
+@check("signing.notarized", order=ORDER, capability=CAP, stack="any", layer="gate", ci_only=True)
 def notarized(ctx):
     """CI-only (developer-id mode, the release workflow on the runner; also run there directly as
     `harness/hslib/notarycheck.py`): every signed Mach-O has the team's Developer ID authority, a secure timestamp and

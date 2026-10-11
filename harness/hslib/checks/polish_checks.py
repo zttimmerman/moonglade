@@ -7,8 +7,9 @@ none); the frontmost app from `lsappinfo front`; windows from the window server 
 of these needs a macOS permission. Focus checks need an unlocked GUI session: a locked screen (loginwindow in front)
 is recorded and fails the GIVEN.
 
-Shared sessions: the app checks share one app run (population profile, stack down, notepad), the play checks share
-one terminal ./play run (m0, stack down, notepad). Each check asserts its own clause on that run's evidence; the
+Shared sessions: the app checks share one app run (population profile, stack down, notepad); the terminal ./play
+checks (play.stage_lines, play.world_progress, play.dock_identity) are scenarios of play.cold_sessions' first session
+(cold_play_checks.py, which uses verify_* here). Each check asserts its own clause on that run's evidence; the
 session runs once per harness process (again for each `--only` invocation), so evidence is always from this run.
 """
 from __future__ import annotations
@@ -427,7 +428,28 @@ def shim_icon_run(icon: Path, d: Path, timeout: float = 90) -> dict:
             "icon_lines": parse_icon_lines(lines), "remaining": launch.prefix_processes()}
 
 
-@check("app.dock_icon_rendered", order=398, capability=CAP_APP, stack="down", tier="slow", gui=True)
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "harness/app/*",
+    "branding/*",
+    "play",
+    "harness/hslib/checks/lssampler.m",
+    "harness/hslib/app.py",
+    "harness/hslib/checks/app_checks.py",
+    "harness/hslib/checks/backup_checks.py",
+    "harness/hslib/checks/naming_checks.py",
+    "harness/hslib/checks/polish_checks.py",
+    "harness/hslib/dockshim.py",
+    "harness/hslib/guienv.py",
+    "harness/hslib/icon.py",
+    "harness/hslib/population.py",
+    "harness/hslib/stages.py",
+)
+
+
+@check("app.dock_icon_rendered", order=398, capability=CAP_APP, stack="down", layer="gate", gui=True)
 def dock_icon_rendered(ctx):
     """The shared app run (dev app, notepad stand-in under the shim, test mode): the shim log of this run (newer than
     its start) has, for the stand-in's pid, the icon it loaded for setApplicationIconImage: (the app bundle's
@@ -528,6 +550,7 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
         ev["notepad_pid"] = win["pid"]
         launchers = _launchers(A.APP)
         ev["launcher_pid"] = launchers[0]["pid"] if launchers else None
+        ev["names"] = running_names_sample(ev["launcher_pid"])     # app.names_running (test-pyramid part 3)
         ev["play_pid"] = _play_pid(off, ev["launcher_pid"])
         ev["process_env"] = scan_process_env()
         ev["launchctl_dyld"] = subprocess.run(["/bin/launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
@@ -568,6 +591,22 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
             wins.stop()
         stop_launchers(A.APP)
         s.cleanup()
+
+
+def running_names_sample(lp: int | None) -> dict:
+    """app.names_running's observation inside the app session: the launcher's and the game (notepad) process's
+    LaunchServices display names, polled until both read Moonglade or NAMES_TIMEOUT passes."""
+    from .app_checks import EXPECT_ID, EXPECT_NAME, NAMES_TIMEOUT
+    t0, apps, nps = time.time(), [], []
+    while time.time() - t0 < NAMES_TIMEOUT:
+        nps = GuiStandIn.notepad_pids()
+        apps = [a for a in lsappinfo_list() if a["pid"] in nps or a["pid"] == lp or a.get("bundle") == EXPECT_ID]
+        game = [a for a in apps if a["pid"] in nps]
+        if lp and game and all(a.get("name") == EXPECT_NAME for a in game) \
+                and any(a["pid"] == lp and a.get("name") == EXPECT_NAME for a in apps):
+            break
+        time.sleep(0.5)
+    return {"launcher_pid": lp, "notepad_pids": nps, "apps": apps, "names_after_s": round(time.time() - t0, 1)}
 
 
 SHUTDOWN_SAMPLE_S = 0.2
@@ -1013,7 +1052,7 @@ def client_inspect() -> dict:
 
 # ---------------------------------------------------------------- app checks
 
-@check("app.single_dock_icon", order=392, capability=CAP_APP, stack="down", tier="full", gui=True)
+# app.single_dock_icon: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def single_dock_icon(ctx):
     """App + notepad stand-in: lsappinfo has the stand-in as a UIElement named Moonglade, the launcher as the only
     Foreground process with bundle id local.moonglade.app, no other prefix process Foreground; sampled at >= 10 Hz
@@ -1022,28 +1061,28 @@ def single_dock_icon(ctx):
     return verify_single_dock(ev)
 
 
-@check("app.handoff_focus", order=393, capability=CAP_APP, stack="down", tier="full", gui=True)
+# app.handoff_focus: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def handoff_focus(ctx):
     """When the stand-in's first window appears, the loading window is hidden and the stand-in is frontmost within
     2 s, without user input."""
     return verify_handoff(_session(focus=True))
 
 
-@check("app.reopen_focuses_game", order=394, capability=CAP_APP, stack="down", tier="full", gui=True)
+# app.reopen_focuses_game: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def reopen_focuses_game(ctx):
     """Stand-in up, Finder frontmost: reopening the app through LaunchServices makes the stand-in frontmost within
     2 s, shows no "already running" dialog, and the launcher stays the single Moonglade Dock icon."""
     return verify_reopen(_session(focus=True))
 
 
-@check("app.reopen_unminimizes", order=396, capability=CAP_APP, stack="down", tier="full", gui=True)
+# app.reopen_unminimizes: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def reopen_unminimizes(ctx):
     """Stand-in window minimised by the shim's test notification: reopening the app puts it back on screen and
     frontmost."""
     return verify_unminimize(_session(focus=True))
 
 
-@check("app.reopen_during_loading", order=395, capability=CAP_APP, stack="down", tier="full", gui=True)
+# app.reopen_during_loading: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def reopen_during_loading(ctx):
     """App loading (world stage, no game window yet), Finder frontmost: reopening the app through LaunchServices makes
     the loading window frontmost within 2 s (launcher frontmost, its window topmost on screen) with no "already
@@ -1051,21 +1090,26 @@ def reopen_during_loading(ctx):
     return verify_reopen_during_loading(_session(focus=True))
 
 
-@check("app.shutdown_window", order=397, capability=CAP_APP, stack="down", tier="full")
+# app.shutdown_window: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def shutdown_window(ctx):
     """Game running from the app, quit requested as from the Dock: the shutdown window is on screen within 1 s and at
     every shutdown stage (recorded in order) until the stack is down (sampled independently); then the app exits 0
-    and nothing remains. save-backups ("The backup stage is shown in order"): a second app run with a scratch backup
-    folder where the game exits by itself records shutdown_backup (start, done) after shutdown_login and before
-    shutdown_database with the window on screen, and leaves one new backup in that folder."""
+    and nothing remains. save-backups ("The backup stage is shown in order"): the dist app's lifecycle session (a
+    scratch backup folder; the game exits by itself; shared with app.launch_lifecycle, test-pyramid part 3) records
+    shutdown_backup (start, done) after shutdown_login and before shutdown_database with the window on screen, and
+    leaves one new backup in that folder."""
     out = verify_shutdown_window(_session())
-    from .backup_checks import backup_stage_app_run, verify_backup_stage
-    run = backup_stage_app_run({})
+    from .app_checks import dist_lifecycle
+    from .backup_checks import verify_backup_stage
+    life = dist_lifecycle()
+    run = {"events": life["events"], "listed_before_exit": life["listed_before_exit"],
+           "listed_after": life["listed_after"], "app_exit_code": life["app_exit_code"],
+           "remaining_after": life["remaining_after"], "t0": life["t_open"]}
     out["backup_stage"] = verify_backup_stage(run)
     return out
 
 
-@check("app.loading_stages", order=397, capability=CAP_APP, stack="down", tier="full")
+# app.loading_stages: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def loading_stages(ctx):
     """Stack down, app + stand-in, population profile: stage events use only the documented ids, in order, overall
     progress never decreases from 0 to 1; the bots stage reports the DB's online count and the target, and launching
@@ -1080,7 +1124,7 @@ def loading_stages(ctx):
     return out
 
 
-@check("app.shim_scope", order=398, capability=CAP_APP, stack="down", tier="full")
+# app.shim_scope: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def shim_scope(ctx):
     """During an app run: client.inspect passes; the shim lives outside client/ and env/wowsilicon-r17/ (pinned hash
     unchanged, nothing in the runtime changed); DYLD_INSERT_LIBRARIES is only in the Wine host processes' environment,
@@ -1091,7 +1135,7 @@ def shim_scope(ctx):
     return out
 
 
-@check("app.loading_stages_warm", order=399, capability=CAP_APP, stack="down", tier="full")
+@check("app.loading_stages_warm", order=399, capability=CAP_APP, stack="down", layer="integration")
 def loading_stages_warm(ctx):
     """Stack already up: the opened app reports database, login and world as skipped within 2 s of its start."""
     ev: dict = {}
@@ -1140,52 +1184,7 @@ def verify_warm(ev: dict) -> dict:
     return out
 
 
-# ---------------------------------------------------------------- terminal ./play session (m0, stack down, notepad)
-
-def term_session(key: str = "term", settings: dict | None = None) -> dict:
-    if key in _SESSIONS:
-        return _SESSIONS[key]
-    ev: dict = {}
-    _SESSIONS[key] = ev
-    before = remaining()
-    ev["given_nothing_running"] = before
-    require(is_clear(before), "GIVEN not met: something from this repo is already running", **ev)
-    s = GuiStandIn("term")
-    sfile = s.dir / "settings.json"
-    sfile.write_text(json.dumps({"client": "stock", **(settings or {})}))
-    wlog = stack.LOG["worldserver"]
-    lines = Sampler(lambda: S.count_lines(wlog), 0.1)
-    t_start = time.time()
-    try:
-        lines.start()
-        s.start_play(env={"HS_SETTINGS": str(sfile)})
-        win, t_win = wait_window(600, stop_if=lambda: s.proc.poll() is not None)
-        ev |= {"window": win, "t_window": t_win}
-        require(win, "the stand-in's window never appeared under ./play", output=s.output()[-3000:], **ev)
-        time.sleep(1.5)
-        ev["apps_at_window"] = [a for a in lsappinfo_list() if is_ours(a)]
-        ev["shim_log"] = shim_log_lines(t_start, win["pid"])
-        s.stop_file.write_text("quit")
-        rc, _ = s.wait_exit(timeout=300)
-        lines.stop()
-        ev |= {"exit_code": rc, "output": s.output(), "line_samples": lines.samples,
-               "remaining_after": remaining(s), "t_start": round(t_start, 3)}
-        ev["ok"] = True
-        return ev
-    except CheckFail as e:
-        ev["session_error"] = str(e)
-        raise
-    finally:
-        lines.stop()
-        s.cleanup()
-
-
-def _term() -> dict:
-    ev = term_session() if "term" not in _SESSIONS else _SESSIONS["term"]
-    if not ev.get("ok"):
-        raise CheckFail(f"the shared ./play session failed: {ev.get('session_error')}", ev)
-    return ev
-
+# ---------------------------------------------------------------- terminal ./play: the verifiers (cold_play_checks.py runs it)
 
 def _regex_of(node) -> str:
     """A say() argument as a regex: literal text escaped, every formatted value / unknown part `.*`."""
@@ -1232,18 +1231,6 @@ def verify_stage_lines(output: str, templates: list[str]) -> dict:
     return out
 
 
-@check("play.stage_lines", order=391, capability=CAP_PLAY, stack="down", tier="full")
-def stage_lines(ctx):
-    """./play in a terminal (stand-in): every [play] line matches a [play] line of the play loop before
-    launcher-polish (unchanged), and every [stage] line parses as JSON with a documented id and state. (The existing
-    play.* checks run in the same harness run.)"""
-    ev = _term()
-    out = verify_stage_lines(ev["output"], base_play_templates())
-    require(ev["exit_code"] == 0 and is_clear(ev["remaining_after"]), "./play didn't end cleanly",
-            exit_code=ev["exit_code"], **out)
-    return out
-
-
 def verify_world_progress(output: str, line_samples: list, poll: float = S.WORLD_POLL_S) -> dict:
     evs = [S.parse(l) for l in output.splitlines() if l.startswith(S.PREFIX)]
     world = [e for e in evs if e and e.get("id") == "world" and e.get("state") == "progress"]
@@ -1274,15 +1261,6 @@ def verify_world_progress(output: str, line_samples: list, poll: float = S.WORLD
     return out
 
 
-@check("play.world_progress", order=391, capability=CAP_PLAY, stack="down", tier="full")
-def world_progress(ctx):
-    """Cold worldserver start under ./play: at least three distinct world fractions strictly between 0 and 1 come
-    before the world is done, each = worldserver.out's line count / the calibration, and that count matches the log's
-    own line count (sampled independently at 10 Hz) within one poll (0.5 s)."""
-    ev = _term()
-    return verify_world_progress(ev["output"], ev["line_samples"])
-
-
 def verify_dock_identity(ev: dict) -> dict:
     np = ev["window"]["pid"]
     stand = [a for a in ev["apps_at_window"] if a["pid"] == np]
@@ -1293,13 +1271,6 @@ def verify_dock_identity(ev: dict) -> dict:
             "the shim log has no icon replacement for the stand-in (this run)", **out)
     require(not any("-> using 1" in l for l in ev["shim_log"]), "the terminal run made the stand-in an accessory app", **out)
     return out
-
-
-@check("play.dock_identity", order=391, capability=CAP_PLAY, stack="down", tier="full")
-def dock_identity(ctx):
-    """Terminal ./play with the notepad stand-in (no app): the stand-in is a normal Foreground app named Moonglade,
-    and the shim log records the icon replacement for its pid in this run."""
-    return verify_dock_identity(_term())
 
 
 # ---------------------------------------------------------------- performance (real client; not a Dock check)
@@ -1426,7 +1397,7 @@ def verify_perf(runs: list[dict]) -> dict:
     return out
 
 
-@check("app.shim_perf", order=420, capability=CAP_APP, stack="down", tier="slow")
+@check("app.shim_perf", order=420, capability=CAP_APP, stack="down", layer="gate")
 def shim_perf(ctx):
     """The real client from the app, 5 runs with the shim (dock_policy accessory) and 5 without (off), interleaved,
     stack already up each time: medians of time-to-first-window and of Wow.exe's median CPU over 60 s at the login
