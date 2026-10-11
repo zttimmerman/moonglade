@@ -116,14 +116,29 @@ The unit layer SHALL run without Homebrew additions and without any server, clie
 - Check: `report.unit_layer`
 
 ### Requirement: Impact selection is fail-safe
-A `pr` run SHALL select tests from the paths the change touches (`git diff --name-only --no-renames <merge-base with origin/main>` plus staged, unstaged and untracked files). A path SHALL select: (1) FULL (the complete acceptance suite) if it matches the FULL-trigger list (`patches/core/**`, `patches/playerbots/**`, `fork.lock`, `bootstrap`, `harness/hslib/build.py`, `harness/hslib/stack.py`, `harness/hslib/probe/**`, and `harness/hslib/config.py` or `harness/hslib/paths.py` unless rule 4 applies); (2) nothing beyond the unit layer if it matches the no-impact list (`openspec/**`, `docs/**`, `*.md`, `harness/tests/unit/**`); (3) otherwise every integration, journey and gate check that declares the path in its `covers` globs or whose own file's import closure contains it, plus `journey.first_play` when any journey's import closure contains it; (4) a change to `config.py` or `paths.py` that only adds, removes or changes top-level assignments selects the checks whose import closure references those names, and any other change to them is rule 1. A path that rule 3 maps to no test SHALL select FULL. A git failure, an unparseable source, or a stale `covers` glob (matching no file) SHALL select FULL. The selection, the reason for each selected test and the selection's own duration SHALL be recorded.
+A `pr` run SHALL select tests from the paths the change touches (`git diff --name-only --no-renames <merge-base with origin/main>` plus staged, unstaged and untracked files), using declared ownership, not import closures. Each integration, journey and gate test SHALL declare a `covers` list: product paths (module sources, add-on and glue files, launcher, scripts), the harness modules its check file imports directly, and module-config sections (for example `Moonglade.Saves.*`). Shared harness infrastructure (modules that six or more acceptance check files import directly, plus `probe/**`, `stack.py`, `lanes.py`, `lanestack.py`, `runner.py`) is owned by the unit layer and the smoke set, not by every test. A path SHALL select:
+1. FULL (the complete acceptance suite) if it is `patches/core/**`, `patches/playerbots/**`, a core or playerbots pin key in `fork.lock`, `harness/hslib/build.py`, or a CMake file;
+2. nothing beyond the unit layer if it is `openspec/**`, `docs/**`, `*.md` or `harness/tests/unit/**`;
+3. otherwise every test whose `covers` names it (a module-config file selects by the sections whose keys changed);
+4. the smoke set (`journey.first_play` plus the cheapest integration test of each area) if no test covers it, if it is shared infrastructure, or if it is `mod_moonglade_loader.cpp`.
+
+A git failure, an unparseable source, or a stale `covers` entry (matching no file) SHALL select FULL. The selection, the reason for each selected test and the selection's own duration SHALL be recorded.
 
 #### Scenario: Unknown, docs, owned and shared paths
 - **GIVEN** synthetic changed-path sets on a scratch git repo
-- **WHEN** the selector runs for (a) `docs/x.md` only, (b) `modules/mod-moonglade/src/MoongladePause.cpp`, (c) a new file under `harness/hslib/` that nothing imports and no `covers` names, (d) `patches/core/0003-world-pause.patch`, (e) a git failure, (f) a shared helper imported only by `harness/hslib/checks/playclient_util.py`, (g) a new constant `SAVES_X` in `config.py` read only by `saves.py`, and (h) a changed function body in `config.py`
-- **THEN** (a) selects only the unit layer; (b) selects the pause integration tests, `journey.pause` and `journey.first_play`, and no saves test; (c), (d), (e) and (h) select FULL with the reason recorded; (f) selects every journey and check importing that helper; (g) selects the checks whose closure contains `saves.py` and no pause test
+- **WHEN** the selector runs for (a) `docs/x.md` only, (b) `modules/mod-moonglade/src/MoongladePause.cpp`, (c) a new file under `harness/hslib/` that no `covers` names, (d) `patches/core/0003-world-pause.patch`, (e) a git failure, (f) a helper that only `harness/hslib/checks/playclient_util.py` imports, (g) a changed `Moonglade.Saves.*` key in the mod-moonglade config, (h) a changed function body in `harness/hslib/stack.py`, (i) the `autobalance` pin key in `fork.lock`, and (j) the core pin key in `fork.lock`
+- **THEN** (a) selects only the unit layer; (b) selects the pause tests, `journey.pause` and no saves test; (c) and (h) select the smoke set with the reason recorded; (d), (e) and (j) select FULL with the reason recorded; (f) selects only the tests that declare `playclient_util.py` or the helper; (g) selects the saves tests and no pause test; (i) selects the tests that declare mod-autobalance, not FULL
 - **AND** the selection step took at most 10 s, recorded
 - Check: `report.selection`
+
+### Requirement: Every product path has an owner
+Every tracked product path (module sources and configs, `client-mods/**`, `harness/app/**`, `play`, `bootstrap`, `tools/release/**`) SHALL be named by at least one test's `covers` or by the FULL or no-impact lists. A unit check SHALL fail and list any path with no owner, so new product code can't silently fall back to the smoke set.
+
+#### Scenario: A new product file without an owner
+- **GIVEN** the ownership map of this tree, and a synthetic tree that adds `modules/mod-moonglade/src/MoongladeNew.cpp`, named by no `covers`
+- **WHEN** the ownership check runs
+- **THEN** it passes on this tree and fails on the synthetic tree, listing `MoongladeNew.cpp`
+- Check: `report.ownership`
 
 ### Requirement: Fixed journey set
 The `journey` layer SHALL be exactly this named set, each with a time budget, run one at a time with no other check overlapping it: `journey.first_play` (150 s; cold app open → fresh play client → Continue → character select → world → quit from the Dock → shutdown window → backup → everything down), `journey.pause` (90 s), `journey.saves` (150 s), `journey.login_recovery` (120 s), `journey.stock_client` (60 s), `journey.app_desktop` (240 s; GUI, stand-in client). The set SHALL hold at most 8 journeys and at most 12 min of budgets in total; adding, removing or re-budgeting a journey is a spec change.
@@ -136,12 +151,12 @@ The `journey` layer SHALL be exactly this named set, each with a time budget, ru
 - Check: `report.journeys`
 
 ### Requirement: Every layer is timed and budgeted
-Every run SHALL record the wall time of the unit layer, the selection step, the integration layer, each journey, the gate checks and build time, and SHALL fail (`report.layer_budgets`) when: the unit layer took more than 120 s; the selection took more than 10 s; a journey exceeded its budget; a full run, or a pr run whose selection is FULL, spent more than 30 min in integration and journeys (build time and gate checks excluded); or the checks of this run that aren't in the timing baseline and that the selection picked add more than 120 s (the "a new feature adds at most 2 min" rule). The summary SHALL show each layer's time against its budget.
+Every run SHALL record the wall time of the unit layer, the selection step, the integration layer, each journey, the gate checks and build time, and SHALL fail (`report.layer_budgets`) when: the unit layer took more than 120 s; the selection took more than 10 s; a journey exceeded its budget; the integration layer of a full run, or of a pr run whose selection is FULL, took more than 15 min (pool time); a full run, or a pr run whose selection is FULL, spent more than 30 min in integration and journeys (build time and gate checks excluded); or the checks of this run that aren't in the timing baseline and that the selection picked add more than 120 s (the "a new feature adds at most 2 min" rule). The summary SHALL show each layer's time against its budget.
 
 #### Scenario: Each budget miss fails the run
 - **GIVEN** synthetic run records
-- **WHEN** (a) the unit layer took 121 s, (b) selection 11 s, (c) `journey.pause` 95 s, (d) a FULL-selection pr run 31 min of integration and journeys, (e) a full run 31 min of them with 10 min of build time on top, (f) a pr run with 130 s of new selected checks, (g) a full run of 29 min plus 25 min of build and gate time
-- **THEN** (a) through (f) each fail naming the layer, its time and its budget; (g) passes with the build and gate time reported
+- **WHEN** (a) the unit layer took 121 s, (b) selection 11 s, (c) `journey.pause` 95 s, (d) a FULL-selection pr run 31 min of integration and journeys, (e) a full run 31 min of them with 10 min of build time on top, (f) a pr run with 130 s of new selected checks, (h) a full run with 16 min of integration, (g) a full run of 29 min plus 25 min of build and gate time
+- **THEN** (a) through (f) and (h) each fail naming the layer, its time and its budget; (g) passes with the build and gate time reported
 - Check: `report.layer_budgets`
 
 ### Requirement: The per-PR acceptance average stays at or under 15 minutes
