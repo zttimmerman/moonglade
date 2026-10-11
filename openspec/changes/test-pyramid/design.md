@@ -1009,3 +1009,28 @@ Not cheaper without a spec change (seconds from this run; for the milestone-gate
 - `lock.*` 164: one dungeon character for all five, so they can't share the pool.
 - `client.launch_smoke` 38.5 (its scenario names the check), `client.login_text_clean` 31.7 (the 30 s stay),
   `client.player_client_not_rebuilt` 37.4 (a cold stand-in probe at the end of every run).
+
+## 16. Targeted integration checks (Zach's decision, 2026-10-11)
+
+After part 3 the complete acceptance run was 45.9 min. About 18 min of it is slow, narrow checks that need real waits or a session of their own. Zach chose (2026-10-11): they run on a PR only when their own code changes, and always in full runs (milestone gates, release tags). FULL selections and the smoke set don't pick them (spec "Targeted integration checks").
+
+The reviewed list (seconds from the part-3 measurement at `ab84fde`):
+
+| Check | s | Why it can't get cheaper |
+|---|---:|---|
+| `play.cold_sessions` | 334 | one cold `./play` session per ending the play-launcher spec names |
+| `backups.on_quit` | 73.5 | a normal-exit cold session with an empty backups folder and a character that gains a level |
+| `backups.restore_roundtrip` | 95 | two real restores plus the seed |
+| `saves.session_interval` | 94 | real autosave-interval waits |
+| `saves.load_ordering` | 82 | 20 load rounds plus a worker-thread restart pair |
+| `lock.*` (5, one dungeon character) | 164 | five lockout states on one character, in order |
+| `app.backups_window` (moved out of `journey.app_desktop`) | 147 | four app runs |
+| `client.launch_smoke` | 38.5 | its own client start (connectivity scenario) |
+| `client.login_text_clean` | 31.7 | the 30 s stay the spec requires |
+| `client.player_client_not_rebuilt` | 37.4 | a cold probe at the end of the run |
+| **Total** | **≈ 1097** | budget 20 min, reported apart |
+
+Projected after the move: integration ≈ 863 s (budget 900); journeys ≈ 757 s (`app_desktop` ≈ 180 without the Backups window; `saves` 191 against a new 200 s budget; `login_recovery` 148 against 150); integration + journeys ≈ 27 min (budget 30); targeted ≈ 18 min (budget 20).
+
+Journey re-budget: `journey.saves` goes from 150 to 200 s and `journey.login_recovery` from 120 to 150 s. Each holds two sessions the specs need (part 3, "can't get cheaper"). The cap goes from 14 to 15 min.
+

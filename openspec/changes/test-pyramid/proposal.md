@@ -238,6 +238,8 @@ The `hs-change-loop` and `hs-harness-checks` skills get the matching run budget.
 - 2026-10-11 (correction): the journey cap goes from 12 to 14 min. It contradicted the six journeys' own budgets (810 s), which are unchanged. `harness/active-changes` joins the no-impact list.
 - 2026-10-11 (clarification): `journey.first_play` is described as the `./play` first play that was built; the app's cold open, Dock and quit are `journey.app_desktop`'s, as built. `client.launch_smoke` stays, because its client-connectivity scenario still names it.
 - 2026-10-11 (part 2, builder; for review at the gate): `lane.merge`, `lane.preflight` and `fixture.*` move to the gate layer (real-stack harness self-tests), so they run in full runs only. Their rules are still covered by unit tests.
+- 2026-10-11 (Zach's decision, design §16): new requirement "Targeted integration checks". About 18 min of slow, narrow checks run on a PR only when their own code changes, and always in full runs. FULL selections and the smoke set don't pick them. The 15/30 min budgets exclude them; their own total is capped at 20 min. **For review at the gate.**
+- 2026-10-11 (re-budget, design §16): `journey.saves` 150 → 200 s, `journey.login_recovery` 120 → 150 s, journey cap 14 → 15 min; `app.backups_window` leaves `journey.app_desktop` and becomes a targeted check. **A loosening of the time budgets, for review at the gate.**
 - Migration slices will add their own entries here: one per capability whose `Check:` lines are re-pointed, scenario text unchanged unless the entry says otherwise.
 
 ## Measurement log

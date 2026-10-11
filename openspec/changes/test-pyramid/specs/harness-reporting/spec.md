@@ -120,9 +120,9 @@ A `pr` run SHALL select tests from the paths the change touches (`git diff --nam
 1. FULL (the complete acceptance suite) if it is `patches/core/**`, `patches/playerbots/**`, a core or playerbots pin key in `fork.lock`, `harness/hslib/build.py`, or a CMake file;
 2. nothing beyond the unit layer if it is `openspec/**`, `docs/**`, `*.md`, `harness/tests/unit/**` or `harness/active-changes`;
 3. otherwise every test whose `covers` names it (a module-config file selects by the sections whose keys changed);
-4. the smoke set (`journey.first_play` plus the cheapest integration test of each area) if no test covers it, if it is shared infrastructure, or if it is `mod_moonglade_loader.cpp`.
+4. the smoke set (`journey.first_play` plus the cheapest non-targeted integration test of each area) if no test covers it, if it is shared infrastructure, or if it is `mod_moonglade_loader.cpp`.
 
-A git failure, an unparseable source, or a stale `covers` entry (matching no file) SHALL select FULL. The selection, the reason for each selected test and the selection's own duration SHALL be recorded.
+A **targeted** integration check ("Targeted integration checks") is selected only by rule 3, never by FULL or the smoke set. A git failure, an unparseable source, or a stale `covers` entry (matching no file) SHALL select FULL. The selection, the reason for each selected test and the selection's own duration SHALL be recorded.
 
 #### Scenario: Unknown, docs, owned and shared paths
 - **GIVEN** synthetic changed-path sets on a scratch git repo
@@ -141,22 +141,22 @@ Every tracked product path (module sources and configs, `client-mods/**`, `harne
 - Check: `report.ownership`
 
 ### Requirement: Fixed journey set
-The `journey` layer SHALL be exactly this named set, each with a time budget, run one at a time with no other check overlapping it: `journey.first_play` (150 s; cold `./play` → fresh play client → Continue → character select → world → quit → everything down, then the same session warm), `journey.pause` (90 s), `journey.saves` (150 s), `journey.login_recovery` (120 s), `journey.stock_client` (60 s), `journey.app_desktop` (240 s; GUI, stand-in client: cold app open, Dock, focus, quit, shutdown window, backup restore). The set SHALL hold at most 8 journeys and at most 14 min (840 s) of budgets in total; adding, removing or re-budgeting a journey is a spec change.
+The `journey` layer SHALL be exactly this named set, each with a time budget, run one at a time with no other check overlapping it: `journey.first_play` (150 s; cold `./play` → fresh play client → Continue → character select → world → quit → everything down, then the same session warm), `journey.pause` (90 s), `journey.saves` (200 s), `journey.login_recovery` (150 s), `journey.stock_client` (60 s), `journey.app_desktop` (240 s; GUI, stand-in client: cold app open, Dock, focus, quit, shutdown window). The set SHALL hold at most 8 journeys and at most 15 min (900 s) of budgets in total; adding, removing or re-budgeting a journey is a spec change.
 
 #### Scenario: The registry matches the named set and journeys never overlap
 - **GIVEN** the registry and a completed full run
 - **WHEN** the journey rule runs
-- **THEN** the registered journey-layer checks are exactly the six named ids with the budgets above, their budgets sum to at most 840 s, and the run's timeline shows no two journeys and no journey and another check overlapping
+- **THEN** the registered journey-layer checks are exactly the six named ids with the budgets above, their budgets sum to at most 900 s, and the run's timeline shows no two journeys and no journey and another check overlapping
 - **AND** a scratch registry with a seventh unnamed journey fails the rule
 - Check: `report.journeys`
 
 ### Requirement: Every layer is timed and budgeted
-Every run SHALL record the wall time of the unit layer, the selection step, the integration layer, each journey, the gate checks and build time, and SHALL fail (`report.layer_budgets`) when: the unit layer took more than 120 s; the selection took more than 10 s; a journey exceeded its budget; the integration layer of a full run, or of a pr run whose selection is FULL, took more than 15 min (pool time); a full run, or a pr run whose selection is FULL, spent more than 30 min in integration and journeys (build time and gate checks excluded); or the checks of this run that aren't in the timing baseline and that the selection picked add more than 120 s (the "a new feature adds at most 2 min" rule). The summary SHALL show each layer's time against its budget.
+Every run SHALL record the wall time of the unit layer, the selection step, the integration layer, each journey, the gate checks and build time, and SHALL fail (`report.layer_budgets`) when: the unit layer took more than 120 s; the selection took more than 10 s; a journey exceeded its budget; the integration layer of a full run, or of a pr run whose selection is FULL, took more than 15 min (pool time, targeted checks excluded); a full run, or a pr run whose selection is FULL, spent more than 30 min in integration and journeys (build time, gate checks and targeted checks excluded); the targeted checks of a full run took more than 20 min in total; or the checks of this run that aren't in the timing baseline and that the selection picked add more than 120 s (the "a new feature adds at most 2 min" rule). The summary SHALL show each layer's time against its budget.
 
 #### Scenario: Each budget miss fails the run
 - **GIVEN** synthetic run records
-- **WHEN** (a) the unit layer took 121 s, (b) selection 11 s, (c) `journey.pause` 95 s, (d) a FULL-selection pr run 31 min of integration and journeys, (e) a full run 31 min of them with 10 min of build time on top, (f) a pr run with 130 s of new selected checks, (h) a full run with 16 min of integration, (g) a full run of 29 min plus 25 min of build and gate time
-- **THEN** (a) through (f) and (h) each fail naming the layer, its time and its budget; (g) passes with the build and gate time reported
+- **WHEN** (a) the unit layer took 121 s, (b) selection 11 s, (c) `journey.pause` 95 s, (d) a FULL-selection pr run 31 min of integration and journeys, (e) a full run 31 min of them with 10 min of build time on top, (f) a pr run with 130 s of new selected checks, (h) a full run with 16 min of integration, (i) a full run with 21 min of targeted checks, (j) a full run of 29 min plus 18 min of targeted checks, (g) a full run of 29 min plus 25 min of build and gate time
+- **THEN** (a) through (f), (h) and (i) each fail naming the layer, its time and its budget; (g) and (j) pass with the build, gate and targeted time reported
 - Check: `report.layer_budgets`
 
 ### Requirement: The per-PR acceptance average stays at or under 15 minutes
@@ -168,6 +168,16 @@ Every `pr` run SHALL append its integration-plus-journey time, whether its selec
 - **THEN** the first fails `report.pr_average` (mean 15.1 min), naming the mean, the FULL share and the slowest runs; the second passes (mean 14.1 min)
 - **AND** with 3 recorded runs it reports the replay's mean and the PRs it replayed with status pass and the note "fewer than 5 recorded runs"
 - Check: `report.pr_average`
+
+### Requirement: Targeted integration checks
+An integration check SHALL be **targeted** only if it is on the reviewed list in design §16, each entry with its measured time and the reason it can't get cheaper (real waits the specs require, or a session of its own). A targeted check runs in every full run (milestone gates, release tags) and in a `pr` run only when a path its `covers` names changed; FULL selections and the smoke set never pick it. Adding a check to the list is a spec change.
+
+#### Scenario: A targeted check runs when its own code changes, not on FULL
+- **GIVEN** a targeted check whose `covers` names `harness/hslib/backups.py`
+- **WHEN** the selector runs for (a) `harness/hslib/backups.py`, (b) `patches/core/0003-world-pause.patch` (FULL) and (c) an unowned new file (smoke set), and a full run executes
+- **THEN** (a) selects it; (b) and (c) don't, and (b) and (c) record it as "targeted, not selected"; the full run runs it
+- **AND** a registry with a targeted check missing from the design §16 list fails the rule
+- Check: `report.targeted`
 
 ### Requirement: Gate-layer checks
 Gate checks SHALL run in every full run (milestone gates, release tags) and never in a `pr` run. A `pr` run whose changed paths a gate check's `covers` names SHALL list that check in its summary under "gate checks owed" with the path that selected it; an owed check is neither run nor a failure. A change whose spec deltas add or change a gate check SHALL be verified with a run that executes that check (`--only <id>`) before it merges. Gate checks are excluded from the layer budgets and stay under the per-check timing guard.

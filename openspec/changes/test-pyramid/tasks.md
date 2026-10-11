@@ -112,6 +112,8 @@ The builder runs `hs test` plus the slice's own tests; no acceptance tier per ta
   - Measure: unit layer, one run of all integration + journey checks, the PR replay; targets in design §15.
   - _Part 3 (2026-10-11), design 15.1: selector/runner done; cold sessions merged (play + backups 896 → 504 s); first_play and app_desktop merged (229 → 127, 454 → 327 s). Measured: unit 38.2 s (pass), integration 1813 s (budget 900, FAIL), journeys 943 s (FAIL: app_desktop, saves, login_recovery), acceptance 2756 s (FAIL), replay 22.3 min (FAIL). Not done: on_quit, saves/dungeons trims, PENDING_SLEEPS, saves and login_recovery merges. Left unticked: the targets are missed._
 
+- [ ] 3.11 Targeted checks (design §16): the `targeted` marker and the reviewed list, selection rule, `report.targeted`, `report.layer_budgets` cases (i)/(j), journey re-budget, `app.backups_window` out of `journey.app_desktop`; the timing baseline rejoined; measure once.
+
 ## 4. Rules and docs
 - [x] 4.1 CLAUDE.md §4, §6, §9 and §10 with the proposal's exact text (orchestrator; Zach approved the change).
   - `hs-change-loop` run budget: builder = unit + own test; verifier = one PR-tier run + 3× new/changed + 2–3 spot checks; full ×3 only at milestone gates.
