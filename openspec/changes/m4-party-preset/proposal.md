@@ -25,3 +25,4 @@ The requirement "A dungeon party in one command" now lives here. Its real-client
 
 ## Spec-change log
 - 2026-10-11: the real-client scenario (`client.party_slash`) is replaced by `unit:lua:test_addon_party` plus a human-verify at the M4 gate. Recorded for the next human gate.
+- 2026-10-11: the unit Check lines name each test id (the coverage rule wants full ids). A clarification.

@@ -19,7 +19,12 @@ The Moonglade addon SHALL provide `/mg party`. It fills the player's party to fi
 - **GIVEN** the addon loaded under the Lua stubs, a player of each role (damage dealer, tank, healer)
 - **WHEN** `/mg party` and then `/mg party clear` are run
 - **THEN** the commands sent are exactly the plan's for that role, in order (addclass, then each companion's spec, autogear and strategy whispers), and `clear` sends the stock removal command; an unknown role sends nothing and says why
-- Check: `unit:lua:test_addon_party`
+- Check: `unit:lua:test_addon_party.damage_dealer_gets_tank_healer_mage_rogue`
+- Check: `unit:lua:test_addon_party.tank_player_gets_a_hunter_instead_of_a_tank`
+- Check: `unit:lua:test_addon_party.healer_player_gets_a_tank_and_a_hunter`
+- Check: `unit:lua:test_addon_party.steps_wait_for_the_companions_answer`
+- Check: `unit:lua:test_addon_party.clear_sends_the_stock_removal`
+- Check: `unit:lua:test_addon_party.unknown_role_sends_nothing_and_says_why`
 - [human-verify] The real client's party frame filling is seen by Zach at the M4 gate. Reason: the command plan is unit-tested, the server's response is checked by `dng.party_preset`, and a real-client GUI run would cost minutes on every PR for no extra coverage.
 
 ### Requirement: AutoBalance's chat lines stay hidden
@@ -29,7 +34,9 @@ The player SHALL NOT see AutoBalance's "[AutoBalance] Combat has ended" system m
 - **GIVEN** the filter's logic (pure function over a message)
 - **WHEN** it sees the AutoBalance combat-ended line, another AutoBalance line, and an ordinary system message
 - **THEN** both AutoBalance lines are dropped and the ordinary message passes
-- Check: `unit:cpp:chat_filter`
+- Check: `unit:cpp:chat_filter.drops_combat_ended_line`
+- Check: `unit:cpp:chat_filter.drops_other_autobalance_lines`
+- Check: `unit:cpp:chat_filter.ordinary_messages_pass`
 
 #### Scenario: Login text stays clean
 - **GIVEN** the login text word list
