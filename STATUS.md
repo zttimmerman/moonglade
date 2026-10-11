@@ -1,7 +1,25 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-11 18:00. **v0.1.2 published** (pre-release): it fixes v0.1.1's world-server crash at Play (RC4 needs OpenSSL's legacy provider; the release now bundles it and sets OPENSSL_MODULES). The fix is proven on the downloaded artifact with Homebrew hidden. The hotfix branch `fix/home-path-spaces` (cb245f5) still has to merge: run firstlaunch.flow (it now injects free space) and release.stack_from_payload, then PR. **test-pyramid:** verifier cycle 1 FAIL (name generator crash, logic_scan with `using namespace`, dng.session1 123 s > 90, baseline raised, sleep-lint keying, fixture cleanup after stack down, pr-run bookkeeping, env checks). A fix builder is running in the main checkout (started 17:57, timebox 2 h). Next: a fresh-Mac release check (a real client login, spaced HOME, no Homebrew), then m4-dungeon-companions in day-sized slices. Zach: new tests are mostly unit tests with mocks; fewer, critical-path upper-layer tests._
+_Updated 2026-10-11 19:10. **Merged today:**
+- test-pyramid (#4): acceptance about 26 min, down from 68.
+- ci-pipeline (#5): pre-commit (syntax + public scan), pre-push (unit tests, about 11 s), GitHub Actions on PRs. The verifier no longer repeats tests.
+- release-home-spaces (#6): the v0.1.2 fixes.
+
+**Next:**
+1. A fresh-Mac release check: a real client login with a spaced HOME and no Homebrew.
+2. m4-dungeon-companions in slices of a day or less.
+
+**Follow-ups:**
+- F2: logic_scan misses `using namespace`.
+- F3: dng.session1 alone takes 123 s against its 90 s budget.
+- F5: the sleep-lint pending list. A loosening, for the human gate.
+- C6: summary wording.
+- The release checks own `.github/workflows/*`; narrow that to release.yml.
+- The first Lua unit build in a fresh worktree failed once under the push hook.
+- setup.preflight's control step needs about 35 GB free. It is integration-layer now, but still fails on this Mac.
+
+**Process (Zach):** a standard pipeline. Most new tests are unit tests with mocks; game tests are few and cover critical paths; nothing is repeated. Waiting on Zach's real-Mac test of v0.1.2._
 
 **Cold start:** read this file, then `openspec list` (Node 20: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`), then `git -C <repo> worktree list`, `git branch -a`, `gh pr list`, then `harness/hs status`. The skills `.claude/skills/hs-*` hold the procedures (change loop, checks, client debugging, RE). User preferences and decisions are in the orchestrator memory notes (plain language for decisions, Gate 1, front-menu vision, logo).
 
