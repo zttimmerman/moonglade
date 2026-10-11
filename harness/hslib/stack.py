@@ -389,6 +389,8 @@ def world_matches(name: str, population_n: int | None = None) -> bool:
     """The running worldserver was started with profile `name` and, for the population profile, at N =
     `population_n` (its recorded n and digest both match). False when no worldserver runs."""
     rp = running_profile()
+    if name != "population" and rp and rp["profile"] != "population":
+        return profile_matches(name)          # same settings under another name (scaling-on is m0): no restart
     n = config.population_n(population_n) if name == "population" else None
     return (bool(rp) and rp["profile"] == name and rp.get("n") == n
             and rp.get("digest") == config.profile_digest(name, n))

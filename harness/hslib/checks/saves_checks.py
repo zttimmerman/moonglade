@@ -1067,7 +1067,20 @@ def store_fingerprint(root: Path) -> dict | None:
 def player_untouched(ctx):
     """env/saves/<PLAYER>/ is identical (names, sizes, sha256) at the end of the run to its start, the PLAYER
     characters' save-set rows are byte-identical to the baseline taken before this run's first save or load, and lane
-    B's save store is its own (its rendered Moonglade.Saves.Dir is under env/lanes/b/, never env/saves/)."""
+    B's save store is its own (its rendered Moonglade.Saves.Dir is under env/lanes/b/, never env/saves/).
+    (test-pyramid part 3: a pr run no longer runs gate checks before the run guards, so the stack is often down here;
+    the guard then starts mysqld alone for its reads and stops it again.)"""
+    started = not stack.stack_processes()["mysqld"]
+    if started:
+        stack.mysql_up()
+    try:
+        return _player_untouched(ctx)
+    finally:
+        if started:
+            stack.mysql_down()
+
+
+def _player_untouched(ctx):
     acct = S.player_account()
     ev = {"player": bool(acct)}
     root = P.PLAYER_SAVES / acct if acct else None
