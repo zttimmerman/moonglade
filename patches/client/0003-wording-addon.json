@@ -7,6 +7,7 @@
     "Interface/AddOns/Moonglade/Moonglade.toc": "client-mods/addons/Moonglade/Moonglade.toc",
     "Interface/AddOns/Moonglade/Moonglade.lua": "client-mods/addons/Moonglade/Moonglade.lua",
     "Interface/AddOns/Moonglade/MoongladeSaves.lua": "client-mods/addons/Moonglade/MoongladeSaves.lua",
+    "Interface/AddOns/Moonglade/MoongladeParty.lua": "client-mods/addons/Moonglade/MoongladeParty.lua",
     "Interface/AddOns/Moonglade/Bindings.xml": "client-mods/addons/Moonglade/Bindings.xml"
   }
 }

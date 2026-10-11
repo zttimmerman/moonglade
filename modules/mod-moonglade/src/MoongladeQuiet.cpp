@@ -13,6 +13,11 @@
  *     lines to every real player, "This server runs with mod-playerbots ..." and "Playerbots: The server is configured
  *     with N bots."; held back by the exact text they start with. (mod-playerbots' note there asks repacks and public
  *     servers to keep them; Moonglade is a personal, never-distributed install, CLAUDE.md section 1.)
+ *   - mod-autobalance's player-facing lines (m4-party-preset, dungeon-companions "AutoBalance's chat lines stay
+ *     hidden"): its login announcement and every "[AutoBalance]"-tagged line, notably "Combat has ended. Difficulty is
+ *     no longer locked." (ABPlayerScript.cpp:224), which fires when a party member leaves mid-fight and no
+ *     AutoBalance setting turns off. The rule is MoongladeLogic::IsAutoBalanceLine (logic/ChatFilterLogic.cpp);
+ *     scaling itself is unchanged, and `.ab` command output (untagged) passes.
  * The filter is ServerScript::CanPacketSend (WorldSession::SendPacket, WorldSession.cpp:357), which only runs for
  * sessions with a real socket: bot sessions never get here (OnPlayerbotPacketSent runs before the socket check).
  * Nothing else is touched: GM command output, chat, and every other system message pass unchanged.
@@ -25,6 +30,7 @@
 #include "SharedDefines.h"
 #include "WorldPacket.h"
 #include "WorldSession.h"
+#include "logic/ChatFilterLogic.h"
 
 #include <array>
 #include <string_view>
@@ -50,10 +56,14 @@ namespace
         if (packet.size() <= HEADER || packet.contents()[0] != CHAT_MSG_SYSTEM)
             return false;
         std::string_view msg(reinterpret_cast<char const*>(packet.contents()) + HEADER, packet.size() - HEADER);
+        // the C string's terminating NUL and the chat tag follow the text
+        std::size_t const end = msg.find('\0');
+        if (end != std::string_view::npos)
+            msg = msg.substr(0, end);
         for (std::string_view prefix : QUIET_SYSTEM_PREFIXES)
             if (msg.substr(0, prefix.size()) == prefix)
                 return true;
-        return false;
+        return MoongladeLogic::IsAutoBalanceLine(msg);
     }
 }
 

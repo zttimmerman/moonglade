@@ -1,0 +1,318 @@
+"""dungeon-companions, slice 1 (openspec/changes/m4-party-preset): dng.party_preset and its child scenario
+dng.party_preset_tank_player, in one dungeon-probe login (budget 90 s).
+
+The probe (dungeon.py's own account and character, P.DUNGEON_USER / P.DUNGEON_CHAR; never PLAYER) sends exactly the
+commands /mg party sends, read from the add-on's MG_PARTY_PLAN (hslib/partyplan.py), as chat lines the way the client
+sends them (`.playerbots bot addclass` typed in chat, then whispers to the companion that joined). Then it reads what
+the server made of them:
+- strategies: each companion answers the whisper `co ?` with "Strategies: a, b, ..." (Engine::ChangeStrategy '?',
+  Engine::ListStrategies, vendor/mod-playerbots/src/Bot/Engine/Engine.cpp:515-529, :663-667);
+- the premade spec: `talents spec <name>` answers "Picking <name>" or "Spec <name> not found"
+  (ChangeTalentsAction::SpecPick, ChangeTalentsAction.cpp:134-159), and the name must be a
+  AiPlayerbot.PremadeSpecName of the class in the rendered playerbots.conf;
+- level and gear: characters.level and character_inventory (bag 0, equipment slots), after `saveall` (cs_misc.cpp
+  HandleSaveAllCommand) writes every online character.
+GIVEN, the probe's own role: its talents are reset (`reset talents`, cs_reset.cpp) and one talent point is put in the
+tree the role needs, with the client's CMSG_LEARN_TALENT (SkillHandler.cpp:25-32); /mg party reads the role from the
+tree holding the most points (MoongladeParty.lua MoongladeParty_Role), so one point decides it. The talent is chosen by
+rule from DBC, never typed in: TalentTab.dbc rows with the class in ClassMask [20] and tabpage [22] = the tree
+(protection: WARRIOR_TAB_PROTECTION = 2, arms: WARRIOR_TAB_ARMS = 0; PlayerbotAI.h tab enums), then the Talent.dbc row
+in that tab [1] with Row [2] = 0 and the lowest Col [3] (DBCStructure.h:1958-1986); rank 1 is RankID[0] [4]. It is
+confirmed from character_talent after `saveall`. At the end the probe's talents are reset again."""
+import struct
+import time
+
+from .. import companion as C, db, dbc, dungeon as D, fixtures as F, partyplan as PP, paths as P, soap
+from ..probe import proto as W
+from ..registry import CheckFail, check, require
+
+CAP = "dungeon-companions"
+COVERS = (
+    "client-mods/addons/Moonglade/MoongladeParty.lua",
+    "harness/hslib/partyplan.py",
+    "harness/hslib/checks/party_checks.py",
+    "harness/hslib/dungeon.py",
+)
+CHILD = "dng.party_preset_tank_player"
+CMSG_LEARN_TALENT = 0x251          # Opcodes.h:623
+CLASS_WARRIOR = 1
+TAB_ARMS, TAB_PROTECTION = 0, 2    # PlayerbotAI.h WARRIOR_TABS (the talent frame's order, TalentTab.dbc tabpage)
+JOIN_S = 20                        # per companion: addclass answers in 1-5 s when a character is free (comp.add_remove)
+REPLY_S = 10                       # a whisper's answer
+ASK_EVERY_S = 2.5                  # `co ?` again if unanswered (see strategies)
+STRATEGIES_S = 25                  # every companion's `co ?` answer (see strategies)
+SETTLE_S = 2.0                     # after the last step, before reading strategies (the last step has no answer)
+LEVEL_SLACK = 3                    # spec: within 3 levels
+# armour slots (Player.h EQUIPMENT_SLOT_*): every equipment slot whose item is ITEM_CLASS_ARMOR (cloth to plate, the
+# cloak, neck, rings, trinkets), i.e. all of 0-18 but the spec's exceptions, shirt (BODY 3) and tabard (18), and the
+# weapon slots (main hand 15, off hand 16: empty with a two-hander; ranged 17). autogear skips trinkets below level 50,
+# neck and head below 30 and rings below 20 (PlayerbotFactory.cpp:2361-2371), so the check runs at Hellfire Ramparts'
+# target level (LFGDungeons.dbc, 63), where every armour slot is in play.
+ARMOUR_SLOTS = {0: "head", 1: "neck", 2: "shoulders", 4: "chest", 5: "waist", 6: "legs", 7: "feet", 8: "wrists",
+                9: "hands", 10: "finger1", 11: "finger2", 12: "trinket1", 13: "trinket2", 14: "back"}
+AUTOGEAR_ALL_SLOTS_LEVEL = 50
+DPS_STRATEGIES = ("dps assist", "threat", "wait for attack")
+HEAL_STRATEGIES = ("heal", "holy heal")
+
+
+# ----------------------------------------------------------------------------- the probe's role (GIVEN)
+
+def tree_talent(class_id: int, tabpage: int) -> dict:
+    """The rule's talent: first column of the first row of the class's tree `tabpage` (module doc)."""
+    tabs, _ = dbc.read_dbc("TalentTab.dbc")
+    tab = next((t for t in tabs if t[20] & (1 << (class_id - 1)) and t[22] == tabpage), None)
+    if not tab:
+        raise C.CompanionError(f"no TalentTab.dbc row for class {class_id} tree {tabpage}")
+    talents, _ = dbc.read_dbc("Talent.dbc")
+    row0 = sorted((t for t in talents if t[1] == tab[0] and t[2] == 0), key=lambda t: t[3])
+    if not row0:
+        raise C.CompanionError(f"no first-row talent in TalentTab {tab[0]}")
+    t = row0[0]
+    return {"talent_id": t[0], "tab_id": tab[0], "tabpage": tabpage, "row": t[2], "col": t[3], "rank1_spell": t[4],
+            "rule": "TalentTab.dbc ClassMask[20] & class bit, tabpage[22]; Talent.dbc tab[1], Row[2]=0, lowest Col[3]; "
+                    "RankID[0][4]"}
+
+
+def saved_talents(guid: int) -> list[int]:
+    return [int(r[0]) for r in db.query(f"SELECT spell FROM character_talent WHERE guid={int(guid)}", "characters")]
+
+
+def set_role(s, tabpage: int) -> dict:
+    """Reset the probe's talents, learn the rule's talent in tree `tabpage`, and confirm it saved."""
+    t = tree_talent(CLASS_WARRIOR, tabpage)
+    ev = {"talent": t, "reset": soap.gm(f"reset talents {P.DUNGEON_CHAR}").evidence()}
+    time.sleep(0.5)
+    s.ws.send(CMSG_LEARN_TALENT, struct.pack("<II", t["talent_id"], 0))
+    time.sleep(0.8)
+    ev["saveall"] = soap.gm("saveall").evidence()
+    got, ok, dt = F.poll(lambda: saved_talents(s.guid), lambda v: v == [t["rank1_spell"]], timeout=10)
+    ev |= {"character_talent": got, "confirmed_s": dt}
+    require(ok, f"GIVEN: the probe's talents are {got}, not just the {['arms', '?', 'protection'][tabpage]} talent "
+            f"{t['rank1_spell']}", **ev)
+    return ev
+
+
+# ----------------------------------------------------------------------------- sending the plan
+
+def _whispers_from(s, guid: int, since: int) -> list[str]:
+    return [e["msg"] for e in s.ws.events_since(since) if e["kind"] == "chat" and e["type"] == W.CHAT_MSG_WHISPER
+            and e.get("sender") == guid]
+
+
+def add_companion(s, comp: dict) -> dict:
+    """Send one companion's plan lines: the addclass command, wait for a new online party member of the class
+    (SMSG_GROUP_LIST, as the add-on waits for PARTY_MEMBERS_CHANGED), then its whispers in order."""
+    want = PP.CLASS_IDS[comp["class"]]
+    before = {m["guid"] for m in s.members()}
+    since = s.ws.mark()
+    t0 = time.time()
+    s.ws.chat(comp["addclass"])
+    found = None
+    while time.time() - t0 < JOIN_S and not found:
+        e = s.ws.wait_event(lambda e: e["kind"] == "group_list", since, timeout=max(0.1, JOIN_S - (time.time() - t0)))
+        if not e:
+            break
+        since = e["i"] + 1
+        for m in e["members"]:
+            if m["guid"] not in before and m["online"]:
+                info = C.bot_info(m["guid"])
+                if info.get("class") == want:
+                    found = (m, info)
+    sys_lines = [e["msg"] for e in s.ws.events_since(0) if e["kind"] == "chat" and e["type"] == W.CHAT_MSG_SYSTEM][-3:]
+    ev = {"companion": comp["companion"], "command": comp["addclass"], "join_s": round(time.time() - t0, 2)}
+    if not found:
+        raise C.CompanionError(f"no online {comp['class']} joined the party within {JOIN_S} s", **ev,
+                               system_lines=sys_lines, members=s.members())
+    m, info = found
+    s.companions[m["name"]] = info
+    ev |= {"name": m["name"], "guid": m["guid"], "steps": []}
+    # the whisper steps, as the add-on sends them: a step's whispers together, the next step after the step's reply
+    for st in comp["steps"]:
+        mark = s.ws.mark()
+        for w in st["send"]:
+            s.ws.chat(w, W.CHAT_MSG_WHISPER, to=m["name"])
+        rec = {"send": st["send"]}
+        ev["steps"].append(rec)
+        if st["reply"]:
+            e = s.ws.wait_event(lambda e: e["kind"] == "chat" and e["type"] == W.CHAT_MSG_WHISPER
+                                and e.get("sender") == m["guid"] and st["reply"] in e["msg"], mark, timeout=REPLY_S)
+            rec |= {"reply": e["msg"] if e else None, "answers": _whispers_from(s, m["guid"], mark)[-3:]}
+            require(e is not None, f"{m['name']} ({comp['companion']}) didn't answer {st['send']} with "
+                    f"{st['reply']!r} within {REPLY_S} s (the add-on stops here too)", **ev)
+    return ev
+
+
+def strategies(s, comps: list[dict]) -> dict:
+    """Whisper `co ?` to every companion and parse each "Strategies: a, b, c" -> {guid: {"strategies", "asked"}}.
+    Unanswered companions are asked again every ASK_EVERY_S, up to STRATEGIES_S: a companion handles the commands that
+    arrived since its last update together, one event per command word (PlayerbotAI::HandleCommands,
+    ExternalEventHelper), so a `co ?` landing in the same update as the plan's `co +...` can be dropped, and a
+    companion in a long cast answers late (measured: the hunter, up to ~10 s after its last step; it revives its pet)."""
+    since = s.ws.mark()
+    out = {c["guid"]: {"strategies": None, "asked": 0} for c in comps}
+    t0, last_ask = time.time(), 0.0
+    while time.time() - t0 < STRATEGIES_S:
+        for e in s.ws.events_since(since):
+            if e["kind"] == "chat" and e["type"] == W.CHAT_MSG_WHISPER and e.get("sender") in out \
+                    and e["msg"].startswith("Strategies:") and out[e["sender"]]["strategies"] is None:
+                body = e["msg"][len("Strategies:"):]
+                out[e["sender"]]["strategies"] = sorted(x.strip() for x in body.split(",") if x.strip())
+                out[e["sender"]]["answered_s"] = round(time.time() - t0, 1)
+        waiting = [c for c in comps if out[c["guid"]]["strategies"] is None]
+        if not waiting:
+            break
+        if time.time() - last_ask >= ASK_EVERY_S:
+            for c in waiting:
+                s.ws.chat("co ?", W.CHAT_MSG_WHISPER, to=c["name"])
+                out[c["guid"]]["asked"] += 1
+            last_ask = time.time()
+        time.sleep(0.2)
+    for c in comps:
+        if out[c["guid"]]["strategies"] is None:
+            out[c["guid"]]["raw"] = _whispers_from(s, c["guid"], since)[-3:]
+    return out
+
+
+def gear_and_level(guids: list[int]) -> dict:
+    """characters.level and the filled equipment slots (character_inventory bag 0, slot < 19) per companion."""
+    out = {}
+    for g in guids:
+        lv = db.scalar(f"SELECT level FROM characters WHERE guid={int(g)}", "characters")
+        slots = sorted(int(r[0]) for r in db.query(
+            f"SELECT slot FROM character_inventory WHERE guid={int(g)} AND bag=0 AND slot < 19", "characters"))
+        out[g] = {"level": int(lv) if lv else None, "slots": slots,
+                  "armour_missing": [n for k, n in ARMOUR_SLOTS.items() if k not in slots]}
+    return out
+
+
+def role_of(strats: list[str] | None) -> str | None:
+    if not strats:
+        return None
+    if "tank" in strats:
+        return "tank"
+    if any(h in strats for h in HEAL_STRATEGIES):
+        return "healer"
+    if all(d in strats for d in DPS_STRATEGIES):
+        return "damage"
+    return "other"
+
+
+def call_party(s, plan: dict, role: str, conf_text: str) -> dict:
+    """Send the role's plan, then read every companion's spec answer, strategies, level and gear."""
+    t0 = time.time()
+    cmds = PP.commands(plan, role)
+    ev = {"role": role, "plan": cmds, "companions": []}
+    for comp in cmds:
+        ev["companions"].append(add_companion(s, comp))
+    for comp, c in zip(cmds, ev["companions"]):
+        spec = PP.spec_of(comp["whispers"])
+        c |= {"spec": spec, "spec_in_conf": spec in PP.premade_specs(conf_text, comp["class"])}
+    # the last step (autogear, co, wait for attack time, pet) has no answer to wait for: give it a beat
+    time.sleep(SETTLE_S)
+    st = strategies(s, ev["companions"])
+    for c in ev["companions"]:
+        c |= st[c["guid"]]
+        c["role"] = role_of(c.get("strategies"))
+    ev["saveall"] = soap.gm("saveall").evidence()
+    time.sleep(1.0)
+    gl = gear_and_level([c["guid"] for c in ev["companions"]])
+    probe_level = db.scalar(f"SELECT level FROM characters WHERE guid={int(s.guid)}", "characters")
+    ev["probe_level"] = int(probe_level) if probe_level else None
+    for c in ev["companions"]:
+        c |= gl[c["guid"]]
+    ev["online"] = [m["name"] for m in s.members() if m["online"]]
+    ev["elapsed_s"] = round(time.time() - t0, 1)
+    return ev
+
+
+def judge(ev: dict, n_tank: int, n_heal: int, n_dps: int) -> None:
+    comps = ev["companions"]
+    names = [c["name"] for c in comps]
+    require(len(comps) == 4 and set(names) <= set(ev["online"]),
+            f"the party lists {len(set(names) & set(ev['online']))} of 4 companions online", **ev)
+    bad_spec = [(c["name"], c["spec"]) for c in comps if not c["spec_in_conf"]]
+    require(not bad_spec, f"plan specs that aren't a PremadeSpecName of the class in playerbots.conf: {bad_spec}", **ev)
+    roles = [c["role"] for c in comps]
+    require(roles.count("tank") == n_tank and roles.count("healer") == n_heal and roles.count("damage") == n_dps,
+            f"roles {roles} (from `co ?`), want {n_tank} tank, {n_heal} healer, {n_dps} damage dealers "
+            f"({'+'.join(DPS_STRATEGIES)})", **ev)
+    lv = ev["probe_level"]
+    far = [(c["name"], c["level"]) for c in comps if c["level"] is None or lv is None or abs(c["level"] - lv) > LEVEL_SLACK]
+    require(not far, f"companions not within {LEVEL_SLACK} levels of the probe's {lv}: {far}", **ev)
+    bare = [(c["name"], c["armour_missing"]) for c in comps if c["armour_missing"]]
+    require(not bare, f"armour slots empty (character_inventory): {bare}", **ev)
+
+
+def clear_party(s, plan: dict) -> dict:
+    """The plan's clear command (/mg party clear), then wait until no companion is online in the party."""
+    t0 = time.time()
+    reply = s.cmd(plan["clear"], settle=0.5)
+    _, ok, dt = F.poll(lambda: [m for m in s.members() if m["online"]], lambda v: not v, timeout=20)
+    ev = {"command": plan["clear"], "reply": reply, "all_gone": ok, "s": dt}
+    if ok:
+        s.companions.clear()
+    ev["left_group"] = s.leave_stale_group()
+    ev["elapsed_s"] = round(time.time() - t0, 1)
+    return ev
+
+
+@check("dng.party_preset", order=530, capability=CAP, stack="up", layer="integration", budget_s=90,
+       children=(CHILD,))
+def party_preset(ctx):
+    """One dungeon-probe login at Hellfire Ramparts' target level, outside any dungeon. (dng.party_preset) The probe in a
+    damage-dealing spec (one arms talent) sends the damage-dealer command list parsed from MoongladeParty.lua: within
+    90 s the party lists 4 online companions, one with `tank`, one with `heal`/`holy heal`, two with `dps assist`,
+    `threat` and `wait for attack` (`co ?`), each within 3 levels of the probe with every armour slot filled
+    (character_inventory), and each picked its plan spec, a PremadeSpecName of its class in the rendered
+    playerbots.conf. Then the plan's clear command empties the party, and (dng.party_preset_tank_player) the probe in a
+    protection spec sends the tank list: no `tank`, one healer, three damage dealers, same level and gear rules."""
+    from .dungeon_checks import _scenario
+    plan = PP.plan()
+    conf_text = (P.LANE_ETC / "modules" / "playerbots.conf").read_text()
+    f = D.facts(D.RAMPARTS)
+    ev: dict = {"plan_file": "client-mods/addons/Moonglade/" + PP.PARTY_LUA.name, "dungeon": f["lfg_id"], "level": f["target_level"]}
+    require(f["target_level"] >= AUTOGEAR_ALL_SLOTS_LEVEL, f"GIVEN: target level {f['target_level']} is below "
+            f"{AUTOGEAR_ALL_SLOTS_LEVEL}, where autogear fills every armour slot", **ev)
+    res: dict = {}
+    t0 = time.time()
+    try:
+        with D.Session(f["target_level"]) as s:
+            ev["session"] = {k: s.ev.get(k) for k in ("login", "stale_group", "revive")}
+            ev["login_s"] = round(time.time() - t0, 1)
+
+            def damage():
+                e = {"given": set_role(s, TAB_ARMS)}
+                t = time.time()
+                e |= call_party(s, plan, "damage", conf_text)
+                e["within_s"] = round(time.time() - t, 1)
+                ev["damage"] = e
+                judge(e, 1, 1, 2)
+                require(e["within_s"] <= 90, f"the party took {e['within_s']} s (spec: within 90 s)", **e)
+                return e
+
+            _scenario(res, "dng.party_preset", damage)
+            ev["clear"] = clear_party(s, plan)
+
+            def tank():
+                require(ev["clear"]["all_gone"], "GIVEN: the first party didn't clear", clear=ev["clear"])
+                e = {"given": set_role(s, TAB_PROTECTION)}
+                t = time.time()
+                e |= call_party(s, plan, "tank", conf_text)
+                e["within_s"] = round(time.time() - t, 1)
+                judge(e, 0, 1, 3)
+                return e
+
+            _scenario(res, CHILD, tank)
+            ev["clear_end"] = clear_party(s, plan)
+            ev["talents_reset_end"] = soap.gm(f"reset talents {P.DUNGEON_CHAR}").evidence()
+    except C.CompanionError as e:
+        raise CheckFail(str(e), {**ev, **e.evidence, "children": res})
+    except C.probe.ProbeError as e:
+        raise CheckFail(f"probe: {e}", {**ev, **e.info, "children": res})
+    ev["session_s"] = round(time.time() - t0, 1)
+    ev["children"] = {CHILD: res.get(CHILD) or {"status": "error", "message": "not run", "evidence": {}}}
+    main = res.get("dng.party_preset") or {}
+    if main.get("status") != "pass":
+        raise CheckFail(main.get("message") or "dng.party_preset didn't run", {**ev, "result": main})
+    ev["result"] = main
+    return ev

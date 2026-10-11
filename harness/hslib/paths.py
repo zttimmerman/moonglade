@@ -173,6 +173,7 @@ DOWNLOADS = DATA / "downloads"
 PATCHES = ROOT / "patches" / "core"
 BOTS_PATCHES = ROOT / "patches" / "playerbots"   # mod-playerbots patch queue (ADR-0008), applied like PATCHES
 MODULES = ROOT / "modules"
+ADDON_SRC = ROOT / "client-mods" / "addons" / "Moonglade"   # the Moonglade add-on's source (m4-party-preset reads its plan)
 OUT = HARNESS / "out" if MODE == "dev" else HOME / "tmp" / "harness-out"
 RESULTS = HARNESS / "results.json" if MODE == "dev" else OUT / "results.json"
 SUMMARY = HARNESS / "summary.md" if MODE == "dev" else OUT / "summary.md"
