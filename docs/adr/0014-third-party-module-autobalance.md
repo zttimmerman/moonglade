@@ -1,6 +1,6 @@
 # ADR-0014: Third-party gameplay module: mod-autobalance
 
-- Status: proposed (draft, 2026-10-10, `m4-dungeon-scaling` task 1.2). Accepted by the orchestrator after the change's verifier PASS. Checks: `scale.module_loaded`, `scale.release_notice`, `build.pin_enforced`, `build.clean_smart`.
+- Status: accepted (2026-10-11, `m4-dungeon-scaling` verifier cycle 2 PASS; cycle 1 full run 216/2/35 at d123522, both failures fixed and re-verified). Checks: `scale.module_loaded`, `scale.release_notice`, `build.pin_enforced`, `build.clean_smart`.
 - Date: 2026-10-10
 
 ## Context
