@@ -29,7 +29,7 @@ from datetime import datetime
 from pathlib import Path
 
 from .. import app as A, icon as I, launch, paths as P, play, procs, stack
-from ..registry import check, require
+from ..registry import CheckFail, check, require
 from .naming_checks import NEW_NAME, OLD_NAME
 from .play_checks import (PINNED, START_TIMEOUT, StandIn, _denials, _wait_denials, graceful_halt, is_clear, last_record,
                           play_processes, remaining, SANDBOX_EXEC)
@@ -812,70 +812,39 @@ def heal_test_launchers() -> list[dict]:
     return [{"pid": l["pid"], "stand_in_dir": l["stand_in_dir"], "needed_sigterm": l in left} for l in own]
 
 
-def running_names(ev: dict) -> dict:
-    """Open the built app through LaunchServices with the notepad stand-in (m0, stock client setting, test hook):
-    the launcher's and the game process's LaunchServices display names, and every status/dialog/stage text the
-    launcher recorded. Then quit the stand-in: the app exits 0 and nothing is left running."""
-    from .polish_checks import GuiStandIn, lsappinfo_list      # polish_checks imports this module
-    run: dict = {}
-    ev["names_run"] = run
-    require_clear(run)
-    s = GuiStandIn("names")
-    hook = Hook(s.dir, "hook")
-    sfile = s.dir / "settings.json"
-    sfile.write_text(json.dumps({"client": "stock"}))
-    off, since = _log_size(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    try:
-        t_open = time.time()
-        run["open"] = open_app(A.APP, hook, "--account", "test", "--client-cmd", str(s.bat),
-                               env={"HS_SETTINGS": str(sfile)})
-        require(run["open"]["rc"] == 0, "`open` failed to launch the app", **run)
-        up = wait_app_client_up(s, hook, off, since)
-        run["client_up"] = up
-        require(up["up"], f"stand-in client never came up under the app: {up.get('why')}", **run)
-        launchers = _launchers(A.APP)
-        lp = launchers[0]["pid"] if len(launchers) == 1 else None
-        t0, apps, nps = time.time(), [], []
-        while time.time() - t0 < NAMES_TIMEOUT:
-            nps = GuiStandIn.notepad_pids()
-            apps = [a for a in lsappinfo_list() if a["pid"] in nps or a["pid"] == lp or a.get("bundle") == EXPECT_ID]
-            game = [a for a in apps if a["pid"] in nps]
-            if lp and game and all(a.get("name") == EXPECT_NAME for a in game) \
-                    and any(a["pid"] == lp and a.get("name") == EXPECT_NAME for a in apps):
-                break
-            time.sleep(0.5)
-        run |= {"t_open": round(t_open, 3), "launchers": launchers, "launcher_pid": lp, "notepad_pids": nps,
-                "apps": apps, "names_after_s": round(time.time() - t0, 1)}
-        ls_launcher = [a for a in apps if a["pid"] == lp]
-        ls_game = [a for a in apps if a["pid"] in nps]
-        require(lp and ls_launcher and ls_launcher[0].get("name") == EXPECT_NAME
-                and ls_launcher[0].get("bundle") == EXPECT_ID,
-                f"the launcher's LaunchServices display name isn't {EXPECT_NAME} (bundle {EXPECT_ID})", **run)
-        require(ls_game and all(a.get("name") == EXPECT_NAME for a in ls_game),
-                f"the game process's LaunchServices display name isn't {EXPECT_NAME}", **run)
-        s.stop_file.write_text("quit")
-        rc, dt = wait_app_exit(hook, A.APP)
-        shown = [{"kind": e.get("kind"), "id": e.get("id"), **{k: e[k] for k in ("title", "text", "label") if k in e}}
-                 for e in hook.events() if e.get("kind") in ("status", "dialog", "detail", "stage")]
-        # a text may include the repo's folder path (e.g. a log path): masked, see repo_roots()
-        roots = repo_roots()
+def verify_running_names(sess: dict) -> dict:
+    """app.names_running on the shared app session (polish_checks.app_session: the built app opened through
+    LaunchServices with the notepad stand-in, quit from the Dock): the launcher's and the game process's LaunchServices
+    display names, every status/dialog/stage text the launcher recorded, the app's exit 0 and nothing left running."""
+    nm = sess["names"]
+    lp, apps, nps = nm["launcher_pid"], nm["apps"], nm["notepad_pids"]
+    run: dict = {"launcher_pid": lp, "notepad_pids": nps, "apps": apps, "names_after_s": nm["names_after_s"]}
+    ls_launcher = [a for a in apps if a["pid"] == lp]
+    ls_game = [a for a in apps if a["pid"] in nps]
+    require(lp and ls_launcher and ls_launcher[0].get("name") == EXPECT_NAME
+            and ls_launcher[0].get("bundle") == EXPECT_ID,
+            f"the launcher's LaunchServices display name isn't {EXPECT_NAME} (bundle {EXPECT_ID})", **run)
+    require(ls_game and all(a.get("name") == EXPECT_NAME for a in ls_game),
+            f"the game process's LaunchServices display name isn't {EXPECT_NAME}", **run)
+    shown = [{"kind": e.get("kind"), "id": e.get("id"), **{k: e[k] for k in ("title", "text", "label") if k in e}}
+             for e in sess["events"] if e.get("kind") in ("status", "dialog", "detail", "stage")]
+    # a text may include the repo's folder path (e.g. a log path): masked, see repo_roots()
+    roots = repo_roots()
 
-        def unrooted(v) -> str:
-            v = str(v)
-            for r in roots:
-                v = v.replace(r, "<repo>")
-            return v.lower()
-        old = [x for x in shown if any(OLD_NAME.lower() in unrooted(x.get(k, "")) for k in ("title", "text", "label"))]
-        run |= {"app_exit_code": rc, "exit_after_s": dt, "shown_texts": shown[:60], "shown_with_old_name": old,
-                "remaining_after": app_remaining(s)}
-        require(shown, "the launcher recorded no status/stage text (nothing to judge)", **run)
-        require(not old, "a launcher status/dialog/stage text still says the old name", **run)
-        require(rc == 0, f"the app's exit code is {rc}, expected 0", **run)
-        require(is_clear(run["remaining_after"]), "something from this repo is still running", **run)
-        return run
-    finally:
-        stop_launchers(A.APP)
-        s.cleanup()
+    def unrooted(v) -> str:
+        v = str(v)
+        for r in roots:
+            v = v.replace(r, "<repo>")
+        return v.lower()
+    old = [x for x in shown if any(OLD_NAME.lower() in unrooted(x.get(k, "")) for k in ("title", "text", "label"))]
+    rc = sess["app_exit_code"]
+    run |= {"app_exit_code": rc, "shown_texts": shown[:60], "shown_with_old_name": old,
+            "remaining_after": sess["remaining_after"]}
+    require(shown, "the launcher recorded no status/stage text (nothing to judge)", **run)
+    require(not old, "a launcher status/dialog/stage text still says the old name", **run)
+    require(rc == 0, f"the app's exit code is {rc}, expected 0", **run)
+    require(is_clear(run["remaining_after"]), "something from this repo is still running", **run)
+    return run
 
 
 @check("app.bundle_valid", order=381, capability=CAP, stack="down", layer="integration")
@@ -959,11 +928,13 @@ def names_running(ctx):
     (bundle id local.moonglade.app), the game process's is Moonglade, no status/dialog/stage text the launcher shows
     says the old name, the app exits 0 and nothing is left running. gui: it puts the launcher and a Wine window on
     screen, so quick runs never run it."""
+    from .polish_checks import _session
     ev: dict = {"healed_stale_test_launchers": heal_test_launchers()}   # kill-safe: a killed earlier run's session
     build_app(ev)
     pl = plistlib.loads((A.APP / "Contents" / "Info.plist").read_bytes())
     verify_names(A.APP, pl, ev)                       # the bundle being opened is the renamed one
-    running_names(ev)
+    # test-pyramid part 3: the shared app session (the one the Dock and focus scenarios use), not a run of its own
+    ev["names_run"] = verify_running_names(_session(focus=True))
     return ev
 
 
@@ -1113,21 +1084,55 @@ def build_app(ev: dict) -> None:
     require(b.returncode == 0, "`harness/hs app` failed", **ev)
 
 
-def lifecycle(bundle: Path, ev: dict, tag: str) -> dict:
-    """Open, play, quit, for the app at `bundle`. Fills ev; returns it."""
+# test-pyramid part 3 (design 9.4, one GUI session for journey.app_desktop): the dist app's lifecycle session also
+# carries app.single_instance's "app running" half (a second launch while it plays) and app.shutdown_window's backup
+# stage (a scratch backup folder; the game exits by itself). Memoised per process; journey.app_desktop clears it.
+LIFECYCLE: dict = {}
+
+
+def dist_lifecycle() -> dict:
+    """The dist app's shared lifecycle session (launch_lifecycle, single_instance (a), shutdown_window's backup
+    stage): run once, its evidence reused; a failed session raises for each scenario that needs it."""
+    if "dist" not in LIFECYCLE:
+        ev: dict = {"bundle": str(A.APP)}
+        LIFECYCLE["dist"] = ev
+        from .backup_checks import scratch_root, drop
+        root = scratch_root("appstage")
+        try:
+            build_app(ev)
+            lifecycle(A.APP, ev, "app", backup_root=root, second_open=True)
+            ev["ok"] = True
+        except CheckFail as e:
+            ev["session_error"] = str(e)
+            ev.update(e.evidence or {})
+        finally:
+            drop(root)
+    ev = LIFECYCLE["dist"]
+    if not ev.get("ok"):
+        raise CheckFail(f"the shared app lifecycle session failed: {ev.get('session_error')}", ev)
+    return ev
+
+
+def lifecycle(bundle: Path, ev: dict, tag: str, backup_root: Path | None = None, second_open: bool = False) -> dict:
+    """Open, play, quit, for the app at `bundle`. Fills ev; returns it. `backup_root`: a scratch backup folder (with
+    the test flag; app.shutdown_window's backup stage). `second_open`: while the game runs, a second launch of the app
+    (`open -n`, app.single_instance's first half), its evidence in ev["second_open"]."""
     require_clear(ev)
     s = StandIn(tag)
     hook = Hook(s.dir, "hook")
     terminals_before = _terminal_pids()
     off, since = _log_size(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    a2 = None
     try:
         t_start = time.time()
         # stock client setting (scratch settings file): the play loop then prints a login line, the case where a
         # password could reach app.log (asserted at the end)
         settings = s.dir / "settings.json"
         settings.write_text(json.dumps({"client": "stock"}))
-        ev["open"] = open_app(bundle, hook, "--account", "test", "--client-cmd", str(s.bat),
-                              env={"HS_SETTINGS": str(settings)})
+        extra, benv = (["--allow-test-client-dir"], {"HS_BACKUP_DIR": str(backup_root)}) if backup_root else ([], {})
+        ev["t_open"] = round(t_start, 3)
+        ev["open"] = open_app(bundle, hook, "--account", "test", "--client-cmd", str(s.bat), *extra,
+                              env={"HS_SETTINGS": str(settings), **benv})
         require(ev["open"]["rc"] == 0, "`open` failed to launch the app", **ev)
         up = wait_app_client_up(s, hook, off, since)
         ev["client_up"] = up
@@ -1150,10 +1155,19 @@ def lifecycle(bundle: Path, ev: dict, tag: str) -> dict:
                 "the stack isn't at readiness while the client runs", **ev)
         time.sleep(3)
         require(hook.exit_code() is None and _launchers(bundle), "the app exited while the client was running", **ev)
+        if second_open:
+            a2 = StandIn(tag + "2")
+            ev["second_open"] = _second_open(bundle, hook, s, a2, launchers)
+        if backup_root is not None:
+            ev["listed_before_exit"] = _backup_ids(backup_root)
 
         s.stop_file.write_text("quit")               # the stand-in exits 0 within ~1 s
         rc, dt = wait_app_exit(hook, bundle)
         rec = last_record(pid_play) if pid_play else {}
+        if backup_root is not None:
+            from .. import backups as BK
+            ev["listed_after"] = [{"id": m["id"], "started_at": m["started_at"], "kind": m["kind"]}
+                                  for m in BK.list_backups(backup_root)]
         ev |= {"app_exit_code": rc, "app_exit_after_client_quit_s": dt, "events": hook.events(),
                "play_record": {k: rec.get(k) for k in ("outcome", "client_exit", "exit_code", "cleanup")},
                "graceful_halt": graceful_halt(t_start, rec), "remaining_after": app_remaining(s),
@@ -1175,7 +1189,56 @@ def lifecycle(bundle: Path, ev: dict, tag: str) -> dict:
         return ev
     finally:
         stop_launchers(bundle)
+        if a2 is not None:
+            a2.cleanup()
         s.cleanup()
+
+
+def _backup_ids(root: Path) -> list[str]:
+    from .. import backups as BK
+    return [m["id"] for m in BK.list_backups(root)]
+
+
+def _second_open(bundle: Path, h1: Hook, a1: StandIn, a2: StandIn, first: list) -> dict:
+    """app.single_instance (a), inside the running lifecycle session: a second launch (`open -n`) of the app."""
+    h2 = Hook(a2.dir, "hook")
+    A_ev: dict = {"first_launchers": first}
+    stack_before = stack.stack_processes()
+    play_before = [p["pid"] for p in play_processes()]
+    lock_before = play.LOCK.read_text().strip()
+    # launcher-fixes: a reopen of the running app while it loads brings its loading window forward (no message,
+    # app.reopen_during_loading), so the "already running" case is a second launch: a second app process
+    A_ev["open_second"] = open_app(bundle, h2, "--account", "test", "--client-cmd", str(a2.bat), new_instance=True)
+    t0 = time.time()
+    while time.time() - t0 < 30 and not (h1.find("dialog", "already_running") or h2.find("dialog", "already_running")):
+        time.sleep(0.5)
+    A_ev["message_after_s"] = round(time.time() - t0, 1)
+    t1 = time.time()                                 # the second launcher is gone again (it only says so and quits)
+    while time.time() - t1 < 10 and (len(_launchers(bundle)) > len(first) or time.time() - t1 < 2):
+        time.sleep(0.25)                             # at least 2 s: nothing else starts after the message
+    A_ev |= {"launchers_after": _launchers(), "events_first": h1.events(), "events_second": h2.events(),
+             "play_before": play_before, "play_after": [p["pid"] for p in play_processes()],
+             "stack_before": stack_before, "stack_after": stack.stack_processes(), "lock_before": lock_before,
+             "lock_after": play.LOCK.read_text().strip(), "second_client_started": a2.started.exists(),
+             "first_client_after": play.client_processes(a1.bat.name.lower()), "first_hook_exit": h1.exit_code(),
+             "dialogs_first": h1.find("dialog"), "dialogs_second": h2.find("dialog")}
+    return A_ev
+
+
+def verify_second_open(A_ev: dict) -> dict:
+    """app.single_instance (a): the "already running" message, no second launcher, play loop, stack or client, and
+    the first session unaffected."""
+    msgs = [d for d in A_ev["dialogs_first"] + A_ev["dialogs_second"] if d.get("id") == "already_running"]
+    require(msgs, "no \"already running\" message after opening the app again", **A_ev)
+    require(not A_ev["second_client_started"], "a second client was started", **A_ev)
+    require([l["pid"] for l in A_ev["launchers_after"]] == [l["pid"] for l in A_ev["first_launchers"]],
+            "a second launcher is still running (or the first one is gone)", **A_ev)
+    require(A_ev["play_after"] == A_ev["play_before"] and len(A_ev["play_before"]) == 1,
+            "a second play loop ran, or the first died", **A_ev)
+    require(A_ev["stack_after"] == A_ev["stack_before"] and A_ev["lock_after"] == A_ev["lock_before"], "the stack or the lock changed under the first session",
+            **A_ev)
+    require(A_ev["first_client_after"] and A_ev["first_hook_exit"] is None, "the first session was affected", **A_ev)
+    return A_ev
 
 
 # ---------------------------------------------------------------- runtime checks
@@ -1186,9 +1249,7 @@ def launch_lifecycle(ctx):
     client is launched by the app's play loop (the app's child, the app launched by LaunchServices, no Terminal),
     and when the client exits the stack shuts down gracefully, the app exits 0 with no dialog, and nothing from this
     repo (stack, Wine, Wow.exe, launcher) remains, ports 3307/3724/8085/7878 free."""
-    ev: dict = {"bundle": str(A.APP)}
-    build_app(ev)
-    return lifecycle(A.APP, ev, "app")
+    return dist_lifecycle()
 
 
 # seamless-experience (mac-app "Friendly launcher errors"): words the error dialog's main text must not use
@@ -1281,58 +1342,17 @@ def verify_failure_stage(ev: dict, text: str, details: str) -> None:
 # app.single_instance: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
 def single_instance(ctx):
     """(a) With the app running its game, opening the app again records an "already running" message, starts no second
-    launcher, play loop, stack or client, and the first session continues and later exits 0. (b) With ./play
-    running, opening the app records "already running", the app exits 0 without starting anything, and ./play
-    continues and later exits 0."""
-    ev: dict = {"bundle": str(A.APP)}
-    build_app(ev)
+    launcher, play loop, stack or client, and the first session continues and later exits 0 (the dist app's shared
+    lifecycle session, test-pyramid part 3). (b) With ./play running, opening the app records "already running", the
+    app exits 0 without starting anything, and ./play continues and later exits 0."""
+    life = dist_lifecycle()
+    ev: dict = {"bundle": str(A.APP), "app_running": life.get("second_open") or {}}
+    require(life.get("second_open"), "the lifecycle session made no second launch", **ev)
+    verify_second_open(ev["app_running"])
+    ev["app_running"] |= {"first_exit_code": life["app_exit_code"], "remaining_after": life["remaining_after"]}
+    require(life["app_exit_code"] == 0, f"the first app's exit code is {life['app_exit_code']}, expected 0", **ev)
+    require(is_clear(life["remaining_after"]), "something from this repo is still running", **ev)
     require_clear(ev)
-    # (a) the app is running
-    a1, a2 = StandIn("app1"), StandIn("app2")
-    h1, h2 = Hook(a1.dir, "hook"), Hook(a2.dir, "hook")
-    off, since = _log_size(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    A_ev: dict = {}
-    ev["app_running"] = A_ev
-    try:
-        A_ev["open_first"] = open_app(A.APP, h1, "--account", "test", "--client-cmd", str(a1.bat))
-        up = wait_app_client_up(a1, h1, off, since)
-        A_ev["first_client_up"] = up
-        require(up["up"], f"first app's client never came up: {up.get('why')}", **ev)
-        first = _launchers(A.APP)
-        play_before = [p["pid"] for p in play_processes()]
-        stack_before, lock_before = stack.stack_processes(), play.LOCK.read_text().strip()
-        # launcher-fixes: a reopen of the running app while it loads brings its loading window forward (no message,
-        # app.reopen_during_loading), so the "already running" case is a second launch: a second app process
-        A_ev["open_second"] = open_app(A.APP, h2, "--account", "test", "--client-cmd", str(a2.bat), new_instance=True)
-        t0 = time.time()
-        while time.time() - t0 < 30 and not (h1.find("dialog", "already_running") or h2.find("dialog", "already_running")):
-            time.sleep(0.5)
-        A_ev["message_after_s"] = round(time.time() - t0, 1)
-        time.sleep(5)
-        A_ev |= {"first_launchers": first, "launchers_after": _launchers(), "events_first": h1.events(),
-                 "events_second": h2.events(), "play_before": play_before,
-                 "play_after": [p["pid"] for p in play_processes()], "stack_before": stack_before,
-                 "stack_after": stack.stack_processes(), "lock_before": lock_before,
-                 "lock_after": play.LOCK.read_text().strip(), "second_client_started": a2.started.exists(),
-                 "first_client_after": play.client_processes(a1.bat.name.lower())}
-        msgs = h1.find("dialog", "already_running") + h2.find("dialog", "already_running")
-        require(msgs, "no \"already running\" message after opening the app again", **ev)
-        require(not A_ev["second_client_started"], "a second client was started", **ev)
-        require([l["pid"] for l in A_ev["launchers_after"]] == [l["pid"] for l in first],
-                "a second launcher is still running (or the first one is gone)", **ev)
-        require(A_ev["play_after"] == play_before and len(play_before) == 1, "a second play loop ran, or the first died", **ev)
-        require(A_ev["stack_after"] == stack_before and A_ev["lock_after"] == lock_before,
-                "the stack or the lock changed under the first session", **ev)
-        require(A_ev["first_client_after"] and h1.exit_code() is None, "the first session was affected", **ev)
-        a1.stop_file.write_text("quit")
-        rc, dt = wait_app_exit(h1, A.APP)
-        A_ev |= {"first_exit_code": rc, "first_exit_after_quit_s": dt, "remaining_after": app_remaining(a1)}
-        require(rc == 0, f"the first app's exit code is {rc}, expected 0", **ev)
-        require(is_clear(A_ev["remaining_after"]), "something from this repo is still running", **ev)
-    finally:
-        stop_launchers(A.APP)
-        a2.cleanup()
-        a1.cleanup()
 
     # (b) ./play is running
     B_ev: dict = {}

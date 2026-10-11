@@ -187,5 +187,10 @@ def saves(ctx):
 def app_desktop(ctx):
     """The Mac app on the desktop with the stand-in client: names while running, the launch lifecycle, one instance,
     a relocated copy, one Dock icon, focus hand-off and reopen, the shutdown window, loading stages, the shim's scope
-    and the Backups window's restore (the scenarios in APP_DESKTOP)."""
+    and the Backups window's restore (the scenarios in APP_DESKTOP). Shared sessions (test-pyramid part 3): the app
+    session with the Dock/focus steps (also app.names_running), the dist app's lifecycle session (also
+    app.single_instance's first half and app.shutdown_window's backup stage); each starts fresh here."""
+    from . import app_checks, polish_checks
+    app_checks.LIFECYCLE.clear()
+    polish_checks._SESSIONS.clear()
     return run_journey(ctx, APP_DESKTOP)

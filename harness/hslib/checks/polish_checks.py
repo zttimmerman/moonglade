@@ -550,6 +550,7 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
         ev["notepad_pid"] = win["pid"]
         launchers = _launchers(A.APP)
         ev["launcher_pid"] = launchers[0]["pid"] if launchers else None
+        ev["names"] = running_names_sample(ev["launcher_pid"])     # app.names_running (test-pyramid part 3)
         ev["play_pid"] = _play_pid(off, ev["launcher_pid"])
         ev["process_env"] = scan_process_env()
         ev["launchctl_dyld"] = subprocess.run(["/bin/launchctl", "getenv", "DYLD_INSERT_LIBRARIES"],
@@ -590,6 +591,22 @@ def app_session(settings: dict | None = None, env: dict | None = None, profile: 
             wins.stop()
         stop_launchers(A.APP)
         s.cleanup()
+
+
+def running_names_sample(lp: int | None) -> dict:
+    """app.names_running's observation inside the app session: the launcher's and the game (notepad) process's
+    LaunchServices display names, polled until both read Moonglade or NAMES_TIMEOUT passes."""
+    from .app_checks import EXPECT_ID, EXPECT_NAME, NAMES_TIMEOUT
+    t0, apps, nps = time.time(), [], []
+    while time.time() - t0 < NAMES_TIMEOUT:
+        nps = GuiStandIn.notepad_pids()
+        apps = [a for a in lsappinfo_list() if a["pid"] in nps or a["pid"] == lp or a.get("bundle") == EXPECT_ID]
+        game = [a for a in apps if a["pid"] in nps]
+        if lp and game and all(a.get("name") == EXPECT_NAME for a in game) \
+                and any(a["pid"] == lp and a.get("name") == EXPECT_NAME for a in apps):
+            break
+        time.sleep(0.5)
+    return {"launcher_pid": lp, "notepad_pids": nps, "apps": apps, "names_after_s": round(time.time() - t0, 1)}
 
 
 SHUTDOWN_SAMPLE_S = 0.2
@@ -1077,12 +1094,17 @@ def reopen_during_loading(ctx):
 def shutdown_window(ctx):
     """Game running from the app, quit requested as from the Dock: the shutdown window is on screen within 1 s and at
     every shutdown stage (recorded in order) until the stack is down (sampled independently); then the app exits 0
-    and nothing remains. save-backups ("The backup stage is shown in order"): a second app run with a scratch backup
-    folder where the game exits by itself records shutdown_backup (start, done) after shutdown_login and before
-    shutdown_database with the window on screen, and leaves one new backup in that folder."""
+    and nothing remains. save-backups ("The backup stage is shown in order"): the dist app's lifecycle session (a
+    scratch backup folder; the game exits by itself; shared with app.launch_lifecycle, test-pyramid part 3) records
+    shutdown_backup (start, done) after shutdown_login and before shutdown_database with the window on screen, and
+    leaves one new backup in that folder."""
     out = verify_shutdown_window(_session())
-    from .backup_checks import backup_stage_app_run, verify_backup_stage
-    run = backup_stage_app_run({})
+    from .app_checks import dist_lifecycle
+    from .backup_checks import verify_backup_stage
+    life = dist_lifecycle()
+    run = {"events": life["events"], "listed_before_exit": life["listed_before_exit"],
+           "listed_after": life["listed_after"], "app_exit_code": life["app_exit_code"],
+           "remaining_after": life["remaining_after"], "t0": life["t_open"]}
     out["backup_stage"] = verify_backup_stage(run)
     return out
 

@@ -1098,40 +1098,6 @@ def verify_restore_feedback(events: list[dict], ok: bool, expect: str, before_st
     return out
 
 
-def backup_stage_app_run(ev: dict) -> dict:
-    """save-backups: the app runs the game (stand-in, m0) with a scratch backup folder and the game exits by itself;
-    the hook's shutdown events and the scratch folder are the evidence."""
-    from .app_checks import (Hook, _log_size, app_remaining, open_app, stop_launchers, wait_app_client_up,
-                             wait_app_exit)
-    root = scratch_root("appstage")
-    s = StandIn("bkstage")
-    hook = Hook(s.dir, "hook")
-    sfile = s.dir / "settings.json"
-    sfile.write_text(json.dumps({"client": "stock"}))
-    run: dict = {"root": str(root)}
-    ev["backup_stage_run"] = run
-    off, since = _log_size(), datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-    try:
-        run["t_open"] = t0 = round(time.time(), 3)
-        run["open"] = open_app(clientbuild_app(), hook, "--account", "test", "--client-cmd", str(s.bat),
-                               "--allow-test-client-dir", env={"HS_SETTINGS": str(sfile), "HS_BACKUP_DIR": str(root)})
-        up = wait_app_client_up(s, hook, off, since)
-        run["client_up"] = up
-        require(up["up"], f"stand-in client never came up under the app: {up.get('why')}", **ev)
-        run["listed_before_exit"] = ids(root)
-        s.stop_file.write_text("quit")                    # the game exits by itself
-        rc, dt = wait_app_exit(hook, clientbuild_app())
-        listed = B.list_backups(root)
-        run |= {"app_exit_code": rc, "events": hook.events(), "remaining_after": app_remaining(s),
-                "listed_after": [{"id": m["id"], "started_at": m["started_at"], "kind": m["kind"]} for m in listed],
-                "t0": t0}
-        return run
-    finally:
-        stop_launchers(clientbuild_app())
-        s.cleanup()
-        drop(root)
-
-
 def verify_backup_stage(run: dict) -> dict:
     """The backup stage is shown in order: shutdown_backup start+done after shutdown_login and before
     shutdown_database, the shutdown window visible and on screen at those events, a new backup in the scratch folder,
