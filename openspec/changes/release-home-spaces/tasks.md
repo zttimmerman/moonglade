@@ -1,0 +1,4 @@
+- [ ] 1.1 `stack.conf_value`: a whitespace-free relative `-c` path when the HOME has spaces; discovery accepts both.
+- [ ] 1.2 Scratch release HOMEs have a space; `release.stack_from_payload` asserts no "--config' is invalid" in the servers' stderr.
+- [ ] 1.3 Verify: `firstlaunch.flow`, `release.stack_from_payload`, `release.client_smoke`, `release.play_standin` and the quick tier; a counterexample with the fix reverted fails.
+- [ ] 1.4 Release v0.1.1.
