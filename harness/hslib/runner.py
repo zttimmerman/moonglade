@@ -690,7 +690,9 @@ LEGACY_CLIENT = frozenset((
     "client.first_start_settings", "client.stock_mode", "client.wording_addon", "client.launch_smoke",
     "login.auto_login", "login.cancel_shows_list", "login.charselect_layout", "login.charselect_wording",
     "login.fresh_menu_waits", "login.friendly_errors", "login.loading_overlay", "login.no_glue_errors",
-    "login.overlay_progress", "login.overlay_progress_reload"))
+    "login.overlay_progress", "login.overlay_progress_reload", "login.backdrop_choice", "client.resolution_default",
+    "saves.live_charselect_load", "saves.live_charselect_list", "savesctl.live_roundtrip", "savesctl.live_codes",
+    "savesctl.live_down", "savesctl.realm_restored", "savesctl.account_name_kept"))
 
 
 def _union_s(spans: list[tuple]) -> float:

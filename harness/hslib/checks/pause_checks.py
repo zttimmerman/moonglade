@@ -66,6 +66,7 @@ def _status_running(ev: dict, key: str = "status_before") -> dict:
 # (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
 COVERS = (
     "modules/mod-moonglade/src/MoongladePause.cpp",
+    "modules/mod-moonglade/src/logic/Pause*",
     "modules/mod-moonglade/src/MoongladeAddon.*",
     "client-mods/addons/Moonglade/*",
     "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.Pause",
@@ -140,7 +141,7 @@ def _respawn(ctx: dict, ev0: dict) -> dict:
         st0 = Z.status()
         p = _run(s.pause)
         ev["respawn_pause"] = p
-        Z.wait_until(p["reply_t"] + R + 3)
+        Z.wait_until(p["reply_t"] + R + RESPAWN_PAUSE_OVER_R_S)
         r = _run(s.resume)
         ev["respawn_resume"] = r
         k1 = _run(lambda: Z.respawn_remaining(s, victim["spawn_id"]))
@@ -180,7 +181,7 @@ def _respawn(ctx: dict, ev0: dict) -> dict:
         p2 = _run(s.pause)
         ev["leash_pause"] = p2
         ev["leash_pause_after_engage_s"] = round(p2["reply_t"] - fight["attacked"]["t"], 1)
-        Z.wait_until(p2["reply_t"] + R + 5)
+        Z.wait_until(p2["reply_t"] + R + LEASH_PAUSE_OVER_R_S)
         r2 = _run(s.resume)
         ev["leash_resume"] = r2
         Z.wait_until(r2["reply_t"] + LEASH_SAMPLE_S)
@@ -209,6 +210,10 @@ def _respawn(ctx: dict, ev0: dict) -> dict:
 
 
 SCRATCH_RESPAWN_S = 5
+# spec (true-pause "Respawn and leash freeze", harness-control "the two pauses each longer than that time"): each pause
+# lasts R s plus this margin
+RESPAWN_PAUSE_OVER_R_S = 3
+LEASH_PAUSE_OVER_R_S = 5
 SCRATCH_RULE = ("a scratch spawn (`.npc add`) of pause.RESPAWN_RULE's first creature at that creature's spawn point, "
                 f"respawn time {SCRATCH_RESPAWN_S} s (`.npc set spawntime`), under the pause-respawn profile (5 s corpse "
                 "decay, config.PROFILES); removed afterwards with `.npc delete` and checked gone from world.creature and "
@@ -532,17 +537,28 @@ def pause_menu(ctx):
     menu shown; the screenshot's banner box holds the banner's gold text, the shot after the resume doesn't) and the
     world view dimmed (DIM_REGION's mean brightness at most DIM_MAX_RATIO of the add-on's pre-Esc shot), and after the
     menu closes the server reports running and DIM_REGION's brightness is back within RESTORE_TOL of the pre-Esc
-    shot."""
+    shot. test-pyramid (journey.pause, a warm journey): with the shared stack up, ./play runs with HS_PLAY_KEEP_STACK
+    and leaves it up; GIVEN nothing else of this repo running (no client, Wine or ./play), and afterwards the same:
+    nothing left running except that stack, with the same pids as before."""
     from . import clientinput
     from .play_checks import is_clear, remaining, require_given_clear
     from .playclient_util import PlayRun, build_scratch, drop_scratch, fresh_scratch, screenshots
     from .seamless_checks import addon_report, addon_sv_path, server_logins
     from .. import paths as P
 
+    from .. import play as _play
     ev: dict = {"account": P.TEST_USER, "glue_test": MENU_GLUE}
     scratch = run = None
+    warm = all(stack.stack_processes().values())
+    ev["warm"] = warm
     try:
-        require_given_clear(ev)
+        if warm:
+            stack_before = _stack_pids()
+            ev["stack_before"] = stack_before
+            ev["given_nothing_else_running"] = before = _without_stack(remaining())
+            require(is_clear(before), "GIVEN not met: something besides the shared stack is already running", **ev)
+        else:
+            require_given_clear(ev)
         scratch = fresh_scratch("pause")
         build = build_scratch(scratch)
         ev["scratch"] = {"dir": str(scratch), "addon_outputs": sorted(o for o in build["stamp"]["outputs"]
@@ -552,7 +568,8 @@ def pause_menu(ctx):
         sv = addon_sv_path(scratch)
         sv.parent.mkdir(parents=True, exist_ok=True)
         sv.write_text(PAUSE_HOOK)
-        run = PlayRun("pause", glue_test=MENU_GLUE, scratch=scratch)
+        run = PlayRun("pause", glue_test=MENU_GLUE, scratch=scratch,
+                      extra_env={_play.KEEP_STACK_ENV: "1", "HS_HARNESS_RUN": "1"} if warm else None)
         run.start()
         up = run.wait_client()
         ev["client_up"] = {k: v for k, v in up.items() if k != "t"}
@@ -655,8 +672,22 @@ def pause_menu(ctx):
             run.cleanup()
         ev["remaining_after"] = remaining()
         drop_scratch(scratch)
-    require(is_clear(ev["remaining_after"]), "something is still running", **ev)
+    if warm:
+        ev["stack_after"] = _stack_pids()
+        require(is_clear(_without_stack(ev["remaining_after"])), "something besides the shared stack is still running", **ev)
+        require(ev["stack_after"] == ev["stack_before"], "the shared stack didn't stay up with the same pids", **ev)
+    else:
+        require(is_clear(ev["remaining_after"]), "something is still running", **ev)
     return ev
+
+
+def _stack_pids() -> dict:
+    return {k: sorted(p if isinstance(p, int) else p.get("pid", p) for p in v) for k, v in stack.stack_processes().items()}
+
+
+def _without_stack(r: dict) -> dict:
+    """play_checks.remaining() without the shared stack's processes and ports (a warm journey keeps them)."""
+    return {k: v for k, v in r.items() if k not in ("stack", "ports_open")}
 
 
 # ---------------------------------------------------------------- the freeze matrix (test-pyramid: 5 scenarios, one pause)
@@ -891,14 +922,16 @@ def freeze_matrix(ctx):
 # ---------------------------------------------------------------- journey.pause (test-pyramid: the fixed journey set)
 
 JOURNEY_PAUSE_COVERS = ("client-mods/addons/Moonglade/*", "modules/mod-moonglade/src/MoongladePause.cpp",
+                        "modules/mod-moonglade/src/logic/Pause*",
                         "harness/hslib/checks/pause_checks.py", "harness/hslib/pause.py",
                         "harness/hslib/checks/clientinput.py", "harness/hslib/checks/seamless_checks.py")
 
 
-@check("journey.pause", order=450, capability=CAP, stack="down", layer="journey", budget_s=90,
+@check("journey.pause", order=450, capability=CAP, stack="up", layer="journey", budget_s=90,
        covers=JOURNEY_PAUSE_COVERS, children=("client.pause_menu",))
 def journey_pause(ctx):
-    """The real client in the world (scratch play client, test account): Esc opens the Moonglade pause menu, the world
-    pauses with the banner and dimming, Esc again resumes (the scenario client.pause_menu, its own record)."""
+    """The real client in the world (scratch play client, test account; warm: the shared stack stays up): Esc opens the
+    Moonglade pause menu, the world pauses with the banner and dimming, Esc again resumes (the scenario
+    client.pause_menu, its own record)."""
     from ..session import run_children
     return run_children(ctx, [("client.pause_menu", pause_menu)])

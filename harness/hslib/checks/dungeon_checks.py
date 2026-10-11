@@ -82,6 +82,7 @@ def _unscaled_ref(ctx: dict, f: dict) -> dict:
 # (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
 COVERS = (
     "modules/mod-moonglade/src/MoongladeDungeons.cpp",
+    "modules/mod-moonglade/src/logic/Dungeons*",
     "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.Dungeons",
     "fork.lock#autobalance_*",
     "harness/hslib/build.py",
@@ -749,7 +750,7 @@ def _notice_problems(out_dir, payload, sources: bool = True) -> tuple[list[str],
 # reference, ctx["m4_unscaled"]).
 
 SESSION1 = ("scale.module_loaded", "scale.solo_weaker", "scale.pause_safe", "scale.counts_companions", "scale.party_stock")
-SESSION2 = ("lock.partial_kept_dismissed", "lock.partial_kept", "lock.fresh_after_clear")
+SESSION2 = ("lock.partial_kept", "lock.fresh_after_clear", "lock.partial_kept_dismissed")
 _DNG: dict = {}
 SCALING_ON = "scaling-on"
 
@@ -861,12 +862,12 @@ def session1(ctx):
 @check("dng.session2", order=503, capability=CAP_LOCK, stack="up", layer="integration", profile=SCALING_ON,
        budget_s=90, children=SESSION2)
 def session2(ctx):
-    """Continues dng.session1's login, in its Deadmines copy with its four companions: the first boss killed (final
-    alive), the probe leaves, every companion is dismissed (the party breaks up), the probe enters again alone: the
-    same instance and the first boss still dead (lock.partial_kept_dismissed and lock.partial_kept); then two
-    companions are summoned back into the party and the copy is cleared, the probe leaves and enters again: a new
-    instance with mask 0, both companions in that same new copy, and no bind to the old copy for any of the three
-    (lock.fresh_after_clear)."""
+    """Continues dng.session1's login, in its Deadmines copy A, with two of its four companions kept in the party:
+    (lock.partial_kept) the first boss killed (final alive), the probe walks out and enters again: copy A, the first
+    encounter still done; (lock.fresh_after_clear) the probe and the two companions clear A (every encounter, completion
+    saved), leave, and the probe enters again: a new copy B with mask 0, both companions in B, and no bind to A for any
+    of the three; (lock.partial_kept_dismissed) in B the first boss killed (final alive), the probe leaves, dismisses
+    both companions (the party breaks up) and enters again alone: copy B, the first boss still dead."""
     res: dict = {}
     ev: dict = {}
     s, f = _DNG.get("s"), _DNG.get("f")
@@ -876,49 +877,43 @@ def session2(ctx):
                         "evidence": {"session1": "missing"}}
         return {"children": res}
     fb = D.first_boss(f)
+    bit, final_bit = 1 << fb["bit"], 1 << f["final"]["bit"]
+    st: dict = {}
+
+    def first_kill(e: dict, key: str) -> None:
+        e[key] = s.kill(fb, f["map"])
+        e[f"{key}_binds"] = s.wait_binds(lambda v: v and v[0]["mask"] & bit, f["map"])
+        rows = e[f"{key}_binds"]
+        require(rows and rows[0]["mask"] & bit and not rows[0]["mask"] & final_bit,
+                "GIVEN: first encounter not done, or the final one is", **e)
+
+    def same_copy_after(e: dict, inst: int) -> None:
+        b = _enter(s, f, e, "reenter")
+        e["first_after"] = s.unit(fb["spawns"][0]["spawn_id"], fb["credit_entry"])
+        e["binds_after"] = s.binds(f["map"])
+        require(inst and b["instance"] == inst, f"re-entry gave instance {b['instance']}, not the unfinished {inst}", **e)
+        require(e["binds_after"] and e["binds_after"][0]["mask"] & bit, "the first encounter isn't done any more (mask)", **e)
+        require(e["first_after"].get("health") in (0, None) or e["first_after"].get("guid") is None,
+                "the first boss is alive again", **e)
     try:
-        part = {}
+        # two companions stay (the lockout scenarios' party); the other two are dismissed
+        keep = list(s.companions)[:2]
+        ev["dismissed_extra"] = [s.remove(n) for n in list(s.companions)[2:]]
+        ev["kept"] = keep
+        st["party"] = [dict(s.companions[n], name=n) for n in keep]
 
         def partial():
-            e = {}
-            bit = 1 << fb["bit"]
-            e["companions"] = sorted(s.companions)
-            require(len(s.companions) >= 2, "GIVEN: the companions from dng.session1 aren't in the party", **e)
-            e["kill"] = s.kill(fb, f["map"])
-            e["binds_kill"] = s.wait_binds(lambda v: v and v[0]["mask"] & bit, f["map"])
-            require(e["binds_kill"] and e["binds_kill"][0]["mask"] & bit and not e["binds_kill"][0]["mask"] & (1 << f["final"]["bit"]),
-                    "GIVEN: first encounter not done, or the final one is", **e)
+            e = {"copy": _DNG["first_instance"], "companions": keep}
+            require(len(keep) == 2, "GIVEN: the companions from dng.session1 aren't in the party", **e)
+            first_kill(e, "kill")
             e["leave"] = s.leave()
-            time.sleep(1.5)
-            part["removed"] = [dict(s.companions[n], name=n) for n in list(s.companions)]
-            e["dismiss"] = [s.remove(n) for n in list(s.companions)]
-            e["group_after"] = s.group_rows()
-            require(not s.members() and not e["group_after"], "GIVEN: the party didn't break up", **e)
-            time.sleep(1.5)
-            e["binds_outside"] = s.binds(f["map"])
-            b = _enter(s, f, e, "reenter")
-            e["first_after"] = s.unit(fb["spawns"][0]["spawn_id"], fb["credit_entry"])
-            e["binds_after"] = s.binds(f["map"])
-            a = _DNG["first_instance"]
-            require(a and b["instance"] == a, f"re-entry gave instance {b['instance']}, not the unfinished {a}", **e)
-            require(e["binds_after"] and e["binds_after"][0]["mask"] & bit, "the first encounter isn't done any more (mask)", **e)
-            require(e["first_after"].get("health") in (0, None) or e["first_after"].get("guid") is None,
-                    "the first boss is alive again", **e)
+            same_copy_after(e, _DNG["first_instance"])
             return e
-        ok = _scenario(res, "lock.partial_kept_dismissed", partial)
-        res["lock.partial_kept"] = dict(res["lock.partial_kept_dismissed"])
-        res["lock.partial_kept"]["evidence"] = {"same_steps_as": "lock.partial_kept_dismissed",
-                                                **(res["lock.partial_kept_dismissed"].get("evidence") or {})}
+        ok_partial = _scenario(res, "lock.partial_kept", partial)
 
         def fresh():
-            e = {}
-            require(ok, "GIVEN: the partial-kept steps didn't pass", **e)
-            # two companions summoned back into the party (playerbots `bot add <name>`), into this copy
-            back = []
-            for c in part["removed"][:2]:
-                back.append(s.cmd(f".playerbots bot add {c['name']}", settle=1.0))
-                s.companions[c["name"]] = c
-            e["summoned_back"] = back
+            e = {"companions": keep}
+            require(ok_partial, "GIVEN: lock.partial_kept's steps didn't leave the probe in its copy", **e)
             e["gather"] = s.gather(3)
             require(e["gather"]["ok"], "GIVEN: the companions never arrived", **e)
             old = _kill_all(s, f, e)
@@ -929,7 +924,7 @@ def session2(ctx):
             e["gather_after"] = s.gather(3)
             e["mapstat_after"] = s.mapstat()
             e["binds_after"] = s.wait_binds(lambda v: v and v[0]["instance"] != old["instance"], f["map"])
-            guids = [s.guid] + [c["guid"] for c in part["removed"][:2]]
+            guids = [s.guid] + [c["guid"] for c in st["party"]]
             e["old_rows"] = db.query(f"SELECT guid FROM character_instance WHERE instance = {old['instance']} AND guid IN "
                                      f"({','.join(str(g & 0xFFFFFFFF) for g in guids)})", "characters")
             require(new["instance"] and new["instance"] != old["instance"],
@@ -939,8 +934,25 @@ def session2(ctx):
             ms = e["mapstat_after"]
             require(ms["instance"] == new["instance"] and ms["players"] == 3, "the companions aren't in the probe's new copy", **e)
             require(not e["old_rows"], "character_instance still binds someone to the old copy", **e)
+            st["copy_b"] = new["instance"]
             return e
-        _scenario(res, "lock.fresh_after_clear", fresh)
+        ok_fresh = _scenario(res, "lock.fresh_after_clear", fresh)
+
+        def dismissed():
+            e = {"copy": st.get("copy_b"), "companions": keep}
+            require(ok_fresh and st.get("copy_b"), "GIVEN: lock.fresh_after_clear's steps didn't leave the probe with "
+                    "its two companions in a fresh copy", **e)
+            first_kill(e, "kill")
+            e["leave"] = s.leave()
+            time.sleep(1.5)
+            e["dismiss"] = [s.remove(n) for n in list(s.companions)]
+            e["group_after"] = s.group_rows()
+            require(not s.members() and not e["group_after"], "GIVEN: the party didn't break up", **e)
+            time.sleep(1.5)
+            e["binds_outside"] = s.binds(f["map"])
+            same_copy_after(e, st["copy_b"])
+            return e
+        _scenario(res, "lock.partial_kept_dismissed", dismissed)
         try:
             s.leave()
         except Exception:  # noqa: BLE001

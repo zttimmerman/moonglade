@@ -552,7 +552,7 @@ def scope(ctx):
         s.cmd(".additem 2589 1")
         s.cmd(".save")
         time.sleep(1)
-        # the added linen (a fresh character's other bag items, the hearthstone among them, can't be auctioned)
+        # the added linen (a fresh character's starting bag items are soulbound and can't be auctioned)
         bag = [it for it in S.inventory(a) if it["bag"] == 0 and S.INVENTORY_SLOT_ITEM_START <= it["slot"] < 39
                and it["entry"] == 2589]
         require(bag, "GIVEN not met: no bag item to auction", **ev)
