@@ -852,7 +852,9 @@ def rc4_probe(app: Path, prof: Path, cwd: Path, server_env: dict) -> str:
     """'<legacy provider loaded> <RC4 fetched>' (e.g. "1 1") from the payload's libcrypto under the no-Homebrew sandbox,
     with the OPENSSL_* variables of `server_env` (a server's environment), else the error text."""
     env = {"PATH": "/usr/bin:/bin"} | {k: v for k, v in server_env.items() if k.startswith("OPENSSL_")}
-    r = subprocess.run([SANDBOX_EXEC, "-f", str(prof), str(app / "python/bin/python3"), "-I", "-c", RC4_PROBE,
+    # /usr/bin/python3, not the payload's Python: the payload's interpreter enforces library validation and won't map
+    # the servers' ad-hoc-signed libcrypto ("different Team IDs"); the servers themselves load it fine
+    r = subprocess.run([SANDBOX_EXEC, "-f", str(prof), "/usr/bin/python3", "-I", "-c", RC4_PROBE,
                         str(app / "server/lib/libcrypto.3.dylib")], capture_output=True, text=True, env=env, cwd=cwd,
                        timeout=60)
     return r.stdout.strip() if r.returncode == 0 else f"rc={r.returncode}: {(r.stderr or r.stdout)[-300:]}"
