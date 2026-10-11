@@ -3,7 +3,8 @@
 test-pyramid (harness-reporting "Test layers and run tiers"): run tiers are
 - unit: the unit layer only (unit tests + unit-layer checks); never touches the stack (`harness/hs test` is the same);
 - pr: the unit layer first (a failure stops the run there), then impact selection (hslib/selection.py), then the
-  selected integration, journey and gate checks in run order (segment());
+  selected integration and journey checks in run order (segment()); the gate checks it selects are listed as owed
+  (meta.selection.gate_owed, summary.md) and never run;
 - full: every check of every layer.
 Run order (segment): unit -> cold integration (stack down) -> `hs up` (lifecycle.up) -> shared integration, default
 profile -> profile groups -> warm journeys -> `hs down` (lifecycle.down) -> journey.first_play -> the release
@@ -548,6 +549,8 @@ def select(reg: dict, tier: str, only: list[str] | None, chosen: set | None = No
             return c.layer == "unit"
         if tier == "full":
             return True
+        if c.layer == "gate":
+            return False                  # a pr run never runs a gate check (listed as owed in meta.selection)
         return c.layer == "unit" or segment(c) == 9 or (chosen is not None and c.id in chosen)
     return sorted((c for c in reg.values() if wanted(c)), key=run_key)
 
@@ -589,9 +592,7 @@ def gui_checks_due(tier: str) -> list[str] | None:
         return gui
     from . import selection
     s = selection.select_for_run(reg)
-    if s["full"]:
-        return [i for i in gui if reg[i].layer != "gate" or i in s["selected"]]
-    return [i for i in gui if i in s["selected"]]
+    return sorted(i for i in gui if i in selection.pr_chosen(s, reg))
 
 
 def preflight_from_env(tier: str, only: list[str] | None, ignore: bool) -> dict:
@@ -756,10 +757,8 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
     if tier == "pr" and not only:
         from . import selection
         sel_meta = selection.select_for_run(reg)
-        chosen = set(reg) if sel_meta["full"] else set(sel_meta["selected"])
-        if sel_meta["full"]:                    # FULL: the complete acceptance suite, and only the gate checks selected
-            chosen = {i for i, c in reg.items() if c.layer != "gate" or i in sel_meta["selected"]}
-        selected = select(reg, tier, only, chosen)
+        # FULL: the complete acceptance suite; never a gate check (they are listed as owed, "Gate-layer checks")
+        selected = select(reg, tier, only, selection.pr_chosen(sel_meta, reg))
     else:
         selected = select(reg, tier, only)
     refuse = filter_refusal(reg, tier, only, selected)
@@ -1012,7 +1011,18 @@ def layer_lines(doc) -> list[str]:
         out.append(f"  - {j}: {v.get('s')} s (budget {v.get('budget_s')} s)")
     s = doc["meta"].get("selection")
     if s:
-        out.append(f"- Selection: {'FULL: ' + '; '.join(s.get('full_reasons') or [])[:200] if s.get('full') else str(len(s.get('selected') or {})) + ' acceptance test(s)'}"
+        n_acc = len([i for i in (s.get("selected") or {}) if i not in (s.get("gate_owed") or {})])
+        out.append(f"- Selection: {'FULL: ' + '; '.join(s.get('full_reasons') or [])[:200] if s.get('full') else str(n_acc) + ' acceptance test(s)'}"
                    f" ({s.get('duration_s')} s; smoke set: {bool(s.get('smoke_paths'))})")
+        out += owed_lines(s)
     return out
+
+
+def owed_lines(sel: dict) -> list[str]:
+    """summary.md: the gate checks a pr run's paths selected, which it doesn't run ("Gate-layer checks")."""
+    owed = sel.get("gate_owed") or {}
+    if not owed:
+        return []
+    return [f"- Gate checks owed ({len(owed)}; not run in a pr run, run in the next full run):"] + \
+        [f"  - `{i}`: {'; '.join(r)[:200]}" for i, r in sorted(owed.items())]
 

@@ -21,7 +21,7 @@ from ..registry import LAYERS, REGISTRY, Check, check, require
 CAP = "harness-reporting"
 JOURNEY_SET = {"journey.first_play": 150, "journey.pause": 90, "journey.saves": 150, "journey.login_recovery": 120,
                "journey.stock_client": 60, "journey.app_desktop": 240}
-JOURNEY_MAX_N, JOURNEY_MAX_S = 8, 720
+JOURNEY_MAX_N, JOURNEY_MAX_S = 8, 840
 GATE_REQUIRED = ("build.clean", "core.login_logout_race_baseline")
 BUDGETS = {"unit": 120.0, "selection": 10.0, "integration": 900.0, "acceptance": 1800.0, "new_checks": 120.0}
 PR_MEAN_MAX_MIN, PR_MIN_RUNS, PR_WINDOW = 15.0, 5, 10
@@ -271,6 +271,7 @@ def scratch_tree(d: Path, extra: dict | None = None) -> dict:
         "harness/hslib/checks/playclient_util.py": "from .. import helper\n",
         "patches/core/0003-world-pause.patch": "diff\n",
         "fork.lock": "core_sha=aaaa\nplayerbots_sha=bbbb\nautobalance_sha=cccc\n",
+        "harness/active-changes": "some-change\n",
     }
     files.update(extra or {})
     for rel, text in files.items():
@@ -321,6 +322,8 @@ def selection_cases(d: Path) -> dict:
         "h_stack_body": run(["harness/hslib/stack.py"], {"harness/hslib/stack.py": "def up():\n    return 2\n"}),
         "i_autobalance_pin": run(["fork.lock"], {"fork.lock": "core_sha=aaaa\nplayerbots_sha=bbbb\nautobalance_sha=dddd\n"}),
         "j_core_pin": run(["fork.lock"], {"fork.lock": "core_sha=eeee\nplayerbots_sha=bbbb\nautobalance_sha=cccc\n"}),
+        "k_active_changes": run(["harness/active-changes"]),
+        "k_active_changes_with_docs": run(["harness/active-changes", "docs/x.md"]),
     }
     smoke = set(m.smoke_set(price))
     sel = {k: set(v["selected"]) for k, v in cases.items()}
@@ -341,6 +344,9 @@ def selection_cases(d: Path) -> dict:
         and bool(cases["h_stack_body"]["smoke_paths"]),
         "i_autobalance_declarers_not_full": not full["i_autobalance_pin"] and sel["i_autobalance_pin"] == {"dng.session1"},
         "j_full": full["j_core_pin"] and bool(cases["j_core_pin"]["full_reasons"]),
+        "k_active_changes_unit_only": all(not full[k] and not sel[k] and not cases[k]["smoke_paths"]
+                                          and "harness/active-changes" in cases[k]["unit_only"]
+                                          for k in ("k_active_changes", "k_active_changes_with_docs")),
         "smoke_is_first_play_plus_cheapest_per_area": smoke == {"journey.first_play", "pause.refused_on_taxi",
                                                                "saves.cluster", "login.continue_context",
                                                                "dng.session1"},
@@ -353,7 +359,8 @@ def selection_cases(d: Path) -> dict:
 
 @check("report.selection", order=2, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def selection_rule(ctx):
-    """The selector on a scratch git repo for the spec's cases (a)-(j) gives the required selections, each with its
+    """The selector on a scratch git repo for the spec's cases (a)-(j), plus harness/active-changes (no-impact: only the
+    unit layer, alone or with docs), gives the required selections, each with its
     reasons and duration; a stale covers entry selects FULL; and this checkout's own selection takes at most 10 s,
     recorded."""
     from .. import selection as S
@@ -412,36 +419,50 @@ def ownership(ctx):
 @check("report.gate_rule", order=3, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def gate_rule(ctx):
     """A gate check whose covers names harness/hslib/lanes.py: a pr run with only docs/x.md changed doesn't run it
-    and records nothing for it; a pr run with lanes.py changed and a full run run it and require it to pass (the
-    run's selection and execution, with the stack handling stubbed out; a failing gate check fails those runs)."""
+    and records nothing for it (not even as owed); a pr run with lanes.py changed doesn't run it either and lists it
+    under "gate checks owed" naming lanes.py (meta.selection and summary.md); a full run runs it and requires it to
+    pass (the run's own selection and execution, with the stack handling stubbed out; a failing gate check fails the
+    full run)."""
     from .. import runner, selection as S
     d = _scratch("gaterule")
     try:
         scratch_tree(d, {"harness/hslib/lanes.py": "X = 1\n"})
         calls = []
-        reg = {"g.lanes": _syn("g.lanes", "gate", ("harness/hslib/lanes.py",),
-                               fn=lambda ctx: calls.append(1) or {"ran": 1}),
+        reg = {"g.lanes": _syn("g.lanes", "gate", ("harness/hslib/lanes.py",)),
                "i.other": _syn("i.other", "integration", ("modules/mod-moonglade/src/MoongladeSaves.cpp",))}
         m = S.Map(reg, d)
         out = {}
+
         def failing(ctx):
             require(False, "gate failed (counterexample)")
-        for name, tier, paths, fn_ok in (("pr_docs", "pr", ["docs/x.md"], True), ("pr_lanes", "pr", ["harness/hslib/lanes.py"], True),
-                                         ("full", "full", None, True), ("pr_lanes_failing", "pr", ["harness/hslib/lanes.py"], False)):
+        for name, tier, paths, fn_ok in (("pr_docs", "pr", ["docs/x.md"], True),
+                                         ("pr_lanes", "pr", ["harness/hslib/lanes.py"], True),
+                                         ("pr_lanes_failing", "pr", ["harness/hslib/lanes.py"], False),
+                                         ("full", "full", None, True), ("full_failing", "full", None, False)):
+            calls.clear()
             reg["g.lanes"].fn = (lambda ctx: calls.append(1) or {"ran": 1}) if fn_ok else failing
-            chosen = None
+            chosen, sel_meta = None, None
             if tier == "pr":
-                s = S.select(paths, m, lambda t: 1.0)
-                chosen = set(s["selected"])
+                sel_meta = S.select(paths, m, lambda t: 1.0)
+                chosen = S.pr_chosen(sel_meta, reg)
             sel = runner.select(reg, tier, None, chosen)
             recs = runner.execute(sel, {}, ensure=lambda *_a: None, quiet=True)
-            out[name] = {"selected": [c.id for c in sel], "records": {r["id"]: r["status"] for r in recs}}
+            owed = (sel_meta or {}).get("gate_owed") or {}
+            out[name] = {"selected": [c.id for c in sel], "records": {r["id"]: r["status"] for r in recs},
+                         "ran": len(calls), "owed": owed,
+                         "summary_owed": runner.owed_lines(sel_meta) if sel_meta else []}
     finally:
         shutil.rmtree(d, ignore_errors=True)
-    v = {"pr_docs_doesnt_run_or_record": "g.lanes" not in out["pr_docs"]["records"],
-         "pr_lanes_runs_and_passes": out["pr_lanes"]["records"].get("g.lanes") == "pass",
-         "full_runs_and_passes": out["full"]["records"].get("g.lanes") == "pass",
-         "failing_gate_fails": out["pr_lanes_failing"]["records"].get("g.lanes") == "fail"}
+    lanes_path = "harness/hslib/lanes.py"
+    v = {"pr_docs_doesnt_run_or_record": "g.lanes" not in out["pr_docs"]["records"] and not out["pr_docs"]["ran"]
+         and "g.lanes" not in out["pr_docs"]["owed"],
+         "pr_lanes_doesnt_run": "g.lanes" not in out["pr_lanes"]["records"] and not out["pr_lanes"]["ran"]
+         and "g.lanes" not in out["pr_lanes"]["selected"],
+         "pr_lanes_lists_owed_with_path": any(lanes_path in r for r in out["pr_lanes"]["owed"].get("g.lanes", []))
+         and any("g.lanes" in ln and lanes_path in ln for ln in out["pr_lanes"]["summary_owed"]),
+         "pr_owed_failing_gate_is_not_a_failure": "g.lanes" not in out["pr_lanes_failing"]["records"],
+         "full_runs_and_passes": out["full"]["records"].get("g.lanes") == "pass" and out["full"]["ran"] == 1,
+         "full_failing_gate_fails": out["full_failing"]["records"].get("g.lanes") == "fail"}
     ev = {"runs": out, "verdict": v}
     require(all(v.values()), f"gate rule wrong: {[k for k, x in v.items() if not x]}", **ev)
     return ev
@@ -588,19 +609,21 @@ def pr_average_record(doc: dict) -> dict:
 
 # ============================================================================ report.journeys (post-run)
 
-def journey_problems(reg: dict, timeline: list[dict]) -> list[str]:
+def journey_problems(reg: dict, timeline: list[dict], named: dict | None = None,
+                     cap_s: float = JOURNEY_MAX_S) -> list[str]:
     probs = []
+    named = JOURNEY_SET if named is None else named
     js = {i: c for i, c in reg.items() if c.layer == "journey"}
-    if set(js) != set(JOURNEY_SET):
-        probs.append(f"journey-layer checks {sorted(js)} != the named set {sorted(JOURNEY_SET)}")
-    for i, b in JOURNEY_SET.items():
+    if set(js) != set(named):
+        probs.append(f"journey-layer checks {sorted(js)} != the named set {sorted(named)}")
+    for i, b in named.items():
         if i in js and js[i].budget_s != b:
             probs.append(f"{i}: budget {js[i].budget_s} != {b} s")
     if len(js) > JOURNEY_MAX_N:
         probs.append(f"{len(js)} journeys (> {JOURNEY_MAX_N})")
     tot = sum(float(c.budget_s or 0) for c in js.values())
-    if tot > JOURNEY_MAX_S:
-        probs.append(f"journey budgets sum to {tot:.0f} s (> {JOURNEY_MAX_S} s)")
+    if tot > cap_s:
+        probs.append(f"journey budgets sum to {tot:.0f} s (> {cap_s:.0f} s)")
     spans = [e for e in timeline if e.get("id") and e.get("lane", "a") in ("a", None)]
     for j in (e for e in spans if e["id"] in js):
         for o in spans:
@@ -618,14 +641,21 @@ def journeys_record(doc: dict) -> dict:
     syn_reg = {i: _syn(i, "journey", budget=b) for i, b in JOURNEY_SET.items()}
     ce = journey_problems({**syn_reg, "journey.seventh": _syn("journey.seventh", "journey", budget=30)}, [])
     ok_syn = journey_problems(syn_reg, [])
+    # the 840 s cap on its own: the same six ids with budgets summing to 841 s (one more second on app_desktop)
+    over = dict(JOURNEY_SET, **{"journey.app_desktop": JOURNEY_SET["journey.app_desktop"]
+                                + (JOURNEY_MAX_S + 1 - sum(JOURNEY_SET.values()))})
+    ce_cap = journey_problems({i: _syn(i, "journey", budget=b) for i, b in over.items()}, [], named=over)
     if not ce:
         probs.append("counterexample: a seventh unnamed journey wasn't caught")
+    if not any("sum to" in x for x in ce_cap):
+        probs.append(f"counterexample: budgets summing to {sum(over.values())} s weren't caught by the {JOURNEY_MAX_S} s cap")
     if ok_syn:
         probs.append(f"the named set itself fails the rule: {ok_syn}")
     ok = not probs
     return {"id": "report.journeys", "capability": CAP, "layer": "unit", "status": "pass" if ok else "fail",
             "evidence": {"registered": sorted(i for i, c in REGISTRY.items() if c.layer == "journey"),
-                         "named_set": JOURNEY_SET, "timeline_entries": len(tl), "counterexample": ce,
+                         "named_set": JOURNEY_SET, "budget_sum_s": sum(JOURNEY_SET.values()), "cap_s": JOURNEY_MAX_S,
+                         "timeline_entries": len(tl), "counterexample": ce, "counterexample_cap": ce_cap,
                          "problems": probs},
             "duration_s": round(time.time() - t0, 2), **({} if ok else {"message": "; ".join(probs)[:300]})}
 

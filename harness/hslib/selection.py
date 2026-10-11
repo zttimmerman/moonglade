@@ -6,13 +6,16 @@ its file's COVERS): repo paths or globs, and config sections as `<conf path>#<Se
 `fork.lock#<key glob>`. A changed path selects:
 1. FULL for a foundation: patches/core/**, patches/playerbots/**, a core or playerbots pin key in fork.lock,
    harness/hslib/build.py, a CMake file;
-2. nothing beyond the unit layer for openspec/**, docs/**, *.md, harness/tests/unit/**;
+2. nothing beyond the unit layer for openspec/**, docs/**, *.md, harness/tests/unit/**, harness/active-changes
+   (every change edits it);
 3. the tests whose covers name it (a module config selects by the sections whose keys changed; fork.lock by the keys
    that changed; a harness module imported only by declared non-shared modules selects their owners);
 4. the smoke set (journey.first_play + the cheapest integration test of each area) when nothing covers it, when it
    is shared infrastructure (a module six or more acceptance check files import directly, plus probe/**, stack.py,
    lanes.py, lanestack.py, runner.py), or when it is mod_moonglade_loader.cpp.
 A git failure, an unparseable source or a stale covers entry selects FULL. Everything is recorded in meta.selection.
+Gate checks are selected by the same rules but never run in a pr run: they are listed as owed (gate_owed), with the
+path that selected each (harness-reporting "Gate-layer checks").
 """
 from __future__ import annotations
 
@@ -30,7 +33,7 @@ from . import paths as P
 FULL_TRIGGERS = ("patches/core/**", "patches/playerbots/**", "harness/hslib/build.py", "CMakeLists.txt",
                  "**/CMakeLists.txt", "*.cmake", "**/*.cmake")
 FOUNDATION_KEYS = ("core_repo", "core_branch", "core_sha", "playerbots_repo", "playerbots_branch", "playerbots_sha")
-NO_IMPACT = ("openspec/**", "docs/**", "*.md", "**/*.md", "harness/tests/unit/**")
+NO_IMPACT = ("openspec/**", "docs/**", "*.md", "**/*.md", "harness/tests/unit/**", "harness/active-changes")
 SHARED_MIN = 6
 SHARED_ALWAYS = ("harness/hslib/probe/**", "harness/hslib/stack.py", "harness/hslib/lanes.py",
                  "harness/hslib/lanestack.py", "harness/hslib/runner.py")
@@ -265,8 +268,22 @@ def select(paths: list[str] | None, m: Map, price, old_source=None, new_source=N
         out["smoke_set"] = m.smoke_set(price)
         for t in out["smoke_set"]:
             sel.setdefault(t, []).append("smoke set: " + ", ".join(out["smoke_paths"][:3]))
+    out["gate_owed"] = gate_owed(sel, m.tests)
     out["duration_s"] = round(time.perf_counter() - t0, 3)
     return out
+
+
+def gate_owed(selected: dict, tests: dict) -> dict:
+    """The selected gate checks with the reasons (the selecting paths) that selected them: a pr run never runs them
+    and lists them as owed (harness-reporting "Gate-layer checks")."""
+    return {t: list(r) for t, r in sorted(selected.items()) if t in tests and tests[t].layer == "gate"}
+
+
+def pr_chosen(sel: dict, reg: dict) -> set:
+    """The checks a pr run executes beyond the unit layer and the run guards: on FULL every integration and journey
+    check, otherwise the selected ones; never a gate check."""
+    ids = set(reg) if sel["full"] else set(sel["selected"])
+    return {i for i in ids if i in reg and reg[i].layer != "gate"}
 
 
 def last_full_times() -> dict:

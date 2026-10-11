@@ -56,8 +56,8 @@ def main(argv=None) -> int:
     r.add_argument("--leave-up", action="store_true", help="don't shut the stack down at the end")
     r.add_argument("--tier", choices=["unit", "pr", "full"], default="pr",
                    help="unit: the unit layer only (no stack; same as `hs test`); pr (default, the merge requirement): "
-                        "the unit layer, then the integration, journey and gate checks the impact selection picks "
-                        "for this change; full: every check of every layer (milestone gates)")
+                        "the unit layer, then the integration and journey checks the impact selection picks "
+                        "for this change (gate checks it selects are listed as owed, never run); full: every check of every layer (milestone gates)")
     r.add_argument("--force-clean", action="store_true", help="build.clean always does a from-empty build")
     r.add_argument("--ignore-gui-preflight", action="store_true",
                    help="start an unfiltered pr/full run although the screen is locked, the display asleep or "

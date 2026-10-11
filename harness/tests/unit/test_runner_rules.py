@@ -101,3 +101,39 @@ class JourneySegments(UnitCase):
         self.assertLess(runner.segment(warm), runner.segment(down))
         self.assertGreater(runner.segment(cold), runner.segment(down))
         self.assertEqual(runner.segment(_c(runner.FIRST_PLAY, layer="journey", stack="up")), 7)
+
+
+class GateNeverInPr(UnitCase):
+    """harness-reporting "Gate-layer checks" (test-pyramid part 3): a pr run never runs a gate check, FULL or not; the
+    selected ones are owed, with the path that selected them."""
+
+    def _reg(self):
+        return {c.id: c for c in (_c("u.x", layer="unit", stack="any", order=1), _c("i.x", order=100),
+                                  _c("j.x", layer="journey", order=450), _c("g.x", layer="gate", order=30),
+                                  _c("guard.x", layer="integration", stack="any", order=995))}
+
+    def test_full_selection_runs_no_gate(self):
+        from hslib import selection as S
+        reg = self._reg()
+        sel = {"full": True, "selected": {}}
+        ids = [c.id for c in runner.select(reg, "pr", None, S.pr_chosen(sel, reg))]
+        self.assertEqual(sorted(ids), ["guard.x", "i.x", "j.x", "u.x"])
+
+    def test_selected_gate_is_owed_not_run(self):
+        from hslib import selection as S
+        reg = self._reg()
+        sel = {"full": False, "selected": {"g.x": ["covers harness/hslib/lanes.py"], "i.x": ["covers play"]}}
+        sel["gate_owed"] = S.gate_owed(sel["selected"], reg)
+        ids = [c.id for c in runner.select(reg, "pr", None, S.pr_chosen(sel, reg))]
+        self.assertNotIn("g.x", ids)
+        self.assertEqual(sel["gate_owed"], {"g.x": ["covers harness/hslib/lanes.py"]})
+        self.assertTrue(any("g.x" in ln and "lanes.py" in ln for ln in runner.owed_lines(sel)))
+
+    def test_counterexample_full_tier_runs_the_gate(self):
+        ids = [c.id for c in runner.select(self._reg(), "full", None)]
+        self.assertIn("g.x", ids)
+
+    def test_active_changes_is_no_impact(self):
+        from hslib import selection as S
+        self.assertTrue(S.match("harness/active-changes", S.NO_IMPACT))
+        self.assertFalse(S.match("harness/hslib/runner.py", S.NO_IMPACT))
