@@ -43,12 +43,14 @@ import tempfile
 import time
 from pathlib import Path
 
-from .. import paths as P
+from .. import paths as P, stack
 from ..registry import check, require
 
 CAP = "release-runtime"
 GOLDEN = Path(__file__).with_name("release_paths_golden.json")
 SCRATCH_ROOT = P.OUT / "release-scratch"          # paths.SCRATCH_PARTS: the only place a scratch HOME may be
+# Scratch HOMEs have a space in their name ("h s"), like the real one (~/Library/Application Support/Moonglade):
+# v0.1.0's first launch failed on a friend's Mac because a server option can't take a path with a space.
 RELEASE_WORK = P.ENV / "release"
 NEW_APP = RELEASE_WORK / "payload" / "Moonglade.app"
 NEW_PAYLOAD = NEW_APP / "Contents" / "Resources" / "Moonglade"
@@ -543,7 +545,7 @@ def mode_resolution(ctx):
         shutil.rmtree(planted)
         # release mode: a scratch app + scratch HOME through the test switch, in this harness run
         app = quick_app(d)
-        home = d / "home"
+        home = d / "home s"
         real_before = real_home_state()
         t = release_table(app, release_env(home), True, d)
         require(t.get("rc") == 0, "the payload's Python couldn't print the release table", **ev, release=t)
@@ -758,7 +760,7 @@ def test_switches_refused(ctx):
         # payload's Python (-I -B -m hslib.play), its log is in the scratch HOME, and PATH has no Homebrew (tasks 2.3,
         # 5.3). The play loop's single-instance lock is held here, so it stops at once ("already running").
         import fcntl
-        home2 = d / "h2"
+        home2 = d / "h2 s"
         (home2 / "run").mkdir(parents=True)
         # a set-up HOME (release-first-launch 3.5: a HOME whose first launch isn't complete gets the first-launch
         # window instead of the play loop; this control is about the play loop)
@@ -904,7 +906,7 @@ def stack_from_payload(ctx):
     d = SCRATCH_ROOT / f"sp-{os.getpid()}"           # short: HOME/run/mysql.sock must fit a 104-byte socket path
     shutil.rmtree(d, ignore_errors=True)
     d.mkdir(parents=True)
-    home = d / "h"
+    home = d / "h s"
     log = d / "release.log"
     ports = dict(SCRATCH_PORTS)
     try:
@@ -948,6 +950,17 @@ def stack_from_payload(ctx):
                 "the running mysqld isn't the payload's", **ev)
         require(world and world[0]["exe"] == str(app / "server/bin/worldserver") and auth
                 and auth[0]["exe"] == str(app / "server/bin/authserver"), "the servers aren't the payload's", **ev)
+        # a spaced HOME (as ~/Library/Application Support is): the servers' -c must be one they accept (boost rejects
+        # a path with whitespace and the server falls back to its compiled-in config; v0.1.0's first install failed so)
+        errs = {n: (home / f"logs/{n}.err").read_text(errors="replace") if (home / f"logs/{n}.err").exists() else ""
+                for n in ("authserver", "worldserver")}
+        ev["spaced_home"] = {"home": str(home), "has_space": " " in str(home),
+                             "config_arg": {n: (stack._conf_arg(x[0]["argv"][1:]) if x else None) for n, x in (("authserver", auth),
+                                                                                          ("worldserver", world))},
+                             "invalid_config_lines": {n: [l for l in e.splitlines() if "is invalid" in l][:2]
+                                                      for n, e in errs.items()}}
+        require(" " in str(home) and not any(ev["spaced_home"]["invalid_config_lines"].values()),
+                "a server rejected its --config path under a HOME with a space", **ev)
         require(ws_env.get("OPENSSL_CONF") == str(home / "etc/openssl.cnf") and (home / "etc/openssl.cnf").is_file()
                 and auth[0]["env"].get("OPENSSL_CONF") == str(home / "etc/openssl.cnf"),
                 "OPENSSL_CONF isn't HOME's openssl.cnf for the servers", **ev)
@@ -1132,7 +1145,7 @@ def app_readonly(ctx):
         ev["mount"] = [l for l in mount_info.splitlines() if str(mnt) in l]
         require(ev["mount"] and "read-only" in ev["mount"][0], "the image isn't mounted read-only", **ev)
         before = tree_hash(mnt)
-        home = d / "h"
+        home = d / "h s"
         prof = d / "release.sb"
         prof.write_text(sandbox_profile(d))
         with LoopbackServer(FL_CACHE) as srv:

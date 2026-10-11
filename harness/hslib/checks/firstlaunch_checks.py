@@ -343,7 +343,7 @@ def flow(ctx):
     try:
         app = release_fixture_app(d)
         bundle = app.parents[2]
-        home = d / "h"
+        home = d / "h s"
         (d / "tmp").mkdir()
         with LoopbackServer(FL_CACHE) as srv:
             base_env = {P.RELEASE_HOME_ENV: str(home), P.RELEASE_PORTS_ENV: json.dumps(SCRATCH_PORTS),
@@ -394,7 +394,7 @@ def flow(ctx):
         require(ev["source_unchanged"], "the source client changed", **ev, diff=pristine.diff(fp0, fp1)[:5])
 
         # counterexample: a corrupted copy is never called deletable; the next launch redoes the copy
-        home2 = d / "h2"
+        home2 = d / "h2 s"
         hook2 = d / "hook2.jsonl"
         with LoopbackServer(FL_CACHE) as srv:
             env2 = {**base_env, P.RELEASE_HOME_ENV: str(home2), P.RELEASE_DOWNLOAD_BASE_ENV: srv.base,
@@ -486,7 +486,7 @@ def fixture(ctx) -> dict:
     _cleanup(d)
     d.mkdir(parents=True)
     app = release_fixture_app(d)
-    home = d / "h"
+    home = d / "h s"
     (d / "tmp").mkdir()
     with LoopbackServer(FL_CACHE) as srv:
         r = run_engine(app, home, ["--client", str(P.CLIENT)],
@@ -823,17 +823,17 @@ def source_untouched(ctx):
             n = sum(1 for e in evs if e.get("event") == "progress" and e.get("step") == "client")
             seen["n"] = n
             return n >= 3
-        k = _engine_sandboxed(app, d / "h2", ["--client", str(src)],
+        k = _engine_sandboxed(app, d / "h2 s", ["--client", str(src)],
                               {**base, P.FIRSTLAUNCH_TEST_ENV: json.dumps({"force_byte_copy": True,
                                                                           "free_bytes": 10**13}),
                                P.RELEASE_DOWNLOAD_BASE_ENV: "http://127.0.0.1:9/"}, d, prof, kill_when=in_copy)
-        partial = [str(p.relative_to(d / "h2")) for p in (d / "h2").rglob("*.hs-part")][:3]
-        res = _engine_sandboxed(app, d / "h2", ["--client", str(src)],
+        partial = [str(p.relative_to(d / "h2 s")) for p in (d / "h2 s").rglob("*.hs-part")][:3]
+        res = _engine_sandboxed(app, d / "h2 s", ["--client", str(src)],
                                 {**base, P.RELEASE_DOWNLOAD_BASE_ENV: "http://127.0.0.1:9/"}, d, prof)
         rst = [(e.get("step"), e.get("state")) for e in res["events"] if e.get("event") == "step"]
         ev["killed_copy"] = {"killed": bool(k["killed"]), "copy_progress_events": seen["n"],
                              "partials_after_kill": partial, "resume_steps": rst, "resume_rc": res["rc"],
-                             "client": _client_check(d / "h2")}
+                             "client": _client_check(d / "h2 s")}
         require(k["killed"] and seen["n"] >= 3, "the run wasn't killed during the client copy", **ev)
         require(("client", "done") in rst and ev["killed_copy"]["client"].get("manifest")
                 and not ev["killed_copy"]["client"].get("mismatches"),
@@ -914,7 +914,7 @@ def client_refusals(ctx):
                 "missing": ("folder_missing", ["couldn't find"]),
                 "unreadable": ("cant_read_folder", ["didn't let Moonglade read"])}
         order = list(want)
-        home = d / "h"
+        home = d / "h s"
         hook = d / "hook.jsonl"
         env = {P.RELEASE_HOME_ENV: str(home), P.RELEASE_PORTS_ENV: json.dumps(SCRATCH_PORTS),
                P.RELEASE_DOWNLOAD_BASE_ENV: "http://127.0.0.1:9/", P.HARNESS_RUN_REGISTRY_ENV: str(P.RUN_REGISTRY),
@@ -941,7 +941,7 @@ def client_refusals(ctx):
         require(only_logs(home), "HOME holds more than the logs", **ev)
         # counterexample: a good (tiny) client through the same pick passes preflight and is copied
         good = scratch_client(d / "good")
-        home2 = d / "h2"
+        home2 = d / "h2 s"
         r2 = exec_with_hook(bundle, d / "hook2.jsonl", {**env, P.RELEASE_HOME_ENV: str(home2),
                                                         P.APP_TEST_CLIENT_PICK_ENV: f"{good};quit"},
                             [P.RELEASE_TEST_FLAG], timeout=300)
@@ -983,7 +983,7 @@ def downloads_check(ctx):
         app = quick_app(d, with_launcher=True)
         bundle = app.parents[2]
         c1 = scratch_client(d / "c1")
-        home = d / "h"
+        home = d / "h s"
         (d / "tmp").mkdir()
         base = {P.RELEASE_PORTS_ENV: json.dumps(SCRATCH_PORTS), "TMPDIR": str(d / "tmp") + "/"}
         # 1. no connection
@@ -1152,7 +1152,7 @@ def kill_resume(ctx):
     d.mkdir(parents=True)
     try:
         app = release_fixture_app(d)
-        home = d / "h"
+        home = d / "h s"
         (d / "tmp").mkdir()
         prof = d / "release.sb"
         from .release_runtime_checks import sandbox_profile
