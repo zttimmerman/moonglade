@@ -21,9 +21,11 @@ Patches cost hours, so check upstream first:
 Lesson: the server-mail crash we spent ~1 h patching was already fixed upstream (AzerothCore #27827, merged 3 days after our pin).
 
 ## Delegate
-- One builder per task group, with clean context. The brief names the spec files, the files it may edit, and the stack rules: who owns the stack, never run `hs down/build` unless it owns it, use `--leave-up` when sharing. It must not edit specs, must commit on the branch, and must not merge or push.
+- One builder per task group, with clean context. The brief names the spec files, the files it may edit, and the stack rules: who owns the stack, never run `hs down/build` unless it owns it, use `--leave-up` when sharing. It must not edit specs. It commits on its change branch and pushes that branch, and never merges or pushes main.
 - Builders that need runtime (server, client, Wine) work in the main checkout; only one agent owns the stack at a time. Research or docs builders can use `isolation: "worktree"`.
 - A builder's report is not evidence (§10).
+- After taking a subagent's report, stop it (TaskStop) unless it gets follow-up work in the same turn. Prefer a fresh subagent with a tight brief over resuming a big one, because a resume replays its whole history.
+- Give every builder a timebox in hours and rank its work by measured value per hour. At the timebox it reports what is done; a change should merge within about a day (Zach, 2026-10-11).
 
 ## Builder pre-verification checklist (shift-left; Zach, 2026-10-04)
 Builders run this before handing over and put a short pass/fail line per item in their report. It doesn't replace the verifier; it removes the predictable misses that cost whole verify rounds. Each item comes from a real verifier catch on this project.

@@ -175,7 +175,7 @@ Task 1.3 measures this with the real selector before anything is migrated. From 
 > 3. Delegate to a builder with the spec deltas and task. The builder's loop is the unit layer plus the test it is writing.
 > 4. Send the result to the verifier (one PR-tier run).
 > 5. FAIL: return to the builder with the verifier's evidence. Reproduce the failure at the cheapest layer that shows it (a unit test, else the single failing test) before rerunning anything larger. After 3 failed cycles on one task, mark it blocked with a written diagnosis and move to another task. Do not stop the session.
-> 6. PASS: integrate. The PR tier is the merge requirement. Its selection runs the complete suite by itself when shared core, build or patch paths change or a path is unknown. Update STATUS.md and archive the change if all its tasks are done. At each milestone gate, run the complete suite (`--tier full`) three times; any failure in any run is P0.
+> 6. PASS: integrate. The PR tier is the merge requirement. Its selection runs the complete acceptance suite (FULL) only for core or playerbots patches, their pins in `fork.lock`, and the build; an unowned or shared path runs the smoke set; targeted checks run only when their own code changes; gate checks never run in a PR. Update STATUS.md and archive the change if all its tasks are done. At each milestone gate, run the complete suite (`--tier full`) three times; any failure in any run is P0.
 
 **§10, the third bullet, replaced by:**
 > - Passing a hand-picked subset of the harness. (The PR tier's automatic selection is not hand-picked: it is the merge requirement when its selection, its time budgets and the run all pass. A missed time budget is a failure, not a note.)
