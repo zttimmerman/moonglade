@@ -112,6 +112,13 @@ def module_loaded(ctx):
     ev["keys"] = {k: {"want": v, "rendered": got[k]} for k, v in want.items()}
     bad = [k for k, v in want.items() if got[k] != v]
     require(not bad, f"AutoBalance keys without their Moonglade value in the rendered conf: {bad}", **ev)
+    # the module's chat output stays off (seamless-experience; client.login_text_clean): rendered conf and the AC_*
+    # variables a lane-B / release worldserver gets
+    env = config.module_env(config.overrides(rp.get("profile") or config.DEFAULT_PROFILE), P.SERVER_ETC / "modules")
+    ev["chat_keys"] = {k: {"rendered": got.get(k), "ac_env": env.get(config.env_var_name(k))}
+                       for k in config.AUTOBALANCE_CHAT_OFF}
+    loud = [k for k, v in ev["chat_keys"].items() if v["rendered"] != "0" or v["ac_env"] != "0"]
+    require(not loud, f"AutoBalance chat output not off: {loud}", **ev)
     with D.Session(D.facts(D.DEADMINES)["target_level"]) as s:
         out = s.cmd(".ab getoffset", settle=0.6)
         ev["getoffset"] = out
@@ -634,7 +641,15 @@ def solo_final_boss(ctx):
         except Exception as e:      # noqa: BLE001  record and go on with the next dungeon; judged below
             rec["error"] = f"{type(e).__name__}: {str(e)[:300]}"
     ev["summary"] = {k: {"killed": v.get("killed"), "attempts": len(v.get("attempts", [])), "deaths": v.get("deaths"),
-                         "total_s": v.get("total_s"), "error": v.get("error")} for k, v in ev["dungeons"].items()}
+                         "total_s": v.get("total_s"), "error": v.get("error"), "boss_scaled": v.get("boss_scaled"),
+                         "fight_s": [x.get("killed_after_s") or x.get("probe_died_after_s") for x in v.get("attempts", [])]}
+                     for k, v in ev["dungeons"].items()}
+    # THEN: the evidence holds the boss's scaled health (and its multiplier), the deaths and the fight length, for
+    # every listed dungeon; a missing read fails
+    unread = [k for k, v in ev["summary"].items() if not (v["boss_scaled"] or {}).get("max_health")
+              or not (v["boss_scaled"] or {}).get("health_multiplier") or v["deaths"] is None
+              or not any(t is not None for t in v["fight_s"])]
+    require(not unread, f"no scaled boss health / multiplier, deaths or fight length recorded for LFG {unread}", **ev)
     bad = [k for k, v in ev["dungeons"].items() if not v.get("killed") or len(v.get("attempts", [])) > D.SOLO_ATTEMPTS
            or (v.get("total_s") or 1e9) > D.SOLO_LIMIT_S]
     require(not bad, f"final boss not beaten alone (within 10 min, at most 2 attempts) in LFG {bad}", **ev)

@@ -377,6 +377,17 @@ class Session(C.Session):
             self.ws.chat("follow", W.CHAT_MSG_WHISPER, to=n)
         return b
 
+    def read_selected_boss(self, guid: int, entry: int) -> dict:
+        """`.npc info` and `.ab creaturestat` on a creature by GUID (a summoned boss has no spawn id to read by)."""
+        self.ws.set_selection(guid)
+        time.sleep(0.3)
+        info = C.parse_npc_info(self.cmd(".npc info", settle=0.5))
+        m = re.search(r"Entry: (\d+)", "\n".join(info.get("raw") or []))
+        stat = parse_creaturestat(self.cmd(".ab creaturestat", settle=0.5))
+        return {"guid": guid, "entry": int(m.group(1)) if m else None, "max_health": info.get("max_health"),
+                "health_multiplier": stat.get("health_multiplier"), "creaturestat": stat,
+                "ok": bool(m and int(m.group(1)) == entry and info.get("max_health") and stat.get("health_multiplier"))}
+
     def boss(self, enc: dict) -> dict:
         """Live max health and AutoBalance multiplier of an encounter's first spawn."""
         sp = enc["spawns"][0]
@@ -499,6 +510,12 @@ class Session(C.Session):
 
 UNIT_FIELD_HEALTH = 6 + 0x12      # UpdateFields.h: OBJECT_END + 0x0012
 UNIT_FIELD_MAXHEALTH = 6 + 0x1A   # OBJECT_END + 0x001A
+UNIT_FIELD_TARGET = 6 + 0x0C      # OBJECT_END + 0x000C, 2 fields (low, high): the unit the probe's self-AI attacks
+
+
+def guid_entry(guid: int) -> int:
+    """ObjectGuid::GetEntry for a creature GUID (HighGuid::Unit 0xF130): bits 24-47."""
+    return (guid >> 24) & 0xFFFFFF if (guid >> 48) == 0xF130 else 0
 READ_NEAR_YD = 25                 # boss_near: close enough for an active grid, outside the usual aggro reach
 KILL_TRIES = 12                   # `.damage` rounds per boss (second phases) before giving up
 SOLO_STAND_YD = 6                 # GM teleport this far from the boss toward the entrance (inside its aggro radius)
@@ -590,6 +607,10 @@ def solo_final_boss(s: "Session", f: dict, log=None) -> dict:
         a["stand"] = s.gps()
         if fin["spawns"]:
             a["boss_before"] = s.boss(fin)
+            st = a["boss_before"].get("creaturestat") or {}
+            if a["boss_before"].get("max_health") and st.get("health_multiplier"):
+                ev.setdefault("boss_scaled", {"max_health": a["boss_before"]["max_health"],
+                                              "health_multiplier": st["health_multiplier"], "how": "static spawn, before the pull"})
         mark = s.ws.mark()
         s.cmd(".gm off", settle=0.3)
         t0 = time.time()
@@ -603,6 +624,24 @@ def solo_final_boss(s: "Session", f: dict, log=None) -> dict:
                 if UNIT_FIELD_HEALTH in fl:
                     low = fl[UNIT_FIELD_HEALTH] if low is None else min(low, fl[UNIT_FIELD_HEALTH])
             u = s.unit(fin["spawns"][0]["spawn_id"], fin["credit_entry"]) if fin["spawns"] else {}
+            if not fin["spawns"] and "boss_scaled" not in ev:
+                # a summoned final boss: found as the self-AI's target (the probe's own UNIT_FIELD_TARGET) once its
+                # GUID's entry is the encounter's credit entry, then read by GUID
+                for x in s.ws.events_since(mark, "self_values"):
+                    fl = x["fields"]
+                    if UNIT_FIELD_TARGET in fl or UNIT_FIELD_TARGET + 1 in fl:
+                        a["_tgt_lo"] = fl.get(UNIT_FIELD_TARGET, a.get("_tgt_lo", 0))
+                        a["_tgt_hi"] = fl.get(UNIT_FIELD_TARGET + 1, a.get("_tgt_hi", 0))
+                        g = (a["_tgt_hi"] << 32) | a["_tgt_lo"]
+                        if guid_entry(g) == fin["credit_entry"]:
+                            r = s.read_selected_boss(g, fin["credit_entry"])
+                            a.setdefault("boss_reads", []).append(r)
+                            if r["ok"]:
+                                ev["boss_scaled"] = {"max_health": r["max_health"],
+                                                     "health_multiplier": r["health_multiplier"],
+                                                     "how": "summoned boss, the self-AI's target, read by GUID"}
+                                u = {"health": None, "max_health": r["max_health"]}
+                            break
             rows = s.binds(f["map"])
             mask = rows[0]["mask"] if rows else 0
             alive = s.alive()
@@ -622,6 +661,8 @@ def solo_final_boss(s: "Session", f: dict, log=None) -> dict:
         a["probe_low_health"] = low
         a["probe_max_health"] = maxhp
         a["boss_scaled_max"] = next((t["boss_max"] for t in a["trace"] if t.get("boss_max")), None)
+        a.pop("_tgt_lo", None)
+        a.pop("_tgt_hi", None)
         a["probe_hits_taken"] = sum(1 for x in evs if x["kind"] in ("melee_damage", "spell_damage") and x["victim"] == s.guid)
         a["probe_damage_taken"] = sum(x["damage"] for x in evs if x["kind"] in ("melee_damage", "spell_damage")
                                       and x["victim"] == s.guid)

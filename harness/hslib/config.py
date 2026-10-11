@@ -130,7 +130,19 @@ AUTOBALANCE = {
     "AutoBalance.RewardScaling.Money": "1",
     # no "difficulty changed" chat lines (seamless-experience: no server chatter); `.ab mapstat` still answers
     "AutoBalance.PlayerChangeNotify": "0",
+    # no "This server is running the AutoBalance module." at login (ABPlayerScript.cpp:14-15; .dist default 1;
+    # client.login_text_clean, verifier cycle 1)
+    "AutoBalanceAnnounce.enable": "0",
+    # no dungeon-token rewards mailed or given at encounter credit (ABGlobalScript.cpp OnAfterUpdateEncounterState;
+    # the .dist says 0 but the code default is 1 when the key is missing): stated explicitly
+    "AutoBalance.reward.enable": "0",
 }
+# AutoBalance's chat output, from the module source (every ChatHandler send outside ABCommandScript):
+#   AutoBalanceAnnounce.enable   login announcement                       -> 0 above
+#   AutoBalance.PlayerChangeNotify  welcome / "X entered" / "X left" lines -> 0 above
+#   (no key)  ABPlayerScript.cpp:224 "leaving_instance_combat_change", sent when the party size changed during a fight
+#             and the fight ends; no setting turns it off (design.md "As built", reported to the orchestrator)
+AUTOBALANCE_CHAT_OFF = ("AutoBalanceAnnounce.enable", "AutoBalance.PlayerChangeNotify")
 AUTOBALANCE_CONF = "AutoBalance.conf"   # vendor/mod-autobalance/conf/AutoBalance.conf.dist, installed to etc/modules
 
 ERA_CONF = "mod_era_profile.conf"     # modules/mod-era-profile/conf/mod_era_profile.conf.dist, installed to etc/modules
