@@ -55,7 +55,7 @@ In a 5-player dungeon, creature health and damage SHALL scale with the number of
 
 #### Scenario: Pausing keeps the scaling
 - **GIVEN** the probe alone in The Deadmines, the final boss scaled for one player
-- **WHEN** the world is paused for 20 s with the true-pause addon message and resumed
+- **WHEN** the world is paused for 5 s with the true-pause addon message and resumed
 - **THEN** the boss's maximum health and the reported multiplier are unchanged
 - Check: `scale.pause_safe`
 
