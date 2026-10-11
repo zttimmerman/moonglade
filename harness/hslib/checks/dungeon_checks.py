@@ -5,7 +5,7 @@ HSTEST or Hscomp) through the probe; driver and every dungeon fact by rule: hsli
 check that needs a fresh copy first clears the probe's own binds of that map (`.instance unbind <map>`), so it doesn't
 depend on what an earlier check left. The lockout checks give boss credit with `.damage <current health>` (`.die`
 gives none; spec-change log 2026-10-10). Tiers: full (1-3 min each) except scale.solo_final_boss (slow) and
-scale.release_notice (slow: it needs the release packaging that release.* runs once per harness run)."""
+scale.release_notice (slow, order 18 with signing.*: right after the release bracket, on the packaging release.* did in this run)."""
 import json
 import math
 import re
@@ -641,7 +641,7 @@ def solo_final_boss(ctx):
     return ev
 
 
-@check("scale.release_notice", order=13, capability=CAP_SCALE, stack="any", tier="slow")
+@check("scale.release_notice", order=18, capability=CAP_SCALE, stack="any", tier="slow")
 def release_notice(ctx):
     """In the release built by tools/release (this run's packaging): THIRD_PARTY carries mod-autobalance with its
     pinned commit and the GPL-2.0-or-later header of src/AutoBalance.cpp, the source assets hold its tree at that
