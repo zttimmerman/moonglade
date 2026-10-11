@@ -65,18 +65,18 @@ Each slice is done the same way:
 
 The builder runs `hs test` plus the slice's own tests; no acceptance tier per task.
 
-- [ ] 3.1 backups (≈ 2 h). _Part 1 (2026-10-11): unit done (rotation as a unit check with the dump faked in-process; manifest/verify, refusal reasons, notice text as Python unit tests). Left for part 2: kill-safe and restore driven directly on the shared server (still cold `./play` sessions), `app.backups_window` (3.5)._ _Part 2 (2026-10-11): not migrated further: kill-safe and restore still run their own cold `./play` sessions (517 s); `app.backups_window` is a child of `journey.app_desktop`._
+- [ ] 3.1 backups (≈ 2 h). _Part 1 (2026-10-11): unit done (rotation as a unit check with the dump faked in-process; manifest/verify, refusal reasons, notice text as Python unit tests). Left for part 2: kill-safe and restore driven directly on the shared server (still cold `./play` sessions), `app.backups_window` (3.5)._ _Part 2 (2026-10-11): not migrated further: kill-safe and restore still run their own cold `./play` sessions (517 s); `app.backups_window` is a child of `journey.app_desktop`._ _Part 3 (2026-10-11): kill-safe, failure and refusals are scenarios of `play.cold_sessions` (shared sessions per ending); restore_roundtrip without a client build; restores load the three DBs in parallel. `on_quit` still its own cold session (73.5 s)._
   - Unit: rotation, manifest, refusal reasons, notice text.
   - Cold: on-quit + one injected failure.
   - Shared: kill-safe and restore driven directly.
   - `app.backups_window` waits for 3.5.
-- [ ] 3.2 saves + savesctl (≈ 3.5 h). _Part 1 (2026-10-11): integration clustered on fixture identities (`saves.session_a` and `session_b` pooled, `session_interval`, `scope` and `load_ordering` on their own identity); `savesctl.load_verb`/`build_refused` and `saves.addon_static` in the unit layer. Left for part 2: the rest of `SavesLogic`, the Lua add-on/glue tests, `journey.saves` (the live savesctl/charselect checks still run as legacy client checks, counted as journey time)._ _Part 2 (2026-10-11): `SavesLogic` gained JSON, SQL values, labels, the refusal predicate and the startup reason (6 C++ tests; `ListGen` and the save-validation half not extracted); `unit:lua:test_addon_saves.*` (12) for MoongladeSaves.lua (HSCharSaves.lua not yet); `journey.saves` (warm; 194.6 s against 150); `load_ordering` not pooled (its profile check is now a world restart)._
+- [ ] 3.2 saves + savesctl (≈ 3.5 h). _Part 1 (2026-10-11): integration clustered on fixture identities (`saves.session_a` and `session_b` pooled, `session_interval`, `scope` and `load_ordering` on their own identity); `savesctl.load_verb`/`build_refused` and `saves.addon_static` in the unit layer. Left for part 2: the rest of `SavesLogic`, the Lua add-on/glue tests, `journey.saves` (the live savesctl/charselect checks still run as legacy client checks, counted as journey time)._ _Part 2 (2026-10-11): `SavesLogic` gained JSON, SQL values, labels, the refusal predicate and the startup reason (6 C++ tests; `ListGen` and the save-validation half not extracted); `unit:lua:test_addon_saves.*` (12) for MoongladeSaves.lua (HSCharSaves.lua not yet); `journey.saves` (warm; 194.6 s against 150); `load_ordering` not pooled (its profile check is now a world restart)._ _Part 3 (2026-10-11): `savesctl.hygiene` warm (40 → 15 s); ListGen/validation and pooled load_ordering not done (timeboxed); journey.saves 190.8 s (miss)._
   - Finish `SavesLogic`: JSON, labels, retention, list format, refusal reasons, combat/dead predicate.
   - Lua tests for `MoongladeSaves.lua` and `HSCharSaves.lua`.
   - Saves integration with the pool.
   - The `savesctl` protocol as unit tests.
   - `journey.saves`.
-- [ ] 3.3 client (≈ 1.5 h). _Part 2 (2026-10-11): `journey.stock_client` (warm, 32.1 s against 60); `client.resolution_default` is a child of `journey.first_play` (its unit half not split out); config gate not warm; `client.launch_smoke` kept: its client-connectivity scenario still names it and no delta removes it._
+- [ ] 3.3 client (≈ 1.5 h). _Part 2 (2026-10-11): `journey.stock_client` (warm, 32.1 s against 60); `client.resolution_default` is a child of `journey.first_play` (its unit half not split out); config gate not warm; `client.launch_smoke` kept: its client-connectivity scenario still names it and no delta removes it._ _Part 3 (2026-10-11): `client.config_gate` warm (70 → 18 s); `launch_smoke` kept (its scenario names it)._
   - Resolution decision and config gate as unit tests.
   - Warm config-gate run.
   - `journey.stock_client`.
@@ -87,14 +87,14 @@ The builder runs `hs test` plus the slice's own tests; no acceptance tier per ta
   - The disabled profile group.
   - Lua tests for the add-on's menu hooks and banner.
   - `journey.pause`.
-- [ ] 3.5 app (≈ 2 h). _Part 2 (2026-10-11): `journey.app_desktop` (cold; the app refuses the keep-stack switch) runs the former app sessions back to back: 453.5 s against 240; two GUI GIVENs failed in both runs because another app (Chrome, Claude) took activation._
+- [ ] 3.5 app (≈ 2 h). _Part 2 (2026-10-11): `journey.app_desktop` (cold; the app refuses the keep-stack switch) runs the former app sessions back to back: 453.5 s against 240; two GUI GIVENs failed in both runs because another app (Chrome, Claude) took activation._ _Part 3 (2026-10-11): names_running on the shared app session; single_instance (a) and the shutdown backup stage on the dist lifecycle session: 453.5 → 327.4 s (budget 240, miss; backups_window 147 s)._
   - `journey.app_desktop` (GUI, stand-in, relocated copy, Backups window restore).
   - Bundle and icon checks to the unit layer.
-- [ ] 3.6 login (≈ 3 h). _Part 2 (2026-10-11): `journey.first_play` (cold session, then warm: 229.1 s against 150) and `journey.login_recovery` (warm: 151.2 s against 120); the 60 s no-login watch is 10 s live plus the simulated 60 s Lua test run inside the scenario._
+- [ ] 3.6 login (≈ 3 h). _Part 2 (2026-10-11): `journey.first_play` (cold session, then warm: 229.1 s against 150) and `journey.login_recovery` (warm: 151.2 s against 120); the 60 s no-login watch is 10 s live plus the simulated 60 s Lua test run inside the scenario._ _Part 3 (2026-10-11): first_play's Continue scenarios and first_start_settings' real run share the cold session: 229.1 → 127.0 s (pass); login_recovery 147.8 s (miss)._
   - Lua suites for `HSFrontMenu` and `HSSeamless` (Continue, overlay bar, backdrop choice, no-login clock).
   - `journey.first_play` and `journey.login_recovery`.
   - The spec-change log entry for the 60 s → simulated + 10 s live move.
-- [ ] 3.7 play (≈ 1.5 h). _Part 2 (2026-10-11): not done (S1–S3 not merged: 379 s); with lane B refused its play.* checks now run after `hs down`._
+- [ ] 3.7 play (≈ 1.5 h). _Part 2 (2026-10-11): not done (S1–S3 not merged: 379 s); with lane B refused its play.* checks now run after `hs down`._ _Part 3 (2026-10-11): `play.cold_sessions` (one session per ending; SIGTERM as a unit test): play + backups 896 → 504 s._
   - Sessions S1–S3, the first-run account.
   - Signal and lock logic as unit tests.
 - [ ] 3.8 The rest (≈ 2 h). _Part 2 (2026-10-11): era off/on restarts shared (`era.session_toggle`, 114.6 → 57.4 s); lane.merge, lane.preflight and fixture.* moved to the gate layer (real-stack harness self-tests)._
@@ -110,6 +110,7 @@ The builder runs `hs test` plus the slice's own tests; no acceptance tier per ta
   - Merged journey sessions (`first_play`, `saves`, `app_desktop`) within their budgets.
   - Saves and dungeons trims; `PENDING_SLEEPS`.
   - Measure: unit layer, one run of all integration + journey checks, the PR replay; targets in design §15.
+  - _Part 3 (2026-10-11), design 15.1: selector/runner done; cold sessions merged (play + backups 896 → 504 s); first_play and app_desktop merged (229 → 127, 454 → 327 s). Measured: unit 38.2 s (pass), integration 1813 s (budget 900, FAIL), journeys 943 s (FAIL: app_desktop, saves, login_recovery), acceptance 2756 s (FAIL), replay 22.3 min (FAIL). Not done: on_quit, saves/dungeons trims, PENDING_SLEEPS, saves and login_recovery merges. Left unticked: the targets are missed._
 
 ## 4. Rules and docs
 - [x] 4.1 CLAUDE.md §4, §6, §9 and §10 with the proposal's exact text (orchestrator; Zach approved the change).

@@ -940,3 +940,72 @@ The levers, in order of seconds per hour of work:
 Measurement: unit layer, then one run of every integration and journey check (not the gate layer, which is timed
 apart and excluded from these budgets), then the replay. No full run by the builder; the verifier runs it.
 
+
+### 15.1 As built (part 3, 2026-10-11) — the budgets are NOT met
+Measured on this Mac, one lane. "Before" is the part-2 full run at `3c95011`; "after" is one filtered run of every
+integration and journey check (82 registered ids, `hs run --only ...`, 13:03–13:49 EDT, wall 46.1 min) at `ab84fde`
+plus the fixes below it; the unit layer is `hs test` on the same tree. Gate checks are not in these numbers.
+
+| Layer | Before (s) | After (s) | Budget (s) | Verdict |
+|---|---:|---:|---:|---|
+| Unit layer | 39.3 | 38.2 | 120 | PASS |
+| Integration (union of spans) | 2321.4 | 1813.3 | 900 | **FAIL** (+913) |
+| Journeys (the six + `client.launch_smoke`) | 1175.4 | 942.7 | 810 (sum of budgets) | **FAIL** |
+| Integration + journeys | 3496.8 | 2756.0 (45.9 min) | 1800 | **FAIL** (+15.9 min) |
+| Replay mean, last 15 merged PRs (`report.pr_average`) | not measured | 22.3 min (21.7 repriced with this run) | 15 min | **FAIL** |
+
+Per journey (budget): `first_play` 229.1 → 127.0 (150) pass; `app_desktop` 453.5 → 327.4 (240) miss; `saves` 194.6 →
+190.8 (150) miss; `login_recovery` 151.2 → 147.8 (120) miss; `pause` 76.4 → 77.9 (90) pass, 53.5 after the profile fix
+below (the measured run includes one needless world restart); `stock_client` 32.1 → 33.5 (60) pass;
+`client.launch_smoke` 38.6 → 38.5 (no budget of its own, counted as journey time).
+
+Per area, integration (s, before → after): backups + play 896.1 → 503.8 (`play.cold_sessions` 333.8, `backups.on_quit`
+73.5, `backups.restore_roundtrip` 95.4); saves 345.6 → 337.6; dungeons (lock/dng/scale) 332.5 → 330.8; client 194.8 →
+135.2; pause 137.3 → 134.1; fixture start and profile restarts 106.0 → 87.4; comp 81.7 → 79.2; era 79.3 → 79.1;
+lifecycle 57.2 → 56.9; app 52.6 → 55.6; savesctl 41.3 → 16.3.
+
+What changed in part 3:
+- **Selector and runner.** A pr run never runs a gate check; the gate checks its paths select are listed as owed
+  (`meta.selection.gate_owed`, "Gate checks owed" in summary.md, each with the selecting path). `harness/active-changes`
+  is no-impact. `report.gate_rule`, `report.selection` (case k) and `report.journeys` (840 s cap, its own
+  counterexample) follow the spec text.
+- **`play.cold_sessions`** (`checks/cold_play_checks.py`): the play loop's own start/stop scenarios share one cold
+  session per ending instead of a cold `./play` each: RA (mysqld only: restore refusals, kill-safe's earlier backup),
+  N (normal exit from nothing running, sandboxed, notepad stand-in, personal account run 1: `play.offline`,
+  `loop_clean_exit`, `dock_identity`, `stage_lines`, `world_progress`), K (SIGKILL mid-backup), N2 (the next run: K's
+  temp folder, stale lock and mysqld; account run 2; a second `./play` and a restore refused while it runs), the killed
+  restore, I (SIGINT + dump failure), C (client crash + low disk), F (bad DataDir; carries the low-disk notice). 13
+  scenarios keep their ids as children. SIGTERM and the repeated signal are unit tests of the handler
+  (`unit:py:test_play_signals.*`, design 9.3). 712 s of checks → 334 s.
+- **Warm instead of cold:** `savesctl.hygiene` (40 → 15 s) and `client.config_gate` (70 → 18 s) run on the shared stack
+  with the keep-stack switch.
+- **Restore:** the three databases load side by side (backups.py); `restore_roundtrip` holds its WTF folder in a bare
+  scratch folder (no play-client build).
+- **Profiles:** `scaling-on` has m0's overrides (same digest); `profile_matches` / `world_matches` accept a world with
+  identical settings, so the warm journeys after the dungeon group need no restart back to m0.
+- **Journeys:** `app_desktop` — `app.names_running` on the shared app session; `app.single_instance`'s app-running half
+  and `app.shutdown_window`'s backup stage on the dist app's lifecycle session. `first_play` — the Continue scenarios
+  (`login.auto_login`, `no_glue_errors`, `fresh_menu_waits`) and `client.first_start_settings`' real run share the cold
+  session (a bootstrap-built play client, stale login file and partial write planted, the account, connection.log and
+  Wow.exe sampled every second; a screenshot at 17 s before the Continue at 20 s).
+- **Fixes:** a passing incremental build stamps the install (not build/), so `core.patch_applied` and the run's
+  "server current" step see the inputs it was built from, and `--clean` still builds from empty; `saves.player_untouched`
+  starts mysqld alone when the stack is down (pr runs no longer run gate checks before the guards).
+
+Not cheaper without a spec change (seconds from this run; for the milestone-gate decision):
+- `play.cold_sessions` 334: six cold sessions are the distinct endings the specs name (normal exit from nothing running,
+  SIGKILL mid-backup and the next run, SIGINT, client crash, failed server start), plus the offline self-tests;
+  `play.player_account` needs two normal runs.
+- `backups.on_quit` 73.5: a normal-exit cold `./play` with an empty scratch folder and a test character that gains a
+  level; no other session meets that GIVEN (first_play's cold session ends by SIGTERM; N/N2 use the personal account).
+- `backups.restore_roundtrip` 95: two real restores (safety backup ~10 s + load ~13 s each) plus the seed.
+- `saves.session_interval` 94 and `saves.load_ordering` 82: real autosave-interval waits; 20 load rounds plus the
+  WorkerThreads = 2 restart pair.
+- `journey.saves` 191: the savesctl live session closes the listener (`savesctl.live_down`) that the character-screen
+  load needs, so they stay two real-client sessions; the load waits `LOAD_AT_S` 40 s for the login connection to close.
+- `journey.login_recovery` 148: the friendly error (login server stopped/restarted) and the backdrop restart are two
+  sessions.
+- `journey.app_desktop` 327: `app.backups_window` 147 s (four app runs: list/close, cancel, restore + Play, damaged).
+- `lock.*` 164: one dungeon character for all five, so they can't share the pool.
+- `client.launch_smoke` 38.5 (its scenario names the check), `client.login_text_clean` 31.7 (the 30 s stay),
+  `client.player_client_not_rebuilt` 37.4 (a cold stand-in probe at the end of every run).
