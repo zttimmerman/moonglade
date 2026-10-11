@@ -289,8 +289,10 @@ def autosave_triggers(ctx):
     interval = 4
     ev["interval"] = S.gm(f".moonglade save interval {interval}")
     taxi = Z.pick_taxi(S.START_TELE)
+    ev["teleports"] = []
     ev["taxi"] = {k: taxi[k] for k in ("from", "to", "path", "rule")} | {"flightmaster": taxi["flightmaster"]["name"]}
     produced = []
+    ev["produced"] = produced
     try:
         with S.Session(S.ident().alt) as s:
             g = s.guid
@@ -328,11 +330,27 @@ def autosave_triggers(ctx):
                 s.cmd(".tele Stormwind")
                 ev["resting_in_city"] = wait_who("resting", True)
 
+            def tele(name):
+                """GIVEN for an "Arrived" moment: `.tele <name>`, then poll until the server shows the character on
+                that game_tele row's map; the reply and the map seen are recorded, and a teleport that didn't land
+                fails here, naming it, instead of as a missing autosave."""
+                want = S.F.tele_row(name)["map"]
+                t0 = time.time()
+                reply = s.cmd(f".tele {name}")
+                landed = wait_who("map", want, timeout=10.0)
+                w = S.who(g)
+                rec = {"tele": name, "reply": reply, "want_map": want, "map_seen": w.get("map"),
+                       "online": w.get("online"), "landed": landed, "after_s": round(time.time() - t0, 2)}
+                ev["teleports"].append(rec)
+                require(landed, f"GIVEN not met: .tele {name} didn't land on map {want} within 10 s "
+                                f"(server shows map {w.get('map')}; reply {reply!r})", **ev)
+                return t0
+
             def other_map():
-                s.cmd(".tele Darnassus")
+                tele("Darnassus")
 
             def back():
-                s.cmd(".tele ElwynnForest")
+                tele("ElwynnForest")
 
             def flight():
                 s.ws.set_selection(g)
@@ -350,9 +368,12 @@ def autosave_triggers(ctx):
             s.cmd(".combatstop")
             # a trigger inside the interval: two map changes within it, only the first saves
             before = set(autos())
-            s.cmd(".tele Darnassus")
-            time.sleep(1.8)
-            s.cmd(".tele ElwynnForest")
+            t_first = tele("Darnassus")
+            time.sleep(max(0.0, 1.8 - (time.time() - t_first)))
+            t_second = tele("ElwynnForest")
+            ev["inside_gap_s"] = round(t_second - t_first, 2)
+            require(t_second - t_first < interval - 1.0,
+                    "GIVEN not met: the second arrival wasn't sent inside the interval", **ev)
             time.sleep(interval + 1.5)
             inside = [x for x in autos() if x not in before]
             produced.append({"kind": "two arrivals inside the interval", "new": inside,
@@ -562,10 +583,13 @@ def scope(ctx):
         s.ws.set_selection(a)
         s.cmd(".additem 2589 1")
         s.cmd(".save")
-        time.sleep(1)
-        # the added linen (a fresh character's starting bag items are soulbound and can't be auctioned)
-        bag = [it for it in S.inventory(a) if it["bag"] == 0 and S.INVENTORY_SLOT_ITEM_START <= it["slot"] < 39
-               and it["entry"] == 2589]
+        # the added linen (a fresh character's starting bag items are soulbound and can't be auctioned); polled until
+        # the save has written it (was a fixed 1 s; design 16.3)
+        t0, bag = time.time(), []
+        while not bag and time.time() - t0 < 5:
+            time.sleep(0.2)
+            bag = [it for it in S.inventory(a) if it["bag"] == 0 and S.INVENTORY_SLOT_ITEM_START <= it["slot"] < 39
+                   and it["entry"] == 2589]
         require(bag, "GIVEN not met: no bag item to auction", **ev)
         ev["auction"] = S.sell_auction(s, bag[0]["item"])
         s.cmd(".save")
@@ -574,9 +598,17 @@ def scope(ctx):
         # map 36: Map.dbc InstanceType 1)
         if not db.query(f"SELECT 1 FROM character_instance WHERE guid={a}", "characters"):
             ev["dungeon"] = s.cmd(".tele Deadmines")
-            time.sleep(3)
+            # design 16.3: poll for the bind row (was a fixed 3 s), then for the arrival back outside (was 1 s)
+            t0 = time.time()
+            while time.time() - t0 < 10 and not db.query(f"SELECT 1 FROM character_instance WHERE guid={a}",
+                                                         "characters"):
+                time.sleep(0.25)
+            ev["dungeon_bind_after_s"] = round(time.time() - t0, 2)
             s.cmd(".tele Stormwind")
-            time.sleep(1)
+            want, t0 = S.F.tele_row("Stormwind")["map"], time.time()
+            while time.time() - t0 < 10 and S.who(a).get("map") != want:
+                time.sleep(0.25)
+            ev["back_outside_after_s"] = round(time.time() - t0, 2)
         s.cmd(".save")
     with S.Session(S.ident().alt) as s:
         S.add_friend(s, S.ident().char)
