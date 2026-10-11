@@ -1104,3 +1104,37 @@ line at all for the last two teleports, so they weren't skipped "inside the inte
 when an autosave starts (`ProcessAutosaves`: a skipped trigger `continue`s before `g_lastAuto` is written), so a
 skipped trigger can't reset it. Open: whether those two teleports reached their maps (the step records no map); not
 reproduced, no fix made.
+
+### 16.3 Integration and `login_recovery` savings, autosave flake GIVEN (task 3.11, 2026-10-11)
+Each changed check measured twice with `hs run --only <ids>` on this Mac (one lane, stack kept up between runs),
+against its 16.1 time. No requirement, scenario or assertion was loosened.
+
+| Change | 16.1 (s) | Now, run 1 / run 2 (s) | Saved (s, mean) |
+|---|---:|---:|---:|
+| Profile restarts: `pause.respawn_frozen`'s 5 s corpse decay joins the `scaling-off` profile (scaling acts only in instances; `scale.disabled_stock` reads creature stats), so 3 restarts instead of 4 | 82.5 (4 × 20.6) | 60.2 / 58.8 | 23.0 |
+| `dng.session1` (`gather()` polls the map's count every 0.5 s inside each 4 s summon round; restart waits poll at 0.25/0.5 s, was 1/2 s) | 79.2 | 71.9 / 74.1 | 6.2 |
+| `dng.session2` (same) | 64.4 | 59.6 / 60.1 | 4.5 |
+| `era.session_toggle` (two restarts; restart polling) | 57.1 | 54.0 / 53.2 | 3.5 |
+| `lifecycle.persist` (restart polling) | 26.2 | 23.1 / 23.1 | 3.1 |
+| `saves.scope` (polls for the bag item, the Deadmines bind row and the arrival back outside; the polls took 0.04 s and 0 s) | 68.0 | 68.8 / 68.5 | −0.7 |
+| `pause.respawn_frozen`, `pause.disabled_noop`, `scale.disabled_stock` (moved or unchanged; noise) | 67.0 | 69.4 / 68.1 | −1.8 |
+
+Integration re-estimated: 908.9 − 37.8 = **871.1 s** (budget 900, pass). Not counted: `lifecycle.up` and the other
+stack starts, which also gain from the restart polling but weren't measured.
+
+`journey.login_recovery`: **133.4 s and 124.8 s** (16.1: 153.3; budget 150, pass). `login.friendly_errors` presses Try
+again at 55 s instead of 80 s (97.6 → 77.2 / 71.2 s). The login server was back 41.5 and 39.5 s after the client came
+up, so Try again still comes about 15 s after it is up; if it weren't, the connection.log assertion (down at Continue,
+connected after Try again) fails. The other five journeys are unchanged from 16.1, all within budget; journeys now
+about 721.7 s, integration + journeys about 1592.8 s (budget 1800).
+
+`saves.autosave_triggers` (16.1 flake): every "Arrived" step and the two arrivals inside the interval now poll until
+`.moonglade save who` shows the character on the `game_tele` row's map (10 s at most), record the `.tele` reply (empty
+on success), the map seen and the time, and fail "GIVEN not met: .tele <name> didn't land on map <m>" otherwise; the
+second arrival must also still be sent inside the interval (recorded `inside_gap_s`, 1.83 s). Three runs of
+`saves.session_interval`: all pass, every teleport landed in about 0.5 s, so the flake didn't reproduce and no product
+bug was seen. Counterexample (expected map + 500): fails with that GIVEN message.
+
+The replay mean stays 16.1 min (16.2; budget 15). With fewer than 5 recorded PR runs the spec ("The per-PR acceptance
+average stays at or under 15 minutes") has `report.pr_average` report the replay without failing, so it is reported
+here, not a merge blocker; the rolling mean of recorded PR runs decides from the fifth run on.
