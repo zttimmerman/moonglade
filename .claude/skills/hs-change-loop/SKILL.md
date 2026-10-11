@@ -1,6 +1,6 @@
 ---
 name: hs-change-loop
-description: Moonglade's unit-of-work loop. OpenSpec change → branch → builder → verifier → full run → PR/merge → archive. Use when starting, delegating, verifying, or closing any change in this repo.
+description: Moonglade's unit-of-work loop. OpenSpec change → branch → builder → verifier → PR-tier run → PR/merge → archive. Use when starting, delegating, verifying, or closing any change in this repo.
 ---
 
 # Moonglade change loop
@@ -45,19 +45,18 @@ Builders run this before handing over and put a short pass/fail line per item in
 ## Verify
 - Use the `verifier` agent type and give it only: spec deltas, `git diff <last-verified>..HEAD -- harness/ …`, and the harness command.
 - **No makeshift copies of the repo with linked runtime folders** (checklist item 14). To compare with another commit, check it out in the main checkout (stack down, nothing else running), or use the harness. `client/` is write-protected (`hs client-lock --status`); never lift it by hand.
-- **Run budget (Zach, 2026-10-07; verification length was the biggest drag on velocity). Target: a verifier cycle ≤ 90 min.**
-  - **Builder:** quick tier + each new/changed check ≥3× + one counterexample per new/changed check + the pre-verification checklist. No full run.
-  - **Verifier:** ONE unfiltered full run (`--force-clean` only when server build inputs changed); each new/changed check 3× (5× only for a check with a flake history); **no extra repeats of untouched checks** (the full run covers them); **spot-check 2–3** of the builder's counterexamples or its own, chosen for risk, not all; independent reading of risky code paths. Brief the verifier with this budget.
-  - On a FAIL: the builder fixes and reruns quick + affected; a fresh verifier repeats the budget above.
-  - Flakiness: the weekly (or pre-gate) full ×3 sweep catches what fewer repeats miss. A failure in any run is still P0.
-  - Why: cycles reached 2.5–3 h each (full run + 5–10× repeats of GUI/client checks + full counterexample sets), doubling on a FAIL.
-- **Harness-wide flakiness:** a separate "full ×3" before each milestone gate or about weekly, not per change. A failure in any run is P0.
-- On FAIL: fix, run the full harness, then a **fresh** verifier (new context). After 3 failed cycles on one task, mark it blocked in STATUS.md and move on.
+- **Run budget (test-pyramid, Zach 2026-10-10: shift left; a verifier cycle ≤ 90 min).**
+  - **Builder:** the unit layer (`harness/hs test`; `hs test -k <id part>` for the inner loop) plus the one acceptance test it is writing (`harness/hs run --only <id>`), repeated as needed: each new/changed test ≥3× and one counterexample per new/changed test (it must FAIL), plus the pre-verification checklist. **Never an acceptance tier per task.**
+  - **Verifier:** ONE PR-tier run (`harness/hs run --tier pr`: the unit layer, then what the impact selection picks for the change, or the complete suite when it says FULL); each new or changed test 3×; **spot-check 2–3** counterexamples (one per runner where the change has unit tests: Python, C++, Lua), chosen for risk; independent reading of risky code paths. A missed layer budget (`report.layer_budgets`) is a FAIL. Brief the verifier with this budget.
+  - On a FAIL: reproduce at the cheapest layer that shows it (a unit test, else the single failing test) before rerunning anything larger; a fresh verifier repeats the budget above.
+  - **Milestone gates:** the complete suite (`--tier full`) three times; any failure in any run is P0. There is no weekly or nightly sweep.
+  - Why: the full run grew from 36 to 82 min in three days, and verifier cycles reached 2.5–3 h.
+- On FAIL: fix, rerun the unit layer and the failing test, then a **fresh** verifier (new context). After 3 failed cycles on one task, mark it blocked in STATUS.md and move on.
 - Weakened checks count as FAIL. Spec changes need a dated entry in the proposal's "Spec-change log" with the reason; tightenings and clarifications are fine, loosenings get reviewed at the next human gate.
 
 ## Close
 1. Tick tasks, then `openspec archive <id> --yes` (merges deltas into `openspec/specs/`). Confirm `Check:` lines survived (`grep -c "Check: \`" openspec/specs/*/spec.md`).
-2. Remove `<id>` from `harness/active-changes`; update STATUS.md (board, last full run, follow-ups).
+2. Remove `<id>` from `harness/active-changes`; update STATUS.md (board, last PR-tier and full runs, follow-ups).
 3. `gh pr create` with the verifier verdict in the body (end with the Claude Code attribution line), then `gh pr merge <n> --merge --delete-branch`, then `git checkout main && git pull`.
 
 ## Gotchas
