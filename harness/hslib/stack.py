@@ -263,7 +263,8 @@ def spawn_env(name: str) -> dict:
         env["OPENSSL_CONF"] = str(P.OPENSSL_CONF)
         # the bundled legacy provider (RC4, the world session cipher); without it a Mac lacking Homebrew's openssl@3
         # asserts in ARC4.cpp at the first client login
-        env["OPENSSL_MODULES"] = str(P.SERVER_BIN.parent / "lib")
+        if not P.firstlaunch_test().get("drop_openssl_modules"):    # counterexample test switch (release-fresh-login)
+            env["OPENSSL_MODULES"] = str(P.SERVER_BIN.parent / "lib")
     return env
 
 

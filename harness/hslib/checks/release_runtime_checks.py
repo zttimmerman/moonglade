@@ -24,8 +24,11 @@ release.stack_from_payload     (slow) a scratch copy of the packaged Moonglade.a
                                release mode brings the stack up with m0 and down; worldserver answers SOAP, the running
                                mysqld is the payload's, the DB updater names the payload's sql/, the servers' env has
                                OPENSSL_CONF = HOME's file and the AC_* module keys, m0's random-bot count (set only via
-                               AC_*) is in effect, shutdown is graceful. Counterexample: the drop-AC_* test switch makes
-                               the playerbots default (500) take effect, which the check sees.
+                               AC_*) is in effect, shutdown is graceful. A throwaway account logs in with the protocol
+                               probe (auth, realm list, world AUTH_SESSION, character list; release-fresh-login) and is
+                               removed. Counterexample: the drop-AC_* test switch makes the playerbots default (500)
+                               take effect, which the check sees. One-off counterexample: HS_TEST_STACK_NO_OPENSSL_MODULES=1
+                               starts the servers without OPENSSL_MODULES and the login fails at the world step.
 release.app_readonly, release.app_moved, release.play_standin, release.client_smoke, release.player_data_untouched,
 release.readline_stub          see each check's docstring (release-first-launch builder c; design "As built").
 """
@@ -860,6 +863,55 @@ def rc4_probe(app: Path, prof: Path, cwd: Path, server_env: dict) -> str:
     return r.stdout.strip() if r.returncode == 0 else f"rc={r.returncode}: {(r.stderr or r.stdout)[-300:]}"
 
 
+LOGIN_STEPS = ("auth", "realm_list", "world_auth", "char_enum")
+CE_NO_OPENSSL_MODULES_ENV = "HS_TEST_STACK_NO_OPENSSL_MODULES"   # one-off counterexample run (release-fresh-login)
+
+
+def fresh_login(user: str, password: str, ports: dict, host: str = "127.0.0.1", probe=None) -> dict:
+    """A fresh client's login with the harness's protocol probe: SRP6 logon (auth port) -> realm list (a realm at
+    host:ports["world"]) -> world AUTH_SESSION (from here the server's RC4 header cipher is on) -> CMSG_CHAR_ENUM
+    answered. Never raises: {"reached": [steps passed], "failed_at": step or None, "error": text, ...}."""
+    if probe is None:
+        from ..probe import client as probe
+    ev: dict = {"reached": [], "failed_at": None}
+    step = LOGIN_STEPS[0]
+    try:
+        lr = probe.logon(user, password, host=host, port=ports["auth"])
+        ev["logon"] = lr.evidence()
+        if not lr.ok:
+            raise RuntimeError("logon proof failed")
+        ev["reached"].append(step)
+        step = "realm_list"
+        want = f"{host}:{ports['world']}"
+        realm = next((r for r in lr.realms if r.get("address") == want), None)
+        if realm is None:
+            raise RuntimeError(f"no realm at {want} in the realm list")
+        ev["realm"] = realm
+        ev["reached"].append(step)
+        step = "world_auth"
+        with probe.WorldSession(user, lr.session_key, realm) as ws:
+            try:
+                ev["world"] = ws.connect()
+                ev["reached"].append(step)
+                step = "char_enum"
+                ev["char_enum"] = len(ws.char_enum())
+                ev["reached"].append(step)
+            finally:
+                ev["trail"] = ws.log[-12:]
+    except Exception as e:  # noqa: BLE001 - every failure is evidence of the step it stopped at
+        ev["failed_at"] = step
+        ev["error"] = f"{type(e).__name__}: {e}"[:300]
+        info = getattr(e, "info", None)
+        if info:
+            ev["error_info"] = {k: v for k, v in info.items() if k != "trail"}
+    return ev
+
+
+def login_ok(ev: dict) -> bool:
+    """Every login step reached, in order, and nothing failed."""
+    return ev.get("failed_at") is None and tuple(ev.get("reached") or ()) == LOGIN_STEPS
+
+
 def release_fixture_app(d: Path) -> Path:
     """A clonefile copy of the packaged Moonglade.app at "<d>/Moonglade Test/Moonglade.app". Returns APP (the
     payload folder inside it)."""
@@ -941,7 +993,8 @@ def stack_from_payload(ctx):
     """Release mode brings the stack up (m0) and down from a scratch copy of the packaged app, a scratch HOME and
     scratch ports, under a sandbox hiding Homebrew and the dev checkout: SOAP answers, mysqld is the payload's, the
     updater's SourceDirectory is the payload's sql/ (and it populated the databases), OPENSSL_CONF and the AC_* keys
-    are in the servers' environment, m0's random-bot count (only via AC_*) is in effect, and shutdown is graceful.
+    are in the servers' environment, a fresh account logs in through to the character list (protocol probe; the
+    world step runs the server's RC4), m0's random-bot count (only via AC_*) is in effect, and shutdown is graceful.
     Counterexample: without the AC_* module keys the playerbots default (500 bots) takes effect and is seen."""
     healed = heal_scratch()
     from .release_checks import _need_payload
@@ -964,11 +1017,19 @@ def stack_from_payload(ctx):
         prof.write_text(sandbox_profile(d))
         proof = subprocess.run([SANDBOX_EXEC, "-f", str(prof), "/bin/ls", str(P.ROOT / "vendor")], capture_output=True,
                                text=True)
-        ev["sandbox"] = {"profile": prof.read_text(), "ls_vendor_rc": proof.returncode}
-        require(proof.returncode != 0, "the sandbox profile doesn't hide the checkout's vendor/", **ev)
+        brew = subprocess.run([SANDBOX_EXEC, "-f", str(prof), "/bin/ls", "/opt/homebrew"], capture_output=True,
+                              text=True)
+        ev["sandbox"] = {"profile": prof.read_text(), "ls_vendor_rc": proof.returncode, "ls_homebrew_rc": brew.returncode,
+                         "ls_homebrew_err": brew.stderr.strip()[-120:]}
+        require(proof.returncode != 0 and brew.returncode != 0,
+                "the sandbox profile doesn't hide the checkout's vendor/ or /opt/homebrew", **ev)
         (d / "tmp").mkdir()
         env = release_env(home, HS_RELEASE_PORTS=json.dumps(ports), TMPDIR=str(d / "tmp") + "/",
                           PATH="/usr/bin:/bin:/usr/sbin:/sbin")
+        if os.environ.get(CE_NO_OPENSSL_MODULES_ENV) == "1":
+            # one-off counterexample (release-fresh-login): the servers start without OPENSSL_MODULES, as v0.1.1 did
+            env[P.FIRSTLAUNCH_TEST_ENV] = json.dumps({"drop_openssl_modules": True})
+            ev["counterexample_no_openssl_modules"] = True
         with SqlFileWatch(app / "server/bin/worldserver") as watch:
             up = run_release(app, ["up", "--profile", "m0"], env, prof, d, 2400, log)
         ev["up"] = {k: up[k] for k in ("rc", "s", "stdout_tail")}
@@ -1006,6 +1067,27 @@ def stack_from_payload(ctx):
                                                       for n, e in errs.items()}}
         require(" " in str(home) and not any(ev["spaced_home"]["invalid_config_lines"].values()),
                 "a server rejected its --config path under a HOME with a space", **ev)
+        # a fresh Mac's first login (release-fresh-login): v0.1.0 (spaced HOME) and v0.1.1 (RC4 without Homebrew's
+        # OpenSSL) both passed packaging and failed here. The servers run under the no-Homebrew sandbox with the spaced
+        # HOME; a throwaway account logs in with the protocol probe through auth, the realm list, the world's
+        # AUTH_SESSION (the server's RC4 starts there) and the character list. The account is removed afterwards.
+        import secrets
+        user, pw = "HSFRESHLOGIN", secrets.token_hex(6)
+        made = run_release(app, ["gm", f"account create {user} {pw}"], env, prof, d, 120, log)
+        try:
+            ev["fresh_login"] = {"account": user, "create_rc": made["rc"],
+                                 "openssl_modules_in_server_env": "OPENSSL_MODULES" in ws_env,
+                                 **fresh_login(user, pw, ports)}
+        finally:
+            gone = run_release(app, ["gm", f"account delete {user}"], env, prof, d, 120, log)
+            ev["fresh_login"] = dict(ev.get("fresh_login") or {}, delete_rc=gone["rc"],
+                                     account_rows_after=_q(app, f"SELECT COUNT(*) FROM account WHERE username='{user}'",
+                                                           ports["mysql"]))
+        require(login_ok(ev["fresh_login"]), "a fresh login didn't reach the character list (stopped at "
+                f"{ev['fresh_login'].get('failed_at')}: {ev['fresh_login'].get('error')})", **ev,
+                world_err_tail=(home / "logs/worldserver.err").read_text(errors="replace")[-800:]
+                if (home / "logs/worldserver.err").exists() else None)
+        require(ev["fresh_login"]["account_rows_after"] == "0", "the throwaway login account wasn't removed", **ev)
         # the world session cipher (RC4, ARC4.cpp) needs OpenSSL's legacy provider; this sandbox hides Homebrew, as a
         # friend's Mac without openssl@3 does. Probe the payload's libcrypto with the worldserver's own OPENSSL_*
         # environment, and without OPENSSL_MODULES as the counterexample (v0.1.1 asserted at the first client login).

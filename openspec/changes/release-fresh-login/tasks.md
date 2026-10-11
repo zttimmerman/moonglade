@@ -1,0 +1,3 @@
+- [x] 1.1 `release.stack_from_payload`: a throwaway account logs in with the protocol probe (auth, realm list, world AUTH_SESSION, character list) under the spaced HOME and the no-Homebrew sandbox; the account is deleted afterwards.
+- [x] 1.2 Test switch `drop_openssl_modules` (stack.spawn_env) and `HS_TEST_STACK_NO_OPENSSL_MODULES=1` for the one-off counterexample; unit tests for the login evidence and the switch.
+- [ ] 1.3 Verify: `release.stack_from_payload` green once, and once with the counterexample (fails at the world step).

@@ -33,7 +33,7 @@ has no player characters, counted on its clone).
 Test switches (release only, honoured with --allow-test-release inside a live harness run; paths.firstlaunch_test()):
 $HS_FIRSTLAUNCH_TEST = {"arch", "macos", "rosetta", "running", "free_bytes" (injected Mac facts), "corrupt_copy"
 (a relative path, or true for Wow.exe: one byte of the copy is changed before it is verified), "force_byte_copy"
-(no clones), "drop_ac_env" (stack.spawn_env)}; $HS_RELEASE_DOWNLOAD_BASE (downloads.download_url).
+(no clones), "drop_ac_env", "drop_openssl_modules" (stack.spawn_env)}; $HS_RELEASE_DOWNLOAD_BASE (downloads.download_url).
 """
 from __future__ import annotations
 
