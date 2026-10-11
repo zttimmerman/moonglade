@@ -23,7 +23,7 @@ PARTY = (("warrior", "prot pve"), ("priest", "holy pve"), ("mage", "frost pve"),
 REL = 0.01                 # spec: "to within 1%"
 UNSTUCK_S = 30             # spec: within 30 s
 UNSTUCK_NEAR_YD = 10       # spec: within 10 yd
-PAUSE_S = 20               # spec: paused for 20 s
+PAUSE_S = 5                # spec (test-pyramid delta): paused for 5 s; values compare to the millisecond
 RESCALE_S = 20             # bound on waiting for AutoBalance to rescale the boss once its grid is active (dungeon.boss_near)
 SCALING_OFF = "scaling-off"
 
@@ -94,7 +94,6 @@ COVERS = (
 )
 
 
-@check("scale.module_loaded", order=500, capability=CAP_SCALE, stack="up", layer="integration")
 def module_loaded(ctx):
     """The core's modules/ holds the harness symlink to the mod-autobalance checkout at the fork.lock commit, this
     worldserver's log shows the module's config load, `.ab getoffset` typed by a probe answers, and every AutoBalance
@@ -175,7 +174,6 @@ def disabled_stock(ctx):
     return ev
 
 
-@check("scale.solo_weaker", order=502, capability=CAP_SCALE, stack="up", layer="integration")
 def solo_weaker(ctx):
     """Alone in a fresh Deadmines at its target level (GM mode off), the final boss's max health is below its
     unscaled max health (the same spawn read under scaling-off in this run), and the ratio matches the multiplier
@@ -221,7 +219,6 @@ def _party_reads(s, f, ev, steps) -> list[dict]:
     return reads
 
 
-@check("scale.party_stock", order=503, capability=CAP_SCALE, stack="up", layer="integration")
 def party_stock(ctx):
     """The probe and four addclass companions in a fresh Deadmines, out of combat: `.ab mapstat` counts 5 players and
     the final boss's max health equals its unscaled max health (scaling-off read, this run) to within 1%."""
@@ -243,7 +240,6 @@ def party_stock(ctx):
     return ev
 
 
-@check("scale.counts_companions", order=504, capability=CAP_SCALE, stack="up", layer="integration")
 def counts_companions(ctx):
     """In a fresh Deadmines the final boss's max health with 1, 3 and 5 players (probe + 0, 2, 4 companions added out of
     combat) strictly increases, and the 5-player value equals the unscaled one to within 1%."""
@@ -310,7 +306,6 @@ def outdoor_untouched(ctx):
     return ev
 
 
-@check("scale.pause_safe", order=506, capability=CAP_SCALE, stack="up", layer="integration")
 def pause_safe(ctx):
     """The probe alone in The Deadmines with the final boss scaled for one: after a 20 s true pause (the add-on's
     MGPAUSE message) and resume, the boss's max health and `.ab creaturestat` multiplier are unchanged."""
@@ -399,7 +394,6 @@ def _kill_all(s, f, ev, key="kills"):
     return rows[0]
 
 
-@check("lock.fresh_after_clear", order=511, capability=CAP_LOCK, stack="up", layer="integration")
 def fresh_after_clear(ctx):
     """The probe and two companions clear The Deadmines (every encounter, completion saved), leave, and the probe enters
     again: a new instance id with mask 0, both companions in that same new copy, and no character_instance row for the
@@ -438,7 +432,6 @@ def fresh_after_clear(ctx):
     return ev
 
 
-@check("lock.partial_kept", order=512, capability=CAP_LOCK, stack="up", layer="integration")
 def partial_kept(ctx):
     """The probe in The Deadmines with its first encounter done (final not done) walks out (teleport to the start
     point) and enters again: the same instance id, and the first encounter is still done."""
@@ -493,7 +486,6 @@ def _partial(ctx, lfg, difficulty, dismiss=False, level=None):
     return ev
 
 
-@check("lock.partial_kept_dismissed", order=513, capability=CAP_LOCK, stack="up", layer="integration")
 def partial_kept_dismissed(ctx):
     """The probe with two companions kills The Deadmines' first boss (final alive), leaves, dismisses every companion
     (the party breaks up) and enters again alone: the same instance id, and the first boss is still dead."""
@@ -748,3 +740,216 @@ def _notice_problems(out_dir, payload, sources: bool = True) -> tuple[list[str],
         if not ev["sources"]["tree"]:
             probs.append("the mod-autobalance source tarball wasn't compared with the pinned tree")
     return probs, ev
+
+
+# ================================================================================================ the clustered sessions
+# test-pyramid design 14: two sessions of <= 90 s on one dungeon probe login; the companions added in session 1 stay
+# in the party for session 2 (the probe stays in the world between them, registered as lingering for the fixture's
+# reset). Both run in the scaling-on profile group, after scale.disabled_stock's scaling-off read (their unscaled
+# reference, ctx["m4_unscaled"]).
+
+SESSION1 = ("scale.module_loaded", "scale.solo_weaker", "scale.pause_safe", "scale.counts_companions", "scale.party_stock")
+SESSION2 = ("lock.partial_kept_dismissed", "lock.partial_kept", "lock.fresh_after_clear")
+_DNG: dict = {}
+SCALING_ON = "scaling-on"
+
+
+def _scenario(res: dict, cid: str, fn) -> bool:
+    from ..registry import CheckFail
+    t0 = time.time()
+    try:
+        res[cid] = {"status": "pass", "evidence": fn() or {"ok": 1}}
+    except CheckFail as e:
+        res[cid] = {"status": "fail", "message": str(e)[:500], "evidence": e.evidence or {"failed": 1}}
+    except Exception as e:  # noqa: BLE001
+        res[cid] = {"status": "error", "message": f"{type(e).__name__}: {e}"[:500], "evidence": {"error": str(e)[:500]}}
+    res[cid]["duration_s"] = round(time.time() - t0, 2)
+    return res[cid]["status"] == "pass"
+
+
+@check("dng.session1", order=502, capability=CAP_SCALE, stack="up", layer="integration", profile=SCALING_ON,
+       budget_s=90, children=SESSION1)
+def session1(ctx):
+    """One dungeon probe login: scale.module_loaded, then in a fresh Deadmines alone: scale.solo_weaker and
+    scale.pause_safe (a 5 s pause), then with 2 and 4 companions added: scale.counts_companions and scale.party_stock.
+    The probe and its four companions stay in the instance for dng.session2."""
+    f = D.facts(D.DEADMINES)
+    res: dict = {}
+    ev: dict = {}
+    _scenario(res, "scale.module_loaded", lambda: module_loaded(ctx))
+    ref = (ctx.get("m4_unscaled") or {}).get(f["lfg_id"]) or _run(lambda: _unscaled_ref(ctx, f))
+    unscaled = ref.get("max_health")
+    ev["unscaled"] = {k: ref.get(k) for k in ("max_health", "profile", "by")}
+    s = D.Session(f["target_level"])
+    _run(s.__enter__)
+    _DNG.clear()
+    _DNG.update({"s": s, "f": f, "unscaled": unscaled})
+    ctx.setdefault("lingering", set()).add(P.DUNGEON_CHAR)
+    try:
+        ev["session"] = _sev(s)
+        _fresh_enter(s, f, ev, "e1")
+        _DNG["first_instance"] = ev["e1"]["instance"]
+        solo = {}
+
+        def solo_weaker():
+            e = {"unscaled": ev["unscaled"], "enter": ev["e1"]}
+            e["gm"] = s.cmd(".gm", settle=0.4)
+            b = s.boss_near(f["final"], 1, RESCALE_S)
+            solo["b"] = b
+            e["boss"] = b
+            mx, mult = b["max_health"], (b["creaturestat"] or {}).get("health_multiplier")
+            require(ev["e1"]["players"] == 1, "GIVEN: the probe isn't alone on the map", **e)
+            require(mx and unscaled and mx < unscaled, f"solo max health {mx} isn't below the unscaled {unscaled}", **e)
+            e["ratio"] = round(mx / unscaled, 4)
+            require(D.within(e["ratio"], mult, REL), f"ratio {e['ratio']} != `.ab creaturestat` multiplier {mult} (1%)", **e)
+            return e
+        _scenario(res, "scale.solo_weaker", solo_weaker)
+
+        def pause_safe():
+            e = {}
+            try:
+                e["before"] = solo.get("b") or s.boss_near(f["final"], 1, RESCALE_S)
+                e["pause"] = _pause(s, True)
+                require(e["pause"]["reply"] == "paused", "GIVEN: the world didn't pause", **e)
+                time.sleep(PAUSE_S)
+                e["resume"] = _pause(s, False)
+                time.sleep(1.0)
+                e["after"] = s.boss_near(f["final"], None, 5)
+            finally:
+                e["resume_at_exit"] = soap.gm("moonglade pause off", timeout=10).evidence()
+            b, a = e["before"], e["after"]
+            bm, am = (b["creaturestat"] or {}).get("health_multiplier"), (a["creaturestat"] or {}).get("health_multiplier")
+            require(b["max_health"] and bm and bm < 1, "GIVEN: the final boss isn't scaled down for one player", **e)
+            require(e["resume"]["reply"] == "running", "the world didn't resume", **e)
+            require(a["max_health"] == b["max_health"] and am == bm,
+                    f"changed across the pause: max health {b['max_health']} -> {a['max_health']}, multiplier {bm} -> {am}", **e)
+            return e
+        _scenario(res, "scale.pause_safe", pause_safe)
+        reads = {}
+
+        def counts():
+            e = {"unscaled": unscaled}
+            r = _party_reads(s, f, e, [("1 player", (), 1), ("3 players", PARTY[:2], 3), ("5 players", PARTY[2:], 5)])
+            reads["r"] = r
+            e["reads"] = r
+            require([x["players"] for x in r] == [1, 3, 5], "GIVEN: the map didn't hold 1, 3 and 5 players", **e)
+            hp = [x["max_health"] for x in r]
+            require(all(h is not None for h in hp) and hp[0] < hp[1] < hp[2], f"max health doesn't strictly increase: {hp}", **e)
+            require(D.within(hp[2], unscaled, REL), f"5-player {hp[2]} != unscaled {unscaled}", **e)
+            return e
+        _scenario(res, "scale.counts_companions", counts)
+
+        def party():
+            r = (reads.get("r") or [{}])[-1]
+            e = {"unscaled": unscaled, "read": r}
+            require(r.get("players") == 5, f"`.ab mapstat` counts {r.get('players')} players, not 5", **e)
+            require(D.within(r.get("max_health"), unscaled, REL),
+                    f"5-player max health {r.get('max_health')} != unscaled {unscaled} (1%)", **e)
+            return e
+        _scenario(res, "scale.party_stock", party)
+    except Exception:
+        _DNG.pop("s", None)
+        try:
+            s.__exit__(None, None, None)
+        finally:
+            ctx.get("lingering", set()).discard(P.DUNGEON_CHAR)
+        raise
+    ev["children"] = res
+    return ev
+
+
+@check("dng.session2", order=503, capability=CAP_LOCK, stack="up", layer="integration", profile=SCALING_ON,
+       budget_s=90, children=SESSION2)
+def session2(ctx):
+    """Continues dng.session1's login, in its Deadmines copy with its four companions: the first boss killed (final
+    alive), the probe leaves, every companion is dismissed (the party breaks up), the probe enters again alone: the
+    same instance and the first boss still dead (lock.partial_kept_dismissed and lock.partial_kept); then two
+    companions are summoned back into the party and the copy is cleared, the probe leaves and enters again: a new
+    instance with mask 0, both companions in that same new copy, and no bind to the old copy for any of the three
+    (lock.fresh_after_clear)."""
+    res: dict = {}
+    ev: dict = {}
+    s, f = _DNG.get("s"), _DNG.get("f")
+    if s is None:
+        for cid in SESSION2:
+            res[cid] = {"status": "error", "message": "GIVEN: dng.session1's login and companions aren't there",
+                        "evidence": {"session1": "missing"}}
+        return {"children": res}
+    fb = D.first_boss(f)
+    try:
+        part = {}
+
+        def partial():
+            e = {}
+            bit = 1 << fb["bit"]
+            e["companions"] = sorted(s.companions)
+            require(len(s.companions) >= 2, "GIVEN: the companions from dng.session1 aren't in the party", **e)
+            e["kill"] = s.kill(fb, f["map"])
+            e["binds_kill"] = s.wait_binds(lambda v: v and v[0]["mask"] & bit, f["map"])
+            require(e["binds_kill"] and e["binds_kill"][0]["mask"] & bit and not e["binds_kill"][0]["mask"] & (1 << f["final"]["bit"]),
+                    "GIVEN: first encounter not done, or the final one is", **e)
+            e["leave"] = s.leave()
+            time.sleep(1.5)
+            part["removed"] = [dict(s.companions[n], name=n) for n in list(s.companions)]
+            e["dismiss"] = [s.remove(n) for n in list(s.companions)]
+            e["group_after"] = s.group_rows()
+            require(not s.members() and not e["group_after"], "GIVEN: the party didn't break up", **e)
+            time.sleep(1.5)
+            e["binds_outside"] = s.binds(f["map"])
+            b = _enter(s, f, e, "reenter")
+            e["first_after"] = s.unit(fb["spawns"][0]["spawn_id"], fb["credit_entry"])
+            e["binds_after"] = s.binds(f["map"])
+            a = _DNG["first_instance"]
+            require(a and b["instance"] == a, f"re-entry gave instance {b['instance']}, not the unfinished {a}", **e)
+            require(e["binds_after"] and e["binds_after"][0]["mask"] & bit, "the first encounter isn't done any more (mask)", **e)
+            require(e["first_after"].get("health") in (0, None) or e["first_after"].get("guid") is None,
+                    "the first boss is alive again", **e)
+            return e
+        ok = _scenario(res, "lock.partial_kept_dismissed", partial)
+        res["lock.partial_kept"] = dict(res["lock.partial_kept_dismissed"])
+        res["lock.partial_kept"]["evidence"] = {"same_steps_as": "lock.partial_kept_dismissed",
+                                                **(res["lock.partial_kept_dismissed"].get("evidence") or {})}
+
+        def fresh():
+            e = {}
+            require(ok, "GIVEN: the partial-kept steps didn't pass", **e)
+            # two companions summoned back into the party (playerbots `bot add <name>`), into this copy
+            back = []
+            for c in part["removed"][:2]:
+                back.append(s.cmd(f".playerbots bot add {c['name']}", settle=1.0))
+                s.companions[c["name"]] = c
+            e["summoned_back"] = back
+            e["gather"] = s.gather(3)
+            require(e["gather"]["ok"], "GIVEN: the companions never arrived", **e)
+            old = _kill_all(s, f, e)
+            e["old"] = old
+            e["leave"] = s.leave()
+            time.sleep(3)
+            new = _enter(s, f, e, "reenter")
+            e["gather_after"] = s.gather(3)
+            e["mapstat_after"] = s.mapstat()
+            e["binds_after"] = s.wait_binds(lambda v: v and v[0]["instance"] != old["instance"], f["map"])
+            guids = [s.guid] + [c["guid"] for c in part["removed"][:2]]
+            e["old_rows"] = db.query(f"SELECT guid FROM character_instance WHERE instance = {old['instance']} AND guid IN "
+                                     f"({','.join(str(g & 0xFFFFFFFF) for g in guids)})", "characters")
+            require(new["instance"] and new["instance"] != old["instance"],
+                    f"re-entry gave instance {new['instance']}, the old one was {old['instance']}", **e)
+            b = e["binds_after"]
+            require(b and b[0]["instance"] == new["instance"] and b[0]["mask"] == 0, "the new copy's completed-encounter mask isn't 0", **e)
+            ms = e["mapstat_after"]
+            require(ms["instance"] == new["instance"] and ms["players"] == 3, "the companions aren't in the probe's new copy", **e)
+            require(not e["old_rows"], "character_instance still binds someone to the old copy", **e)
+            return e
+        _scenario(res, "lock.fresh_after_clear", fresh)
+        try:
+            s.leave()
+        except Exception:  # noqa: BLE001
+            pass
+    finally:
+        _DNG.clear()
+        try:
+            s.__exit__(None, None, None)
+        finally:
+            ctx.get("lingering", set()).discard(P.DUNGEON_CHAR)
+    ev["children"] = res
+    return ev

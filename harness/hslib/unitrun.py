@@ -117,8 +117,23 @@ def _tap_suite(name: str, cmd: list[str], prefix: str, build: dict) -> dict:
     return out
 
 
+def _pat(pattern: str | None, runner: str) -> tuple[bool, str | None]:
+    """(run this runner?, the pattern its own filter takes): a full id names one runner (unit:cpp:x -> x)."""
+    if not pattern:
+        return True, None
+    if pattern.startswith("unit:"):
+        pre = f"unit:{runner}:"
+        if not (pre.startswith(pattern) or pattern.startswith(pre)):
+            return False, None
+        return True, pattern[len(pre):] or None
+    return True, pattern
+
+
 def run_cpp(pattern: str | None = None, tests: Path | None = None, out: Path | None = None) -> dict:
     from . import unittools as U
+    go, pattern = _pat(pattern, "cpp")
+    if not go:
+        return {"suite": "cpp", "wall_s": 0.0, "tests": [], "build": None}
     try:
         b = U.ensure_cpp(tests=tests, out=out)
     except U.ToolError as e:
@@ -130,6 +145,9 @@ def run_cpp(pattern: str | None = None, tests: Path | None = None, out: Path | N
 def run_lua(pattern: str | None = None, tests: Path | None = None, lua_dir: Path | None = None,
             lock: dict | None = None, cache: Path | None = None) -> dict:
     from . import unittools as U
+    go, pattern = _pat(pattern, "lua")
+    if not go:
+        return {"suite": "lua", "wall_s": 0.0, "tests": [], "build": None}
     try:
         b = U.ensure_lua(lua_dir, lock, cache)
     except Exception as e:  # noqa: BLE001  a missing or mismatched build fails the suite, never skips it

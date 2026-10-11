@@ -77,7 +77,10 @@ def shared_state(own: set[str] = frozenset()) -> dict:
                        "interval_s": int(m.group(1)) if m else None} if r.ok else "error"
         rp = stack.running_profile()
         st["profile"] = (rp or {}).get("profile")
-        rows = db.query("SELECT name FROM characters WHERE online = 1", "characters")
+        # AI players (random bots and the companion pool) come and go on their own: only other accounts count
+        bots = P.DB_NAMES["playerbots"]
+        rows = db.query("SELECT name FROM characters WHERE online = 1 AND account NOT IN "
+                        f"(SELECT account_id FROM {bots}.playerbots_account_type)", "characters")
         st["online"] = sorted(r[0] for r in rows if r[0] not in own)
     except Exception as e:  # noqa: BLE001
         st["error"] = f"{type(e).__name__}: {e}"
@@ -193,3 +196,17 @@ def bulk_identities(n: int, workers: int = 8, run_tag: int | None = None) -> dic
         each = list(ex.map(prepare_identity, ids))
     return {"identities": ids, "wall_s": round(time.time() - t0, 2), "each_s": [e["s"] for e in each],
             "workers": workers}
+
+
+def cleanup_stale() -> dict:
+    """Fixture identities left by an earlier run that was killed before its own cleanup (accounts HSI*): their
+    characters and accounts are removed through the server, and their save folders deleted. Run at fixture start."""
+    t0 = time.time()
+    rows = db.query("SELECT id, username FROM account WHERE username LIKE 'HSI%'", "auth")
+    idents = []
+    for aid, user in rows:
+        chars = [r[0] for r in db.query(f"SELECT name FROM characters WHERE account = {int(aid)} ORDER BY guid", "characters")]
+        chars = (chars + ["", ""])[:2]
+        idents.append(S.Identity(user, "", chars[0] or "Hsnone", chars[1] or "Hsnone"))
+    out = cleanup_identities(idents) if idents else {"errors": []}
+    return {"stale_accounts": [u for _, u in rows], "duration_s": round(time.time() - t0, 2), "errors": out.get("errors")}

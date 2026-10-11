@@ -20,6 +20,7 @@ from pathlib import Path
 
 from .. import config, db, paths as P, saves as S, soap, stack
 from ..registry import check, require
+from ..session import run_children
 
 CAP = "character-saves"
 REFUSE_COMBAT = "You can't save in combat."
@@ -104,7 +105,6 @@ COVERS = (
     "modules/mod-moonglade/src/MoongladeAddon.*",
     "client-mods/addons/Moonglade/*",
     "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.Saves",
-    "modules/mod-moonglade/conf/mod_moonglade.conf.dist#CharacterDatabase.WorkerThreads",
     "harness/hslib/backups.py",
     "harness/hslib/charsaves.py",
     "harness/hslib/checks/saves_checks.py",
@@ -145,7 +145,6 @@ def table_coverage(ctx):
 
 # ---------------------------------------------------------------- saving
 
-@check("saves.manual", order=471, capability=CAP, stack="up", layer="integration")
 def manual(ctx):
     """A probe character in the world, out of combat, sends `MGSAVE SAVE manual <name>`: within 5 s a complete save
     folder exists under the saves account's store with a manifest naming the character, level, zone and the name; the
@@ -183,13 +182,12 @@ def manual(ctx):
     return ev
 
 
-@check("saves.quick_slot", order=472, capability=CAP, stack="up", layer="integration")
 def quick_slot(ctx):
     """A character with an existing quicksave quicksaves twice more: exactly one quicksave exists for it, and it is
     the newest (its id and creation time are after every earlier quicksave's)."""
     ev = {"before_writes": S.before_writes()}
     _given_enabled(ev)
-    with S.Session(P.SAVES_ALT) as s:
+    with S.Session(S.ident().alt) as s:
         g = s.guid
         ev["first"] = s.ask("QUICK")
         quick = lambda: [x for x in S.store_ids(g) if "-quick" in x and not x.startswith(".tmp-")]   # noqa: E731
@@ -217,7 +215,6 @@ def _fight_alt(s) -> dict:
     return S.engage(s, level=8)
 
 
-@check("saves.refused_in_combat", order=473, capability=CAP, stack="up", layer="integration")
 def refused_in_combat(ctx):
     """A probe character in melee with a creature asks for a manual save and a quicksave, and an autosave trigger fires
     during the fight; later the same character is dead and asks again: no save folder is created, it gets "You can't
@@ -227,7 +224,7 @@ def refused_in_combat(ctx):
     _given_enabled(ev)
     ev["interval"] = S.gm(".moonglade save interval 1")
     try:
-        with S.Session(P.SAVES_ALT) as s:
+        with S.Session(S.ident().alt) as s:
             g = s.guid
             before = S.store_ids(g)
             ev["fight"] = _run(lambda: S.engage(s, level=8), ev)
@@ -270,7 +267,6 @@ def config_interval() -> int:
     return int(m.group(1)) if m else 120
 
 
-@check("saves.autosave_triggers", order=474, capability=CAP, stack="up", layer="integration")
 def autosave_triggers(ctx):
     """With the autosave interval set short (`.moonglade save interval`), the character enters a city (a rest area),
     takes a flight and teleports to another map, repeatedly, until more than 5 autosaves were triggered: each trigger
@@ -285,7 +281,7 @@ def autosave_triggers(ctx):
     ev["taxi"] = {k: taxi[k] for k in ("from", "to", "path", "rule")} | {"flightmaster": taxi["flightmaster"]["name"]}
     produced = []
     try:
-        with S.Session(P.SAVES_ALT) as s:
+        with S.Session(S.ident().alt) as s:
             g = s.guid
             S.clear_store(g)
             ev["manual"] = s.ask("SAVE manual keep me")
@@ -376,7 +372,6 @@ def autosave_triggers(ctx):
     return ev
 
 
-@check("saves.bots_skip", order=475, capability=CAP, stack="up", layer="integration")
 def bots_skip(ctx):
     """The saves account's alt logged in as a playerbot companion of its main passes autosave triggers (the main
     changes maps with it in the party, and a trigger fired for the alt itself): no save appears for the alt, and the
@@ -385,13 +380,13 @@ def bots_skip(ctx):
     _given_enabled(ev)
     interval = 3
     ev["interval"] = S.gm(f".moonglade save interval {interval}")
-    alt = _guid(P.SAVES_ALT)
+    alt = _guid(S.ident().alt)
     try:
-        with S.Session(P.SAVES_CHAR) as s:
+        with S.Session(S.ident().char) as s:
             g = s.guid
             alt_before = S.store_ids(alt)
             main_before = S.store_ids(g)
-            ev["add"] = s.cmd(f".playerbots bot add {P.SAVES_ALT}", settle=2.0, timeout=15)
+            ev["add"] = s.cmd(f".playerbots bot add {S.ident().alt}", settle=2.0, timeout=15)
             t = time.time()
             w = {}
             while time.time() - t < 20:
@@ -404,18 +399,18 @@ def bots_skip(ctx):
             s.after_login()
             ev["tele_main"] = s.cmd(".tele Darnassus")
             time.sleep(2)
-            ev["summon_alt"] = s.cmd(f".summon {P.SAVES_ALT}")         # the companion arrives on the main's new map
+            ev["summon_alt"] = s.cmd(f".summon {S.ident().alt}")         # the companion arrives on the main's new map
             time.sleep(interval + 4)
             ev["trigger_alt"] = S.gm(f".moonglade save trigger {alt} Arrived")
             time.sleep(2)
             ev["alt_who_after"] = S.who(alt)
             ev["alt_new"] = _new_ids(alt, alt_before)
             ev["main_new"] = [x for x in _new_ids(g, main_before) if "-auto" in x]
-            ev["remove"] = s.cmd(f".playerbots bot remove {P.SAVES_ALT}", settle=2.0, timeout=15)
+            ev["remove"] = s.cmd(f".playerbots bot remove {S.ident().alt}", settle=2.0, timeout=15)
             s.cmd(".tele ElwynnForest")
     finally:
         S.gm(f".moonglade save interval {config_interval()}")
-        S.wait_offline(P.SAVES_ALT, timeout=90)
+        S.wait_offline(S.ident().alt, timeout=90)
     require(ev["alt_who_after"].get("map") == 1 and ev["alt_who"].get("map") != 1,
             "GIVEN not met: the companion didn't change maps with its main", **ev)
     require(not ev["alt_new"], "a save appeared for the companion", **ev)
@@ -431,8 +426,8 @@ def atomic(ctx):
     load."""
     ev = {"before_writes": S.before_writes()}
     _given_enabled(ev)
-    g = _guid(P.SAVES_ALT)
-    require(S.wait_offline(P.SAVES_ALT), "GIVEN not met: the alt is online", **ev)
+    g = _guid(S.ident().alt)
+    require(S.wait_offline(S.ident().alt), "GIVEN not met: the alt is online", **ev)
     prev = S.take(g, "before the kill")
     ev["previous"] = prev["id"]
     ev["switch"] = S.gm(".moonglade save test pause 30")
@@ -472,7 +467,6 @@ def _content(guid, ignore=None):
 IGNORE_AFTER_LOGIN = {}
 
 
-@check("saves.roundtrip", order=480, capability=CAP, stack="up", layer="integration")
 def roundtrip(ctx):
     """The saves account's hunter with a pet, out of the world, with level, XP, gold, equipped items, items in bags
     and bank, an equipment set, an active quest, a talent, a profession skill and a reputation, and a save of it; it
@@ -492,10 +486,10 @@ def roundtrip(ctx):
     require(saved == _content(g), "GIVEN not met: the save's content isn't the database's", diff=S.diff(saved, _content(g)), **ev)
     # changes
     fac = S.faction_rule(g)
-    with S.Session(P.SAVES_CHAR, tele=None) as s:
+    with S.Session(S.ident().char, tele=None) as s:
         sel = lambda c: (s.ws.set_selection(g), s.cmd(c))[1]       # noqa: E731
         ch = {"levelup": sel(".levelup 2"), "money": sel(".modify money -50000"),
-              "quest": S.gm(f"quest remove {S.F.QUEST_ID} {P.SAVES_CHAR}"), "talents": S.gm(f"reset talents {P.SAVES_CHAR}"),
+              "quest": S.gm(f"quest remove {S.F.QUEST_ID} {S.ident().char}"), "talents": S.gm(f"reset talents {S.ident().char}"),
               "rep": sel(f".modify reputation {fac['faction']} {S.REP_CHANGED}")}
         bag = [it for it in S.inventory(g) if it["bag"] == 0 and S.INVENTORY_SLOT_ITEM_START <= it["slot"] < 39]
         if bag:
@@ -506,7 +500,7 @@ def roundtrip(ctx):
         ch["save"] = s.cmd(".save")
         time.sleep(1)
         ev["changes"] = ch
-    require(S.wait_offline(P.SAVES_CHAR), "the hunter didn't log out", **ev)
+    require(S.wait_offline(S.ident().char), "the hunter didn't log out", **ev)
     changed = _content(g)
     ev["changed_tables"] = sorted(S.diff(saved, changed))
     require({"characters", "character_queststatus", "character_talent", "character_reputation"} <= set(ev["changed_tables"])
@@ -525,8 +519,8 @@ def roundtrip(ctx):
     ev["position_delta_yd"] = dpos
     require(not d, "save-set rows differ from the save after the load", **ev)
     require(dpos <= 0.01, "the position is off by more than 0.01 yards", **ev)
-    require(pos[3] == P.SAVES_CHAR and int(pos[4]) == g, "the character id or name changed", **ev)
-    with S.Session(P.SAVES_CHAR, tele=None) as s:
+    require(pos[3] == S.ident().char and int(pos[4]) == g, "the character id or name changed", **ev)
+    with S.Session(S.ident().char, tele=None) as s:
         w = S.who(g)
         ev["who"] = w
     require(w.get("level") == save["level"] and w.get("money") == save["money"]
@@ -535,7 +529,7 @@ def roundtrip(ctx):
     return ev
 
 
-@check("saves.scope", order=481, capability=CAP, stack="up", layer="integration")
+@check("saves.scope", order=481, capability=CAP, stack="up", layer="integration", identity=True)
 def scope(ctx):
     """Two characters A and B; a mail in A's mailbox, an auction by A, A on B's friend list, a dungeon lockout of A
     (A entered the Deadmines); with the world paused
@@ -546,19 +540,25 @@ def scope(ctx):
     ev = {"before_writes": S.before_writes()}
     _given_enabled(ev)
     S.ensure()
-    a, b = _guid(P.SAVES_CHAR), _guid(P.SAVES_ALT)
+    a, b = _guid(S.ident().char), _guid(S.ident().alt)
+    # test-pyramid: a fresh fixture character has no history; level it so it can enter the Deadmines (min level 10)
+    # and post an auction like the long-lived saves character could
+    if (S.char_row(S.ident().char) or {}).get("level", 0) < S.RICH_LEVEL:
+        ev["level"] = S.gm(f"character level {S.ident().char} {S.RICH_LEVEL}")
     # GIVEN: mail to A, an auction by A, A on B's friend list
-    ev["mail"] = S.gm(f'send items {P.SAVES_CHAR} "hs scope" "hs scope" 2589')
-    with S.Session(P.SAVES_CHAR) as s:
+    ev["mail"] = S.gm(f'send items {S.ident().char} "hs scope" "hs scope" 2589')
+    with S.Session(S.ident().char) as s:
         s.ws.set_selection(a)
         s.cmd(".additem 2589 1")
         s.cmd(".save")
         time.sleep(1)
-        bag = [it for it in S.inventory(a) if it["bag"] == 0 and S.INVENTORY_SLOT_ITEM_START <= it["slot"] < 39]
+        # the added linen (a fresh character's other bag items, the hearthstone among them, can't be auctioned)
+        bag = [it for it in S.inventory(a) if it["bag"] == 0 and S.INVENTORY_SLOT_ITEM_START <= it["slot"] < 39
+               and it["entry"] == 2589]
         require(bag, "GIVEN not met: no bag item to auction", **ev)
         ev["auction"] = S.sell_auction(s, bag[0]["item"])
         s.cmd(".save")
-    with S.Session(P.SAVES_CHAR, tele=None) as s:
+    with S.Session(S.ident().char, tele=None) as s:
         # a real dungeon lockout for A (character_instance): entering the dungeon binds it (game_tele "Deadmines",
         # map 36: Map.dbc InstanceType 1)
         if not db.query(f"SELECT 1 FROM character_instance WHERE guid={a}", "characters"):
@@ -567,9 +567,9 @@ def scope(ctx):
             s.cmd(".tele Stormwind")
             time.sleep(1)
         s.cmd(".save")
-    with S.Session(P.SAVES_ALT) as s:
-        S.add_friend(s, P.SAVES_CHAR)
-    require(S.wait_offline(P.SAVES_CHAR) and S.wait_offline(P.SAVES_ALT), "GIVEN not met: characters online", **ev)
+    with S.Session(S.ident().alt) as s:
+        S.add_friend(s, S.ident().char)
+    require(S.wait_offline(S.ident().char) and S.wait_offline(S.ident().alt), "GIVEN not met: characters online", **ev)
     q = lambda sql: int(db.scalar(sql, "characters") or 0)      # noqa: E731
     given = {"mail": q(f"SELECT COUNT(*) FROM mail WHERE receiver={a}"),
              "auction": q(f"SELECT COUNT(*) FROM auctionhouse WHERE itemowner={a}"),
@@ -579,11 +579,11 @@ def scope(ctx):
     ev["lockout_rows"] = db.query(f"SELECT * FROM character_instance WHERE guid={a}", "characters")
     require(all(given.values()), "GIVEN not met: no mail, auction, friend entry or dungeon lockout", **ev)
     save = S.take(a, "scope")
-    with S.Session(P.SAVES_CHAR, tele=None) as s:
+    with S.Session(S.ident().char, tele=None) as s:
         s.ws.set_selection(a)
         s.cmd(".levelup 1")
         s.cmd(".save")
-    require(S.wait_offline(P.SAVES_CHAR), "A didn't log out", **ev)
+    require(S.wait_offline(S.ident().char), "A didn't log out", **ev)
     save_tables = {t["name"]: t["where"] for t in S.save_set()}
     ev["pause_on"] = S.gm("moonglade pause on")
     try:
@@ -638,7 +638,6 @@ def diff_checksums(x: dict, y: dict) -> list[str]:
     return sorted(k for k in set(x) | set(y) if x.get(k) != y.get(k))
 
 
-@check("saves.item_ids_fresh", order=482, capability=CAP, stack="up", layer="integration")
 def item_ids_fresh(ctx):
     """A save of A holds item X; then A mails X to B; A's save is loaded: A has X again under a new item id, B's mail
     still holds the original X, no primary key is duplicated, the server log shows no item or database error, and
@@ -704,7 +703,6 @@ def item_ids_fresh(ctx):
     return ev
 
 
-@check("saves.inworld_load", order=483, capability=CAP, stack="up", layer="integration")
 def inworld_load(ctx):
     """A probe character in the world, in combat, with a save from an earlier level, sends `MGSAVE LIST`, then
     `MGSAVE LOAD <generation> <index>` naming that save: it gets SMSG_LOGOUT_COMPLETE within 3 s without a 20 s
@@ -755,7 +753,7 @@ def inworld_load(ctx):
     return ev
 
 
-@check("saves.load_ordering", order=484, capability=CAP, stack="up", layer="integration")
+@check("saves.load_ordering", order=484, capability=CAP, stack="up", layer="integration", identity=True)
 def load_ordering(ctx):
     """20 times: the character moves and gains gold (a periodic save pending; in every other round a save of it is
     queued too) and 0.1 s later loads a save in the game: every time the database afterwards holds the save's position and gold, not the pre-load values. The rendered
@@ -767,15 +765,15 @@ def load_ordering(ctx):
     m = re.search(r"^CharacterDatabase\.WorkerThreads\s*=\s*(\d+)", conf, re.M)
     ev["worker_threads"] = int(m.group(1)) if m else None
     require(ev["worker_threads"] == 1, "GIVEN not met: CharacterDatabase.WorkerThreads isn't 1", **ev)
-    g = _guid(P.SAVES_ALT)
-    require(S.wait_offline(P.SAVES_ALT), "GIVEN not met: the alt is online", **ev)
-    S.gm(f"tele name {P.SAVES_ALT} ElwynnForest")
+    g = _guid(S.ident().alt)
+    require(S.wait_offline(S.ident().alt), "GIVEN not met: the alt is online", **ev)
+    S.gm(f"tele name {S.ident().alt} ElwynnForest")
     save = S.take(g, "ordering base")
     sx = db.query(f"SELECT CAST(position_x AS DOUBLE), CAST(position_y AS DOUBLE), money FROM characters WHERE guid={g}",
                   "characters")[0]
     rounds = []
     for i in range(20):
-        with S.Session(P.SAVES_ALT, tele=None) as s:
+        with S.Session(S.ident().alt, tele=None) as s:
             lst = s.list()
             row = next(r for r in lst["rows"] if r["label"] == save["label"])
             s.ws.set_selection(g)
@@ -831,7 +829,6 @@ def load_ordering(ctx):
     return ev
 
 
-@check("saves.undo", order=485, capability=CAP, stack="up", layer="integration")
 def undo(ctx):
     """A character that has just loaded an older save loads its "Before loading" save: its save-set rows equal those
     from before the first load (by content), and at most 3 before-load saves exist for it."""
@@ -864,10 +861,10 @@ def load_atomic(ctx):
     identical to before (checksums), the load reports failure, and the before-load save exists."""
     ev = {"before_writes": S.before_writes()}
     _given_enabled(ev)
-    g = _guid(P.SAVES_CHAR)
-    require(S.wait_offline(P.SAVES_CHAR), "GIVEN not met: the hunter is online", **ev)
+    g = _guid(S.ident().char)
+    require(S.wait_offline(S.ident().char), "GIVEN not met: the hunter is online", **ev)
     old = S.take(g, "atomic")
-    S.gm(f"character level {P.SAVES_CHAR} {S.RICH_LEVEL + 1}")
+    S.gm(f"character level {S.ident().char} {S.RICH_LEVEL + 1}")
     nstmt = statements_of(g, old["id"])
     half = max(1, nstmt // 2)
     ev["statements"] = nstmt
@@ -899,7 +896,6 @@ def statements_of(guid: int, sid: str) -> int:
     return n
 
 
-@check("saves.load_refusals", order=487, capability=CAP, stack="up", layer="integration")
 def load_refusals(ctx):
     """One save each that is damaged (one byte changed), of another character, of another account, or with an altered
     schema fingerprint, and the target character online (as itself, and as a companion): each load is refused with its
@@ -907,8 +903,8 @@ def load_refusals(ctx):
     ev = {"before_writes": S.before_writes()}
     _given_enabled(ev)
     S.ensure()
-    a, b = _guid(P.SAVES_CHAR), _guid(P.SAVES_ALT)
-    require(S.wait_offline(P.SAVES_CHAR) and S.wait_offline(P.SAVES_ALT), "GIVEN not met: characters online", **ev)
+    a, b = _guid(S.ident().char), _guid(S.ident().alt)
+    require(S.wait_offline(S.ident().char) and S.wait_offline(S.ident().alt), "GIVEN not met: characters online", **ev)
     good = S.take(a, "refusals base")
     other = S.take(b, "other character")
     da, db_ = S.store_dir(a), S.store_dir(b)
@@ -951,12 +947,12 @@ def load_refusals(ctx):
             r = S.load(a, sid)
             results[label] = {"result": r, "rows_changed": S.rows_digest(a) != before,
                               "new_saves": sorted(set(S.store_ids(a)) - ids)}
-        with S.Session(P.SAVES_CHAR, tele=None) as s:
+        with S.Session(S.ident().char, tele=None) as s:
             before, ids = S.rows_digest(a), set(S.store_ids(a))
             r = S.load(a, good["id"])
             results["online as itself"] = {"result": r, "rows_changed": S.rows_digest(a) != before,
                                            "new_saves": sorted(set(S.store_ids(a)) - ids)}
-            s.cmd(f".playerbots bot add {P.SAVES_ALT}", settle=2.0, timeout=15)
+            s.cmd(f".playerbots bot add {S.ident().alt}", settle=2.0, timeout=15)
             t = time.time()
             while time.time() - t < 20 and not S.who(b).get("online"):
                 time.sleep(0.5)
@@ -965,8 +961,8 @@ def load_refusals(ctx):
             r = S.load(b, other["id"])
             results["online as a companion"] = {"result": r, "who": S.who(b), "rows_changed": S.rows_digest(b) != before_b,
                                                 "new_saves": sorted(set(S.store_ids(b)) - ids_b)}
-            s.cmd(f".playerbots bot remove {P.SAVES_ALT}", settle=2.0, timeout=15)
-        S.wait_offline(P.SAVES_ALT, timeout=90)
+            s.cmd(f".playerbots bot remove {S.ident().alt}", settle=2.0, timeout=15)
+        S.wait_offline(S.ident().alt, timeout=90)
     finally:
         for x in made:
             shutil.rmtree(da / x, ignore_errors=True)
@@ -981,19 +977,18 @@ def load_refusals(ctx):
 
 # ---------------------------------------------------------------- lists
 
-@check("saves.inworld_list", order=488, capability=CAP, stack="up", layer="integration")
 def inworld_list(ctx):
     """A probe character with manual, quick, auto and before-load saves sends `MGSAVE LIST`: one reply line per save,
     newest first, each at most 255 bytes, with kind, label, time, level and zone, and the same set the store holds."""
     ev = {"before_writes": S.before_writes()}
     _given_enabled(ev)
-    g = _guid(P.SAVES_ALT)
-    require(S.wait_offline(P.SAVES_ALT), "GIVEN not met: the alt is online", **ev)
+    g = _guid(S.ident().alt)
+    require(S.wait_offline(S.ident().alt), "GIVEN not met: the alt is online", **ev)
     m = S.take(g, "list manual")
     ev["before_load"] = S.load(g, m["id"])
     S.gm(".moonglade save interval 1")
     try:
-        with S.Session(P.SAVES_ALT) as s:
+        with S.Session(S.ident().alt) as s:
             s.ask("QUICK")
             s.after_login()
             s.cmd(".tele Darnassus")
@@ -1019,23 +1014,22 @@ def inworld_list(ctx):
     return ev
 
 
-@check("saves.list_wording", order=489, capability=CAP, stack="up", layer="integration")
 def list_wording(ctx):
     """The generated save list for the glue (charsaves.render for the saves account's store) and the add-on's reply
     lines: no save id, path, nonce or password appears; no label contains "server", "realm", "account" or "database";
     the glue file is written 0600 inside a play client only (refused for client/)."""
     from .. import charsaves, frontmenu
     ev = {}
-    g = _guid(P.SAVES_ALT)
-    content, index = charsaves.build([P.SAVES_USER])
+    g = _guid(S.ident().alt)
+    content, index = charsaves.build([S.ident().user])
     lua = charsaves.render(content, 3).decode()
-    with S.Session(P.SAVES_ALT) as s:
+    with S.Session(S.ident().alt) as s:
         lines = s.list()["lines"]
     ids = [x for x in S.store_ids(g) if not x.startswith(".tmp-")]
     ev["saves"] = len(index)
     ev["lines"] = len(lines)
     texts = {"glue": lua, "addon": "\n".join(lines)}
-    secrets_ = [P.SAVES_PASS, P.TEST_PASS, str(P.SAVES), str(P.ROOT)] + ids
+    secrets_ = [S.ident().password, P.TEST_PASS, str(P.SAVES), str(P.ROOT)] + ids
     ev["leaks"] = {k: [x for x in secrets_ if x and x in v] for k, v in texts.items()}
     labels = [r["label"] for c in content["chars"] for r in c["saves"]] + [l.split("\t")[-1] for l in lines if l.startswith("E\t")]
     ev["bad_labels"] = [l for l in labels if any(w in l.lower() for w in FORBIDDEN_WORDS)]
@@ -1149,7 +1143,7 @@ def addon_report(addon: Path, binds: dict) -> dict:
             "patch_files": sorted(patch)}
 
 
-@check("saves.addon_static", order=469, capability=CAP, stack="any", layer="integration")
+@check("saves.addon_static", order=469, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def addon_static(ctx):
     """The Moonglade add-on's files: Bindings.xml declares quicksave and quickload; their default keys are bound to
     nothing in the installed client's own default bindings (WTF\\DefaultBindings.wtf from its base archives, cited in
@@ -1168,3 +1162,37 @@ def addon_static(ctx):
     want = {f"Interface/AddOns/Moonglade/{f}" for f in ("Moonglade.toc", "Moonglade.lua", "MoongladeSaves.lua", "Bindings.xml")}
     require(rep["toc_lists_lua"] and want <= set(rep["patch_files"]), "the TOC or patch 0003 lacks the add-on's files", **ev)
     return ev
+
+
+# ---------------------------------------------------------------- clustered sessions (test-pyramid design 13 rule 3)
+# Each session runs its scenarios one after another for the fixture's identity (ctx["identity"], set as the saves
+# identity by the fixture); each scenario keeps its id, status and evidence. Character-scoped sessions may run two at
+# a time; the interval session changes the server-wide autosave interval (each scenario restores it), so it runs alone.
+
+@check("saves.session_a", order=471, capability=CAP, stack="up", layer="integration", scope="character",
+       children=('saves.manual', 'saves.quick_slot', 'saves.inworld_load', 'saves.undo', 'saves.list_wording'))
+def session_a(ctx):
+    """One identity: a manual save, the quicksave slot, a load in the game, its undo, and the list wording, in order
+    (the scenarios saves.manual, saves.quick_slot, saves.inworld_load, saves.undo and saves.list_wording)."""
+    return run_children(ctx, [("saves.manual", manual), ("saves.quick_slot", quick_slot), ("saves.inworld_load", inworld_load), ("saves.undo", undo), ("saves.list_wording", list_wording)])
+
+
+@check("saves.session_b", order=472, capability=CAP, stack="up", layer="integration", scope="character",
+       children=('saves.roundtrip', 'saves.item_ids_fresh', 'saves.load_refusals'))
+def session_b(ctx):
+    """One identity: the round trip of a rich character, item ids after a load, and the refused loads (the scenarios
+    saves.roundtrip, saves.item_ids_fresh and saves.load_refusals)."""
+    return run_children(ctx, [("saves.roundtrip", roundtrip), ("saves.item_ids_fresh", item_ids_fresh), ("saves.load_refusals", load_refusals)])
+
+
+@check("saves.session_interval", order=473, capability=CAP, stack="up", layer="integration", identity=True,
+       children=('saves.refused_in_combat', 'saves.autosave_triggers', 'saves.bots_skip', 'saves.inworld_list'))
+def session_interval(ctx):
+    """The scenarios that shorten the server-wide autosave interval (each restores it, and registers the restore as
+    an undo): refused in combat, autosave triggers, companions skip, and the in-game list."""
+    ctx.setdefault("undo", []).append(_restore_interval)
+    return run_children(ctx, [("saves.refused_in_combat", refused_in_combat), ("saves.autosave_triggers", autosave_triggers), ("saves.bots_skip", bots_skip), ("saves.inworld_list", inworld_list)])
+
+
+def _restore_interval():
+    S.gm(f".moonglade save interval {config_interval()}")

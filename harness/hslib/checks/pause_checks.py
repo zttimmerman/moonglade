@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import time
 
-from .. import config, pause as Z, soap, stack
+from .. import config, db, pause as Z, soap, stack
 from ..registry import check, require
 
 CAP = "true-pause"
@@ -76,233 +76,12 @@ COVERS = (
 )
 
 
-@check("pause.combat_frozen", order=440, capability=CAP, stack="up", layer="integration")
-def combat_frozen(ctx):
-    """GIVEN the companion character in melee with a creature (it attacks the character; the character auto-attacks
-    it), WHEN the probe sends the pause add-on message and waits 20 s, THEN the character's and the creature's health
-    (`.moonglade pause unit`) are the same at the start and the end of the pause, no SMSG_ATTACKERSTATEUPDATE arrives
-    between the server's "paused" answer and the resume request, and after the resume a melee swing arrives within
-    5 s."""
-    ev = {}
-    _status_running(ev)
-    s = _session()
-    try:
-        fight = _run(s.engage)
-        ev["fight"] = fight
-        cg = fight["guid"]
-        i_given = s.ws.mark()
-        first = s.ws.wait_event(lambda e: e["kind"] == "melee_damage" and {e["attacker"], e["victim"]} == {cg, s.guid},
-                                0, timeout=10)
-        ev["swing_before_pause"] = first
-        require(first is not None, "GIVEN not met: no melee swing between the character and the creature", **ev)
-        p = _run(s.pause)
-        ev["pause"] = p
-        start = {"me": _run(lambda: s.unit(s.guid)), "creature": _run(lambda: s.unit(cg))}
-        Z.wait_until(p["reply_t"] + PAUSE_S)
-        end = {"me": _run(lambda: s.unit(s.guid)), "creature": _run(lambda: s.unit(cg))}
-        ev["at_pause_start"], ev["at_pause_end"] = start, end
-        ev["status_paused"] = Z.status()
-        r = _run(s.resume)
-        ev["resume"] = r
-        swing = s.ws.wait_event(lambda e: e["kind"] == "melee_damage" and {e["attacker"], e["victim"]} == {cg, s.guid}
-                                and e["t"] >= r["sent_t"], 0, timeout=SWING_AFTER_S + 1)
-        ev["first_swing_after_resume"] = swing
-        during = s.swings(p["reply_i"], r["sent_i"])
-        ev["swings_during_pause"] = during[:10]
-        ev["swings_since_given"] = len(s.swings(i_given - 1))
-        ev["paused_s"] = round(r["sent_t"] - p["reply_t"], 2)
-        require(ev["status_paused"]["state"] == "paused", "the server didn't report paused during the pause", **ev)
-        require(start["me"]["health"] == end["me"]["health"], "the character's health changed during the pause", **ev)
-        require(start["creature"]["health"] == end["creature"]["health"], "the creature's health changed during the pause",
-                **ev)
-        require(not during, f"{len(during)} SMSG_ATTACKERSTATEUPDATE arrived during the pause", **ev)
-        require(ev["paused_s"] >= PAUSE_S, "the pause was shorter than 20 s", **ev)
-        require(swing is not None and swing["t"] - r["sent_t"] <= SWING_AFTER_S,
-                "no melee swing within 5 s of the resume", **ev)
-    finally:
-        _close(s, ev)
-    return ev
 
 
-@check("pause.aura_frozen", order=441, capability=CAP, stack="up", layer="integration")
-def aura_frozen(ctx):
-    """GIVEN a buff with >= 30 s left on the companion character and a DoT ticking on a creature (spells by
-    pause.SPELL_RULES, applied with `.aura`), WHEN paused 20 s and resumed, THEN the buff's lost time (pause.lost_ms
-    between a read-out just before the pause and one just after the resume, `.list auras id`) is under 1 s, no
-    SMSG_PERIODICAURALOG for the DoT arrives during the pause, and after the resume the client gets an
-    SMSG_AURA_UPDATE for the buff whose remaining duration is within 1 s of the server's."""
-    ev = {"spells": {k: v for k, v in _run(Z.pick_spells).items() if k in ("buff", "dot")}}
-    buff, dot = ev["spells"]["buff"]["id"], ev["spells"]["dot"]["id"]
-    _status_running(ev)
-    s = _session()
-    try:
-        fight = _run(lambda: s.engage(swing=False))
-        ev["fight"] = fight
-        cg = fight["guid"]
-        s.ws.set_selection(s.guid)
-        ev["aura_buff"] = s.ws.command(f".aura {buff}", settle=0.3, timeout=4)
-        s.ws.set_selection(cg)
-        ev["aura_dot"] = s.ws.command(f".aura {dot}", settle=0.3, timeout=4)
-        t_dot = time.time()
-        tick = None
-        while tick is None and time.time() - t_dot < 8:
-            tick = next(iter(s.tap.between(t_dot - 1, kind="periodic", spell=dot, victim=cg)), None)
-            time.sleep(0.2)
-        ev["dot_tick_before_pause"] = tick
-        require(tick is not None, "GIVEN not met: the DoT never ticked on the creature", **ev)
-        b0 = _run(lambda: s.aura(s.guid, buff))
-        ev["buff_before"] = b0
-        require((b0["duration"] or 0) >= 30000, "GIVEN not met: the buff has less than 30 s left", **ev)
-        st0 = Z.status()
-        p = _run(s.pause)
-        ev["pause"] = p
-        bp = _run(lambda: s.aura(s.guid, buff))
-        Z.wait_until(p["reply_t"] + PAUSE_S)
-        bp2 = _run(lambda: s.aura(s.guid, buff))
-        ev["buff_during"] = [bp, bp2]
-        r = _run(s.resume)
-        ev["resume"] = r
-        b1 = _run(lambda: s.aura(s.guid, buff))
-        st1 = Z.status()
-        ev["buff_after"], ev["status"] = b1, [st0, st1]
-        # the paused time as the probe saw it (the server's "paused" to its "running" answer), not the server's own
-        # paused total (kept as evidence): a server whose clock didn't stop could also miscount it
-        paused_ms = round((r["reply_t"] - p["reply_t"]) * 1000)
-        ev["paused_ms"], ev["server_paused_total_delta_ms"] = paused_ms, st1["paused_total_ms"] - st0["paused_total_ms"]
-        ev["buff_lost_ms"] = Z.lost_ms(b0["duration"], b0["t"], b1["duration"], b1["t"], paused_ms)
-        ticks = s.tap.after(p["reply_i"], r["sent_i"], kind="periodic", spell=dot)
-        ev["dot_ticks_during_pause"] = ticks[:5]
-        time.sleep(4)
-        ev["dot_ticks_after_resume"] = len(s.tap.between(r["sent_t"], kind="periodic", spell=dot))
-        upd = s.tap.between(r["sent_t"], kind="aura_update", guid=s.guid, spell=buff)
-        ev["client_buff_updates_after_resume"] = upd[:3]
-        require(paused_ms >= PAUSE_S * 1000, "the pause was shorter than 20 s", **ev)
-        require(abs(ev["buff_lost_ms"]) < FROZEN_MS, f"the buff lost {ev['buff_lost_ms']} ms during the pause", **ev)
-        require(not ticks, f"{len(ticks)} DoT ticks during the pause", **ev)
-        u = upd[0] if upd else None
-        require(u is not None and u["t"] - r["sent_t"] <= 3 and "duration" in u,
-                "the client got no SMSG_AURA_UPDATE with the buff's duration after the resume", **ev)
-        server_at_update = b1["duration"] + (b1["t"] - u["t"]) * 1000
-        ev["client_vs_server_ms"] = round(u["duration"] - server_at_update)
-        require(abs(ev["client_vs_server_ms"]) < FROZEN_MS,
-                "the buff duration sent to the client differs from the server's by 1 s or more", **ev)
-    finally:
-        _close(s, ev)
-    return ev
 
 
-@check("pause.cooldown_frozen", order=442, capability=CAP, stack="up", layer="integration")
-def cooldown_frozen(ctx):
-    """GIVEN a player spell on a >= 30 s cooldown (`.cooldown` then `.cast`, spell by pause.SPELL_RULES player_cd)
-    and a creature ability on cooldown (creature_cd: `.cast back`, then `.unaura` starts the creature's cooldown),
-    WHEN paused 20 s and resumed, THEN both remaining cooldowns on the server (`.moonglade pause cooldown`) lost under
-    1 s (pause.lost_ms), and after the resume the client gets a cooldown correction for the player spell
-    (SMSG_MODIFY_COOLDOWN or SMSG_SPELL_COOLDOWN naming it)."""
-    ev = {"spells": {k: v for k, v in _run(Z.pick_spells).items() if k in ("player_cd", "creature_cd")}}
-    pcd, ccd = ev["spells"]["player_cd"]["id"], ev["spells"]["creature_cd"]["id"]
-    _status_running(ev)
-    s = _session()
-    try:
-        s.ws.set_selection(s.guid)
-        cr = _run(s.pick_live_creature)
-        cg = cr["guid"]
-        p0 = cr["npc_info"]["pos"]
-        ev["creature"] = {k: cr[k] for k in ("spawn_id", "name", "guid")}
-        # stand 25 yd from it (within `.cast back` range) without pulling it: the staging point rule's direction
-        here = s.gps()
-        stage = _run(lambda: Z.kite_point(p0, here, here.get("map", 0), dist=25))
-        ev["stand_at"] = stage
-        s.ws.command(f".go xyz {stage['x']:.2f} {stage['y']:.2f}", settle=0.4, timeout=4)
-        s.ws.set_selection(s.guid)
-        ev["clear_cooldowns"] = s.ws.command(".cooldown", settle=0.3, timeout=4)
-        ev["cast_player"] = s.ws.command(f".cast {pcd}", settle=0.4, timeout=4)
-        s.ws.set_selection(cg)
-        ev["cast_back"] = s.ws.command(f".cast back {ccd}", settle=0.4, timeout=4)
-        ev["unaura"] = s.ws.command(f".unaura {ccd}", settle=0.4, timeout=4)
-        c0 = {"player": _run(lambda: s.cooldown(s.guid, pcd)), "creature": _run(lambda: s.cooldown(cg, ccd))}
-        ev["cooldowns_before"] = c0
-        require(c0["player"]["ms"] >= 30000 - 5000 and c0["creature"]["ms"] > 0,
-                "GIVEN not met: the player spell or the creature ability isn't on cooldown", **ev)
-        st0 = Z.status()
-        p = _run(s.pause)
-        ev["pause"] = p
-        Z.wait_until(p["reply_t"] + PAUSE_S)
-        r = _run(s.resume)
-        ev["resume"] = r
-        c1 = {"player": _run(lambda: s.cooldown(s.guid, pcd)), "creature": _run(lambda: s.cooldown(cg, ccd))}
-        st1 = Z.status()
-        ev["cooldowns_after"], ev["status"] = c1, [st0, st1]
-        # the paused time as the probe saw it (the server's "paused" to its "running" answer), not the server's own
-        # paused total (kept as evidence): a server whose clock didn't stop could also miscount it
-        paused_ms = round((r["reply_t"] - p["reply_t"]) * 1000)
-        ev["paused_ms"], ev["server_paused_total_delta_ms"] = paused_ms, st1["paused_total_ms"] - st0["paused_total_ms"]
-        ev["lost_ms"] = {k: Z.lost_ms(c0[k]["ms"], c0[k]["t"], c1[k]["ms"], c1[k]["t"], paused_ms) for k in c0}
-        corr = ([x for x in s.tap.between(r["sent_t"], kind="modify_cooldown") if x["spell"] == pcd and x["guid"] == s.guid]
-                + [x for x in s.tap.between(r["sent_t"], kind="spell_cooldown")
-                   if x["guid"] == s.guid and any(c["spell"] == pcd for c in x["cooldowns"])])
-        ev["client_corrections"] = corr[:3]
-        require(paused_ms >= PAUSE_S * 1000, "the pause was shorter than 20 s", **ev)
-        for k, v in ev["lost_ms"].items():
-            require(abs(v) < FROZEN_MS, f"the {k} cooldown lost {v} ms during the pause", **ev)
-        require(corr and corr[0]["t"] - r["sent_t"] <= 3,
-                "the client got no cooldown correction for the player spell after the resume", **ev)
-    finally:
-        _close(s, ev)
-    return ev
-
-
-@check("pause.cast_cancelled", order=443, capability=CAP, stack="up", layer="integration")
-def cast_cancelled(ctx):
-    """GIVEN the companion character casting a >= 2 s cast-time spell (pause.SPELL_RULES cast, `.cast`; its
-    SMSG_SPELL_START seen), WHEN the pause begins mid-cast, THEN the client gets the interrupted notice
-    (SMSG_SPELL_FAILURE / SMSG_SPELL_FAILED_OTHER with SPELL_FAILED_INTERRUPTED, or SMSG_CAST_FAILED) for it, no
-    SMSG_SPELL_GO for it arrives during the pause or within 5 s after the resume and its aura isn't on the character,
-    the character gets SMSG_FORCE_MOVE_ROOT with the pause and SMSG_FORCE_MOVE_UNROOT only after the resume request."""
-    ev = {"spell": _run(Z.pick_spells)["cast"]}
-    sp = ev["spell"]["id"]
-    _status_running(ev)
-    s = _session()
-    try:
-        s.ws.command(".combatstop", settle=0.3, timeout=3)
-        s.ws.set_selection(s.guid)
-        t0 = time.time()
-        s.ws.chat(f".cast {sp}")
-        start = None
-        while start is None and time.time() - t0 < 5:
-            start = next(iter(s.tap.between(t0, kind="spell_start", spell=sp, caster=s.guid)), None)
-            time.sleep(0.05)
-        ev["spell_start"] = start
-        require(start is not None, "GIVEN not met: the cast never started (no SMSG_SPELL_START)", **ev)
-        p = _run(s.pause)
-        ev["pause"] = p
-        ev["pause_after_cast_start_s"] = round(p["sent_t"] - start["t"], 3)
-        require(p["sent_t"] - start["t"] < ev["spell"]["cast_ms"] / 1000,
-                "GIVEN not met: the pause request went out after the cast would have finished", **ev)
-        Z.wait_until(p["reply_t"] + PAUSE_S)
-        unrooted_early = s.tap.after(p["reply_i"], s.ws.mark(), kind="unroot", guid=s.guid)
-        r = _run(s.resume)
-        ev["resume"] = r
-        time.sleep(5)
-        ev["aura_after"] = _run(lambda: s.aura(s.guid, sp))
-        fails = [x for x in s.tap.between(start["t"]) if x.get("spell") == sp
-                 and ((x["kind"] in ("spell_failure", "spell_failed_other") and x["result"] == Z.SPELL_FAILED_INTERRUPTED)
-                      or x["kind"] == "cast_failed")]
-        gos = s.tap.between(start["t"], kind="spell_go", spell=sp, caster=s.guid)
-        roots = s.tap.between(p["sent_t"], p["reply_t"] + 1, kind="root", guid=s.guid)
-        unroots = s.tap.between(r["sent_t"], r["reply_t"] + 1, kind="unroot", guid=s.guid)
-        ev.update({"interrupted": fails[:3], "spell_go": gos[:3], "root": roots[:2], "unroot_during_pause": unrooted_early,
-                   "unroot_after_resume": unroots[:2]})
-        require(fails and fails[0]["t"] <= p["reply_t"] + 0.5, "the client got no interrupted notice for the cast", **ev)
-        require(not gos, "the cast's SMSG_SPELL_GO arrived (the spell went off)", **ev)
-        require(ev["aura_after"]["duration"] is None, "the cast's aura is on the character", **ev)
-        require(roots, "the character wasn't rooted when the pause began", **ev)
-        require(not unrooted_early and unroots, "the character wasn't kept rooted until the resume", **ev)
-    finally:
-        _close(s, ev)
-    return ev
-
-
-@check("pause.respawn_frozen", order=444, capability=CAP, stack="up", layer="integration")
+@check("pause.respawn_frozen", order=444, capability=CAP, stack="up", layer="integration", profile="pause-respawn",
+       identity=True)
 def respawn_frozen(ctx):
     """Two pauses, one per GIVEN: the creature with the shortest respawn by rule stands where no creature can chase the
     character, and creatures only update with a player near them (Map::Update marks the cells around players), so
@@ -313,22 +92,41 @@ def respawn_frozen(ctx):
     its leash radius (it attacked the character, which then ran pause.KITE_YD away), WHEN the world is paused for
     longer than R s and resumed, THEN it is still in combat LEASH_SAMPLE_S after the resume (its leash timer reads
     the frozen game clock; on the wall clock it would have evaded at once)."""
-    ev = {"rule": Z.RESPAWN_RULE}
+    ident = ctx.get("identity")
+    if ident is not None:            # the fixture's identity (security level 3: `.npc add/set/delete` need it)
+        from .. import companion as C
+        with C.as_identity(ident.user, ident.password, ident.alt):
+            return _respawn(ctx, {"fixture_identity": {"account": ident.user, "character": ident.alt}})
+    return _respawn(ctx, {})
+
+
+def _respawn(ctx: dict, ev0: dict) -> dict:
+    ev = {"rule": Z.RESPAWN_RULE, "scratch_rule": SCRATCH_RULE} | ev0
     _status_running(ev)
     s = _session()
+    scratch = None
     try:
         start = s.gps()
         cands = _run(lambda: Z.respawn_candidates())
-        victim = None
-        for c in cands:
-            s.ws.set_selection(s.guid)
-            s.ws.command(f".go xyz {c['spawn']['x']:.2f} {c['spawn']['y']:.2f} {c['spawn']['z']:.2f}", settle=0.4, timeout=4)
-            info = s.npc_info(c["spawn_id"])
-            if info.get("health") and info["guid"]:
-                victim = c | {"guid": info["guid"]}
-                break
+        require(cands, "GIVEN not met: no creature matches the rule", **ev)
+        c = cands[0]
+        # a scratch spawn of the rule's creature where the rule's spawn stands (no creature can chase there)
+        s.ws.set_selection(s.guid)
+        s.ws.command(f".go xyz {c['spawn']['x']:.2f} {c['spawn']['y']:.2f} {c['spawn']['z']:.2f}", settle=0.4, timeout=4)
+        top0 = int(db.scalar("SELECT COALESCE(MAX(guid), 0) FROM creature", "world") or 0)
+        ev["npc_add"] = s.ws.command(f".npc add {c['entry']}", settle=0.6, timeout=5)
+        rows = db.query(f"SELECT guid FROM creature WHERE guid > {top0} AND id = {c['entry']} ORDER BY guid", "world")
+        require(len(rows) == 1, "GIVEN not met: `.npc add` didn't make exactly one scratch spawn", rows=rows, **ev)
+        scratch = int(rows[0][0])
+        ctx.setdefault("undo", []).append(lambda sid=scratch: _drop_scratch_spawn(sid))
+        info = s.npc_info(scratch)
+        require(info.get("guid"), "GIVEN not met: the scratch spawn isn't in the world", info=info, **ev)
+        s.ws.set_selection(info["guid"])
+        ev["spawntime"] = s.ws.command(f".npc set spawntime {SCRATCH_RESPAWN_S}", settle=0.4, timeout=4)
+        st_db = db.scalar(f"SELECT spawntimesecs FROM creature WHERE guid = {scratch}", "world")
+        victim = c | {"spawn_id": scratch, "guid": info["guid"], "spawntimesecs": int(st_db or 0), "scratch": True}
         ev["killed"] = victim
-        require(victim is not None, "GIVEN not met: none of the rule's creatures is alive", candidates=cands, **ev)
+        require(0 < victim["spawntimesecs"] <= 15, "GIVEN not met: the scratch spawn's respawn time isn't at most 15 s", **ev)
         s.ws.set_selection(victim["guid"])
         ev["die"] = s.ws.command(".die", settle=0.3, timeout=4)
         t_kill = time.time()
@@ -337,11 +135,12 @@ def respawn_frozen(ctx):
         require(k0["health"] == 0 and k0["remain_s"], "GIVEN not met: the creature isn't dead with a respawn time", **ev)
         R = k0["remain_s"]
         ev["R_s"] = R
+        require(R <= 15, "GIVEN not met: the respawn remainder R is over 15 s", **ev)
         # (1) the respawn
         st0 = Z.status()
         p = _run(s.pause)
         ev["respawn_pause"] = p
-        Z.wait_until(p["reply_t"] + R + 5)
+        Z.wait_until(p["reply_t"] + R + 3)
         r = _run(s.resume)
         ev["respawn_resume"] = r
         k1 = _run(lambda: Z.respawn_remaining(s, victim["spawn_id"]))
@@ -395,64 +194,38 @@ def respawn_frozen(ctx):
                 "the killed creature didn't come back once R s of unpaused time had passed", **ev)
         require(ch1["combat"] == 1, "the chasing creature evaded (left combat) after the resume", **ev)
     finally:
+        if scratch is not None and s.ws is not None:
+            try:                        # in the world: `.npc delete <spawn>` finds it on the player's map
+                ev["scratch_delete"] = s.ws.command(f".npc delete {scratch}", settle=0.6, timeout=5)
+            except Exception as e:  # noqa: BLE001
+                ev["scratch_delete_error"] = f"{type(e).__name__}: {e}"
         _close(s, ev)
+        if scratch is not None:
+            ev["scratch_dropped"] = _drop_scratch_spawn(scratch)
+            if ctx.get("undo"):
+                ctx["undo"] = [u for u in ctx["undo"] if getattr(u, "__defaults__", None) != (scratch,)]
+    require(ev.get("scratch_dropped", {}).get("ok"), "the scratch spawn or its respawn data is still there", **ev)
     return ev
 
 
-@check("pause.bots_frozen", order=445, capability=CAP, stack="up", layer="integration")
-def bots_frozen(ctx):
-    """GIVEN a playerbot companion in the character's party that is moving (`.playerbots bot addclass priest`; the
-    character moves 30 yd and the bot's position changes between two read-outs), WHEN the world is paused for 20 s,
-    THEN the bot's position, health, mana and current spells (`.moonglade pause unit`) are the same at the start and
-    the end of the pause, and after the resume it acts again (its position changes within 15 s)."""
-    ev = {}
-    _status_running(ev)
-    s = _session()
-    try:
-        ev["combatstop"] = s.ws.command(".combatstop", settle=0.3, timeout=3)
-        add = _run(lambda: s.addclass("priest"))
-        bot = add["bot"]
-        ev["bot"] = {k: bot.get(k) for k in ("guid", "name", "class")}
-        near = s.wait_near(bot["guid"], 10, 30)
-        ev["near_before"] = {"ok": near["ok"], "elapsed_s": near["elapsed_s"]}
-        me = s.gps()
-        s.ws.command(f".go xyz {me['x'] + 30:.2f} {me['y']:.2f}", settle=0.2, timeout=3)
-        # GIVEN: the bot moving (two read-outs 0.3 s apart at different positions) or casting, right before the pause
-        b0, b1, moving, samples = _run(lambda: s.unit(bot["guid"])), None, 0.0, []
-        t_move = time.time()
-        while time.time() - t_move < 6:
-            time.sleep(0.3)
-            b1 = _run(lambda: s.unit(bot["guid"]))
-            moving = Z.math.dist((b0["pos"]["x"], b0["pos"]["y"]), (b1["pos"]["x"], b1["pos"]["y"]))
-            samples.append(round(moving, 2))
-            if moving > 0.2 or b1["spell"] or b1["channel"]:
-                break
-            b0 = b1
-        ev["bot_before"], ev["moved_per_0_3s_yd"] = [b0, b1], samples
-        require(moving > 0.2 or b1["spell"] or b1["channel"], "GIVEN not met: the bot was neither moving nor casting", **ev)
-        p = _run(s.pause)
-        ev["pause"] = p
-        u0 = _run(lambda: s.unit(bot["guid"]))
-        Z.wait_until(p["reply_t"] + PAUSE_S)
-        u1 = _run(lambda: s.unit(bot["guid"]))
-        ev["during"] = [u0, u1]
-        r = _run(s.resume)
-        ev["resume"] = r
-        acted = None
-        while time.time() - r["reply_t"] < BOT_ACTS_S:
-            u = _run(lambda: s.unit(bot["guid"]))
-            if u["pos"] != u1["pos"] or u["spell"] != u1["spell"] or u["channel"] != u1["channel"]:
-                acted = u
-                break
-            time.sleep(0.5)
-        ev["acted_after_resume"] = acted
-        same = {k: u0[k] == u1[k] for k in ("pos", "health", "power", "spell", "channel")}
-        ev["unchanged_during_pause"] = same
-        require(all(same.values()), f"the bot changed during the pause: {[k for k, v in same.items() if not v]}", **ev)
-        require(acted is not None, "the bot didn't act again within 15 s of the resume", **ev)
-    finally:
-        _close(s, ev)
-    return ev
+SCRATCH_RESPAWN_S = 5
+SCRATCH_RULE = ("a scratch spawn (`.npc add`) of pause.RESPAWN_RULE's first creature at that creature's spawn point, "
+                f"respawn time {SCRATCH_RESPAWN_S} s (`.npc set spawntime`), under the pause-respawn profile (5 s corpse "
+                "decay, config.PROFILES); removed afterwards with `.npc delete` and checked gone from world.creature and "
+                "characters.creature_respawn")
+
+
+def _drop_scratch_spawn(spawn_id: int) -> dict:
+    """Check a scratch spawn is gone (row and respawn time); if its row is still there (the in-world delete didn't
+    happen), try the GM command over SOAP once, then check again. Fail-closed: a query error raises."""
+    out = {"spawn_id": spawn_id}
+    if db.query(f"SELECT guid FROM creature WHERE guid = {int(spawn_id)}", "world"):
+        out["delete_soap"] = soap.gm(f"npc delete {int(spawn_id)}", timeout=10).evidence()
+    left = db.query(f"SELECT guid FROM creature WHERE guid = {int(spawn_id)}", "world")
+    resp = db.query(f"SELECT guid FROM creature_respawn WHERE guid = {int(spawn_id)}", "characters")
+    out |= {"creature_rows": left, "respawn_rows": resp, "ok": not left and not resp}
+    return out
+
 
 
 @check("pause.session_alive", order=446, capability=CAP, stack="up", layer="gate")
@@ -600,13 +373,24 @@ DROP_RESUME_S = 5.0         # spec: "within a few seconds" (the session timeout 
 OFFLINE_WAIT_S = 90         # afterwards: the dropped session's character goes offline (WorldSessionMgr, 60 s)
 
 
-@check("pause.disconnect_unpauses", order=451, capability=CAP, stack="up", layer="integration")
+@check("pause.disconnect_unpauses", order=451, capability=CAP, stack="up", layer="integration", identity=True)
 def disconnect_unpauses(ctx):
     """GIVEN a world paused by a connected client (the companion probe session; the server answered "paused" and
     `.moonglade pause status` says paused), WHEN that client's connection is cut without a logout (the probe's socket
     is shut down and closed; no CMSG_LOGOUT_REQUEST), THEN `.moonglade pause status` reports running within 5 s of
-    the cut. Afterwards the check waits for the character to go offline, so later checks can log it in."""
+    the cut. test-pyramid: the session is the test's own fixture character (ctx["identity"]: account and its human
+    warrior), so nothing waits for it to go offline afterwards (no later test uses it)."""
     ev = {}
+    ident = ctx.get("identity")
+    if ident is not None:
+        from .. import companion as C
+        ev["fixture_identity"] = {"account": ident.user, "character": ident.alt}
+        with C.as_identity(ident.user, ident.password, ident.alt):
+            return _disconnect(ev)
+    return _disconnect(ev, wait_offline=True)
+
+
+def _disconnect(ev: dict, wait_offline: bool = False) -> dict:
     _status_running(ev)
     s = _session()
     cut = False
@@ -647,24 +431,23 @@ def disconnect_unpauses(ctx):
                 ev["resume_at_exit"] = soap.gm("moonglade pause off", timeout=10).evidence()
             except OSError as e:
                 ev["resume_at_exit"] = str(e)
-            t0 = time.time()
-            while time.time() - t0 < OFFLINE_WAIT_S and (Z.C.char_row() or {}).get("online"):
-                time.sleep(2)
-            ev["character_offline_after_s"] = round(time.time() - t0, 1)
+            if wait_offline:            # the shared companion character: later checks log it in
+                t0 = time.time()
+                while time.time() - t0 < OFFLINE_WAIT_S and (Z.C.char_row() or {}).get("online"):
+                    time.sleep(2)
+                ev["character_offline_after_s"] = round(time.time() - t0, 1)
     return ev
 
 
-@check("pause.disabled_noop", order=449, capability=CAP, stack="up", layer="integration")
+@check("pause.disabled_noop", order=449, capability=CAP, stack="up", layer="integration", profile="pause-off")
 def disabled_noop(ctx):
     """GIVEN Moonglade.Pause.Enable = 0 (the stack restarted with the pause-off config profile; `.moonglade pause
     status` says enabled 0), WHEN the pause add-on message arrives during a fight, THEN nothing pauses: the server
     answers "disabled", reports running with an unchanged paused total, and melee swings keep arriving (one within
-    5 s after the answer). The stack is put back on the profile it ran before."""
-    ev = {}
-    was = stack.running_profile()
-    ev["profile_before"] = was
-    ev["to_off"] = stack.ensure_profile("pause-off")
-    try:
+    5 s after the answer). test-pyramid: the run's pause-off profile group provides the restart (runner.segment and
+    _ensure_stack); the next default-profile test restarts back."""
+    ev = {"profile": stack.running_profile()}
+    if True:
         st0 = Z.status()
         ev["status_before"] = st0
         require(st0["enabled"] == 0, "GIVEN not met: Moonglade.Pause.Enable isn't 0 on the server", **ev)
@@ -687,9 +470,6 @@ def disabled_noop(ctx):
                     "no melee swing within 5 s after the answer (combat stopped)", **ev)
         finally:
             _close(s, ev)
-    finally:
-        back = (was or {}).get("profile") or config.DEFAULT_PROFILE
-        ev["restore"] = stack.ensure_profile(back if back != "pause-off" else config.DEFAULT_PROFILE)
     return ev
 
 
@@ -744,7 +524,6 @@ def _banner_box(path) -> tuple:
     return ((w / 2 - 170 * u) / w, (60 * u) / h, (w / 2 + 170 * u) / w, (140 * u) / h)
 
 
-@check("client.pause_menu", order=450, capability=CAP, stack="down", layer="integration")
 def pause_menu(ctx):
     """GIVEN the play client in the world (a scratch patched play client, ./play --account test, the harness test
     account; the add-on's pause test mode planted in its SavedVariables), WHEN a hardware Esc (SendInput in the
@@ -878,3 +657,248 @@ def pause_menu(ctx):
         drop_scratch(scratch)
     require(is_clear(ev["remaining_after"]), "something is still running", **ev)
     return ev
+
+
+# ---------------------------------------------------------------- the freeze matrix (test-pyramid: 5 scenarios, one pause)
+
+FREEZE_CHILDREN = ("pause.combat_frozen", "pause.aura_frozen", "pause.cooldown_frozen", "pause.cast_cancelled",
+                   "pause.bots_frozen")
+
+
+@check("pause.freeze_matrix", order=440, capability=CAP, stack="up", layer="integration", children=FREEZE_CHILDREN)
+def freeze_matrix(ctx):
+    """One session establishes the GIVENs of the five freeze scenarios together (a player spell and a creature
+    ability on cooldown, a moving or casting priest companion, melee with a creature that carries the character's DoT
+    while the character carries a buff, a cast in progress), then ONE 20 s pause, then each scenario's THEN, recorded
+    under its own id: pause.combat_frozen, pause.aura_frozen, pause.cooldown_frozen, pause.cast_cancelled and
+    pause.bots_frozen (each with the assertions of its scenario; a GIVEN that couldn't be established fails that
+    scenario)."""
+    from ..registry import CheckFail
+    ev: dict = {}
+    res: dict = {}
+    given: dict = {}
+
+    def fail_all(msg, **e):
+        for cid in FREEZE_CHILDREN:
+            res.setdefault(cid, {"status": "fail", "message": msg, "evidence": e or {"given": False}})
+    _status_running(ev)
+    spells = _run(Z.pick_spells)
+    ev["spells"] = {k: v for k, v in spells.items() if k in ("buff", "dot", "player_cd", "creature_cd", "cast")}
+    buff, dot = spells["buff"]["id"], spells["dot"]["id"]
+    pcd, ccd, sp = spells["player_cd"]["id"], spells["creature_cd"]["id"], spells["cast"]["id"]
+    s = _session()
+    t0 = time.time()
+    try:
+        # the companion
+        s.ws.command(".combatstop", settle=0.3, timeout=3)
+        add = _run(lambda: s.addclass("priest"))
+        bot = add["bot"]
+        given["bot"] = {k: bot.get(k) for k in ("guid", "name", "class")}
+        given["bot_near"] = s.wait_near(bot["guid"], 10, 30)["ok"]
+        # cooldowns: a creature B 25 yd away casts its ability back; the player spell goes on cooldown
+        s.ws.set_selection(s.guid)
+        crb = _run(s.pick_live_creature)
+        cgb = crb["guid"]
+        here = s.gps()
+        stage = _run(lambda: Z.kite_point(crb["npc_info"]["pos"], here, here.get("map", 0), dist=25))
+        s.ws.command(f".go xyz {stage['x']:.2f} {stage['y']:.2f}", settle=0.4, timeout=4)
+        s.ws.set_selection(s.guid)
+        s.ws.command(".cooldown", settle=0.3, timeout=4)
+        s.ws.command(f".cast {pcd}", settle=0.4, timeout=4)
+        s.ws.set_selection(cgb)
+        s.ws.command(f".cast back {ccd}", settle=0.4, timeout=4)
+        s.ws.command(f".unaura {ccd}", settle=0.4, timeout=4)
+        given["cooldown"] = {"creature": {k: crb[k] for k in ("spawn_id", "name", "guid")}}
+        # melee with creature A (not B), the buff on the character and the DoT on A
+        fight = _run(lambda: s.engage(exclude={crb["spawn_id"]}))
+        cg = fight["guid"]
+        given["fight"] = fight
+        i_given = s.ws.mark()
+        first = s.ws.wait_event(lambda e: e["kind"] == "melee_damage" and {e["attacker"], e["victim"]} == {cg, s.guid},
+                                0, timeout=10)
+        given["swing_before_pause"] = first
+        s.ws.set_selection(s.guid)
+        s.ws.command(f".aura {buff}", settle=0.3, timeout=4)
+        s.ws.set_selection(cg)
+        s.ws.command(f".aura {dot}", settle=0.3, timeout=4)
+        t_dot = time.time()
+        tick = None
+        while tick is None and time.time() - t_dot < 8:
+            tick = next(iter(s.tap.between(t_dot - 1, kind="periodic", spell=dot, victim=cg)), None)
+            time.sleep(0.2)
+        given["dot_tick"] = tick
+        b0 = _run(lambda: s.aura(s.guid, buff))
+        given["buff_before"] = b0
+        # the bot moving or casting right before the pause
+        u_a, moving, bsamples = _run(lambda: s.unit(bot["guid"])), 0.0, []
+        u_b = u_a
+        t_move = time.time()
+        while time.time() - t_move < 6:
+            time.sleep(0.3)
+            u_b = _run(lambda: s.unit(bot["guid"]))
+            moving = Z.math.dist((u_a["pos"]["x"], u_a["pos"]["y"]), (u_b["pos"]["x"], u_b["pos"]["y"]))
+            bsamples.append(round(moving, 2))
+            if moving > 0.2 or u_b["spell"] or u_b["channel"]:
+                break
+            u_a = u_b
+        given["bot_before"], given["bot_moved_per_0_3s_yd"] = [u_a, u_b], bsamples
+        # the cast, then the pause at once
+        s.ws.set_selection(s.guid)
+        tc = time.time()
+        s.ws.chat(f".cast {sp}")
+        start = None
+        while start is None and time.time() - tc < 5:
+            start = next(iter(s.tap.between(tc, kind="spell_start", spell=sp, caster=s.guid)), None)
+            time.sleep(0.05)
+        given["spell_start"] = start
+        c0 = {"player": _run(lambda: s.cooldown(s.guid, pcd)), "creature": _run(lambda: s.cooldown(cgb, ccd))}
+        given["cooldown"]["before"] = c0                 # right before the pause (the GIVEN at the WHEN)
+        st0 = Z.status()
+        p = _run(s.pause)
+        ev["pause"] = p
+        at = {"me": _run(lambda: s.unit(s.guid)), "creature": _run(lambda: s.unit(cg)),
+              "bot": _run(lambda: s.unit(bot["guid"])), "buff": _run(lambda: s.aura(s.guid, buff))}
+        Z.wait_until(p["reply_t"] + PAUSE_S)
+        end = {"me": _run(lambda: s.unit(s.guid)), "creature": _run(lambda: s.unit(cg)),
+               "bot": _run(lambda: s.unit(bot["guid"])), "buff": _run(lambda: s.aura(s.guid, buff))}
+        unrooted_early = s.tap.after(p["reply_i"], s.ws.mark(), kind="unroot", guid=s.guid)
+        ev["status_paused"] = Z.status()
+        r = _run(s.resume)
+        ev["resume"] = r
+        b1 = _run(lambda: s.aura(s.guid, buff))
+        c1 = {"player": _run(lambda: s.cooldown(s.guid, pcd)), "creature": _run(lambda: s.cooldown(cgb, ccd))}
+        st1 = Z.status()
+        paused_ms = round((r["reply_t"] - p["reply_t"]) * 1000)
+        ev |= {"paused_ms": paused_ms, "server_paused_total_delta_ms": st1["paused_total_ms"] - st0["paused_total_ms"],
+               "pause_after_given_s": round(p["sent_t"] - t0, 1)}
+        # after the resume: one observation window that covers every scenario's "after" (the longest is the bot's 15 s)
+        swing = s.ws.wait_event(lambda e: e["kind"] == "melee_damage" and {e["attacker"], e["victim"]} == {cg, s.guid}
+                                and e["t"] >= r["sent_t"], 0, timeout=SWING_AFTER_S + 1)
+        acted = None
+        while time.time() - r["reply_t"] < BOT_ACTS_S:
+            u = _run(lambda: s.unit(bot["guid"]))
+            if u["pos"] != end["bot"]["pos"] or u["spell"] != end["bot"]["spell"] or u["channel"] != end["bot"]["channel"]:
+                acted = u
+                break
+            time.sleep(0.5)
+        if time.time() - r["sent_t"] < 5:
+            time.sleep(5 - (time.time() - r["sent_t"]))      # the cast/DoT scenarios observe 5 s after the resume
+        aura_cast_after = _run(lambda: s.aura(s.guid, sp))
+
+        def scenario(cid, fn):
+            try:
+                e = fn()
+                res[cid] = {"status": "pass", "evidence": e}
+            except CheckFail as x:
+                res[cid] = {"status": "fail", "message": str(x)[:500], "evidence": x.evidence}
+        common = {"paused_ms": paused_ms, "pause": p, "resume": r}
+
+        def combat():
+            during = s.swings(p["reply_i"], r["sent_i"])
+            e = common | {"fight": fight, "swing_before_pause": first, "at_pause_start": {k: at[k] for k in ("me", "creature")},
+                          "at_pause_end": {k: end[k] for k in ("me", "creature")}, "swings_during_pause": during[:10],
+                          "first_swing_after_resume": swing, "status_paused": ev["status_paused"]}
+            require(first is not None, "GIVEN not met: no melee swing between the character and the creature", **e)
+            require(ev["status_paused"]["state"] == "paused", "the server didn't report paused during the pause", **e)
+            require(at["me"]["health"] == end["me"]["health"], "the character's health changed during the pause", **e)
+            require(at["creature"]["health"] == end["creature"]["health"], "the creature's health changed during the pause", **e)
+            require(not during, f"{len(during)} SMSG_ATTACKERSTATEUPDATE arrived during the pause", **e)
+            require(paused_ms >= PAUSE_S * 1000, "the pause was shorter than 20 s", **e)
+            require(swing is not None and swing["t"] - r["sent_t"] <= SWING_AFTER_S, "no melee swing within 5 s of the resume", **e)
+            return e
+
+        def aura():
+            lost = Z.lost_ms(b0["duration"], b0["t"], b1["duration"], b1["t"], paused_ms) if b0["duration"] and b1["duration"] else None
+            ticks = s.tap.after(p["reply_i"], r["sent_i"], kind="periodic", spell=dot)
+            upd = s.tap.between(r["sent_t"], kind="aura_update", guid=s.guid, spell=buff)
+            e = common | {"dot_tick_before_pause": tick, "buff_before": b0, "buff_during": [at["buff"], end["buff"]],
+                          "buff_after": b1, "buff_lost_ms": lost, "dot_ticks_during_pause": ticks[:5],
+                          "dot_ticks_after_resume": len(s.tap.between(r["sent_t"], kind="periodic", spell=dot)),
+                          "client_buff_updates_after_resume": upd[:3]}
+            require(tick is not None, "GIVEN not met: the DoT never ticked on the creature", **e)
+            require((b0["duration"] or 0) >= 30000, "GIVEN not met: the buff has less than 30 s left", **e)
+            require(paused_ms >= PAUSE_S * 1000, "the pause was shorter than 20 s", **e)
+            require(lost is not None and abs(lost) < FROZEN_MS, f"the buff lost {lost} ms during the pause", **e)
+            require(not ticks, f"{len(ticks)} DoT ticks during the pause", **e)
+            u = upd[0] if upd else None
+            require(u is not None and u["t"] - r["sent_t"] <= 3 and "duration" in u,
+                    "the client got no SMSG_AURA_UPDATE with the buff's duration after the resume", **e)
+            e["client_vs_server_ms"] = round(u["duration"] - (b1["duration"] + (b1["t"] - u["t"]) * 1000))
+            require(abs(e["client_vs_server_ms"]) < FROZEN_MS,
+                    "the buff duration sent to the client differs from the server's by 1 s or more", **e)
+            return e
+
+        def cooldown():
+            lost = {k: Z.lost_ms(c0[k]["ms"], c0[k]["t"], c1[k]["ms"], c1[k]["t"], paused_ms) for k in c0}
+            corr = ([x for x in s.tap.between(r["sent_t"], kind="modify_cooldown") if x["spell"] == pcd and x["guid"] == s.guid]
+                    + [x for x in s.tap.between(r["sent_t"], kind="spell_cooldown")
+                       if x["guid"] == s.guid and any(c["spell"] == pcd for c in x["cooldowns"])])
+            e = common | {"given": given["cooldown"], "cooldowns_after": c1, "lost_ms": lost, "client_corrections": corr[:3]}
+            require(c0["player"]["ms"] >= 30000 - 5000 and c0["creature"]["ms"] > 0,
+                    "GIVEN not met: the player spell or the creature ability isn't on cooldown", **e)
+            require(paused_ms >= PAUSE_S * 1000, "the pause was shorter than 20 s", **e)
+            for k, v in lost.items():
+                require(abs(v) < FROZEN_MS, f"the {k} cooldown lost {v} ms during the pause", **e)
+            require(corr and corr[0]["t"] - r["sent_t"] <= 3,
+                    "the client got no cooldown correction for the player spell after the resume", **e)
+            return e
+
+        def cast():
+            fails = [x for x in s.tap.between(start["t"] if start else tc) if x.get("spell") == sp
+                     and ((x["kind"] in ("spell_failure", "spell_failed_other") and x["result"] == Z.SPELL_FAILED_INTERRUPTED)
+                          or x["kind"] == "cast_failed")]
+            gos = s.tap.between(start["t"] if start else tc, kind="spell_go", spell=sp, caster=s.guid)
+            roots = s.tap.between(p["sent_t"], p["reply_t"] + 1, kind="root", guid=s.guid)
+            unroots = s.tap.between(r["sent_t"], r["reply_t"] + 1, kind="unroot", guid=s.guid)
+            e = common | {"spell": ev["spells"]["cast"], "spell_start": start, "interrupted": fails[:3], "spell_go": gos[:3],
+                          "root": roots[:2], "unroot_during_pause": unrooted_early, "unroot_after_resume": unroots[:2],
+                          "aura_after": aura_cast_after}
+            require(start is not None, "GIVEN not met: the cast never started (no SMSG_SPELL_START)", **e)
+            e["pause_after_cast_start_s"] = round(p["sent_t"] - start["t"], 3)
+            require(p["sent_t"] - start["t"] < ev["spells"]["cast"]["cast_ms"] / 1000,
+                    "GIVEN not met: the pause request went out after the cast would have finished", **e)
+            require(fails and fails[0]["t"] <= p["reply_t"] + 0.5, "the client got no interrupted notice for the cast", **e)
+            require(not gos, "the cast's SMSG_SPELL_GO arrived (the spell went off)", **e)
+            require(aura_cast_after["duration"] is None, "the cast's aura is on the character", **e)
+            require(roots, "the character wasn't rooted when the pause began", **e)
+            require(not unrooted_early and unroots, "the character wasn't kept rooted until the resume", **e)
+            return e
+
+        def bots():
+            same = {k: at["bot"][k] == end["bot"][k] for k in ("pos", "health", "power", "spell", "channel")}
+            ub = given["bot_before"][1]
+            e = common | {"bot": given["bot"], "bot_before": given["bot_before"],
+                          "moved_per_0_3s_yd": given["bot_moved_per_0_3s_yd"], "during": [at["bot"], end["bot"]],
+                          "acted_after_resume": acted, "unchanged_during_pause": same}
+            require(moving > 0.2 or ub["spell"] or ub["channel"], "GIVEN not met: the bot was neither moving nor casting", **e)
+            require(all(same.values()), f"the bot changed during the pause: {[k for k, v in same.items() if not v]}", **e)
+            require(acted is not None, "the bot didn't act again within 15 s of the resume", **e)
+            return e
+        for cid, fn in (("pause.combat_frozen", combat), ("pause.aura_frozen", aura), ("pause.cooldown_frozen", cooldown),
+                        ("pause.cast_cancelled", cast), ("pause.bots_frozen", bots)):
+            scenario(cid, fn)
+    except CheckFail as e:
+        fail_all(f"the shared session failed before the scenarios' THEN: {e}", **(e.evidence or {}))
+    finally:
+        _close(s, ev)
+    ev["given"] = {k: v for k, v in given.items() if k != "bot_before"}
+    ev["children"] = {k: res[k] | {"duration_s": round(time.time() - t0, 1)} for k in FREEZE_CHILDREN if k in res}
+    for cid in FREEZE_CHILDREN:
+        ev["children"].setdefault(cid, {"status": "error", "message": "not evaluated", "evidence": {"session": "freeze"}})
+    return ev
+
+
+# ---------------------------------------------------------------- journey.pause (test-pyramid: the fixed journey set)
+
+JOURNEY_PAUSE_COVERS = ("client-mods/addons/Moonglade/*", "modules/mod-moonglade/src/MoongladePause.cpp",
+                        "harness/hslib/checks/pause_checks.py", "harness/hslib/pause.py",
+                        "harness/hslib/checks/clientinput.py", "harness/hslib/checks/seamless_checks.py")
+
+
+@check("journey.pause", order=450, capability=CAP, stack="down", layer="journey", budget_s=90,
+       covers=JOURNEY_PAUSE_COVERS, children=("client.pause_menu",))
+def journey_pause(ctx):
+    """The real client in the world (scratch play client, test account): Esc opens the Moonglade pause menu, the world
+    pauses with the banner and dimming, Esc again resumes (the scenario client.pause_menu, its own record)."""
+    from ..session import run_children
+    return run_children(ctx, [("client.pause_menu", pause_menu)])

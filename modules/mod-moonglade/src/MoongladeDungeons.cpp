@@ -34,6 +34,7 @@
  */
 
 #include "Config.h"
+#include "logic/DungeonsLogic.h"
 #include "Group.h"
 #include "InstanceSaveMgr.h"
 #include "Log.h"
@@ -72,21 +73,16 @@ namespace
 
     // Every final encounter of the map and difficulty is in the save's completed-encounter mask. False when the
     // map has no final encounter (nothing to finish).
+    // (the rule is logic/DungeonsLogic.cpp's FinalDone, unit-tested on the host; this passes it the encounter table)
     bool FinalDone(uint32 mask, uint32 mapId, Difficulty diff)
     {
         DungeonEncounterList const* list = sObjectMgr->GetDungeonEncounterList(mapId, diff);
         if (!list)
             return false;
-        bool any = false;
+        std::vector<MoongladeLogic::Encounter> encs;
         for (DungeonEncounter const* enc : *list)
-        {
-            if (!enc->lastEncounterDungeon)
-                continue;
-            any = true;
-            if (!(mask & (1u << enc->dbcEntry->encounterIndex)))
-                return false;
-        }
-        return any;
+            encs.push_back({ enc->lastEncounterDungeon != 0, uint32(enc->dbcEntry->encounterIndex) });
+        return MoongladeLogic::FinalDone(mask, encs);
     }
 
     bool IsBot(Player const* p)
@@ -116,7 +112,7 @@ namespace
             if (!bind || !bind->save || bind->perm || bind->save->GetInstanceId() != k.instanceId)
                 continue;
             uint32 mask = bind->save->GetCompletedEncounterMask();
-            if (!mask || FinalDone(mask, k.mapId, k.difficulty))
+            if (!MoongladeLogic::KeepOnLeave(mask, mask && FinalDone(mask, k.mapId, k.difficulty)))
                 continue;
             sInstanceSaveMgr->PlayerBindToInstance(k.guid, bind->save, true, nullptr);
             LOG_INFO("module", "[mod-moonglade] dungeons: {} left map {} instance {} (mask {:#x}) unfinished: bind kept "
@@ -213,20 +209,25 @@ public:
         if (!save)
             return true;
         uint32 mapId = entry->MapID, instanceId = save->GetInstanceId(), mask = save->GetCompletedEncounterMask();
-        if (!FinalDone(mask, mapId, diff))
+        // the decision is logic/DungeonsLogic.cpp's DecideEnter (unit-tested on the host)
+        bool finished = FinalDone(mask, mapId, diff);
+        Map* map = finished ? sMapMgr->FindMap(mapId, instanceId) : nullptr;
+        bool inside = map && RealPlayerInside(map);
+        bool reset = finished && !inside && map ? map->ToInstanceMap()->Reset(INSTANCE_RESET_ALL) : false;
+        MoongladeLogic::EnterDecision d = MoongladeLogic::DecideEnter(finished, inside, map != nullptr, reset);
+        if (d == MoongladeLogic::EnterDecision::Keep)
         {
             LOG_INFO("module", "[mod-moonglade] dungeons: {} enters map {} instance {} (mask {:#x}): not finished, "
                      "kept", player->GetName(), mapId, instanceId, mask);
             return true;
         }
-        Map* map = sMapMgr->FindMap(mapId, instanceId);
-        if (map && RealPlayerInside(map))
+        if (d == MoongladeLogic::EnterDecision::KeepPlayerInside)
         {
             LOG_INFO("module", "[mod-moonglade] dungeons: {} enters map {} instance {} (mask {:#x}): finished but a "
                      "player is inside, kept", player->GetName(), mapId, instanceId, mask);
             return true;
         }
-        if (!map || map->ToInstanceMap()->Reset(INSTANCE_RESET_ALL))
+        if (d == MoongladeLogic::EnterDecision::ResetAll)
         {
             sInstanceSaveMgr->DeleteInstanceSavedData(instanceId);
             sInstanceSaveMgr->UnbindAllFor(save);   // the player and every companion bound to it

@@ -451,20 +451,54 @@ def rotation_run(root: Path, ev: dict, take=None) -> dict:
     return ev
 
 
-@check("backups.rotation", order=366, capability=CAP, stack="down", layer="integration")
+FAKE_DUMP_S = 0.25        # each faked database dump takes this long, so the 50 ms watcher samples inside every take
+
+
+class fake_database:
+    """test-pyramid (backups.rotation in the unit layer): backups.take with its database I/O faked in-process (no
+    mysqld): the stack looks like mysqld alone running, each dump writes a small gzip file and takes FAKE_DUMP_S, and
+    the per-schema reads (characters, charset, table stats) return fixed values. Every other step of take - the temp
+    folder, the manifest, the re-hash and verify, the rename into place and the rotation - is the real code."""
+    def __enter__(self):
+        import gzip
+        from unittest import mock
+        from .. import stack as _stack
+
+        def dump(schema, dest, add_child, fail=False):
+            time.sleep(FAKE_DUMP_S)
+            Path(dest).write_bytes(gzip.compress(f"-- fake dump of {schema}\n".encode()))
+            return {"bytes": Path(dest).stat().st_size}
+        self.patches = [mock.patch.object(_stack, "stack_processes", lambda lane=None: {"mysqld": [1], "authserver": [], "worldserver": []}),
+                        mock.patch.object(_stack, "mysql_ready", lambda: True),
+                        mock.patch.object(_stack, "mysql_up", lambda *a, **k: {"fake": True}),
+                        mock.patch.object(B, "dump_database", dump),
+                        mock.patch.object(B, "characters", lambda account, schemas=None: []),
+                        mock.patch.object(B, "schema_charset", lambda schema: ("utf8mb4", "utf8mb4_general_ci")),
+                        mock.patch.object(B, "table_stats", lambda schema: {}),
+                        mock.patch.object(B, "_copy_wtf", lambda *a, **k: {})]
+        for x in self.patches:
+            x.start()
+        return self
+
+    def __exit__(self, *exc):
+        for x in reversed(self.patches):
+            x.stop()
+
+
+@check("backups.rotation", order=366, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def rotation(ctx):
-    """Scratch folder with 10 automatic and 3 safety backups (one real backup plus clones of it under older ids):
-    after two more automatic backups and one more safety backup, exactly the newest 10 automatic and newest 3 safety
-    remain; no deletion happened before the new backup was complete (deletion times vs completion, and a 50 ms folder
-    watcher never saw fewer than 10 automatic / 3 safety backups); no temporary folders remain."""
-    ev: dict = {}
-    given_clear(ev)
+    """Scratch folder with 10 automatic and 3 safety backups (one backup plus clones of it under older ids): after two
+    more automatic backups and one more safety backup, exactly the newest 10 automatic and newest 3 safety remain; no
+    deletion happened before the new backup was complete (deletion times vs completion, and a 50 ms folder watcher
+    never saw fewer than 10 automatic / 3 safety backups); no temporary folders remain. test-pyramid: unit layer, the
+    database dump faked in-process (fake_database); the rest of backups.take runs as is."""
+    ev: dict = {"database": "faked in-process (fake_database: no mysqld)"}
     root = scratch_root("rotation")
     try:
-        rotation_run(root, ev)
+        with fake_database():
+            rotation_run(root, ev)
         return ev | verify_rotation(ev)
     finally:
-        stack.down()
         drop(root)
 
 

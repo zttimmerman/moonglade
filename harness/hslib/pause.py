@@ -329,7 +329,7 @@ class Session(C.Session):
         reply None on timeout."""
         since = self.ws.mark()
         t = time.time()
-        self.ws.chat(f"{PREFIX}\t{'1' if on else '0'}", W.CHAT_MSG_WHISPER, to=P.COMP_CHAR, lang=LANG_ADDON)
+        self.ws.chat(f"{PREFIX}\t{'1' if on else '0'}", W.CHAT_MSG_WHISPER, to=C._id()[2], lang=LANG_ADDON)
         e = self.ws.wait_event(lambda e: e["kind"] == "chat" and e["type"] == W.CHAT_MSG_WHISPER and e["lang"] == -1
                                and e["msg"].startswith(PREFIX + "\t")
                                and (want is None or e["msg"].split("\t", 1)[1] in want), since, timeout)

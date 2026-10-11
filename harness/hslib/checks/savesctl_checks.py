@@ -718,7 +718,7 @@ def load_verb_run(listener_cls=None) -> dict:
             "log_text": json.dumps(events)}
 
 
-@check("savesctl.load_verb", order=50, capability=CAP, stack="any", layer="integration")
+@check("savesctl.load_verb", order=50, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def load_verb(ctx):
     """The listener with a stub load action: only the valid L that succeeds gets ACCEPTED; a stale generation, an
     unknown index, a refused load, a load that doesn't finish in the poll limit and the second of two overlapping
@@ -754,7 +754,7 @@ def build_run() -> dict:
     return {"replies": out, "log": [e for e in events if e.get("event") == "request"]}
 
 
-@check("savesctl.build_refused", order=51, capability=CAP, stack="any", layer="integration")
+@check("savesctl.build_refused", order=51, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def build_refused(ctx):
     """With the right nonce, valid S challenges with builds 12340, 12339 and 8606 and with version 2.4.3: only build
     12340 at 3.3.5 gets ACCEPTED; the others get REFUSED and are logged with the reason "wrong build"."""

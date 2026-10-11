@@ -853,7 +853,7 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
         # power-guard "Stop cleanly": no later check runs; the results so far are written and the run fails
         meta["power"]["stop"] = ctx["power_stop"]
         log(ctx["power_stop"]["message"])
-        if not leave_up and any(stack.stack_processes().values()):
+        if not leave_up and tier != "unit" and any(stack.stack_processes().values()):
             ctx.setdefault("stack_transitions", []).append({"down(final)": stack.down()})
         doc = {"meta": meta | {"finished": _now()}, "checks": results}
         doc["meta"]["wall_s"] = round(time.time() - t_start, 1)
@@ -865,7 +865,9 @@ def _run(only, leave_up, tier, force_clean, awake, preflight=None, orphans=None,
         print(P.SUMMARY.read_text())
         return power.STOP_EXIT
 
-    if not leave_up and any(stack.stack_processes().values()):
+    # a unit run never touches the stack (harness-reporting "Unit tier runs fast, starts nothing"): not even to stop
+    # one another run is using
+    if not leave_up and tier != "unit" and any(stack.stack_processes().values()):
         ctx.setdefault("stack_transitions", []).append({"down(final)": stack.down()})
 
     doc = {"meta": meta | {"finished": _now()}, "checks": results}

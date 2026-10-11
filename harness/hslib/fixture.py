@@ -42,7 +42,7 @@ class SharedServer:
         t0 = time.time()
         self.started = t0
         need = len(self.char_checks)
-        rec: dict = {"identities": need}
+        rec: dict = {"identities": need, "stale_cleanup": sharedfix.cleanup_stale()}
         with ThreadPoolExecutor(2) as ex:
             fb = ex.submit(sharedfix.bulk_identities, need, IDENTITY_WORKERS) if need else None
             fw = ex.submit(C.world_facts_warm)
@@ -68,10 +68,12 @@ class SharedServer:
                 out.append({"undo": getattr(fn, "__name__", "?"), "ok": False, "error": f"{type(e).__name__}: {e}"})
         return out
 
-    def _reset(self, recs: list[dict], profile: str | None) -> None:
-        """The reset between shared-server tests: compare with the state at the start of the shared segment."""
+    def _reset(self, recs: list[dict], profile: str | None, ctx: dict | None = None) -> None:
+        """The reset between shared-server tests: compare with the state at the start of the shared segment. Probe
+        characters a test registered as lingering (ctx["lingering"]: a session continued by the next test) don't
+        count as left online."""
         from . import sharedfix
-        own = {n for i in self.identities.values() for n in (i.char, i.alt)}
+        own = {n for i in self.identities.values() for n in (i.char, i.alt)} | set((ctx or {}).get("lingering") or ())
         r = sharedfix.shared_state(own)
         want = dict(self.bases.get(profile or config.DEFAULT_PROFILE, self.base)["state"])
         got = dict(r["state"])
@@ -137,11 +139,11 @@ class SharedServer:
                     recs = list(ex.map(one, part))
                 for r in recs:
                     r["pool"] = len(part) > 1
-                self._reset(recs, batch[0].profile)
+                self._reset(recs, batch[0].profile, ctx)
                 out += recs
             return out
         recs = [one(batch[0])]
-        self._reset(recs, batch[0].profile)
+        self._reset(recs, batch[0].profile, ctx)
         return recs
 
     def finish(self, ctx: dict) -> dict:
