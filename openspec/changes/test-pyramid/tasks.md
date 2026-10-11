@@ -104,6 +104,13 @@ The builder runs `hs test` plus the slice's own tests; no acceptance tier per ta
   - `DungeonsLogic` with its C++ tests.
   - Its checks placed in layers with `covers`.
 
+- [ ] 3.10 Part 3 (design §15): close the gap.
+  - Selector and runner: gate checks never run in pr (listed as owed); `harness/active-changes` no-impact; `report.gate_rule`, `report.selection` and `report.journeys` updated to the new spec text.
+  - No cold `./play` or client session in the integration layer: backups kill-safe/restore on the shared server, play S1–S3 merged, client area.
+  - Merged journey sessions (`first_play`, `saves`, `app_desktop`) within their budgets.
+  - Saves and dungeons trims; `PENDING_SLEEPS`.
+  - Measure: unit layer, one run of all integration + journey checks, the PR replay; targets in design §15.
+
 ## 4. Rules and docs
 - [x] 4.1 CLAUDE.md §4, §6, §9 and §10 with the proposal's exact text (orchestrator; Zach approved the change).
   - `hs-change-loop` run budget: builder = unit + own test; verifier = one PR-tier run + 3× new/changed + 2–3 spot checks; full ×3 only at milestone gates.

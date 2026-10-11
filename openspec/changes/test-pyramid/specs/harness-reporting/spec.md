@@ -1,7 +1,7 @@
 ## MODIFIED Requirements
 
 ### Requirement: Single-command full run
-`harness/hs run` SHALL run the checks of the selected run tier (`unit`, `pr` or `full`; default `pr`), optionally filtered by `--only <glob>`, bring the stack up as needed, and exit 0 only if every executed check passed and every time budget of the run held. On a run that isn't full (filtered, tier `unit`, or tier `pr` whose selection isn't FULL), `report.full_run` records `skip` ("not a full run") instead of `fail`, and that skip doesn't affect the exit code. A run counts as **full** only if it is unfiltered and its tier is `full`, and it SHALL include every check and every unit test referenced by any scenario in the archived specs and in the active changes (those listed in `harness/active-changes`). A `pr` run whose selection is FULL SHALL execute every unit, integration and journey check (the complete acceptance suite) and only the gate checks its changed paths select.
+`harness/hs run` SHALL run the checks of the selected run tier (`unit`, `pr` or `full`; default `pr`), optionally filtered by `--only <glob>`, bring the stack up as needed, and exit 0 only if every executed check passed and every time budget of the run held. On a run that isn't full (filtered, tier `unit`, or tier `pr` whose selection isn't FULL), `report.full_run` records `skip` ("not a full run") instead of `fail`, and that skip doesn't affect the exit code. A run counts as **full** only if it is unfiltered and its tier is `full`, and it SHALL include every check and every unit test referenced by any scenario in the archived specs and in the active changes (those listed in `harness/active-changes`). A `pr` run whose selection is FULL SHALL execute every unit, integration and journey check (the complete acceptance suite) and no gate check.
 
 #### Scenario: Full run produces reports
 - **GIVEN** a built server
@@ -86,7 +86,7 @@ Every unfiltered full run SHALL write its results.json and summary.md to `harnes
 ## ADDED Requirements
 
 ### Requirement: Test layers and run tiers
-Every check SHALL declare exactly one **layer**: `unit` (no server, no client, no Wine process; a check that starts one fails), `integration` (server probe, SQL, CLI or a stand-in `./play`), `journey` (the real client or the app end to end; only the named set in "Fixed journey set") or `gate` (builds from empty, soaks, packaging, real-stack harness self-tests). Run tiers SHALL be: `--tier unit` runs the unit layer only (`harness/hs test` is the same run); `--tier pr` runs the unit layer, then the integration, journey and gate checks the impact selection picks; `--tier full` runs every check of every layer. `results.json` SHALL record the tier, each record's layer, and the selection.
+Every check SHALL declare exactly one **layer**: `unit` (no server, no client, no Wine process; a check that starts one fails), `integration` (server probe, SQL, CLI or a stand-in `./play`), `journey` (the real client or the app end to end; only the named set in "Fixed journey set") or `gate` (builds from empty, soaks, packaging, real-stack harness self-tests). Run tiers SHALL be: `--tier unit` runs the unit layer only (`harness/hs test` is the same run); `--tier pr` runs the unit layer, then the integration and journey checks the impact selection picks, and lists the gate checks it selects as owed without running them; `--tier full` runs every check of every layer. `results.json` SHALL record the tier, each record's layer, and the selection.
 
 #### Scenario: Unit tier runs fast, starts nothing and says so
 - **GIVEN** a checkout with the stack down
@@ -118,7 +118,7 @@ The unit layer SHALL run without Homebrew additions and without any server, clie
 ### Requirement: Impact selection is fail-safe
 A `pr` run SHALL select tests from the paths the change touches (`git diff --name-only --no-renames <merge-base with origin/main>` plus staged, unstaged and untracked files), using declared ownership, not import closures. Each integration, journey and gate test SHALL declare a `covers` list: product paths (module sources, add-on and glue files, launcher, scripts), the harness modules its check file imports directly, and module-config sections (for example `Moonglade.Saves.*`). Shared harness infrastructure (modules that six or more acceptance check files import directly, plus `probe/**`, `stack.py`, `lanes.py`, `lanestack.py`, `runner.py`) is owned by the unit layer and the smoke set, not by every test. A path SHALL select:
 1. FULL (the complete acceptance suite) if it is `patches/core/**`, `patches/playerbots/**`, a core or playerbots pin key in `fork.lock`, `harness/hslib/build.py`, or a CMake file;
-2. nothing beyond the unit layer if it is `openspec/**`, `docs/**`, `*.md` or `harness/tests/unit/**`;
+2. nothing beyond the unit layer if it is `openspec/**`, `docs/**`, `*.md`, `harness/tests/unit/**` or `harness/active-changes`;
 3. otherwise every test whose `covers` names it (a module-config file selects by the sections whose keys changed);
 4. the smoke set (`journey.first_play` plus the cheapest integration test of each area) if no test covers it, if it is shared infrastructure, or if it is `mod_moonglade_loader.cpp`.
 
@@ -141,12 +141,12 @@ Every tracked product path (module sources and configs, `client-mods/**`, `harne
 - Check: `report.ownership`
 
 ### Requirement: Fixed journey set
-The `journey` layer SHALL be exactly this named set, each with a time budget, run one at a time with no other check overlapping it: `journey.first_play` (150 s; cold app open → fresh play client → Continue → character select → world → quit from the Dock → shutdown window → backup → everything down), `journey.pause` (90 s), `journey.saves` (150 s), `journey.login_recovery` (120 s), `journey.stock_client` (60 s), `journey.app_desktop` (240 s; GUI, stand-in client). The set SHALL hold at most 8 journeys and at most 12 min of budgets in total; adding, removing or re-budgeting a journey is a spec change.
+The `journey` layer SHALL be exactly this named set, each with a time budget, run one at a time with no other check overlapping it: `journey.first_play` (150 s; cold `./play` → fresh play client → Continue → character select → world → quit → everything down, then the same session warm), `journey.pause` (90 s), `journey.saves` (150 s), `journey.login_recovery` (120 s), `journey.stock_client` (60 s), `journey.app_desktop` (240 s; GUI, stand-in client: cold app open, Dock, focus, quit, shutdown window, backup restore). The set SHALL hold at most 8 journeys and at most 14 min (840 s) of budgets in total; adding, removing or re-budgeting a journey is a spec change.
 
 #### Scenario: The registry matches the named set and journeys never overlap
 - **GIVEN** the registry and a completed full run
 - **WHEN** the journey rule runs
-- **THEN** the registered journey-layer checks are exactly the six named ids with the budgets above, their budgets sum to at most 720 s, and the run's timeline shows no two journeys and no journey and another check overlapping
+- **THEN** the registered journey-layer checks are exactly the six named ids with the budgets above, their budgets sum to at most 840 s, and the run's timeline shows no two journeys and no journey and another check overlapping
 - **AND** a scratch registry with a seventh unnamed journey fails the rule
 - Check: `report.journeys`
 
@@ -170,12 +170,12 @@ Every `pr` run SHALL append its integration-plus-journey time, whether its selec
 - Check: `report.pr_average`
 
 ### Requirement: Gate-layer checks
-Gate checks SHALL run in every full run and in a `pr` run whose changed paths select them; a `pr` run SHALL never run an unselected gate check. A change whose spec deltas reference a gate check SHALL be verified with at least one run that executes it before it merges. Gate checks on the fixed-cost allowlist (build from empty, release packaging, population and performance soaks), each with a recorded reason, are excluded from the pr and full layer budgets and stay under the per-check timing guard.
+Gate checks SHALL run in every full run (milestone gates, release tags) and never in a `pr` run. A `pr` run whose changed paths a gate check's `covers` names SHALL list that check in its summary under "gate checks owed" with the path that selected it; an owed check is neither run nor a failure. A change whose spec deltas add or change a gate check SHALL be verified with a run that executes that check (`--only <id>`) before it merges. Gate checks are excluded from the layer budgets and stay under the per-check timing guard.
 
-#### Scenario: Gate checks run when selected or full, never otherwise
+#### Scenario: Gate checks run only in full runs, and pr runs list them as owed
 - **GIVEN** a gate check whose `covers` names `harness/hslib/lanes.py`
 - **WHEN** a pr run with only `docs/x.md` changed, a pr run with `harness/hslib/lanes.py` changed, and a full run execute
-- **THEN** the first doesn't run it and records nothing for it, the second and third run it and require it to pass
+- **THEN** the first doesn't run it and records nothing for it; the second doesn't run it and lists it as owed, naming `harness/hslib/lanes.py`; the third runs it and requires it to pass
 - Check: `report.gate_rule`
 
 ### Requirement: Acceptance tests don't sleep through fixed waits

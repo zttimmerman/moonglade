@@ -234,6 +234,10 @@ The `hs-change-loop` and `hs-harness-checks` skills get the matching run budget.
   - "Slow-tier scenario checks", "GUI tier", "GUI path rule covers shared helpers", "Backups tier" and "Nightly flake hunt" are removed and replaced (see the deltas' Reason/Migration).
   - The quick tier's 3 min budget becomes the unit layer's 2 min budget. This is a tightening.
 - 2026-10-10 (verification move, for review at the gate): the 60 s live "no login before Continue" observation becomes a simulated 60 s unit test plus a 10 s live watch (Open question 2). This is a loosening of the live part.
+- 2026-10-11 (orchestrator, after part 2; design §15): gate checks never run in a `pr` run. They run in full runs, and a pr run lists the ones its paths select as owed. A change whose deltas add or change a gate check runs it alone before merge. This replaces "selected gates run in pr"; gate checks also run at every milestone gate and release tag, so this narrows when they run, not what must pass. **For review at the gate.**
+- 2026-10-11 (correction): the journey cap goes from 12 to 14 min. It contradicted the six journeys' own budgets (810 s), which are unchanged. `harness/active-changes` joins the no-impact list.
+- 2026-10-11 (clarification): `journey.first_play` is described as the `./play` first play that was built; the app's cold open, Dock and quit are `journey.app_desktop`'s, as built. `client.launch_smoke` stays, because its client-connectivity scenario still names it.
+- 2026-10-11 (part 2, builder; for review at the gate): `lane.merge`, `lane.preflight` and `fixture.*` move to the gate layer (real-stack harness self-tests), so they run in full runs only. Their rules are still covered by unit tests.
 - Migration slices will add their own entries here: one per capability whose `Check:` lines are re-pointed, scenario text unchanged unless the entry says otherwise.
 
 ## Measurement log

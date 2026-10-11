@@ -893,3 +893,50 @@ Zach's targets are met by the measured projection: unit layer about 47 s (≤ 2 
 - `release_runtime_checks.py` dev-only list: extending it with the five test-tooling modules is reviewed and accepted (they're harness-only, never in a release payload).
 
 Go for tasks 2.x onwards, re-measuring each layer as it lands.
+
+## 15. Part 3: closing the gap (orchestrator, 2026-10-11)
+
+Part 2 measured 58.3 min of integration and journeys against 30. The replay of real PRs under the part-2 selector is
+worse than the complete suite suggests, because of selection costs that have nothing to do with the change's own
+tests. Replayed with the part-2 selector and per-check times from the `3c95011` full run:
+- front-menu-saves (#33): integration 20.8 min, journeys 11.4 min, **gate 36.4 min** (the harness/app paths select
+  `app.shim_perf` and the release checks), and the smoke set too, because the change edits `harness/active-changes`;
+- the same change's product paths only: 13.0 + 10.9 min (+ 5.4 gate);
+- m4-dungeon-scaling (#3) and true-pause (#32): FULL (`build.py` and a core patch). That's correct, which is why the
+  complete suite has to fit 30 min, not just the per-PR selection.
+- The smoke set costs 7.2 min (23 tests; `journey.first_play` 229 s of it).
+
+Decisions (spec deltas edited in this commit; spec-change log 2026-10-11):
+1. **Gate checks never run in a `pr` run.** They run in full runs (milestone gates and release tags). A pr run lists
+   the gate checks its paths select as "owed". A change whose deltas add or change a gate check runs that check alone
+   (`--only`) during verification. This replaces the "selected gates run in pr" rule. The builder brief and the spec
+   disagreed; the brief was right.
+2. **`harness/active-changes` is no-impact.** Every change edits it.
+3. **The journey cap is 14 min (840 s).** The six budgets add up to 810 s. The old 12 min cap contradicted them, so
+   `report.journeys` could never pass.
+4. **`journey.first_play` is the `./play` first play.** `journey.app_desktop` is the app's cold open, Dock and quit.
+   The spec text now says what was built.
+
+Part 3 targets (measured, a miss is a failure):
+
+| Layer / area | Part 2 (s) | Target (s) |
+|---|---:|---:|
+| Integration, whole layer | 2321 | ≤ 900 |
+| Journeys, each | see 12.3 | ≤ its budget (sum 810) |
+| Integration + journeys | 3497 | ≤ 1800 |
+| Replay mean of the last 15 merged PRs (`report.pr_average` replay) | not measured | ≤ 900 |
+
+The levers, in order of seconds per hour of work:
+1. **No cold `./play` or real-client session in the integration layer (~1350 s today).** A scenario that needs the
+   client is a child inside an existing journey session, sharing it, not a new session. A scenario that only needs the
+   server is driven directly on the shared server. Applies to backups kill-safe/restore (517 s), play S1–S3 (379 s) and
+   the client area's runs (195 s).
+2. **Merged journey sessions (design 9.4).** One cold session for `first_play`, one session for `saves`, one GUI
+   session for `app_desktop`: each scenario asserts inside the shared session instead of starting its own.
+3. **Saves (368 s) and dungeons (333 s).** Saves: `ListGen` and save validation in `SavesLogic`, pooled
+   `load_ordering`. Dungeons: the `scale.solo_final_boss` read (191 s) inside a `dng` session.
+4. **`PENDING_SLEEPS`:** the 69 reported waits become polls or get a spec citation.
+
+Measurement: unit layer, then one run of every integration and journey check (not the gate layer, which is timed
+apart and excluded from these budgets), then the replay. No full run by the builder; the verifier runs it.
+
