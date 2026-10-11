@@ -21,10 +21,13 @@ CAP = "harness-reporting"
 # first_play: the cold session first (./play starts the stack from nothing, Continue, character select, the world, the
 # add-on's report, quit, the stack stopped with its backup); then the other sessions warm on one `hs up`.
 # (login.overlay_progress_reload asserts on the same cold session: its Main Menu -> Continue reload is part of it)
+# test-pyramid part 3 (design 9.4): the Continue scenarios (login.auto_login, login.no_glue_errors,
+# login.fresh_menu_waits) and client.first_start_settings' real-client run share that cold session too; only
+# client.resolution_default's injected-display launches stay warm.
 FIRST_PLAY_COLD = ("login.loading_overlay", "login.charselect_layout", "login.charselect_wording",
-                   "login.overlay_progress", "login.overlay_progress_reload", "client.wording_addon")
-FIRST_PLAY_WARM = ("login.auto_login", "login.no_glue_errors", "login.fresh_menu_waits", "client.first_start_settings",
-                   "client.resolution_default")
+                   "login.overlay_progress", "login.overlay_progress_reload", "client.wording_addon",
+                   "login.auto_login", "login.no_glue_errors", "login.fresh_menu_waits", "client.first_start_settings")
+FIRST_PLAY_WARM = ("client.resolution_default",)
 FIRST_PLAY = FIRST_PLAY_COLD + FIRST_PLAY_WARM
 LOGIN_RECOVERY = ("login.friendly_errors", "login.backdrop_choice", "login.cancel_shows_list")
 SAVES = ("savesctl.live_roundtrip", "savesctl.live_codes", "savesctl.live_down", "savesctl.realm_restored",
@@ -156,6 +159,9 @@ def first_play(ctx):
     """The cold first play: a fresh scratch play client from the real ./play (test account), the menu waiting for
     Continue, one Continue, character select and its wording/layout, the world and the add-on's report, the written
     first-start settings and resolution, and nothing left running (the scenarios in FIRST_PLAY, each its own record)."""
+    from . import login_checks, seamless_checks
+    login_checks._SESSIONS.pop("continue", None)
+    seamless_checks._SESSIONS.pop("play", None)
     return run_cold_then_warm(ctx, FIRST_PLAY_COLD, FIRST_PLAY_WARM)
 
 
