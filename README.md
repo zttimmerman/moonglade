@@ -1,20 +1,37 @@
 # Moonglade
 
-Moonglade is single-player, fully offline World of Warcraft: **Wrath of the Lich King 3.3.5a (build 12340)** on an Apple Silicon Mac. It runs a local **AzerothCore** server with **mod-playerbots**, so about 500 AI players fill the world, and you can add bot companions to your party. An optional **vanilla mode** gives levels 1–60 the pre-2.3 pace and difficulty, and all WotLK content stays in place: Outland, Northrend and Death Knights. The game's own login screen becomes a **front menu**, so you press Continue and you're in. One double-click (or `./play`) starts the server and the game. Quitting stops everything.
+**World of Warcraft: Wrath of the Lich King as a single-player RPG for your Mac.** One double-click and you're in a living Azeroth full of AI players, with a true pause, Elder Scrolls-style saves, and dungeons you can run alone or with companions. No server to run, no accounts, no internet.
 
-It's a personal project. The source is public under the GPL (GPL-2.0-or-later), and no client or game files are distributed. **The WoW client isn't included.** Bring your own Windows 3.3.5a enUS client.
+Under the hood it's the 3.3.5a game (build 12340) on a local [AzerothCore](https://www.azerothcore.org/) server with [mod-playerbots](https://github.com/mod-playerbots/mod-playerbots), running natively on Apple Silicon. **Bring your own Windows 3.3.5a enUS client;** no game files are included (see [Legal and scope](#legal-and-scope)).
+
+## Why Moonglade
+
+If you just want a private server, plain AzerothCore (or a Windows repack) will do. Moonglade is for people who want it to feel like a single-player game.
+
+**It's an app, not a server you run.**
+- **One click to play.** With plain AzerothCore, every session means starting MySQL, the auth server and the world server, waiting for the world to load, launching the client, typing an account and password and picking a realm. Moonglade does all of it, in order, and logs you straight in: press **Continue** and you're at your characters.
+- **Quitting is safe.** Closing the game saves, shuts the servers down cleanly and backs up your characters. A crash is cleaned up on the next launch.
+- **Built for Apple Silicon.** The server runs natively; the Windows client runs on a pinned, checked Wine runtime. One Dock icon, proper full screen, and your original client is never modified.
+- **Kept working.** The server, bots, data and Wine runtime are pinned to versions tested together and updated as a set, with an automated test harness behind every change.
+
+**It's designed for one player.**
+- **True pause.** Press Esc and the whole world stops: fights, buffs, cooldowns, respawns and the AI players. Close the menu and everything carries on where it was. No WoW server can do this; it's a small, documented core change ([ADR-0013](docs/adr/0013-world-pause-core-patch.md)).
+- **Saves, like an Elder Scrolls game.** Each character has its own saves: manual saves, a quicksave (F6 / F7 to load) and autosaves at safe moments. Load one from the character screen or the Esc menu without restarting anything. Plus an automatic backup every time you quit.
+- **A world that feels populated.** About 500 AI players level, quest and travel around you, sized to fit a 16 GB Mac. Add companions to your party who follow you, fight with you and share quests.
+- **Optional vanilla pace.** Levels 1–60 can use the original pre-2.3 XP, elites and mount levels, with values taken from real data (VMaNGOS), not guesswork. All Wrath content stays: Outland, Northrend, Death Knights.
+- **Coming next:** dungeons scaled for you alone or with companions, with companion tactics and rerunnable lockouts (M4); shared kill credit so bots don't steal your quest mobs; and prebuilt downloads that need no developer tools.
+
+It's a personal, non-commercial project. The source is public under the GPL (GPL-2.0-or-later).
 
 ## Status
 
-**Works today** (as of 2026-10-05):
-- **M0 foundation:** the pinned server builds and boots natively on macOS ARM64, with the test harness complete. The Windows client runs under Wine.
-- **M1 offline loop:** `./play` takes you from nothing running to in-game and back to nothing running, with no network needed.
-- **M2 living world:** about 500 AI players across starting zones and capitals, plus companions you add to your party who follow you, fight with you and take shared quests. It stays within a measured memory budget on a 16 GB Mac.
-- **M3 vanilla mode:** levels 1–60 use pre-2.3 XP, quest XP, outdoor elites and mounts. It's on by default, and all values come from VMaNGOS data.
-- **Moonglade.app:** a double-clickable launcher for `./play`.
-- **In-client login screen:** the Continue / Profiles / Settings / Extras menu inside the game's own login screen, running on a patched, revertable copy of the client.
+**Works today** (as of 2026-10-10):
+- **One-command setup and play:** `./bootstrap` sets everything up from your client; the Moonglade app (or `./play`) takes you from nothing running to in-game and back.
+- **The front menu:** the game's own login screen becomes Continue / Profiles / Settings / Extras, on a patched, revertable copy of the client. Nothing on screen talks about servers, realms or connecting.
+- **Living world:** about 500 AI players, plus companions in your party, within a measured memory budget.
+- **Vanilla mode** (on by default), **save backups** on every quit, **true pause** and **per-character saves**.
 
-**Next:** the **seamless experience** change (no server/realm/connecting wording on screen, plus a Saves entry in the in-game front menu), then **M4 solo dungeons**. Zach still has to play the "human-verify" scenarios (M2 living world and companions, M3 vanilla mode, the in-client login screen). The live roadmap, task board and known issues are in **[STATUS.md](STATUS.md)**.
+**In progress:** M4 solo dungeons (scaling and rerunnable lockouts first, then companion tactics). The live roadmap, task board and known issues are in **[STATUS.md](STATUS.md)**.
 
 ## Requirements
 
@@ -55,7 +72,6 @@ cd moonglade
 
 - **`dist/Moonglade.app`** (build it with `harness/hs app`). Double-click it, or drag it to `/Applications` or the Dock, and it still finds the repo. It shows a small "starting" window, then the game. Quitting the game (or quitting the app from the Dock) shuts everything down. If something fails, a dialog tells you what went wrong and points you to the log.
   - **First launch:** macOS asks whether Moonglade may access your **Documents folder**, because the repo lives in `~/Documents`. Allow it. The permission is tied to the app's bundle id `local.moonglade.app`, so it survives rebuilds. Don't change the bundle id, or macOS will ask again.
-  - The Dock shows two icons today: Moonglade, and Wine's process for the game. Clicking Moonglade says "already running", and the Wine icon brings the game forward. A fix for this is accepted (ADR-0010) and is part of the upcoming launcher polish.
 - **`./play`** in a terminal does the same thing and prints its progress. The terminal stays busy while you play. Ctrl-C stops everything cleanly. Exit codes: `0` normal quit, `1` startup problem, `2` already running, `3` the client crashed, `129`/`130`/`143` SIGHUP/Ctrl-C/SIGTERM.
 
 Both start the database, the login server and the world server, then wait until they're ready, make sure your account exists and open the game. With the ~500-bot world, startup takes a while.
@@ -91,11 +107,23 @@ These are saved in `env/settings.json` and read on every start.
 
 Things to know when switching: going from vanilla to WotLK lowers the XP thresholds, so a character may level up on its next XP gain. Item tooltips can look stale until the client cache refreshes.
 
+### Pause
+
+Press **Esc** in the world: the game menu opens, the world dims, a "Paused" banner shows, and the whole world stops (your fight, buffs, cooldowns, monsters and AI players). Press Esc again to carry on. A spell you were casting when you paused is cancelled. You can't pause during a flight. Logging out or quitting from the menu un-pauses first.
+
+### Saves
+
+Every character has its own saves (only that character's progress: level, talents, gear, bags, bank, gold, quests, reputation, professions, pets and where you stand; never other characters or the AI players).
+- **Save:** Esc → **Saves** → Save (optionally with a name), or **F6** for the quicksave slot. Not in combat, while dead, falling, in a battleground or mid-teleport.
+- **Autosaves** happen at safe moments: entering an inn or city, starting a flight, moving to another zone or continent.
+- **Load:** Esc → **Saves** → Load (or **F7** for the quicksave), or on the character screen pick the character and press **Saves**. No restart. Every load first makes a "before loading" save, so you can undo it.
+- Your mailbox isn't rewound by a load (mail works like a shared post office), and dungeon lockouts are world state, not part of a save.
+
 ### Save backups
 
 Every time you quit the game, Moonglade backs up your save while it shuts down (the shutdown window shows "Backing up your save"; about 10 s with the default world). A backup holds your characters, your companions and the AI players (the `acore_characters`, `acore_auth` and `acore_playerbots` databases) plus your client's per-account settings (`WTF/Account/<ACCOUNT>/`: key bindings, macros, chat and addon settings). Game content and vanilla mode aren't part of it. Backups live in `env/backups/` (about 38 MB each). The last 10 are kept.
 
-**To restore one,** make sure Moonglade isn't running, then hold **Option** (⌥, "alt") while you click Moonglade in the Dock or double-click it in Finder, and keep holding until the Backups window appears. (Option-click is a stopgap; a Saves entry in the in-game front menu is planned.) Instead of starting the game it shows the Backups window: pick a backup, press **Restore…**, confirm, then **Play** or **Quit**. From a terminal: `./play --backups` lists them and `./play --backups restore <id>` restores one. A restore rewinds everything in the backup together and first saves a "before restore" safety backup of how things are now (the last 3 are kept), so you can undo it the same way. Restoring is refused while Moonglade is running, and a damaged backup is refused without changing anything. If a backup ever fails (for example, less than 2 GB free disk space), shutdown still completes, and the next start tells you why.
+**To restore one,** make sure Moonglade isn't running, then hold **Option** (⌥, "alt") while you click Moonglade in the Dock or double-click it in Finder, and keep holding until the Backups window appears. (Backups rewind your whole world; for one character, use **Saves** above.) Instead of starting the game it shows the Backups window: pick a backup, press **Restore…**, confirm, then **Play** or **Quit**. From a terminal: `./play --backups` lists them and `./play --backups restore <id>` restores one. A restore rewinds everything in the backup together and first saves a "before restore" safety backup of how things are now (the last 3 are kept), so you can undo it the same way. Restoring is refused while Moonglade is running, and a damaged backup is refused without changing anything. If a backup ever fails (for example, less than 2 GB free disk space), shutdown still completes, and the next start tells you why.
 
 ### Companions
 
@@ -168,8 +196,8 @@ You can rerun dungeons freely:
 | `hs ghidra-install`, `hs re …`, `hs mpq …` | read-only client analysis, MPQ list/extract/write (never under `client/`) |
 
 **Tiers.** Each check is tagged quick, full or slow:
-- `--tier quick` runs only the quick checks. The spec bound is under 3 min. The last run took 78 s (2026-10-05).
-- `--tier full` is the default and the merge gate. It runs quick and full checks and takes about **25 min** (1526 s, 76 pass, on 2026-10-05). Most of that time goes to checks that launch the real client (login screen, play loop, app), plus a from-empty build when build inputs change (about 3.5 min with ccache).
+- `--tier quick` runs only the quick checks. The spec bound is under 3 min. The last runs took about 155 s (2026-10-10).
+- `--tier full` is the default and the merge gate. It runs quick and full checks and took about **82 min** (203 pass, 2026-10-10), most of it checks that launch the real client or wait on real game time, plus a from-empty build when build inputs change (about 4 min with ccache). A restructure into fast unit tests plus a small set of acceptance tests is next (targets: unit ≤2 min, a PR's acceptance run ≈15 min, everything ≤30 min).
 - `--tier slow` runs everything, including bot warm-ups and the 10-minute performance soak. The last slow run (68/0, 2026-10-03, `22ef40e`) predates the M3 and login-screen checks; expect well over 30 min.
 
 Only one agent or person owns the running stack at a time. `--leave-up` keeps it running at the end. The harness uses its own accounts (`HSTEST`, `HSCOMP`, `HS_GM`) and never touches `PLAYER` or `env/player.json`.
@@ -233,7 +261,10 @@ Generated and gitignored, never committed: `vendor/` (pinned sources), `build/`,
 | [0007](docs/adr/0007-core-patch-playerbots-hook-packet-copy.md) | Core patch: give the playerbots packet hook an intact copy of the packet |
 | [0008](docs/adr/0008-playerbots-patch-queue-and-group-cleanup.md) | mod-playerbots patch queue; dismissing a companion takes it out of the party |
 | [0009](docs/adr/0009-client-patch-overlay.md) | Revertable client patches on a derived "play client" |
-| [0010](docs/adr/0010-wine-host-shim.md) | Wine host shim for one Moonglade Dock icon (accepted, not built yet) |
+| [0010](docs/adr/0010-wine-host-shim.md) | Wine host shim for one Moonglade Dock icon |
+| [0011](docs/adr/0011-second-harness-stack.md) | A second isolated harness stack ("lane B") |
+| [0012](docs/adr/0012-going-public.md) | Publish the Moonglade source |
+| [0013](docs/adr/0013-world-pause-core-patch.md) | Core patch: a world-pause switch |
 
 **Specs** (`openspec/specs/<capability>/spec.md`): what each capability must do, with scenarios.
 - `server-build`, `server-lifecycle`: build and run the server.
