@@ -40,7 +40,7 @@ Estimates are agent-hours of builder work, without padding (recent changes ran 2
   - Every existing check gets an interim layer: `stack="down"` checks → cold integration, `stack="up"` → shared integration, slow → gate, `quick` and no-stack → unit.
   - Checks: `report.layers_declared`, `report.unit_layer`, `report.gate_rule`.
 - [ ] 2.2 Impact selection (≈ 2 h).
-  - The production selector from 1.3, fail-safe cases, selection timing, `meta.selection`.
+  - The production selector from 1.5 (declared ownership, design §13), `report.ownership`, fail-safe cases, selection timing, `meta.selection`.
   - Checks: `report.selection`, and `hs select --replay`.
 - [ ] 2.3 Budgets and reports (≈ 2 h).
   - Per-layer timing.
