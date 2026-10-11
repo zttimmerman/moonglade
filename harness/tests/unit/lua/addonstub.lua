@@ -12,13 +12,13 @@
 local S = require("wowstub")
 local A = {}
 
-local GLOBAL_STRINGS = {        -- FrameXML GlobalStrings.lua (enUS 3.3.5a): only the keys Moonglade.lua replaces
-	LOGOUT = "Logout", CAMP_TIMER = "%d %s until logout", CAMP_NOW = "Logout Now",
-	ERR_LOGOUT_FAILED = "You can't logout now.", PLAYER_LOGOUT_FAILED = "Logout failed",
-	PLAYER_LOGOUT_FAILED_ERROR = "You can't logout because you can't sit down right now.",
-	IDLE_MESSAGE = "You have been inactive for some time and will be logged out of the game. If you wish to remain logged in, hit the cancel button.",
-	ERR_COMSAT_DISCONNECT = "Voice chat disconnected.", SERVER_MESSAGE_PREFIX = "[SERVER]",
-}
+-- FrameXML GlobalStrings.lua defines these keys (Moonglade.lua replaces them). Their stock wording isn't asserted by
+-- any test, so the stub holds placeholders instead of text typed from memory.
+local GLOBAL_STRINGS = {}
+for _, k in ipairs({ "LOGOUT", "CAMP_TIMER", "CAMP_NOW", "ERR_LOGOUT_FAILED", "PLAYER_LOGOUT_FAILED",
+	"PLAYER_LOGOUT_FAILED_ERROR", "IDLE_MESSAGE", "ERR_COMSAT_DISCONNECT", "SERVER_MESSAGE_PREFIX" }) do
+	GLOBAL_STRINGS[k] = "<stock " .. k .. ">"
+end
 
 function A.new(opts)
 	opts = opts or {}
@@ -33,12 +33,12 @@ function A.new(opts)
 	w.frame{ type = "Button", name = "GameMenuButtonMacros", parent = menu, height = 21 }
 	w.frame{ type = "Button", name = "GameMenuButtonRatings", parent = menu, hidden = true, height = 21 }
 	w.frame{ type = "Button", name = "GameMenuButtonLogout", parent = menu, text = env.LOGOUT, height = 21 }
-	w.frame{ type = "Button", name = "GameMenuButtonQuit", parent = menu, text = "Exit Game", height = 21 }
+	w.frame{ type = "Button", name = "GameMenuButtonQuit", parent = menu, text = "<stock EXIT_GAME>", height = 21 }
 	-- UIErrorsFrame (UIParent.xml): AddMessage(text, r, g, b, a) shows the red/yellow error text; recorded
 	local errs = w.frame{ name = "UIErrorsFrame", parent = ui }
 	errs.messages = {}
 	env.UISpecialFrames = {}               -- UIParent.lua: frames Escape closes
-	env.CANCEL = "Cancel"                  -- GlobalStrings.lua
+	env.CANCEL = "<stock CANCEL>"          -- GlobalStrings.lua (placeholder)
 	-- StaticPopup.lua: StaticPopup_Show(which, text_arg1, text_arg2, data) / StaticPopup_Hide(which): recorded; a
 	-- test accepts a shown dialog with w.accept(which) (its OnAccept(self, data), as the Accept button does)
 	w.popups = {}
