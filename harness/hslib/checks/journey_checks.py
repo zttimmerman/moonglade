@@ -35,13 +35,13 @@ SAVES = ("savesctl.live_roundtrip", "savesctl.live_codes", "savesctl.live_down",
 STOCK_CLIENT = ("client.stock_mode",)
 APP_DESKTOP = ("app.names_running", "app.launch_lifecycle", "app.single_instance", "app.relocatable",
                "app.single_dock_icon", "app.handoff_focus", "app.reopen_focuses_game", "app.reopen_during_loading",
-               "app.reopen_unminimizes", "app.shutdown_window", "app.loading_stages", "app.shim_scope",
-               "app.backups_window")
+               "app.reopen_unminimizes", "app.shutdown_window", "app.loading_stages", "app.shim_scope")
+# app.backups_window left this journey for a targeted integration check of its own (test-pyramid design 16)
 
 
 def _fns() -> dict:
     """Scenario id -> the function that asserts it (each module's former check function)."""
-    from . import (app_checks as A, backup_checks as B, client_play_checks as CP, login_checks as L,
+    from . import (app_checks as A, client_play_checks as CP, login_checks as L,
                    polish_checks as PO, resolution_checks as R, saves_gui_checks as SG, savesctl_checks as SC,
                    seamless_checks as SE)
     return {
@@ -64,7 +64,6 @@ def _fns() -> dict:
         "app.reopen_focuses_game": PO.reopen_focuses_game, "app.reopen_during_loading": PO.reopen_during_loading,
         "app.reopen_unminimizes": PO.reopen_unminimizes, "app.shutdown_window": PO.shutdown_window,
         "app.loading_stages": PO.loading_stages, "app.shim_scope": PO.shim_scope,
-        "app.backups_window": B.backups_window,
     }
 
 
@@ -150,7 +149,7 @@ STOCK_CLIENT_COVERS = JOURNEY_COMMON + ("patches/client/**", "harness/hslib/chec
 APP_DESKTOP_COVERS = JOURNEY_COMMON + (
     "harness/app/*", "branding/*", "harness/hslib/app.py", "harness/hslib/dockshim.py", "harness/hslib/guienv.py",
     "harness/hslib/backups.py", "harness/hslib/checks/app_checks.py", "harness/hslib/checks/polish_checks.py",
-    "harness/hslib/checks/backup_checks.py")
+    "harness/hslib/checks/backup_checks.py")      # app.shutdown_window's backup stage (polish_checks imports it)
 
 
 @check("journey.first_play", order=460, capability=CAP, stack="down", layer="journey", budget_s=150,
@@ -172,7 +171,7 @@ def stock_client(ctx):
     return run_journey(ctx, STOCK_CLIENT, warm=True)
 
 
-@check("journey.login_recovery", order=462, capability=CAP, stack="up", layer="journey", budget_s=120,
+@check("journey.login_recovery", order=462, capability=CAP, stack="up", layer="journey", budget_s=150,
        covers=LOGIN_RECOVERY_COVERS, children=LOGIN_RECOVERY)
 def login_recovery(ctx):
     """The login screen recovering: the friendly error with the login server down and Try again, the backdrop choice
@@ -180,7 +179,7 @@ def login_recovery(ctx):
     return run_journey(ctx, LOGIN_RECOVERY, warm=True)
 
 
-@check("journey.saves", order=463, capability=CAP, stack="up", layer="journey", budget_s=150,
+@check("journey.saves", order=463, capability=CAP, stack="up", layer="journey", budget_s=200,
        covers=SAVES_COVERS, children=SAVES)
 def saves(ctx):
     """Saves from the real client: the control channel's round trip, codes and listener-down, the realm and account
@@ -192,8 +191,8 @@ def saves(ctx):
        covers=APP_DESKTOP_COVERS, children=APP_DESKTOP)
 def app_desktop(ctx):
     """The Mac app on the desktop with the stand-in client: names while running, the launch lifecycle, one instance,
-    a relocated copy, one Dock icon, focus hand-off and reopen, the shutdown window, loading stages, the shim's scope
-    and the Backups window's restore (the scenarios in APP_DESKTOP). Shared sessions (test-pyramid part 3): the app
+    a relocated copy, one Dock icon, focus hand-off and reopen, the shutdown window, loading stages and the shim's scope
+    (the scenarios in APP_DESKTOP; the Backups window is the targeted check app.backups_window). Shared sessions (test-pyramid part 3): the app
     session with the Dock/focus steps (also app.names_running), the dist app's lifecycle session (also
     app.single_instance's first half and app.shutdown_window's backup stage); each starts fresh here."""
     from . import app_checks, polish_checks

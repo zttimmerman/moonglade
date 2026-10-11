@@ -257,7 +257,7 @@ COVERS = (
 )
 
 
-@check("backups.on_quit", order=365, capability=CAP, stack="down", layer="integration")
+@check("backups.on_quit", order=365, capability=CAP, stack="down", layer="integration", targeted=True)
 def on_quit(ctx):
     """Empty scratch backup folder + scratch play client: a ./play session where the test character gains a level
     ends with exactly one new backup whose manifest lists the three databases and the WTF folder with sha256 values
@@ -745,7 +745,7 @@ def change_target(t: dict, new_level: int) -> None:
              f"WHERE name='{P.TEST_CHAR}'", root=True)
 
 
-@check("backups.restore_roundtrip", order=369, capability=CAP, stack="down", layer="integration")
+@check("backups.restore_roundtrip", order=369, capability=CAP, stack="down", layer="integration", targeted=True)
 def restore_roundtrip(ctx):
     """Backup B (of the live databases, read only) is loaded into scratch schemas hsbk_rt_*; there the test character's
     level changes and a new test character appears, and the scratch play client's WTF folder changes.
@@ -935,7 +935,9 @@ def verify_window_shown(run: dict, root_rows: list[dict]) -> dict:
     return out
 
 
-# app.backups_window: a scenario of a journey (journey_checks.py), not a check of its own (test-pyramid part 2)
+# app.backups_window: a targeted integration check of its own (test-pyramid design 16: four app runs, 147 s; it left
+# journey.app_desktop). gui: the window must be shown on screen (the GUI preflight guards runs that pick it).
+@check("app.backups_window", order=386, capability=CAP_APP, stack="down", layer="integration", gui=True, targeted=True)
 def backups_window(ctx):
     """Built app, scratch folder with 3 backups (one of the live databases, one of scratch schemas where the test
     character is a level higher, and a clone as a safety backup), Option reported held (test hook): (1) the Backups

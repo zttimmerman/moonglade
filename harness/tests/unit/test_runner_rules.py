@@ -137,3 +137,42 @@ class GateNeverInPr(UnitCase):
         from hslib import selection as S
         self.assertTrue(S.match("harness/active-changes", S.NO_IMPACT))
         self.assertFalse(S.match("harness/hslib/runner.py", S.NO_IMPACT))
+
+
+class TargetedRules(UnitCase):
+    """harness-reporting "Targeted integration checks" (test-pyramid design 16): a pr run picks a targeted check only
+    when its covers selected it, never on FULL or as a run guard; a full run runs it; its time is reported apart."""
+
+    def _reg(self):
+        t = _c("t.slow", order=300)
+        t.targeted = True
+        g = _c("t.guard", stack="down", order=998)
+        g.targeted = True
+        return {c.id: c for c in (_c("u.x", layer="unit", stack="any", order=1), _c("i.x", order=100), t, g,
+                                  _c("guard.x", layer="integration", stack="any", order=995))}
+
+    def test_full_selection_skips_targeted(self):
+        from hslib import selection as S
+        reg = self._reg()
+        ids = [c.id for c in runner.select(reg, "pr", None, S.pr_chosen({"full": True, "selected": {}}, reg))]
+        self.assertEqual(sorted(ids), ["guard.x", "i.x", "u.x"])
+
+    def test_covers_selects_targeted(self):
+        from hslib import selection as S
+        reg = self._reg()
+        sel = {"full": True, "selected": {"t.slow": ["covers harness/hslib/backups.py"]}}
+        ids = [c.id for c in runner.select(reg, "pr", None, S.pr_chosen(sel, reg))]
+        self.assertIn("t.slow", ids)
+        self.assertNotIn("t.guard", ids)
+
+    def test_counterexample_full_tier_runs_targeted(self):
+        ids = [c.id for c in runner.select(self._reg(), "full", None)]
+        self.assertIn("t.slow", ids)
+        self.assertIn("t.guard", ids)
+
+    def test_targeted_time_is_apart(self):
+        L = PC.synthetic_targeted_layers(integration_s=100.0, journeys_s=50.0, targeted_s=70.0)
+        self.assertEqual((L["integration"]["wall_s"], L["acceptance"]["wall_s"], L["targeted"]["wall_s"]),
+                         (100.0, 150.0, 70.0))
+        L = PC.synthetic_targeted_layers(integration_s=100.0, journeys_s=50.0, targeted_s=70.0, mark=False)
+        self.assertEqual((L["integration"]["wall_s"], L["targeted"]["wall_s"]), (170.0, 0.0))

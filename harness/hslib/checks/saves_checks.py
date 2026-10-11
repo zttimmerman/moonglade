@@ -753,7 +753,7 @@ def inworld_load(ctx):
     return ev
 
 
-@check("saves.load_ordering", order=484, capability=CAP, stack="up", layer="integration", identity=True)
+@check("saves.load_ordering", order=484, capability=CAP, stack="up", layer="integration", targeted=True, identity=True)
 def load_ordering(ctx):
     """20 times: the character moves and gains gold (a periodic save pending; in every other round a save of it is
     queued too) and 0.1 s later loads a save in the game: every time the database afterwards holds the save's position and gold, not the pre-load values. The rendered
@@ -1198,7 +1198,7 @@ def session_b(ctx):
     return run_children(ctx, [("saves.roundtrip", roundtrip), ("saves.item_ids_fresh", item_ids_fresh), ("saves.load_refusals", load_refusals)])
 
 
-@check("saves.session_interval", order=473, capability=CAP, stack="up", layer="integration", identity=True,
+@check("saves.session_interval", order=473, capability=CAP, stack="up", layer="integration", targeted=True, identity=True,
        children=('saves.refused_in_combat', 'saves.autosave_triggers', 'saves.bots_skip', 'saves.inworld_list'))
 def session_interval(ctx):
     """The scenarios that shorten the server-wide autosave interval (each restores it, and registers the restore as

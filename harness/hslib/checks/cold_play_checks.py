@@ -901,7 +901,7 @@ COVERS = (
 )
 
 
-@check("play.cold_sessions", order=300, capability=CAP, stack="down", layer="integration", covers=COVERS,
+@check("play.cold_sessions", order=300, capability=CAP, stack="down", layer="integration", targeted=True, covers=COVERS,
        children=CHILDREN)
 def cold_sessions(ctx):
     """The play loop's own start and stop in its distinct endings (normal exit from nothing running, SIGKILL during

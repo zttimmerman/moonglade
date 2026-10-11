@@ -353,7 +353,7 @@ def _pause(s, on: bool, timeout: float = 10.0) -> dict:
 
 # ================================================================================================ lockouts
 
-@check("lock.no_hourly_cap", order=510, capability=CAP_LOCK, stack="up", layer="integration")
+@check("lock.no_hourly_cap", order=510, capability=CAP_LOCK, stack="up", layer="integration", targeted=True)
 def no_hourly_cap(ctx):
     """Five fresh Deadmines copies entered, cleared from the probe's save and left; the sixth entry arrives in a sixth
     distinct copy (SMSG_NEW_WORLD for the map) and no SMSG_TRANSFER_ABORTED TOO_MANY_INSTANCES arrives."""
@@ -493,7 +493,7 @@ def partial_kept_dismissed(ctx):
     return _partial(ctx, D.DEADMINES, 0, dismiss=True)
 
 
-@check("lock.heroic_fresh_after_clear", order=514, capability=CAP_LOCK, stack="up", layer="integration")
+@check("lock.heroic_fresh_after_clear", order=514, capability=CAP_LOCK, stack="up", layer="integration", targeted=True)
 def heroic_fresh_after_clear(ctx):
     """The probe at level 80 with heroic difficulty clears Utgarde Keep (heroic; the core's permanent heroic bind),
     leaves and enters again the same server day: a fresh heroic copy (new instance id, mask 0)."""
@@ -529,14 +529,14 @@ def heroic_fresh_after_clear(ctx):
     return ev
 
 
-@check("lock.heroic_partial_kept", order=515, capability=CAP_LOCK, stack="up", layer="integration")
+@check("lock.heroic_partial_kept", order=515, capability=CAP_LOCK, stack="up", layer="integration", targeted=True)
 def heroic_partial_kept(ctx):
     """The probe in Utgarde Keep (heroic) with the first encounter done and the final one not done leaves and enters
     again: the same instance id, first encounter still done."""
     return _partial(ctx, D.UTGARDE_KEEP_HEROIC, 1)
 
 
-@check("lock.login_inside_kept", order=516, capability=CAP_LOCK, stack="up", layer="integration")
+@check("lock.login_inside_kept", order=516, capability=CAP_LOCK, stack="up", layer="integration", targeted=True)
 def login_inside_kept(ctx):
     """The probe logged out inside a fully cleared Deadmines copy logs in again: it is in the same instance id, and its
     bind (instance, permanent flag, mask) is unchanged."""
@@ -569,7 +569,7 @@ def login_inside_kept(ctx):
     return ev
 
 
-@check("lock.companion_unstuck", order=517, capability=CAP_LOCK, stack="up", layer="integration")
+@check("lock.companion_unstuck", order=517, capability=CAP_LOCK, stack="up", layer="integration", targeted=True)
 def companion_unstuck(ctx):
     """A pool companion that logged out inside an older Deadmines copy, brought into the probe's party in a fresh copy
     and summoned, is in the probe's instance within 30 s and within 10 yd of it."""

@@ -14,6 +14,9 @@ its file's COVERS): repo paths or globs, and config sections as `<conf path>#<Se
    is shared infrastructure (a module six or more acceptance check files import directly, plus probe/**, stack.py,
    lanes.py, lanestack.py, runner.py), or when it is mod_moonglade_loader.cpp.
 A git failure, an unparseable source or a stale covers entry selects FULL. Everything is recorded in meta.selection.
+A targeted integration check (registry.TARGETED; harness-reporting "Targeted integration checks") is selected only by
+rule 3 (its covers), never by FULL or the smoke set; each one not selected is recorded as "targeted, not selected"
+(meta.selection.targeted).
 Gate checks are selected by the same rules but never run in a pr run: they are listed as owed (gate_owed), with the
 path that selected each (harness-reporting "Gate-layer checks").
 """
@@ -42,6 +45,7 @@ SMOKE_PATHS = ("modules/mod-moonglade/src/mod_moonglade_loader.cpp",)
 PRODUCT = ("modules/**", "client-mods/**", "harness/app/**", "play", "bootstrap", "tools/release/**")
 PR_RUNS = P.OUT / "pr-runs.jsonl"
 SMOKE_JOURNEY = "journey.first_play"
+TARGETED_NOT_SELECTED = "targeted, not selected"
 
 
 def match(path: str, globs) -> bool:
@@ -134,10 +138,10 @@ class Map:
         return out
 
     def smoke_set(self, price) -> list[str]:
-        """journey.first_play + the cheapest integration test of each area (check id prefix)."""
+        """journey.first_play + the cheapest non-targeted integration test of each area (check id prefix)."""
         best: dict = {}
         for tid, c in self.tests.items():
-            if c.layer != "integration":
+            if c.layer != "integration" or getattr(c, "targeted", False):
                 continue
             area = tid.split(".", 1)[0]
             s = price(tid)
@@ -269,6 +273,8 @@ def select(paths: list[str] | None, m: Map, price, old_source=None, new_source=N
         for t in out["smoke_set"]:
             sel.setdefault(t, []).append("smoke set: " + ", ".join(out["smoke_paths"][:3]))
     out["gate_owed"] = gate_owed(sel, m.tests)
+    out["targeted"] = {t: (sel[t] if t in sel else TARGETED_NOT_SELECTED)
+                       for t, c in sorted(m.tests.items()) if getattr(c, "targeted", False)}
     out["duration_s"] = round(time.perf_counter() - t0, 3)
     return out
 
@@ -280,9 +286,11 @@ def gate_owed(selected: dict, tests: dict) -> dict:
 
 
 def pr_chosen(sel: dict, reg: dict) -> set:
-    """The checks a pr run executes beyond the unit layer and the run guards: on FULL every integration and journey
-    check, otherwise the selected ones; never a gate check."""
-    ids = set(reg) if sel["full"] else set(sel["selected"])
+    """The checks a pr run executes beyond the unit layer and the run guards: on FULL every non-targeted integration
+    and journey check, otherwise the selected ones; never a gate check. A targeted check only when its covers selected
+    it ("Targeted integration checks")."""
+    ids = {i for i, c in reg.items() if not getattr(c, "targeted", False)} if sel["full"] else set()
+    ids |= set(sel["selected"])
     return {i for i in ids if i in reg and reg[i].layer != "gate"}
 
 
@@ -388,13 +396,14 @@ def merged_prs(n: int, root: Path | None = None, upto: str = "origin/main") -> l
 
 def replay(n: int = 15, reg: dict | None = None, root: Path | None = None) -> dict:
     """The selector over the last n merged PRs, priced with the last full run's per-check times (the FULL price is
-    every integration and journey check). Minutes are integration + journeys."""
+    every non-targeted integration and journey check, plus the targeted ones the PR's paths select by covers). Minutes
+    are integration + journeys (+ the targeted checks a PR selects)."""
     from .registry import load_all
     reg = reg if reg is not None else load_all()
     root = Path(root or P.ROOT)
     price = pricer(reg)
     m = Map(reg, root)
-    acc = [i for i, c in reg.items() if c.layer in ("integration", "journey")]
+    acc = [i for i, c in reg.items() if c.layer in ("integration", "journey") and not c.targeted]
     full_s = sum(price(i) for i in acc)
     rows = []
     for pr in merged_prs(n, root):
@@ -409,10 +418,10 @@ def replay(n: int = 15, reg: dict | None = None, root: Path | None = None) -> di
                 return r.stdout if r.returncode == 0 else ""
             return f
         s = select(paths, m, price, show(f"{sha}^1"), show(sha))
-        sel = [i for i in s["selected"] if reg[i].layer in ("integration", "journey")] if not s["full"] else acc
+        sel = sorted(i for i in pr_chosen(s, reg) if reg[i].layer in ("integration", "journey"))
         secs = sum(price(i) for i in sel)
         rows.append({"pr": pr["pr"], "branch": pr["branch"], "full": s["full"], "full_reasons": s["full_reasons"][:3],
-                     "selected": len(sel), "smoke": bool(s["smoke_paths"]), "minutes": round(secs / 60, 1),
+                     "selected": len(sel), "targeted": sorted(i for i in sel if reg[i].targeted), "smoke": bool(s["smoke_paths"]), "minutes": round(secs / 60, 1),
                      "selection_s": s["duration_s"]})
     mean = round(sum(r["minutes"] for r in rows) / len(rows), 1) if rows else None
     return {"prs": rows, "mean_min": mean, "full_min": round(full_s / 60, 1),

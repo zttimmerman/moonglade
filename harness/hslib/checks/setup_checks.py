@@ -549,7 +549,7 @@ def _perturb_inputs(scratch: Path) -> dict:
     raise RuntimeError("no patch with sources to perturb")
 
 
-@check("client.player_client_not_rebuilt", order=998, capability="play-launcher", stack="down", layer="integration")
+@check("client.player_client_not_rebuilt", order=998, capability="play-launcher", stack="down", layer="integration", targeted=True)
 def player_client_not_rebuilt(ctx):
     """The player's env/client-play/ build (folder inode; hs-build.json, Wow.exe and every patch output: SHA-256, inode,
     mtime) is identical to the start of the run. Probe: a harness-shaped ./play stand-in run on a scratch play client

@@ -537,8 +537,8 @@ def timing_summary(records: list[dict], wall_s: float | None, reg: dict | None =
 
 def select(reg: dict, tier: str, only: list[str] | None, chosen: set | None = None) -> list:
     """Checks a run executes, in run order: tier unit -> the unit layer; pr -> the unit layer plus `chosen` (impact
-    selection) plus the run guards; full -> everything. `--only` globs filter any tier (a filtered pr run runs exactly
-    the filter's checks, without impact selection)."""
+    selection) plus the run guards (a targeted run guard only when `chosen` has it); full -> everything. `--only` globs
+    filter any tier (a filtered pr run runs exactly the filter's checks, without impact selection)."""
     if tier not in RUN_TIERS:
         raise ValueError(f"unknown tier {tier!r}; expected one of {RUN_TIERS}")
 
@@ -551,7 +551,9 @@ def select(reg: dict, tier: str, only: list[str] | None, chosen: set | None = No
             return True
         if c.layer == "gate":
             return False                  # a pr run never runs a gate check (listed as owed in meta.selection)
-        return c.layer == "unit" or segment(c) == 9 or (chosen is not None and c.id in chosen)
+        if chosen is not None and c.id in chosen:
+            return True
+        return c.layer == "unit" or (segment(c) == 9 and not c.targeted)
     return sorted((c for c in reg.values() if wanted(c)), key=run_key)
 
 
@@ -690,14 +692,10 @@ def ensure_server_current(ctx: dict) -> dict:
     return out
 
 
-# Checks not yet migrated that start the real client or the app end to end (design.md appendix A: they become the
-# journeys of part 2). Until then they keep their integration layer but their time counts as journey time
-# (layer_times; the coordinator's part-1 rule: legacy client checks count against the journey budgets).
-LEGACY_CLIENT = frozenset((
-    # test-pyramid part 2: the client/app scenarios are journey children now (journey_checks.py); only this check,
-    # whose scenario (client-connectivity "Client launch smoke test", `hs launch --smoke`) no journey runs, still
-    # starts the real client outside the journey set
-    "client.launch_smoke",))
+# Checks not yet migrated that start the real client or the app end to end count as journey time (layer_times; the
+# coordinator's part-1 rule). Empty since test-pyramid design 16: client.launch_smoke, the last one, is a targeted
+# integration check, timed with the targeted checks.
+LEGACY_CLIENT: frozenset = frozenset()
 
 
 def _union_s(spans: list[tuple]) -> float:
@@ -713,25 +711,34 @@ def _union_s(spans: list[tuple]) -> float:
 
 
 def layer_times(ctx: dict, records: list[dict], unit_s: float | None, selection_s: float | None,
-                build_s: float) -> dict:
+                build_s: float, reg: dict | None = None) -> dict:
     """meta.layers: wall time per layer (integration = the union of its checks' wall spans, so pooled tests count
-    once), each journey's time against its budget, gate time and build time."""
+    once), each journey's time against its budget, gate time and build time. Targeted integration checks (design 16)
+    are timed apart (`targeted`, the union of their spans, budget 20 min in a full run) and are not integration time,
+    so the 15/30 min budgets exclude them (harness-reporting "Every layer is timed and budgeted")."""
+    reg = REGISTRY if reg is None else reg
+    from .registry import TARGETED_BUDGET_S
+    tgt = lambda i: i in reg and reg[i].targeted
     xl = [e for e in ctx.get("exec_log", []) if "id" in e]
-    spans = lambda layer: [(e["start"], e["end"]) for e in xl if e.get("layer") == layer and e["id"] not in LEGACY_CLIENT]
-    journeys = {r["id"]: {"s": r.get("duration_s"), "budget_s": (REGISTRY[r["id"]].budget_s if r["id"] in REGISTRY else None)}
-                for r in records if r.get("layer") == "journey" and r["id"] in REGISTRY and r.get("status") != "skip"}
+    spans = lambda layer: [(e["start"], e["end"]) for e in xl if e.get("layer") == layer and e["id"] not in LEGACY_CLIENT
+                           and not tgt(e["id"])]
+    journeys = {r["id"]: {"s": r.get("duration_s"), "budget_s": (reg[r["id"]].budget_s if r["id"] in reg else None)}
+                for r in records if r.get("layer") == "journey" and r["id"] in reg and r.get("status") != "skip"}
     legacy = {e["id"]: round(e["end"] - e["start"], 1) for e in xl if e["id"] in LEGACY_CLIENT}
     # clustered integration sessions with their own budget (design 14: dng.session1/2 at most 90 s each)
-    sessions = {r["id"]: {"s": r.get("duration_s"), "budget_s": REGISTRY[r["id"]].budget_s}
-                for r in records if r.get("layer") == "integration" and r["id"] in REGISTRY
-                and REGISTRY[r["id"]].budget_s and r.get("status") != "skip"}
+    sessions = {r["id"]: {"s": r.get("duration_s"), "budget_s": reg[r["id"]].budget_s}
+                for r in records if r.get("layer") == "integration" and r["id"] in reg
+                and reg[r["id"]].budget_s and r.get("status") != "skip"}
     integ = _union_s(spans("integration"))
     jsum = round(sum(v["s"] or 0.0 for v in journeys.values()) + sum(legacy.values()), 1)
+    targeted = {e["id"]: round(e["end"] - e["start"], 1) for e in xl if tgt(e["id"])}
     return {"unit": {"wall_s": unit_s, "budget_s": 120.0},
             "selection": {"wall_s": selection_s, "budget_s": 10.0},
             "integration": {"wall_s": integ, "budget_s": 900.0, "sessions": sessions},
             "journeys": {"wall_s": jsum, "each": journeys, "legacy_client_s": legacy},
             "acceptance": {"wall_s": round(integ + jsum, 1), "budget_s": 1800.0},
+            "targeted": {"wall_s": _union_s([(e["start"], e["end"]) for e in xl if tgt(e["id"])]),
+                         "budget_s": TARGETED_BUDGET_S, "each": targeted},
             "gate": {"wall_s": _union_s(spans("gate"))},
             "build": {"wall_s": build_s}}
 
@@ -1006,7 +1013,8 @@ def layer_lines(doc) -> list[str]:
         v = L.get(k) or {}
         b = v.get("budget_s")
         return f"{k} {v.get('wall_s')} s" + (f" (budget {b:.0f} s)" if b else "")
-    out = ["- Layers: " + ", ".join(f(k) for k in ("unit", "selection", "integration", "journeys", "acceptance", "gate", "build") if k in L)]
+    out = ["- Layers: " + ", ".join(f(k) for k in ("unit", "selection", "integration", "journeys", "acceptance", "targeted",
+                                                   "gate", "build") if k in L)]
     for j, v in sorted(((L.get("journeys") or {}).get("each") or {}).items()):
         out.append(f"  - {j}: {v.get('s')} s (budget {v.get('budget_s')} s)")
     s = doc["meta"].get("selection")
@@ -1015,6 +1023,10 @@ def layer_lines(doc) -> list[str]:
         out.append(f"- Selection: {'FULL: ' + '; '.join(s.get('full_reasons') or [])[:200] if s.get('full') else str(n_acc) + ' acceptance test(s)'}"
                    f" ({s.get('duration_s')} s; smoke set: {bool(s.get('smoke_paths'))})")
         out += owed_lines(s)
+        nsel = sorted(i for i, v in (s.get("targeted") or {}).items() if v == "targeted, not selected")
+        if nsel:
+            out.append(f"- Targeted checks not selected ({len(nsel)}; run when their own code changes and in full "
+                       f"runs): {', '.join(nsel)}")
     return out
 
 

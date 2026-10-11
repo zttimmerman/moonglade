@@ -12,6 +12,9 @@ a check that passes none takes its module's `COVERS` (declared per check file). 
 shared-server test that touches only its own fixture characters (it may share the 2-worker pool); `budget_s` is a
 journey's or session's time budget; `parallel_safe` lets a unit check run in the unit tier's process pool;
 `children` are the scenario ids a clustered session records results for (each its own status and evidence).
+`targeted` (harness-reporting "Targeted integration checks"; test-pyramid design 16) marks a slow, narrow integration
+check on the reviewed list TARGETED: a pr run picks it only when a path its `covers` names changed (never by FULL or
+the smoke set), every full run runs it, and its time is reported apart (budget 20 min) from the 15/30 min budgets.
 """
 from dataclasses import dataclass, field
 from typing import Callable
@@ -32,6 +35,14 @@ class CheckSkip(Exception):
 LAYERS = ("unit", "integration", "journey", "gate")
 RUN_TIERS = ("unit", "pr", "full")
 SCOPES = ("exclusive", "character")
+# The reviewed list of targeted integration checks (design 16, Zach 2026-10-11): each can't get cheaper (real waits the
+# specs require, or a session of its own). Adding an id here is a spec change; report.targeted fails a check marked
+# targeted that isn't on it, and an id on it that isn't a targeted integration check.
+TARGETED = ("play.cold_sessions", "backups.on_quit", "backups.restore_roundtrip", "saves.session_interval",
+            "saves.load_ordering", "lock.no_hourly_cap", "lock.heroic_fresh_after_clear", "lock.heroic_partial_kept",
+            "lock.login_inside_kept", "lock.companion_unstuck", "app.backups_window", "client.launch_smoke",
+            "client.login_text_clean", "client.player_client_not_rebuilt")
+TARGETED_BUDGET_S = 1200.0       # the targeted checks of a full run, in total (report.layer_budgets)
 
 
 @dataclass
@@ -53,6 +64,7 @@ class Check:
     parallel_safe: bool = False
     children: tuple = field(default_factory=tuple)
     identity: bool = False        # gets its own fixture account + two characters (ctx["identity"]); always for scope=character
+    targeted: bool = False        # on TARGETED: selected by covers only, run in every full run, timed apart
 
 
 REGISTRY: dict[str, Check] = {}
@@ -62,7 +74,7 @@ CHILDREN: dict[str, str] = {}     # child scenario id -> the session check that 
 def check(id: str, order: int, capability: str, stack: str = "any", layer: str | None = None,
           profile: str | None = None, gui: bool = False, ci_only: bool = False, covers=None,
           scope: str = "exclusive", budget_s: float | None = None, parallel_safe: bool = False, children=(),
-          identity: bool = False):
+          identity: bool = False, targeted: bool = False):
     """Register a check (see the module doc for the fields). `layer` must be one of LAYERS."""
     def deco(fn):
         if id in REGISTRY or id in CHILDREN:
@@ -71,10 +83,12 @@ def check(id: str, order: int, capability: str, stack: str = "any", layer: str |
             raise RuntimeError(f"{id}: unknown layer {layer!r}; expected one of {LAYERS}")
         if scope not in SCOPES:
             raise RuntimeError(f"{id}: unknown scope {scope!r}")
+        if targeted and layer != "integration":
+            raise RuntimeError(f"{id}: only an integration check can be targeted (layer {layer!r})")
         cov = covers if covers is not None else fn.__globals__.get("COVERS", ())
         REGISTRY[id] = Check(id, fn, order, capability, stack, (fn.__doc__ or "").strip(), layer, profile, gui,
                              ci_only, tuple(cov), scope, budget_s, parallel_safe, tuple(children),
-                             identity or scope == "character")
+                             identity or scope == "character", targeted)
         for c in children:
             if c in REGISTRY or c in CHILDREN:
                 raise RuntimeError(f"duplicate check id {c} (child of {id})")

@@ -16,14 +16,15 @@ import time
 from pathlib import Path
 
 from .. import paths as P
-from ..registry import LAYERS, REGISTRY, Check, check, require
+from ..registry import LAYERS, REGISTRY, TARGETED, TARGETED_BUDGET_S, Check, check, require
 
 CAP = "harness-reporting"
-JOURNEY_SET = {"journey.first_play": 150, "journey.pause": 90, "journey.saves": 150, "journey.login_recovery": 120,
+JOURNEY_SET = {"journey.first_play": 150, "journey.pause": 90, "journey.saves": 200, "journey.login_recovery": 150,
                "journey.stock_client": 60, "journey.app_desktop": 240}
-JOURNEY_MAX_N, JOURNEY_MAX_S = 8, 840
+JOURNEY_MAX_N, JOURNEY_MAX_S = 8, 900
 GATE_REQUIRED = ("build.clean", "core.login_logout_race_baseline")
-BUDGETS = {"unit": 120.0, "selection": 10.0, "integration": 900.0, "acceptance": 1800.0, "new_checks": 120.0}
+BUDGETS = {"unit": 120.0, "selection": 10.0, "integration": 900.0, "acceptance": 1800.0, "new_checks": 120.0,
+           "targeted": TARGETED_BUDGET_S}
 PR_MEAN_MAX_MIN, PR_MIN_RUNS, PR_WINDOW = 15.0, 5, 10
 
 COVERS = (
@@ -43,9 +44,9 @@ def _scratch(tag: str) -> Path:
     return Path(tempfile.mkdtemp(prefix=f"hs-{tag}-")).resolve()
 
 
-def _syn(cid, layer, covers=(), stack="any", budget=None, gui=False, fn=None, order=100):
+def _syn(cid, layer, covers=(), stack="any", budget=None, gui=False, fn=None, order=100, targeted=False):
     return Check(cid, fn or (lambda ctx: {"ok": 1}), order, "synthetic", stack, "", layer, None, gui, False,
-                 tuple(covers), "exclusive", budget)
+                 tuple(covers), "exclusive", budget, targeted=targeted)
 
 
 # ============================================================================ report.layers_declared
@@ -468,6 +469,101 @@ def gate_rule(ctx):
     return ev
 
 
+# ============================================================================ report.targeted
+
+def targeted_problems(reg: dict, reviewed=TARGETED) -> list[str]:
+    """A check marked targeted that isn't on the reviewed list (design 16), and a listed id that isn't a registered,
+    targeted integration check."""
+    probs = []
+    for i, c in sorted(reg.items()):
+        if getattr(c, "targeted", False) and i not in reviewed:
+            probs.append(f"{i}: targeted but not on the reviewed list (design 16)")
+        if getattr(c, "targeted", False) and c.layer != "integration":
+            probs.append(f"{i}: targeted but layer {c.layer!r} (only integration checks can be)")
+    for i in reviewed:
+        if i not in reg:
+            probs.append(f"{i}: on the reviewed list but not registered")
+        elif not getattr(reg[i], "targeted", False):
+            probs.append(f"{i}: on the reviewed list but not marked targeted")
+    return probs
+
+
+def targeted_cases(d: Path) -> dict:
+    """The spec's cases on a scratch git repo: a targeted check covering harness/hslib/backups.py (the cheapest of its
+    area, so the smoke set would pick it without the rule) and a targeted run guard (order 998, which a pr run would
+    otherwise always run), against (a) backups.py, (b) a core patch (FULL), (c) an unowned new file (smoke set), and a
+    full run (the run's own selection and execution, with the stack handling stubbed out)."""
+    from .. import runner, selection as S
+    scratch_tree(d, {"harness/hslib/backups.py": "X = 1\n", "harness/hslib/guardthing.py": "Y = 1\n"})
+    ran: list = []
+    reg = scratch_registry()
+    reg["backups.restore_roundtrip"] = _syn("backups.restore_roundtrip", "integration", ("harness/hslib/backups.py",),
+                                            "down", fn=lambda ctx: ran.append("backups.restore_roundtrip") or {"ran": 1},
+                                            targeted=True)
+    reg["backups.list"] = _syn("backups.list", "integration", ("harness/hslib/backups.py",), "down")
+    reg["client.player_client_not_rebuilt"] = _syn(
+        "client.player_client_not_rebuilt", "integration", ("harness/hslib/guardthing.py",), "down", order=998,
+        fn=lambda ctx: ran.append("client.player_client_not_rebuilt") or {"ran": 1}, targeted=True)
+    m = S.Map(reg, d)
+    price = lambda tid: {"backups.restore_roundtrip": 1.0, "backups.list": 5.0}.get(tid, 20.0)
+    tids = ("backups.restore_roundtrip", "client.player_client_not_rebuilt")
+    out = {}
+    for name, paths in (("a_backups_py", ["harness/hslib/backups.py"]),
+                        ("b_core_patch_full", ["patches/core/0003-world-pause.patch"]),
+                        ("c_unowned_smoke", ["harness/hslib/newthing.py"])):
+        sel = S.select(paths, m, price)
+        chosen = S.pr_chosen(sel, reg)
+        run_ids = [c.id for c in runner.select(reg, "pr", None, chosen)]
+        out[name] = {"full": sel["full"], "smoke_set": sel["smoke_set"], "selected": sorted(sel["selected"]),
+                     "targeted": {t: sel["targeted"].get(t) for t in tids}, "pr_run_ids": run_ids,
+                     "summary": [ln for ln in runner.layer_lines({"meta": {"layers": {"unit": {}}, "selection": sel}})
+                                 if "Targeted" in ln]}
+    ran.clear()
+    full_sel = runner.select(reg, "full", None)
+    recs = runner.execute(full_sel, {}, ensure=lambda *_a: None, quiet=True)
+    out["full_run"] = {"selected": [c.id for c in full_sel], "ran": list(ran),
+                       "records": {r["id"]: r["status"] for r in recs if r["id"] in tids}}
+    nsel = S.TARGETED_NOT_SELECTED
+    a, b, c = out["a_backups_py"], out["b_core_patch_full"], out["c_unowned_smoke"]
+    v = {"a_selects_it": "backups.restore_roundtrip" in a["pr_run_ids"]
+         and a["targeted"]["backups.restore_roundtrip"] != nsel,
+         "a_guard_not_selected_not_run": "client.player_client_not_rebuilt" not in a["pr_run_ids"]
+         and a["targeted"]["client.player_client_not_rebuilt"] == nsel,
+         "b_full_doesnt_pick_it": b["full"] and not any(t in b["pr_run_ids"] for t in tids)
+         and "backups.list" in b["pr_run_ids"],
+         "b_records_targeted_not_selected": all(b["targeted"][t] == nsel for t in tids) and bool(b["summary"]),
+         "c_smoke_skips_it": bool(c["smoke_set"]) and not any(t in c["pr_run_ids"] for t in tids)
+         and "backups.list" in c["smoke_set"],
+         "c_records_targeted_not_selected": all(c["targeted"][t] == nsel for t in tids) and bool(c["summary"]),
+         "full_run_runs_them": sorted(out["full_run"]["ran"]) == sorted(tids)
+         and all(out["full_run"]["records"].get(t) == "pass" for t in tids)}
+    return {"cases": out, "verdict": v}
+
+
+@check("report.targeted", order=3, capability=CAP, stack="any", layer="unit", parallel_safe=True)
+def targeted_rule(ctx):
+    """A targeted check covering harness/hslib/backups.py is selected for (a) backups.py, not for (b) a core patch
+    (FULL) or (c) an unowned new file (smoke set), which record it as "targeted, not selected"; a full run runs it.
+    The registry's targeted checks are exactly design 16's reviewed list, and a registry with a targeted check missing
+    from the list fails the rule."""
+    from ..registry import load_all
+    d = _scratch("targeted")
+    try:
+        res = targeted_cases(d)
+    finally:
+        shutil.rmtree(d, ignore_errors=True)
+    live = targeted_problems(load_all())
+    syn_reg = dict(load_all())
+    syn_reg["t.unlisted"] = _syn("t.unlisted", "integration", targeted=True)
+    cx = targeted_problems(syn_reg)
+    res |= {"reviewed_list": list(TARGETED), "live_problems": live, "counterexample_unlisted": cx}
+    res["verdict"]["live_registry_matches_the_list"] = not live
+    res["verdict"]["unlisted_targeted_fails"] = any("t.unlisted" in p for p in cx)
+    bad = [k for k, x in res["verdict"].items() if not x]
+    require(not bad, f"targeted rule wrong: {bad}" + (f"; {live[:5]}" if live else ""), **res)
+    return res
+
+
 # ============================================================================ report.layer_budgets (post-run)
 
 def budget_problems(meta: dict, new_selected_s: float | None = None) -> tuple[list[str], dict]:
@@ -489,6 +585,8 @@ def budget_problems(meta: dict, new_selected_s: float | None = None) -> tuple[li
             chk(k, v.get("s"), float(v["budget_s"]))
     chk("integration", (L.get("integration") or {}).get("wall_s"), BUDGETS["integration"], full_like)
     chk("acceptance (integration + journeys)", (L.get("acceptance") or {}).get("wall_s"), BUDGETS["acceptance"], full_like)
+    # targeted integration checks (design 16): outside the two budgets above (layer_times), 20 min in a full run
+    chk("targeted", (L.get("targeted") or {}).get("wall_s"), BUDGETS["targeted"], meta.get("full_run") is True)
     if meta.get("tier") == "pr" and not full_like:
         chk("new selected checks", new_selected_s, BUDGETS["new_checks"])
     rows["gate_s"] = (L.get("gate") or {}).get("wall_s")
@@ -514,18 +612,48 @@ def synthetic_budget_cases() -> dict:
         "e_full_31min_plus_build": budget_problems(meta(layers={"acceptance": {"wall_s": 31 * 60.0}, "build": {"wall_s": 600.0}}))[0],
         "f_pr_130s_new": budget_problems(meta(tier="pr", full_run=False, selection={"full": False}), 130.0)[0],
         "h_full_16min_integration": budget_problems(meta(layers={"integration": {"wall_s": 16 * 60.0}}))[0],
-        "i_session_over_its_budget": budget_problems(meta(layers={"integration": {"wall_s": 600.0, "sessions": {
+        "i_full_21min_targeted": budget_problems(meta(layers={"targeted": {"wall_s": 21 * 60.0}}))[0],
+        "s_session_over_its_budget": budget_problems(meta(layers={"integration": {"wall_s": 600.0, "sessions": {
             "dng.session1": {"s": 95.0, "budget_s": 90}}}}))[0],
         "g_full_29min_plus_25min_build_gate": budget_problems(meta(layers={"acceptance": {"wall_s": 29 * 60.0},
                                                                           "build": {"wall_s": 900.0}, "gate": {"wall_s": 600.0}}))[0],
     }
+    # (j) a full run of 29 min plus 18 min of targeted checks passes, with the targeted time reported; built through
+    # layer_times from an execution log, so the exclusion itself is under test (not just the budget arithmetic)
+    j_layers = synthetic_targeted_layers(integration_s=600.0, journeys_s=29 * 60.0 - 600.0, targeted_s=18 * 60.0)
+    j_probs, j_rows = budget_problems(meta(layers=j_layers))
+    cases["j_full_29min_plus_18min_targeted"] = j_probs
     names = {"a_unit_121": "unit", "b_selection_11": "selection", "c_journey_pause_95": "journey.pause",
              "d_full_selection_pr_31min": "acceptance", "e_full_31min_plus_build": "acceptance",
              "f_pr_130s_new": "new selected checks", "h_full_16min_integration": "integration",
-             "i_session_over_its_budget": "dng.session1"}
+             "i_full_21min_targeted": "targeted", "s_session_over_its_budget": "dng.session1"}
     verdict = {k: bool(cases[k]) and any(n in p for p in cases[k]) for k, n in names.items()}
     verdict["g_passes"] = not cases["g_full_29min_plus_25min_build_gate"]
+    verdict["j_passes_targeted_reported"] = (not j_probs and (j_rows.get("targeted") or {}).get("s") == 18 * 60.0
+                                             and j_layers["integration"]["wall_s"] == 600.0
+                                             and j_layers["acceptance"]["wall_s"] == 29 * 60.0)
+    # counterexample of (j): the same execution log with the targeted check counted as integration fails both budgets
+    cx = synthetic_targeted_layers(integration_s=600.0, journeys_s=29 * 60.0 - 600.0, targeted_s=18 * 60.0,
+                                   mark=False)
+    cx_probs = budget_problems(meta(layers=cx))[0]
+    cases["j_counterexample_unmarked"] = cx_probs
+    verdict["j_counterexample_unmarked_fails"] = (any(p.startswith("integration") for p in cx_probs)
+                                                  and any(p.startswith("acceptance") for p in cx_probs))
     return {"cases": cases, "verdict": verdict}
+
+
+def synthetic_targeted_layers(integration_s: float, journeys_s: float, targeted_s: float, mark: bool = True) -> dict:
+    """runner.layer_times over a synthetic execution log: one integration check, one journey and one targeted
+    integration check (`mark=False`: the same check without the marker)."""
+    from ..runner import layer_times
+    reg = {"i.cheap": _syn("i.cheap", "integration"), "journey.x": _syn("journey.x", "journey", budget=journeys_s + 1),
+           "t.slow": _syn("t.slow", "integration", targeted=mark)}
+    t = 1000.0
+    xl = [{"id": "i.cheap", "start": t, "end": t + integration_s, "lane": "a", "layer": "integration"},
+          {"id": "t.slow", "start": t + integration_s, "end": t + integration_s + targeted_s, "lane": "a",
+           "layer": "integration"}]
+    recs = [{"id": "journey.x", "layer": "journey", "status": "pass", "duration_s": journeys_s}]
+    return layer_times({"exec_log": xl}, recs, 50.0, 1.0, 0.0, reg=reg)
 
 
 def layer_budgets_record(doc: dict) -> dict:
@@ -641,7 +769,7 @@ def journeys_record(doc: dict) -> dict:
     syn_reg = {i: _syn(i, "journey", budget=b) for i, b in JOURNEY_SET.items()}
     ce = journey_problems({**syn_reg, "journey.seventh": _syn("journey.seventh", "journey", budget=30)}, [])
     ok_syn = journey_problems(syn_reg, [])
-    # the 840 s cap on its own: the same six ids with budgets summing to 841 s (one more second on app_desktop)
+    # the JOURNEY_MAX_S cap on its own: the same six ids with budgets summing to one second over it (on app_desktop)
     over = dict(JOURNEY_SET, **{"journey.app_desktop": JOURNEY_SET["journey.app_desktop"]
                                 + (JOURNEY_MAX_S + 1 - sum(JOURNEY_SET.values()))})
     ce_cap = journey_problems({i: _syn(i, "journey", budget=b) for i, b in over.items()}, [], named=over)

@@ -358,11 +358,12 @@ def main(argv=None) -> int:
         if a.json:
             _print([{"id": c.id, "order": c.order, "capability": c.capability, "stack": c.stack, "layer": c.layer,
                      "scope": c.scope, "gui": c.gui, "budget_s": c.budget_s, "parallel_safe": c.parallel_safe,
-                     "covers": list(c.covers), "children": list(c.children)} for c in checks])
+                     "targeted": c.targeted, "covers": list(c.covers), "children": list(c.children)} for c in checks])
             return 0
         for c in checks:
             print(f"{c.order:4} {c.id:32} [{c.capability}] stack={c.stack} layer={c.layer or '(undeclared)'}"
-                  f"{' gui' if c.gui else ''}{' scope=character' if c.scope == 'character' else ''}  "
+                  f"{' gui' if c.gui else ''}{' targeted' if c.targeted else ''}"
+                  f"{' scope=character' if c.scope == 'character' else ''}  "
                   f"{c.doc.splitlines()[0] if c.doc else ''}")
         return 0
 

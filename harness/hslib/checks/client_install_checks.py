@@ -110,7 +110,7 @@ def inspect(ctx):
     return ev
 
 
-@check("client.launch_smoke", order=189, capability="client-connectivity", stack="up", layer="integration")
+@check("client.launch_smoke", order=189, capability="client-connectivity", stack="up", layer="integration", targeted=True)
 def launch_smoke(ctx):
     """`hs launch --smoke`: Wine Wow.exe still running after 30 s, then nothing from this prefix remains."""
     from ..launch import prefix_processes
