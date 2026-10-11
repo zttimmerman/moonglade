@@ -94,6 +94,9 @@ def main(argv=None) -> int:
     ci = sub.add_parser("client-install",
                         help="install a 3.3.5a client (zip or folder, read-only) into client/ + manifest")
     ci.add_argument("source", type=Path)
+    ci.add_argument("--rerecord-source", action="store_true",
+                    help="the source was replaced by its owner: check it holds the recorded client and record its "
+                         "size/mtime in the manifest only (client/ untouched)")
 
     cl = sub.add_parser("client-lock", help="write-protect the installed client/ (chmod a-w + chflags uchg; "
                                             "client-install does this itself); --status only reports")
@@ -399,6 +402,10 @@ def main(argv=None) -> int:
         from .clientinst import install, ClientInstallError
         from .clientcfg import ClientConfigError
         try:
+            if a.rerecord_source:
+                from .clientinst import rerecord_source
+                _print(rerecord_source(a.source))
+                return 0
             res = install(a.source)
         except (ClientInstallError, ClientConfigError) as e:
             log(f"CLIENT-INSTALL FAILED: {e}")

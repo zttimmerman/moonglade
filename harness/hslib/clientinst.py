@@ -188,6 +188,44 @@ def heal_manifest_client_dir(manifest_path: Path = P.CLIENT_MANIFEST, client: Pa
     return {"healed": True, "from": old, "to": want}
 
 
+def rerecord_source(src: Path, manifest_path: Path = P.CLIENT_MANIFEST) -> dict:
+    """The owner replaced the client source (same path, new mtime): after proving the new source holds the same
+    client the manifest records (the same member list and sizes, and every .exe/.dll SHA-256 read from the source),
+    record its size and mtime as the manifest's source fingerprint (client.inspect compares with it). Reads the source
+    and writes the manifest file only (env/), never anything in the install folder; the old fingerprint is kept
+    under source.rerecorded. Raises ClientInstallError when the contents differ (then reinstall instead)."""
+    src = Path(src).expanduser().resolve()
+    m = load_manifest(Path(manifest_path))
+    if m is None:
+        raise ClientInstallError("no install record (env/client-manifest.json); run `hs client-install` instead")
+    if m.get("source", {}).get("path") != str(src):
+        raise ClientInstallError(f"{src} isn't the recorded source ({m.get('source', {}).get('path')})")
+    before = source_stat(src)
+    srcobj = _open_source(src)
+    try:
+        members = srcobj.members
+        rec = m.get("files") or {}
+        diff = sorted(set(members) ^ set(rec))
+        sizes = [r for r in members if r in rec and srcobj.size(r) != rec[r].get("size")]
+        hashes = [r for r in members if r in rec and rec[r].get("sha256") and _src_sha(srcobj, r) != rec[r]["sha256"]]
+    finally:
+        srcobj.close()
+    after = source_stat(src)
+    if (after["size"], after["mtime_ns"]) != (before["size"], before["mtime_ns"]):
+        raise ClientInstallError("source changed while it was read", kind="source_changed")
+    if diff or sizes or hashes:
+        raise ClientInstallError(f"the source's contents differ from the install record (members {diff[:5]}, "
+                                 f"sizes {sizes[:5]}, hashes {hashes[:5]}); reinstall with `hs client-install`",
+                                 evidence={"members": diff, "sizes": sizes, "hashes": hashes})
+    old = {k: m["source"].get(k) for k in ("before", "after")}
+    m["source"].setdefault("rerecorded", []).append({"at": _now(), "previous": old})
+    m["source"]["before"], m["source"]["after"] = before, after
+    tmp = Path(manifest_path).with_name(Path(manifest_path).name + ".tmp")
+    tmp.write_text(json.dumps(m, indent=2))
+    os.replace(tmp, manifest_path)
+    return {"rerecorded": True, "source": str(src), "members": len(members), "previous": old, "now": before}
+
+
 def mismatches(client: Path, manifest: dict, hash_binaries: bool = True) -> list[dict]:
     """Differences between client/ and the manifest (missing files, wrong sizes, wrong hashes).
     Config-managed files (realmlist.wtf) are skipped; client-config rewrites them by design."""
