@@ -13,7 +13,7 @@ The worldserver SHALL NOT refuse a player entry to a 5-player dungeon because of
 When a player enters a 5-player dungeon (normal or heroic) while their saved copy has every final encounter done (each `instance_encounters` row with `lastEncounterDungeon` ≠ 0 for that map and difficulty), and no non-bot player is inside it, mod-moonglade SHALL clear that save for the player and for every bot in their group first, so the entry creates a fresh copy. A save whose final encounter isn't done SHALL be kept, so a player who leaves mid-way (for example after dying) returns to their progress. Logging in inside a dungeon SHALL NOT clear anything. `Moonglade.Dungeons.FreshAfterClear = 0` SHALL restore stock behaviour.
 
 #### Scenario: Finished normal dungeon resets on re-entry
-- **GIVEN** the probe character and two companions in The Deadmines, with every encounter done (bosses killed in a fight, or with the GM `.die` command, which goes through the same kill-credit path; design.md §3) and the completion saved in `characters.instance.completedEncounters`
+- **GIVEN** the probe character and two companions in The Deadmines, with every encounter done (bosses killed in a fight, or with GM `.damage` to their current health, which goes through the normal kill-credit path; design.md §3) and the completion saved in `characters.instance.completedEncounters`
 - **WHEN** the party leaves the dungeon and the probe enters it again
 - **THEN** the probe arrives in a copy with a different instance id and a completed-encounter mask of 0, the companions follow into that same new copy, and `character_instance` holds no row for the old copy for the probe or either companion
 - Check: `lock.fresh_after_clear`
