@@ -209,7 +209,21 @@ def _adler(s: str) -> str:
     return adler(s)
 
 
-@check("saves.live_charselect_load", order=402, capability="character-saves", stack="down", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "client-mods/glue/**",
+    "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.Saves",
+    "harness/hslib/charsaves.py",
+    "harness/hslib/checks/clientinput.py",
+    "harness/hslib/checks/saves_gui_checks.py",
+    "harness/hslib/checks/seamless_checks.py",
+    "harness/hslib/saves.py",
+)
+
+
+@check("saves.live_charselect_load", order=402, capability="character-saves", stack="down", layer="integration")
 def live_charselect_load(ctx):
     """The play client at the character screen in a test run (listener up, the character with two saves): the script
     opens Saves, picks the older save and confirms: within 10 s the character list shows the saved level; the notice
@@ -260,7 +274,7 @@ def live_charselect_load(ctx):
     return ev
 
 
-@check("saves.live_charselect_list", order=403, capability="character-saves", stack="down", tier="full")
+@check("saves.live_charselect_list", order=403, capability="character-saves", stack="down", layer="integration")
 def live_charselect_list(ctx):
     """A test run that entered the world, made a manual save and a quicksave, and exited to the character screen: the
     script opens Saves for that character, and the panel lists both new saves at the top with their labels, without

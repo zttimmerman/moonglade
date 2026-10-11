@@ -11,7 +11,7 @@ import subprocess
 MIN_BATTERY_PCT = 35          # CLAUDE session rule: below 35 % on battery, heavy work pauses
 # report.gui_preflight's test switches (test-loop-speedups): a stubbed probe (JSON), a stubbed GUI rule
 # (changed | unchanged | unknown) and "decide, print, exit"; the CLI refuses them outside a harness run
-PREFLIGHT_TEST_ENV = ("HS_TEST_GUI_PROBE", "HS_TEST_GUI_RULE", "HS_TEST_PREFLIGHT_ONLY")
+PREFLIGHT_TEST_ENV = ("HS_TEST_GUI_PROBE", "HS_TEST_GUI_DUE", "HS_TEST_PREFLIGHT_ONLY")
 
 
 def screen_locked() -> bool:

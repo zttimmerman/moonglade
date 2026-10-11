@@ -54,21 +54,20 @@ def main(argv=None) -> int:
     r = sub.add_parser("run", help="run checks; write harness/results.json + summary.md")
     r.add_argument("--only", action="append", help="glob of check ids (repeatable)")
     r.add_argument("--leave-up", action="store_true", help="don't shut the stack down at the end")
-    r.add_argument("--tier", choices=["quick", "full", "slow", "gui", "backups"], default="full",
-                   help="quick: quick checks only; full (default, the merge gate): quick+full; slow: everything; "
-                        "gui: only the checks that need exclusive screen focus (full runs include them only when "
-                        "a GUI path changed); backups: only the save-backups end-to-end checks (full runs include "
-                        "them only when a backup path changed)")
+    r.add_argument("--tier", choices=["unit", "pr", "full"], default="pr",
+                   help="unit: the unit layer only (no stack; same as `hs test`); pr (default, the merge requirement): "
+                        "the unit layer, then the integration, journey and gate checks the impact selection picks "
+                        "for this change; full: every check of every layer (milestone gates)")
     r.add_argument("--force-clean", action="store_true", help="build.clean always does a from-empty build")
     r.add_argument("--ignore-gui-preflight", action="store_true",
-                   help="start an unfiltered full/slow/gui run although the screen is locked, the display asleep or "
+                   help="start an unfiltered pr/full run although the screen is locked, the display asleep or "
                         "the battery low (GUI checks will then fail; for runs that knowingly accept that)")
     r.add_argument("--ignore-power", action="store_true",
-                   help="full/slow/gui runs: don't pause between checks on low battery (below 35 %% until 50 %%)")
-    r.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)   # nested runs (report.tiers) write here
+                   help="pr/full runs: don't pause between checks on low battery (below 35 %% until 50 %%)")
+    r.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)   # nested runs write here
     r.add_argument("--lanes", type=int, choices=[1, 2],
                    help="1: every check in lane A, serially; 2: the LANE_B checks in the second test stack alongside "
-                        "(when memory and power allow). Default: 2 for unfiltered full/slow runs, else 1")
+                        "(when memory and power allow). Default: 2 for unfiltered full runs, else 1")
     ps_ = sub.add_parser("pop-session", help="one M2 population session (cold start with the population profile, "
                                             "warm-up, 10 min of samples); tuning runs for the budget record")
     ps_.add_argument("--n", type=int, help="random bots (default: config.POPULATION_N)")
@@ -77,7 +76,10 @@ def main(argv=None) -> int:
                                             "(small | normal | large | a number); stored in env/settings.json")
     wsz.add_argument("value", nargs="?")
     ls = sub.add_parser("list", help="list registered checks")
-    ls.add_argument("--json", action="store_true", help="machine-readable: id, order, capability, stack, tier")
+    ls.add_argument("--json", action="store_true", help="machine-readable: id, order, capability, stack, layer, covers")
+    se = sub.add_parser("select", help="the impact selection a pr run would make for this checkout; --replay N "
+                                       "replays it over the last N merged PRs, priced with the last full run")
+    se.add_argument("--replay", type=int, metavar="N")
 
     pr = sub.add_parser("probe", help="headless 3.3.5a protocol probe (logon, realm list, world, char enum/login)",
                         add_help=False)
@@ -177,23 +179,16 @@ def main(argv=None) -> int:
     ka = sub.add_parser("keep-awake", help="keep this Mac and its display awake (the assertion every `hs run` holds) "
                                            "for N hours (default 8) or until stopped (Ctrl-C)")
     ka.add_argument("--hours", type=float, default=8.0)
-    ng = sub.add_parser("nightly", help="flake hunt: 3 unfiltered full runs on a clean main, results and a flake table "
-                                        "in harness/out/nightly/<date>/; --install/--uninstall manage a user "
-                                        "LaunchAgent that runs it nightly (installing it is Zach's call)")
-    ngx = ng.add_mutually_exclusive_group()
-    ngx.add_argument("--install", action="store_true", help="write and load ~/Library/LaunchAgents/<label>.plist")
-    ngx.add_argument("--uninstall", action="store_true", help="unload and remove that LaunchAgent")
-    ng.add_argument("--runs", type=int, default=3, help=argparse.SUPPRESS)
     ln = sub.add_parser("lane", help="the harness's second test stack, lane B (ADR-0011): init (template datadir + "
                                       "Wine prefix clone) | status | down | reset (fresh datadir clone); init and "
                                       "reset only inside a harness run")
     ln.add_argument("action", choices=["init", "status", "down", "reset"])
     ln.add_argument("--force", action="store_true", help="init: rebuild the template even if one exists")
-    ut = sub.add_parser("test", help="the unit layer (test-pyramid): Python, C++ and Lua unit tests; no stack, Wine "
-                                      "or client; results in harness/out/unit/results.json")
-    ut.add_argument("-k", dest="pattern", help="only tests whose id contains this")
-    ut.add_argument("--static", type=int, default=0, metavar="N",
-                    help="also run the unit-layer static checks, in N processes (1 = serially)")
+    ut = sub.add_parser("test", help="the unit layer (test-pyramid): `hs run --tier unit` (unit tests and unit-layer "
+                                      "checks; no stack, Wine or client); with -k only the unit tests whose id "
+                                      "contains the pattern, without the checks (the builder's inner loop)")
+    ut.add_argument("-k", dest="pattern", help="only unit tests whose id contains this (no checks)")
+    ut.add_argument("--results-dir", type=Path, help=argparse.SUPPRESS)
     ic = sub.add_parser("icon", help="regenerate branding/AppIcon.png + .icns + .json (logo on the navy tile) from env/branding/logo-source.jpeg")
     ic.add_argument("--out-dir", type=Path, help="write here instead of branding/ (e.g. a reproducibility check)")
 
@@ -311,15 +306,27 @@ def main(argv=None) -> int:
                    ignore_power=a.ignore_power, lanes=a.lanes)
 
     if a.cmd == "test":
-        from . import unitrun
-        return unitrun.main(a.pattern, a.static)
+        if a.pattern:
+            from . import unitrun
+            return unitrun.main(a.pattern)
+        from . import paths as P
+        from .runner import run
+        if a.results_dir:
+            a.results_dir.mkdir(parents=True, exist_ok=True)
+            P.RESULTS, P.SUMMARY = a.results_dir.resolve() / "results.json", a.results_dir.resolve() / "summary.md"
+        return run(tier="unit")
+
+    if a.cmd == "select":
+        from . import selection
+        from .registry import load_all
+        if a.replay:
+            _print(selection.replay(a.replay))
+        else:
+            _print(selection.select_for_run(load_all()))
+        return 0
     if a.cmd == "keep-awake":
         from .util import keep_awake_cli
         return keep_awake_cli(a.hours)
-
-    if a.cmd == "nightly":
-        from . import nightly
-        return nightly.cli(do_install=a.install, do_uninstall=a.uninstall, runs=a.runs)
 
     if a.cmd == "pop-session":
         from . import population
@@ -345,12 +352,13 @@ def main(argv=None) -> int:
         from .registry import load_all
         checks = sorted(load_all().values(), key=lambda c: (c.order, c.id))
         if a.json:
-            _print([{"id": c.id, "order": c.order, "capability": c.capability, "stack": c.stack, "tier": c.tier,
-                     "tier_declared": c.tier_declared, "gui": c.gui, "backups": c.backups} for c in checks])
+            _print([{"id": c.id, "order": c.order, "capability": c.capability, "stack": c.stack, "layer": c.layer,
+                     "scope": c.scope, "gui": c.gui, "budget_s": c.budget_s, "parallel_safe": c.parallel_safe,
+                     "covers": list(c.covers), "children": list(c.children)} for c in checks])
             return 0
         for c in checks:
-            t = c.tier if c.tier_declared else f"{c.tier}(undeclared)"
-            print(f"{c.order:4} {c.id:32} [{c.capability}] stack={c.stack} tier={t}{' gui' if c.gui else ''}{' backups' if c.backups else ''}  "
+            print(f"{c.order:4} {c.id:32} [{c.capability}] stack={c.stack} layer={c.layer or '(undeclared)'}"
+                  f"{' gui' if c.gui else ''}{' scope=character' if c.scope == 'character' else ''}  "
                   f"{c.doc.splitlines()[0] if c.doc else ''}")
         return 0
 

@@ -95,7 +95,27 @@ def module_lists() -> dict:
     return out
 
 
-@check("saves.table_coverage", order=470, capability=CAP, stack="up", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "modules/mod-moonglade/src/MoongladeSaves.*",
+    "modules/mod-moonglade/src/logic/Saves*",
+    "modules/mod-moonglade/src/MoongladeAddon.*",
+    "client-mods/addons/Moonglade/*",
+    "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.Saves",
+    "modules/mod-moonglade/conf/mod_moonglade.conf.dist#CharacterDatabase.WorkerThreads",
+    "harness/hslib/backups.py",
+    "harness/hslib/charsaves.py",
+    "harness/hslib/checks/saves_checks.py",
+    "harness/hslib/frontmenu.py",
+    "harness/hslib/mpq.py",
+    "harness/hslib/pause.py",
+    "harness/hslib/saves.py",
+)
+
+
+@check("saves.table_coverage", order=470, capability=CAP, stack="up", layer="integration")
 def table_coverage(ctx):
     """Every table of the running character database with a column naming a character (guid, owner, owner_guid,
     receiver, player*, and the other character-reference names) or an item (an integer column named *item*) is on
@@ -125,7 +145,7 @@ def table_coverage(ctx):
 
 # ---------------------------------------------------------------- saving
 
-@check("saves.manual", order=471, capability=CAP, stack="up", tier="full")
+@check("saves.manual", order=471, capability=CAP, stack="up", layer="integration")
 def manual(ctx):
     """A probe character in the world, out of combat, sends `MGSAVE SAVE manual <name>`: within 5 s a complete save
     folder exists under the saves account's store with a manifest naming the character, level, zone and the name; the
@@ -163,7 +183,7 @@ def manual(ctx):
     return ev
 
 
-@check("saves.quick_slot", order=472, capability=CAP, stack="up", tier="full")
+@check("saves.quick_slot", order=472, capability=CAP, stack="up", layer="integration")
 def quick_slot(ctx):
     """A character with an existing quicksave quicksaves twice more: exactly one quicksave exists for it, and it is
     the newest (its id and creation time are after every earlier quicksave's)."""
@@ -197,7 +217,7 @@ def _fight_alt(s) -> dict:
     return S.engage(s, level=8)
 
 
-@check("saves.refused_in_combat", order=473, capability=CAP, stack="up", tier="full")
+@check("saves.refused_in_combat", order=473, capability=CAP, stack="up", layer="integration")
 def refused_in_combat(ctx):
     """A probe character in melee with a creature asks for a manual save and a quicksave, and an autosave trigger fires
     during the fight; later the same character is dead and asks again: no save folder is created, it gets "You can't
@@ -250,7 +270,7 @@ def config_interval() -> int:
     return int(m.group(1)) if m else 120
 
 
-@check("saves.autosave_triggers", order=474, capability=CAP, stack="up", tier="full")
+@check("saves.autosave_triggers", order=474, capability=CAP, stack="up", layer="integration")
 def autosave_triggers(ctx):
     """With the autosave interval set short (`.moonglade save interval`), the character enters a city (a rest area),
     takes a flight and teleports to another map, repeatedly, until more than 5 autosaves were triggered: each trigger
@@ -356,7 +376,7 @@ def autosave_triggers(ctx):
     return ev
 
 
-@check("saves.bots_skip", order=475, capability=CAP, stack="up", tier="full")
+@check("saves.bots_skip", order=475, capability=CAP, stack="up", layer="integration")
 def bots_skip(ctx):
     """The saves account's alt logged in as a playerbot companion of its main passes autosave triggers (the main
     changes maps with it in the party, and a trigger fired for the alt itself): no save appears for the alt, and the
@@ -404,7 +424,7 @@ def bots_skip(ctx):
     return ev
 
 
-@check("saves.atomic", order=476, capability=CAP, stack="up", tier="full")
+@check("saves.atomic", order=476, capability=CAP, stack="up", layer="integration")
 def atomic(ctx):
     """A save paused by the test switch after its first file; the worldserver is killed (SIGKILL) and the stack
     started again: no partial save is listed, the .tmp-* folder is removed at start, and the previous saves still
@@ -452,7 +472,7 @@ def _content(guid, ignore=None):
 IGNORE_AFTER_LOGIN = {}
 
 
-@check("saves.roundtrip", order=480, capability=CAP, stack="up", tier="full")
+@check("saves.roundtrip", order=480, capability=CAP, stack="up", layer="integration")
 def roundtrip(ctx):
     """The saves account's hunter with a pet, out of the world, with level, XP, gold, equipped items, items in bags
     and bank, an equipment set, an active quest, a talent, a profession skill and a reputation, and a save of it; it
@@ -515,7 +535,7 @@ def roundtrip(ctx):
     return ev
 
 
-@check("saves.scope", order=481, capability=CAP, stack="up", tier="full")
+@check("saves.scope", order=481, capability=CAP, stack="up", layer="integration")
 def scope(ctx):
     """Two characters A and B; a mail in A's mailbox, an auction by A, A on B's friend list, a dungeon lockout of A
     (A entered the Deadmines); with the world paused
@@ -618,7 +638,7 @@ def diff_checksums(x: dict, y: dict) -> list[str]:
     return sorted(k for k in set(x) | set(y) if x.get(k) != y.get(k))
 
 
-@check("saves.item_ids_fresh", order=482, capability=CAP, stack="up", tier="full")
+@check("saves.item_ids_fresh", order=482, capability=CAP, stack="up", layer="integration")
 def item_ids_fresh(ctx):
     """A save of A holds item X; then A mails X to B; A's save is loaded: A has X again under a new item id, B's mail
     still holds the original X, no primary key is duplicated, the server log shows no item or database error, and
@@ -684,7 +704,7 @@ def item_ids_fresh(ctx):
     return ev
 
 
-@check("saves.inworld_load", order=483, capability=CAP, stack="up", tier="full")
+@check("saves.inworld_load", order=483, capability=CAP, stack="up", layer="integration")
 def inworld_load(ctx):
     """A probe character in the world, in combat, with a save from an earlier level, sends `MGSAVE LIST`, then
     `MGSAVE LOAD <generation> <index>` naming that save: it gets SMSG_LOGOUT_COMPLETE within 3 s without a 20 s
@@ -735,7 +755,7 @@ def inworld_load(ctx):
     return ev
 
 
-@check("saves.load_ordering", order=484, capability=CAP, stack="up", tier="full")
+@check("saves.load_ordering", order=484, capability=CAP, stack="up", layer="integration")
 def load_ordering(ctx):
     """20 times: the character moves and gains gold (a periodic save pending; in every other round a save of it is
     queued too) and 0.1 s later loads a save in the game: every time the database afterwards holds the save's position and gold, not the pre-load values. The rendered
@@ -811,7 +831,7 @@ def load_ordering(ctx):
     return ev
 
 
-@check("saves.undo", order=485, capability=CAP, stack="up", tier="full")
+@check("saves.undo", order=485, capability=CAP, stack="up", layer="integration")
 def undo(ctx):
     """A character that has just loaded an older save loads its "Before loading" save: its save-set rows equal those
     from before the first load (by content), and at most 3 before-load saves exist for it."""
@@ -838,7 +858,7 @@ def undo(ctx):
     return ev
 
 
-@check("saves.load_atomic", order=486, capability=CAP, stack="up", tier="full")
+@check("saves.load_atomic", order=486, capability=CAP, stack="up", layer="integration")
 def load_atomic(ctx):
     """A load with the test switch set to fail its transaction after half its statements: the character's rows are
     identical to before (checksums), the load reports failure, and the before-load save exists."""
@@ -879,7 +899,7 @@ def statements_of(guid: int, sid: str) -> int:
     return n
 
 
-@check("saves.load_refusals", order=487, capability=CAP, stack="up", tier="full")
+@check("saves.load_refusals", order=487, capability=CAP, stack="up", layer="integration")
 def load_refusals(ctx):
     """One save each that is damaged (one byte changed), of another character, of another account, or with an altered
     schema fingerprint, and the target character online (as itself, and as a companion): each load is refused with its
@@ -961,7 +981,7 @@ def load_refusals(ctx):
 
 # ---------------------------------------------------------------- lists
 
-@check("saves.inworld_list", order=488, capability=CAP, stack="up", tier="full")
+@check("saves.inworld_list", order=488, capability=CAP, stack="up", layer="integration")
 def inworld_list(ctx):
     """A probe character with manual, quick, auto and before-load saves sends `MGSAVE LIST`: one reply line per save,
     newest first, each at most 255 bytes, with kind, label, time, level and zone, and the same set the store holds."""
@@ -999,7 +1019,7 @@ def inworld_list(ctx):
     return ev
 
 
-@check("saves.list_wording", order=489, capability=CAP, stack="up", tier="full")
+@check("saves.list_wording", order=489, capability=CAP, stack="up", layer="integration")
 def list_wording(ctx):
     """The generated save list for the glue (charsaves.render for the saves account's store) and the add-on's reply
     lines: no save id, path, nonce or password appears; no label contains "server", "realm", "account" or "database";
@@ -1049,7 +1069,7 @@ def store_fingerprint(root: Path) -> dict | None:
     return fingerprint(root)
 
 
-@check("saves.player_untouched", order=997, capability=CAP, stack="any", tier="full")
+@check("saves.player_untouched", order=997, capability=CAP, stack="any", layer="integration")
 def player_untouched(ctx):
     """env/saves/<PLAYER>/ is identical (names, sizes, sha256) at the end of the run to its start, the PLAYER
     characters' save-set rows are byte-identical to the baseline taken before this run's first save or load, and lane
@@ -1129,7 +1149,7 @@ def addon_report(addon: Path, binds: dict) -> dict:
             "patch_files": sorted(patch)}
 
 
-@check("saves.addon_static", order=469, capability=CAP, stack="any", tier="full")
+@check("saves.addon_static", order=469, capability=CAP, stack="any", layer="integration")
 def addon_static(ctx):
     """The Moonglade add-on's files: Bindings.xml declares quicksave and quickload; their default keys are bound to
     nothing in the installed client's own default bindings (WTF\\DefaultBindings.wtf from its base archives, cited in

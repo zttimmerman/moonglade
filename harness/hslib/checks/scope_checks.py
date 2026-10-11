@@ -27,7 +27,17 @@ def _alive(p: subprocess.Popen | None) -> bool:
     return bool(p) and p.poll() is None
 
 
-@check("harness.prefix_scope", order=228, capability="harness-reporting", stack="any", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "modules/mod-moonglade/src/MoongladeQuiet.cpp",
+    "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.QuietServerText",
+    "harness/hslib/checks/scope_checks.py",
+)
+
+
+@check("harness.prefix_scope", order=228, capability="harness-reporting", stack="any", layer="integration")
 def prefix_scope(ctx):
     """An unrelated process (stand-in for StorageManagementService) holding a file open under env/wineprefix-mtld3d
     isn't reported by prefix_processes(), while a real Wine process from the pinned runtime is."""

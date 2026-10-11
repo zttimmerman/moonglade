@@ -73,7 +73,19 @@ def verify_record(rec: dict, adr_text: str, exe: bytes) -> dict:
     return ev | {"problems": problems}
 
 
-@check("client.patch0001_recorded", order=225, capability=CAP, stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "patches/client/**",
+    "client-mods/**",
+    "harness/hslib/checks/client_play_checks.py",
+    "harness/hslib/clientinst.py",
+    "harness/hslib/pristine.py",
+)
+
+
+@check("client.patch0001_recorded", order=225, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def patch0001_recorded(ctx):
     """Patch 0001's record names offsets, original/new bytes, input/output SHA-256 (consistent with client/Wow.exe and
     with each other), and the ADR-0009 appendix cites the same values and the disassembly addresses."""
@@ -104,7 +116,7 @@ def _flip_copy(base: Path, dest: Path, how: str) -> None:
     wow.write_bytes(bytes(data))
 
 
-@check("client.play_build", order=226, capability=CAP, stack="any", tier="quick")
+@check("client.play_build", order=226, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def play_build(ctx):
     """`hs client-build` twice gives identical stamped outputs (second run a no-op), the patched Wow.exe equals patch
     0001's output hash, client/ matches its manifest before and after; a wrong base, an already-patched exe and wrong
@@ -171,7 +183,7 @@ def play_build(ctx):
             shutil.rmtree(d, ignore_errors=True)
 
 
-@check("client.play_revert", order=227, capability=CAP, stack="any", tier="quick")
+@check("client.play_revert", order=227, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def play_revert(ctx):
     """Rebuilding a built play client with patch 0001 removed from the queue (`hs client-build --skip 0001`) gives a
     Wow.exe byte-identical to client/Wow.exe; adding it back gives the patched hash again."""
@@ -217,7 +229,7 @@ def _launched(run: PlayRun, ev_key: str, ev: dict) -> dict:
     return info
 
 
-@check("client.stock_mode", order=386, capability=CAP, stack="down", tier="full")
+@check("client.stock_mode", order=386, capability=CAP, stack="down", layer="integration")
 def stock_mode(ctx):
     """With `client = stock` (scratch settings) the play loop launches the real client/Wow.exe (pristine hash); with
     `client = patched` it launches the play client's Wow.exe (patched hash): a scratch play client built by the same

@@ -115,7 +115,23 @@ def listener_run() -> dict:
     return ev
 
 
-@check("savesctl.listener", order=48, capability=CAP, stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "client-mods/glue/**",
+    "play",
+    "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.Saves",
+    "harness/hslib/checks/saves_gui_checks.py",
+    "harness/hslib/checks/savesctl_checks.py",
+    "harness/hslib/checks/seamless_checks.py",
+    "harness/hslib/frontmenu.py",
+    "harness/hslib/mpq.py",
+    "harness/hslib/savesctl.py",
+)
+
+
+@check("savesctl.listener", order=48, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def listener(ctx):
     """Offline, no client: a status request with the right nonce gets exactly `00 00 <accepted>` and the connection
     closes (when the client closes, as the real one does, or by itself after its linger); wrong nonce / unknown verb / an argument where none belongs / a malformed challenge / a non-control name
@@ -203,7 +219,7 @@ def _player_never_gets_hook() -> dict:
             "knobs_for_test": knob_test}
 
 
-@check("savesctl.test_actions_refused", order=49, capability=CAP, stack="down", tier="full")
+@check("savesctl.test_actions_refused", order=49, capability=CAP, stack="down", layer="integration")
 def test_actions_refused(ctx):
     """A normal ./play (the app runs the same ./play) with $HS_GLUE_TEST carrying ctl: / realm: actions, or the
     listener's $HS_SAVESCTL_TEST, without the harness's test flag (default and test account), exits nonzero naming
@@ -292,7 +308,7 @@ def nonce_leaks(texts: dict[str, str], nonces: list[str]) -> dict[str, list[str]
     return out
 
 
-@check("savesctl.hygiene", order=361, capability=CAP, stack="down", tier="full")
+@check("savesctl.hygiene", order=361, capability=CAP, stack="down", layer="integration")
 def hygiene(ctx):
     """./play in test mode (stand-in client, scratch play client, test account): while the game runs, ./play's
     control listener is bound to 127.0.0.1 only (lsof) and answers a status request; the port and nonce reach the
@@ -537,7 +553,7 @@ def _connects(conn: str) -> list[str]:
     return re.findall(r"RESPONSE_CONNECTED result: LOGIN_OK (\S+)", conn)
 
 
-@check("savesctl.live_roundtrip", order=395, capability=CAP, stack="down", tier="full")
+@check("savesctl.live_roundtrip", order=395, capability=CAP, stack="down", layer="integration")
 def live_roundtrip(ctx):
     """Real client on the title menu (test run, listener up), the test script sends ctl:S: the listener logs exactly
     one challenge for it, account HS<nonce>S (accepted: the nonce matched), build 12340, from 127.0.0.1, within 5 s
@@ -570,7 +586,7 @@ def live_roundtrip(ctx):
     return ev
 
 
-@check("savesctl.live_codes", order=396, capability=CAP, stack="down", tier="full")
+@check("savesctl.live_codes", order=396, capability=CAP, stack="down", layer="integration")
 def live_codes(ctx):
     """The listener answers successive ctl:S requests with each candidate code (0x03 0x04 0x07 0x08 0x0C 0x10); the
     glue records each one's status text (Adler-32, matched against the installed client's GlueStrings.lua). The
@@ -606,7 +622,7 @@ def live_codes(ctx):
     return ev
 
 
-@check("savesctl.live_down", order=397, capability=CAP, stack="down", tier="full")
+@check("savesctl.live_down", order=397, capability=CAP, stack="down", layer="integration")
 def live_down(ctx):
     """With the listener stopped (closed after its sixth connection), the script's ctl:S: within 10 s the glue records
     "couldn't reach the launcher" (class U) with realmList restored; the listener saw no further challenge; no stock
@@ -629,7 +645,7 @@ def live_down(ctx):
     return ev
 
 
-@check("savesctl.realm_restored", order=398, capability=CAP, stack="down", tier="full")
+@check("savesctl.realm_restored", order=398, capability=CAP, stack="down", layer="integration")
 def realm_restored(ctx):
     """After the control requests the script continues: the login reaches the real login server (127.0.0.1:3724,
     character list received), the test character enters the world (the server's Players.log), and WTF/Config.wtf,
@@ -702,7 +718,7 @@ def load_verb_run(listener_cls=None) -> dict:
             "log_text": json.dumps(events)}
 
 
-@check("savesctl.load_verb", order=50, capability=CAP, stack="any", tier="full")
+@check("savesctl.load_verb", order=50, capability=CAP, stack="any", layer="integration")
 def load_verb(ctx):
     """The listener with a stub load action: only the valid L that succeeds gets ACCEPTED; a stale generation, an
     unknown index, a refused load, a load that doesn't finish in the poll limit and the second of two overlapping
@@ -738,7 +754,7 @@ def build_run() -> dict:
     return {"replies": out, "log": [e for e in events if e.get("event") == "request"]}
 
 
-@check("savesctl.build_refused", order=51, capability=CAP, stack="any", tier="full")
+@check("savesctl.build_refused", order=51, capability=CAP, stack="any", layer="integration")
 def build_refused(ctx):
     """With the right nonce, valid S challenges with builds 12340, 12339 and 8606 and with version 2.4.3: only build
     12340 at 3.3.5 gets ACCEPTED; the others get REFUSED and are logged with the reason "wrong build"."""
@@ -786,7 +802,7 @@ def heal_run() -> dict:
     return ev
 
 
-@check("savesctl.account_name_kept", order=404, capability=CAP, stack="down", tier="full")
+@check("savesctl.account_name_kept", order=404, capability=CAP, stack="down", layer="integration")
 def account_name_kept(ctx):
     """(1) A test run on the title menu, accountName = the test profile's account: two `ctl:S` requests, then Continue,
     the world, quit: WTF/Config.wtf afterwards has accountName = the test account and no HS... token anywhere in WTF/,

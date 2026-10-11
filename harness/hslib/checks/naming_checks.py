@@ -145,7 +145,15 @@ def plant_selftest() -> dict:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-@check("repo.naming", order=4, capability=CAP, stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "harness/hslib/checks/naming_checks.py",
+)
+
+
+@check("repo.naming", order=4, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def naming(ctx):
     """Every case-insensitive hit of the old project name in tracked files (content and path) is inside the
     documented allowlist (archived changes, research docs, ADR bodies, Blizzard game content, this change, the guard

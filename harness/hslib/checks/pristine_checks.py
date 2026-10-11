@@ -92,7 +92,19 @@ def write_attempts(root: Path, via: str, loc: str) -> list[dict]:
     ]
 
 
-@check("client.pristine_locked", order=212, capability=CAP, stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    ".claude/hooks/*",
+    ".claude/settings.json",
+    "harness/hslib/checks/pristine_checks.py",
+    "harness/hslib/clientinst.py",
+    "harness/hslib/pristine.py",
+)
+
+
+@check("client.pristine_locked", order=212, capability=CAP, stack="any", layer="unit")
 def pristine_locked(ctx):
     """On a protected scratch install (an APFS clone of client/), every write attempt of a plain process fails,
     directly and through a symlinked path; every file still matches the install record and the fingerprint is
@@ -220,7 +232,7 @@ def pristine_locked(ctx):
         pristine.remove_tree(SCRATCH)
 
 
-@check("client.build_refuses_pristine", order=213, capability=CAP, stack="any", tier="quick")
+@check("client.build_refuses_pristine", order=213, capability=CAP, stack="any", layer="unit")
 def build_refuses_pristine(ctx):
     """A play-client build aimed at a scratch "client" through a symlinked folder, a case variant or a `..` path stops
     before writing, with a message naming the pristine client, and the scratch client is unchanged (identity, sizes,
@@ -339,7 +351,7 @@ def self_test() -> dict:
     for name, extra in (("untouched", {}), ("changed", {PROBE_ENV: target})):
         out = SELFTEST_DIR / name
         env = {k: v for k, v in os.environ.items() if k != PROBE_ENV} | {pristine.TEST_ENV: str(root), **extra}
-        cmd = [str(P.HARNESS / "hs"), "run", "--tier", "quick", "--only", "report.client_pristine_probe",
+        cmd = [str(P.HARNESS / "hs"), "run", "--tier", "unit", "--only", "report.client_pristine_probe",
                "--results-dir", str(out), "--leave-up"]
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=600, env=env)
         try:
@@ -379,7 +391,7 @@ def post_run_record(start: dict, run_self_test: bool) -> dict:
 
 
 if os.environ.get(PROBE_ENV) and os.environ.get(pristine.TEST_ENV) and os.environ.get("HS_HARNESS_RUN") == "1":
-    @check("report.client_pristine_probe", order=1, capability="harness-reporting", stack="any", tier="quick")
+    @check("report.client_pristine_probe", order=1, capability="harness-reporting", stack="any", layer="unit")
     def client_pristine_probe(ctx):
         """Test-only (registered only under report.client_pristine's self-test switches): changes one file of the
         scratch stand-in during the run, as a misbehaving check would."""
@@ -391,7 +403,7 @@ if os.environ.get(PROBE_ENV) and os.environ.get(pristine.TEST_ENV) and os.enviro
             f.write(b"changed by the probe\n")
         return {"changed": str(target)}
 elif os.environ.get(pristine.TEST_ENV) and os.environ.get("HS_HARNESS_RUN") == "1":
-    @check("report.client_pristine_probe", order=1, capability="harness-reporting", stack="any", tier="quick")
+    @check("report.client_pristine_probe", order=1, capability="harness-reporting", stack="any", layer="unit")
     def client_pristine_probe(ctx):
         """Test-only (registered only under report.client_pristine's self-test switch): changes nothing."""
         return {"changed": None}
@@ -472,7 +484,7 @@ def run_hook(payload: dict) -> dict:
     return {"exit": r.returncode, "stderr": r.stderr.strip()[:240]}
 
 
-@check("repo.agent_guard_hook", order=8, capability=CAP, stack="any", tier="quick")
+@check("repo.agent_guard_hook", order=8, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def agent_guard_hook(ctx):
     """The committed PreToolUse hook (.claude/settings.json → .claude/hooks/guard-client.sh, for Bash, Write, Edit and
     NotebookEdit) blocks each harmful sample (the 08:21 symlink loop, cp/mv/sed -i/redirect/rm/chflags/cd/inline

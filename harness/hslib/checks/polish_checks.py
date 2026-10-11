@@ -427,7 +427,28 @@ def shim_icon_run(icon: Path, d: Path, timeout: float = 90) -> dict:
             "icon_lines": parse_icon_lines(lines), "remaining": launch.prefix_processes()}
 
 
-@check("app.dock_icon_rendered", order=398, capability=CAP_APP, stack="down", tier="slow", gui=True)
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "harness/app/*",
+    "branding/*",
+    "play",
+    "harness/hslib/checks/lssampler.m",
+    "harness/hslib/app.py",
+    "harness/hslib/checks/app_checks.py",
+    "harness/hslib/checks/backup_checks.py",
+    "harness/hslib/checks/naming_checks.py",
+    "harness/hslib/checks/polish_checks.py",
+    "harness/hslib/dockshim.py",
+    "harness/hslib/guienv.py",
+    "harness/hslib/icon.py",
+    "harness/hslib/population.py",
+    "harness/hslib/stages.py",
+)
+
+
+@check("app.dock_icon_rendered", order=398, capability=CAP_APP, stack="down", layer="gate", gui=True)
 def dock_icon_rendered(ctx):
     """The shared app run (dev app, notepad stand-in under the shim, test mode): the shim log of this run (newer than
     its start) has, for the stand-in's pid, the icon it loaded for setApplicationIconImage: (the app bundle's
@@ -1013,7 +1034,7 @@ def client_inspect() -> dict:
 
 # ---------------------------------------------------------------- app checks
 
-@check("app.single_dock_icon", order=392, capability=CAP_APP, stack="down", tier="full", gui=True)
+@check("app.single_dock_icon", order=392, capability=CAP_APP, stack="down", layer="integration", gui=True)
 def single_dock_icon(ctx):
     """App + notepad stand-in: lsappinfo has the stand-in as a UIElement named Moonglade, the launcher as the only
     Foreground process with bundle id local.moonglade.app, no other prefix process Foreground; sampled at >= 10 Hz
@@ -1022,28 +1043,28 @@ def single_dock_icon(ctx):
     return verify_single_dock(ev)
 
 
-@check("app.handoff_focus", order=393, capability=CAP_APP, stack="down", tier="full", gui=True)
+@check("app.handoff_focus", order=393, capability=CAP_APP, stack="down", layer="integration", gui=True)
 def handoff_focus(ctx):
     """When the stand-in's first window appears, the loading window is hidden and the stand-in is frontmost within
     2 s, without user input."""
     return verify_handoff(_session(focus=True))
 
 
-@check("app.reopen_focuses_game", order=394, capability=CAP_APP, stack="down", tier="full", gui=True)
+@check("app.reopen_focuses_game", order=394, capability=CAP_APP, stack="down", layer="integration", gui=True)
 def reopen_focuses_game(ctx):
     """Stand-in up, Finder frontmost: reopening the app through LaunchServices makes the stand-in frontmost within
     2 s, shows no "already running" dialog, and the launcher stays the single Moonglade Dock icon."""
     return verify_reopen(_session(focus=True))
 
 
-@check("app.reopen_unminimizes", order=396, capability=CAP_APP, stack="down", tier="full", gui=True)
+@check("app.reopen_unminimizes", order=396, capability=CAP_APP, stack="down", layer="integration", gui=True)
 def reopen_unminimizes(ctx):
     """Stand-in window minimised by the shim's test notification: reopening the app puts it back on screen and
     frontmost."""
     return verify_unminimize(_session(focus=True))
 
 
-@check("app.reopen_during_loading", order=395, capability=CAP_APP, stack="down", tier="full", gui=True)
+@check("app.reopen_during_loading", order=395, capability=CAP_APP, stack="down", layer="integration", gui=True)
 def reopen_during_loading(ctx):
     """App loading (world stage, no game window yet), Finder frontmost: reopening the app through LaunchServices makes
     the loading window frontmost within 2 s (launcher frontmost, its window topmost on screen) with no "already
@@ -1051,7 +1072,7 @@ def reopen_during_loading(ctx):
     return verify_reopen_during_loading(_session(focus=True))
 
 
-@check("app.shutdown_window", order=397, capability=CAP_APP, stack="down", tier="full")
+@check("app.shutdown_window", order=397, capability=CAP_APP, stack="down", layer="integration")
 def shutdown_window(ctx):
     """Game running from the app, quit requested as from the Dock: the shutdown window is on screen within 1 s and at
     every shutdown stage (recorded in order) until the stack is down (sampled independently); then the app exits 0
@@ -1065,7 +1086,7 @@ def shutdown_window(ctx):
     return out
 
 
-@check("app.loading_stages", order=397, capability=CAP_APP, stack="down", tier="full")
+@check("app.loading_stages", order=397, capability=CAP_APP, stack="down", layer="integration")
 def loading_stages(ctx):
     """Stack down, app + stand-in, population profile: stage events use only the documented ids, in order, overall
     progress never decreases from 0 to 1; the bots stage reports the DB's online count and the target, and launching
@@ -1080,7 +1101,7 @@ def loading_stages(ctx):
     return out
 
 
-@check("app.shim_scope", order=398, capability=CAP_APP, stack="down", tier="full")
+@check("app.shim_scope", order=398, capability=CAP_APP, stack="down", layer="integration")
 def shim_scope(ctx):
     """During an app run: client.inspect passes; the shim lives outside client/ and env/wowsilicon-r17/ (pinned hash
     unchanged, nothing in the runtime changed); DYLD_INSERT_LIBRARIES is only in the Wine host processes' environment,
@@ -1091,7 +1112,7 @@ def shim_scope(ctx):
     return out
 
 
-@check("app.loading_stages_warm", order=399, capability=CAP_APP, stack="down", tier="full")
+@check("app.loading_stages_warm", order=399, capability=CAP_APP, stack="down", layer="integration")
 def loading_stages_warm(ctx):
     """Stack already up: the opened app reports database, login and world as skipped within 2 s of its start."""
     ev: dict = {}
@@ -1232,7 +1253,7 @@ def verify_stage_lines(output: str, templates: list[str]) -> dict:
     return out
 
 
-@check("play.stage_lines", order=391, capability=CAP_PLAY, stack="down", tier="full")
+@check("play.stage_lines", order=391, capability=CAP_PLAY, stack="down", layer="integration")
 def stage_lines(ctx):
     """./play in a terminal (stand-in): every [play] line matches a [play] line of the play loop before
     launcher-polish (unchanged), and every [stage] line parses as JSON with a documented id and state. (The existing
@@ -1274,7 +1295,7 @@ def verify_world_progress(output: str, line_samples: list, poll: float = S.WORLD
     return out
 
 
-@check("play.world_progress", order=391, capability=CAP_PLAY, stack="down", tier="full")
+@check("play.world_progress", order=391, capability=CAP_PLAY, stack="down", layer="integration")
 def world_progress(ctx):
     """Cold worldserver start under ./play: at least three distinct world fractions strictly between 0 and 1 come
     before the world is done, each = worldserver.out's line count / the calibration, and that count matches the log's
@@ -1295,7 +1316,7 @@ def verify_dock_identity(ev: dict) -> dict:
     return out
 
 
-@check("play.dock_identity", order=391, capability=CAP_PLAY, stack="down", tier="full")
+@check("play.dock_identity", order=391, capability=CAP_PLAY, stack="down", layer="integration")
 def dock_identity(ctx):
     """Terminal ./play with the notepad stand-in (no app): the stand-in is a normal Foreground app named Moonglade,
     and the shim log records the icon replacement for its pid in this run."""
@@ -1426,7 +1447,7 @@ def verify_perf(runs: list[dict]) -> dict:
     return out
 
 
-@check("app.shim_perf", order=420, capability=CAP_APP, stack="down", tier="slow")
+@check("app.shim_perf", order=420, capability=CAP_APP, stack="down", layer="gate")
 def shim_perf(ctx):
     """The real client from the app, 5 runs with the shim (dock_policy accessory) and 5 without (off), interleaved,
     stack already up each time: medians of time-to-first-window and of Wow.exe's median CPU over 60 s at the login

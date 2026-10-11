@@ -17,6 +17,7 @@ Never the PLAYER account (env/player.json) and never the HSTEST fixture account:
 
 Every world-data choice (quest, creature, teleport points) is made by SQL/DBC rules written here, never from memory
 (CLAUDE.md §7)."""
+import json
 import math
 import re
 import time
@@ -200,6 +201,53 @@ def creature_candidates(level: int = LEVEL, tele: str = START_TELE, n: int = 10)
         if have is None or (have[0] < n and len(have[1]) >= have[0]):     # a shorter list can serve a smaller n
             _CANDIDATES[key] = (n, _creature_candidates(level, tele, n))
         return [dict(c, spawn=dict(c["spawn"])) for c in _CANDIDATES[key][1][:n]]
+
+
+# Across runs (test-pyramid design 14): the candidates are cached on disk keyed by a hash of the world database content
+# they come from (CHECKSUM TABLE of creature, creature_template and game_tele, plus FactionTemplate.dbc), so the run-start
+# fixture phase reads them instead of running the ~14 s query; any change to those tables changes the key.
+WORLD_FACTS_KEYS = ((LEVEL, START_TELE, 20),)
+WORLD_FACTS_DIR = P.OUT / "world-facts"
+
+
+def world_hash() -> str:
+    import hashlib
+    rows = db.query("CHECKSUM TABLE creature, creature_template, game_tele", "world")
+    h = hashlib.sha256(json.dumps(sorted([list(map(str, r)) for r in rows])).encode())
+    h.update((dbc.DBC_DIR / "FactionTemplate.dbc").read_bytes())
+    return h.hexdigest()
+
+
+def world_facts_warm() -> dict:
+    """Fill the in-process candidate cache for WORLD_FACTS_KEYS from the on-disk cache of this world database's
+    content, or compute and store it. Returns {"from": "cache" | "computed", "s", "hash"}."""
+    t0 = time.time()
+    h = world_hash()
+    f = WORLD_FACTS_DIR / f"{h}.json"
+    try:
+        data = json.loads(f.read_text())
+        src = "cache"
+    except (OSError, ValueError):
+        data = {}
+        src = "computed"
+    out = {}
+    for level, tele, n in WORLD_FACTS_KEYS:
+        k = f"{level}|{tele}|{n}"
+        rows = data.get(k)
+        if rows is None:
+            rows = _creature_candidates(level, tele, n)
+        with _CANDIDATES_LOCK:
+            _CANDIDATES[(level, tele)] = (n, rows)
+        out[k] = rows
+    if src == "computed":
+        WORLD_FACTS_DIR.mkdir(parents=True, exist_ok=True)
+        tmp = f.with_suffix(".tmp")
+        tmp.write_text(json.dumps(out))
+        tmp.replace(f)
+        for old in WORLD_FACTS_DIR.glob("*.json"):           # keep only this world's facts
+            if old != f:
+                old.unlink(missing_ok=True)
+    return {"from": src, "s": round(time.time() - t0, 2), "hash": h[:12]}
 
 
 def _creature_candidates(level: int, tele: str, n: int) -> list[dict]:

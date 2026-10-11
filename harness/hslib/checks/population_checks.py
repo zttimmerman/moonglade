@@ -45,7 +45,17 @@ def zone_coverage(snap: dict, tg: dict) -> tuple[list[dict], list[str]]:
     return rows, probs
 
 
-@check("pop.zones_covered", order=400, capability="world-population", stack="any", tier="slow", profile="population")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "harness/hslib/checks/population_checks.py",
+    "harness/hslib/population.py",
+    "harness/hslib/settings.py",
+)
+
+
+@check("pop.zones_covered", order=400, capability="world-population", stack="any", layer="gate", profile="population")
 def zones_covered(ctx):
     """After the warm-up, each of the 8 race starting zones and 8 capitals (from DBC/playercreateinfo) has >= 3 online
     random bots; evidence lists per-zone counts and each zone ID's source."""
@@ -68,7 +78,7 @@ def zones_covered(ctx):
     return ev
 
 
-@check("pop.size_stable", order=401, capability="world-population", stack="any", tier="slow", profile="population")
+@check("pop.size_stable", order=401, capability="world-population", stack="any", layer="gate", profile="population")
 def size_stable(ctx):
     """Online random bots at the end of the warm-up and 5 minutes later are both >= 95% of N, and no bot logged a
     fatal error (worldserver never restarted; no FATAL/ASSERTION in Playerbots.log, Server.log, worldserver.err)."""
@@ -113,7 +123,7 @@ def activity(s0: dict, s1: dict) -> dict:
             "progressed_fraction": round(progressed / k, 3) if k else 0.0, "samples": rows}
 
 
-@check("pop.bots_active", order=402, capability="world-population", stack="any", tier="slow", profile="population")
+@check("pop.bots_active", order=402, capability="world-population", stack="any", layer="gate", profile="population")
 def bots_active(ctx):
     """Over 5 minutes after the warm-up, >= 60% of online random bots moved > 20 yd and >= 25% gained XP, a level,
     or a completed quest (raw per-bot samples in evidence)."""
@@ -131,7 +141,7 @@ def bots_active(ctx):
     return ev
 
 
-@check("perf.server_budget", order=410, capability="performance-budget", stack="any", tier="slow",
+@check("perf.server_budget", order=410, capability="performance-budget", stack="any", layer="gate",
        profile="population")
 def server_budget(ctx):
     """With the population profile after warm-up, every 10 s sample over 10 minutes meets: worldserver <= 6.0 GB,
@@ -223,7 +233,7 @@ def tuning_problems(doc: dict, n: int) -> list[str]:
     return probs
 
 
-@check("perf.population_tuned", order=411, capability="performance-budget", stack="any", tier="slow",
+@check("perf.population_tuned", order=411, capability="performance-budget", stack="any", layer="gate",
        profile="population")
 def population_tuned(ctx):
     """Given perf.server_budget passed at the default N this run, the tuning record has measured runs at N and at a
@@ -291,7 +301,7 @@ def _size_case(case: str, settings_file: Path, want: int) -> dict:
     return ev
 
 
-@check("pop.size_setting", order=395, capability="world-population", stack="any", tier="slow", profile="population")
+@check("pop.size_setting", order=395, capability="world-population", stack="any", layer="gate", profile="population")
 def size_setting(ctx):
     """With a (scratch) settings file saying `small`, ./play's world steps (play.choose_world -> launch.ensure_world)
     run the population profile with online random bots within 5% of the small preset, both from a cold start and
@@ -357,7 +367,7 @@ def size_setting(ctx):
     return ev
 
 
-@check("pop.fresh_start_scope", order=403, capability="world-population", stack="any", tier="slow",
+@check("pop.fresh_start_scope", order=403, capability="world-population", stack="any", layer="gate",
        profile="population")
 def fresh_start_scope(ctx):
     """Every random-bot character online in the session was either reset by the population start's fresh-world step

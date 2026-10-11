@@ -14,7 +14,19 @@ WRAPPER_GLOBS = ["d3d8.dll", "d3d9.dll", "d3d10*.dll", "d3d11.dll", "dxgi.dll", 
                  "dsound.dll", "version.dll", "winmm.dll"]
 
 
-@check("client.inspect", order=205, capability="client-connectivity", stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "patches/client/**",
+    "fork.lock#wowsilicon_*",
+    "harness/hslib/checks/client_install_checks.py",
+    "harness/hslib/clientinst.py",
+    "harness/hslib/pe.py",
+)
+
+
+@check("client.inspect", order=205, capability="client-connectivity", stack="any", layer="unit", parallel_safe=True)
 def inspect(ctx):
     """Installed client: Wow.exe is 3.3.5.12340, no wrapper DLLs, binaries match the manifest, source untouched."""
     from ..clientinst import load_manifest, sha256_file, source_stat
@@ -98,7 +110,7 @@ def inspect(ctx):
     return ev
 
 
-@check("client.launch_smoke", order=189, capability="client-connectivity", stack="up", tier="full")
+@check("client.launch_smoke", order=189, capability="client-connectivity", stack="up", layer="integration")
 def launch_smoke(ctx):
     """`hs launch --smoke`: Wine Wow.exe still running after 30 s, then nothing from this prefix remains."""
     from ..launch import prefix_processes

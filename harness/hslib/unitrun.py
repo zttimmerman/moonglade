@@ -64,17 +64,19 @@ class _TimedResult(unittest.TestResult):
         self._rec(test, "fail", f"skipped ({reason}): a unit test never skips")
 
 
-def run_python(pattern: str | None = None) -> dict:
+def run_python(pattern: str | None = None, start: Path | None = None, top: Path | None = None) -> dict:
+    """`start`/`top`: a scratch test package and its top-level dir (report.unit_layer's scratch cases)."""
     t0 = time.perf_counter()
-    if str(P.HARNESS) not in sys.path:
-        sys.path.insert(0, str(P.HARNESS))
-    suite = unittest.TestLoader().discover(str(UNIT_DIR), pattern="test_*.py", top_level_dir=str(P.HARNESS))
+    top = Path(top or P.HARNESS)
+    if str(top) not in sys.path:
+        sys.path.insert(0, str(top))
+    suite = unittest.TestLoader().discover(str(start or UNIT_DIR), pattern="test_*.py", top_level_dir=str(top))
     res = _TimedResult()
     if pattern:
         def flat(s):
             for x in s:
                 yield from (flat(x) if isinstance(x, unittest.TestSuite) else [x])
-        suite = unittest.TestSuite([t for t in flat(suite) if pattern in t.id()])
+        suite = unittest.TestSuite([t for t in flat(suite) if pattern in f"unit:py:{t.id()}"])
     suite.run(res)
     return {"suite": "python", "wall_s": round(time.perf_counter() - t0, 3), "tests": res.records}
 
@@ -115,20 +117,21 @@ def _tap_suite(name: str, cmd: list[str], prefix: str, build: dict) -> dict:
     return out
 
 
-def run_cpp(pattern: str | None = None) -> dict:
+def run_cpp(pattern: str | None = None, tests: Path | None = None, out: Path | None = None) -> dict:
     from . import unittools as U
     try:
-        b = U.ensure_cpp()
+        b = U.ensure_cpp(tests=tests, out=out)
     except U.ToolError as e:
         return {"suite": "cpp", "wall_s": 0.0, "build": {"error": str(e)},
                 "tests": [{"id": "unit:cpp:<build>", "status": "error", "duration_s": 0.0, "message": str(e)}]}
     return _tap_suite("cpp", [b["bin"], *([pattern] if pattern else [])], "unit:cpp:", b)
 
 
-def run_lua(pattern: str | None = None) -> dict:
+def run_lua(pattern: str | None = None, tests: Path | None = None, lua_dir: Path | None = None,
+            lock: dict | None = None, cache: Path | None = None) -> dict:
     from . import unittools as U
     try:
-        b = U.ensure_lua()
+        b = U.ensure_lua(lua_dir, lock, cache)
     except Exception as e:  # noqa: BLE001  a missing or mismatched build fails the suite, never skips it
         return {"suite": "lua", "wall_s": 0.0, "build": {"error": str(e)},
                 "tests": [{"id": "unit:lua:<build>", "status": "error", "duration_s": 0.0, "message": str(e)}]}
@@ -136,75 +139,173 @@ def run_lua(pattern: str | None = None) -> dict:
     from . import luaprelude
     prelude = luaprelude.write_prelude()
     b = b | {"prelude_s": round(time.perf_counter() - t0, 3)}
-    files = sorted(str(f) for f in LUA_DIR.glob("test_*.lua"))
+    tdir = Path(tests or LUA_DIR)
+    files = sorted(str(f) for f in tdir.glob("test_*.lua"))
     cmd = [b["lua"], str(LUA_DIR / "run.lua"), str(LUA_DIR), str(P.ROOT), str(prelude), pattern or "", *files]
     return _tap_suite("lua", cmd, "unit:lua:", b)
 
 
-# ---------------------------------------------------------------- static unit-layer checks (measurement, task 1.1)
+# ---------------------------------------------------------------- unit-layer checks (the run's unit phase)
 
-# design.md appendix A "Goes to: unit", minus the ten rewritten as true unit tests (lane.merge,
-# client.resolution_default, backups.rotation, saves.inworld_list, lane.preflight, saves.quick_slot, savesctl.listener,
-# savesctl.load_verb, savesctl.build_refused, saves.list_wording) and login.backdrop_choice (a Lua unit test; today
-# it is a live real-client check).
-STATIC_CHECKS = (
-    "app.icon app.bundle_valid app.icon_everywhere build.downloads_pinned client.config_gen client.inspect "
-    "client.pristine_locked client.build_refuses_pristine client.patch0001_recorded client.play_build "
-    "client.play_revert client.resolution_gate core.patch_applied core.playerbots_patches_applied "
-    "firstlaunch.preflight lane.paths lane.refusal lane.table power.jobs_default power.jobs_override "
-    "power.pause_resume power.run_pause power.stop_low power.bootstrap_resume power.switch_refusal public.license "
-    "public.tree_scrub public.no_game_files re.ghidra_installed re.mpq_readonly re.ghidra_refuses_mismatch "
-    "re.mpq_write_roundtrip release.mode_resolution release.readline_stub release.test_switches_refused "
-    "release.player_data_untouched repo.naming repo.agent_guard_hook repo.portable report.tiers_declared "
-    "report.slow_tier_rule report.gui_tier_rule report.backups_tier_rule report.gui_preflight report.keep_awake "
-    "report.last_full_run report.nightly saves.addon_static setup.preflight signing.mode_setting "
-    "signing.open_instructions").split()
+def _ctx_subset(ctx: dict) -> dict:
+    out = {}
+    for k, v in ctx.items():
+        try:
+            json.dumps(v)
+        except (TypeError, ValueError):
+            continue
+        out[k] = v
+    return out
 
 
-def _run_one_check(cid: str) -> dict:
+def _pool_one(cid: str, ctx: dict) -> dict:
     import os
-    os.environ["HS_HARNESS_RUN"] = "1"           # as inside `hs run` (the unit tier runs there in task 2.1)
+    os.environ["HS_HARNESS_RUN"] = "1"
     from .registry import load_all
     from . import runner
     reg = load_all()
-    ctx: dict = {"unit_layer": True}
-    rec = runner.execute([reg[cid]], ctx, ensure=lambda *_a: None, quiet=True)[0]
-    return {"id": rec["id"], "status": rec["status"], "duration_s": rec["duration_s"],
-            **({"message": rec.get("message", "")[-800:]} if rec["status"] != "pass" else {})}
+    rec = runner.run_one(reg[cid], ctx, lambda *_a: None)
+    rec.pop("_t", None)
+    return json.loads(json.dumps(rec, default=str))
 
 
-def run_static(workers: int = 1, ids=STATIC_CHECKS) -> dict:
+class ProcSampler:
+    """Samples this lane's stack processes and the Wine/client processes while the unit phase runs (harness-reporting
+    "Unit tier runs fast, starts nothing"): any process present now that wasn't at the start is a violation."""
+    def __init__(self, period: float = 0.5):
+        import threading
+        self.period, self.samples, self.new = period, 0, {}
+        self._stop = threading.Event()
+        self.start = self._snap()
+        self._t = threading.Thread(target=self._loop, daemon=True)
+        self._t.start()
+
+    def _snap(self) -> set:
+        from . import stack
+        found = set()
+        try:
+            for name, pids in stack.stack_processes().items():
+                found |= {f"{name}:{p}" for p in pids}
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            r = subprocess.run(["/bin/ps", "-axo", "pid=,comm="], capture_output=True, text=True, timeout=5)
+            for line in r.stdout.splitlines():
+                pid, _, comm = line.strip().partition(" ")
+                base = comm.rsplit("/", 1)[-1].lower()
+                if base.startswith(("wine", "wow.exe", "wowsilicon")) or base in ("wow.exe",):
+                    found.add(f"{base}:{pid}")
+        except (OSError, subprocess.SubprocessError):
+            pass
+        return found
+
+    def _loop(self):
+        while not self._stop.wait(self.period):
+            now = self._snap()
+            self.samples += 1
+            for x in now - self.start:
+                self.new.setdefault(x, time.time())
+
+    def stop(self) -> dict:
+        self._stop.set()
+        self._t.join(timeout=5)
+        return {"samples": self.samples, "period_s": self.period, "at_start": sorted(self.start),
+                "started_during": sorted(self.new)}
+
+
+def unit_layer(checks: list, ctx: dict, run_tests: bool = True, workers: int = 4, say=print, guard=None) -> dict:
+    """The run's unit phase: the unit tests (Python, C++, Lua) and the unit-layer checks (parallel_safe ones in a
+    `workers`-process pool, the rest one by one), never touching the stack. Returns meta.unit plus "records" (the
+    checks' records, for results.json)."""
+    from . import runner
     t0 = time.perf_counter()
-    if workers <= 1:
-        recs = [_run_one_check(i) for i in ids]
-    else:
+    sampler = ProcSampler()
+    suites = []
+    if run_tests:
+        suites = [run_python(), run_cpp(), run_lua()]
+        for s_ in suites:
+            for t in s_["tests"]:
+                if t["status"] == "pass" and t["duration_s"] > UNIT_TEST_CAP_S:
+                    t["status"] = "fail"
+                    t["message"] = f"unit test over budget: {t['duration_s']} s > {UNIT_TEST_CAP_S} s"
+    t_tests = round(time.perf_counter() - t0, 3)
+    pooled = [c for c in checks if c.parallel_safe]
+    serial = [c for c in checks if not c.parallel_safe]
+    records = []
+    t_c = time.perf_counter()
+    if pooled and workers > 1:
         import multiprocessing as mp
-        from concurrent.futures import ProcessPoolExecutor
-        # longest first, so the pool's tail is short
-        order = sorted(ids, key=lambda i: -_STATIC_HINT_S.get(i, 1.0))
-        with ProcessPoolExecutor(workers, mp_context=mp.get_context("spawn")) as ex:
-            recs = list(ex.map(_run_one_check, order))
-    return {"suite": "static", "workers": workers, "wall_s": round(time.perf_counter() - t0, 3), "tests": recs}
+        from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+        sub = _ctx_subset(ctx)
+        by = {}
+        todo = list(pooled)
+        running = {}
+        with ProcessPoolExecutor(min(workers, len(pooled)), mp_context=mp.get_context("spawn")) as ex:
+            while todo or running:
+                while todo and len(running) < workers and not ctx.get("power_stop"):
+                    c = todo[0]
+                    if guard is not None:            # power-guard: checked before each check starts, as in execute
+                        from .power import PowerStop
+                        try:
+                            guard.check(f"check {c.id}")
+                        except PowerStop as e:
+                            ctx["power_stop"] = {"message": str(e), "before_check": c.id, "pause": e.record}
+                            break
+                    todo.pop(0)
+                    running[ex.submit(_pool_one, c.id, sub)] = c
+                if not running:
+                    break
+                done, _ = wait(list(running), return_when=FIRST_COMPLETED)
+                for fut in done:
+                    c = running.pop(fut)
+                    try:
+                        rec = fut.result()
+                    except Exception as e:  # noqa: BLE001
+                        rec = {"id": c.id, "capability": c.capability, "description": c.doc, "layer": c.layer,
+                               "status": "error", "message": f"pool worker: {type(e).__name__}: {e}", "duration_s": 0.0,
+                               "evidence": {"pool": True}}
+                    rec["pool"] = True
+                    say(f"{rec['status'].upper():5} {rec['id']} ({rec['duration_s']}s, pool)"
+                        f"{'  ' + rec.get('message', '') if rec['status'] != 'pass' else ''}")
+                    by[c.id] = rec
+        records += [by[c.id] for c in pooled if c.id in by]
+    else:
+        serial = pooled + serial
+    if serial and not ctx.get("power_stop"):
+        records += runner.execute(serial, ctx, ensure=lambda *_a: None, guard=guard)
+    from .runner import run_key
+    from .registry import REGISTRY
+    records.sort(key=lambda r: run_key(REGISTRY[r["id"]]) if r["id"] in REGISTRY else ((99,), r["id"]))
+    t_checks = round(time.perf_counter() - t_c, 3)
+    procs = sampler.stop()
+    tests = [t for s_ in suites for t in s_["tests"]]
+    bad_tests = [t["id"] for t in tests if t["status"] != "pass"]
+    bad_checks = [r["id"] for r in records if r["status"] != "pass"]
+    doc = {"run_tests": run_tests, "wall_s": round(time.perf_counter() - t0, 3), "tests_wall_s": t_tests,
+           "checks_wall_s": t_checks, "workers": workers, "pooled": [c.id for c in pooled],
+           "suites": [{k: v for k, v in s_.items()} for s_ in suites],
+           "counts": {s_["suite"]: len(s_["tests"]) for s_ in suites} | {"checks": len(records)},
+           "failed_tests": bad_tests, "failed_checks": bad_checks, "processes": procs,
+           "ok": not bad_tests and not bad_checks and not procs["started_during"], "records": records}
+    for s_ in suites:
+        say(f"unit {s_['suite']:6} {len(s_['tests']):3} tests {s_['wall_s']:6.2f} s"
+            + (f" ({len([t for t in s_['tests'] if t['status'] != 'pass'])} failing)" if any(t['status'] != 'pass' for t in s_['tests']) else ""))
+    for t in tests:
+        if t["status"] != "pass":
+            say(f"{t['status'].upper()} {t['id']}: {t.get('message', '')[:400]}")
+    if procs["started_during"]:
+        say(f"FAIL  unit layer started processes: {procs['started_during']}")
+    return doc
 
 
-# baseline durations (design.md appendix A) used only to order the pool
-_STATIC_HINT_S = {"report.keep_awake": 9.3, "power.run_pause": 7.5, "app.bundle_valid": 6.7, "client.play_revert": 6.2,
-                  "app.icon": 6.0, "release.test_switches_refused": 6.0, "setup.preflight": 5.1,
-                  "firstlaunch.preflight": 4.9, "release.player_data_untouched": 4.7, "re.mpq_readonly": 4.5,
-                  "release.readline_stub": 4.4}
+# ---------------------------------------------------------------- the inner loop (`hs test -k`)
 
-
-# ---------------------------------------------------------------- the run
-
-def run(pattern: str | None = None, static_workers: int = 0, out: Path | None = None) -> dict:
+def run(pattern: str | None = None, out: Path | None = None) -> dict:
+    """Unit tests only (no checks), optionally only ids containing `pattern`: the builder's inner loop."""
     t0 = time.perf_counter()
     suites = [run_python(pattern), run_cpp(pattern), run_lua(pattern)]
-    if static_workers:
-        suites.append(run_static(static_workers))
     over = []
     for s in suites:
-        if s["suite"] == "static":
-            continue                                       # static checks have their own (check) budgets
         for t in s["tests"]:
             if t["status"] == "pass" and t["duration_s"] > UNIT_TEST_CAP_S:
                 t["status"] = "fail"
@@ -212,22 +313,41 @@ def run(pattern: str | None = None, static_workers: int = 0, out: Path | None = 
                 over.append(t["id"])
     tests = [t for s in suites for t in s["tests"]]
     bad = [t["id"] for t in tests if t["status"] != "pass"]
-    doc = {"tier": "unit", "wall_s": round(time.perf_counter() - t0, 3), "ok": not bad, "failed": bad,
-           "over_budget": over, "counts": {s["suite"]: len(s["tests"]) for s in suites}, "suites": suites}
+    doc = {"tier": "unit-tests", "pattern": pattern, "wall_s": round(time.perf_counter() - t0, 3), "ok": not bad,
+           "failed": bad, "over_budget": over, "counts": {s["suite"]: len(s["tests"]) for s in suites}, "suites": suites}
     out = out or RESULTS
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(json.dumps(doc, indent=1))
     return doc
 
 
-def main(pattern: str | None, static_workers: int) -> int:
-    doc = run(pattern, static_workers)
+def main(pattern: str | None) -> int:
+    doc = run(pattern)
     for s in doc["suites"]:
-        slow = sorted(s["tests"], key=lambda t: -t["duration_s"])[:3]
-        print(f"[hs] unit {s['suite']:6} {len(s['tests']):3} tests  {s['wall_s']:7.2f} s"
-              f"{'  build ' + json.dumps(s.get('build')) if s.get('build') else ''}"
-              f"  slowest {[(t['id'], t['duration_s']) for t in slow]}")
+        print(f"[hs] unit {s['suite']:6} {len(s['tests']):3} tests  {s['wall_s']:7.2f} s")
     for t in (t for s in doc["suites"] for t in s["tests"] if t["status"] != "pass"):
         print(f"[hs] {t['status'].upper()} {t['id']}: {t.get('message', '')[:600]}")
-    print(f"[hs] unit layer {'PASS' if doc['ok'] else 'FAIL'} in {doc['wall_s']} s ({RESULTS.relative_to(P.ROOT)})")
+    print(f"[hs] unit tests {'PASS' if doc['ok'] else 'FAIL'} in {doc['wall_s']} s ({RESULTS.relative_to(P.ROOT)})")
     return 0 if doc["ok"] else 1
+
+
+# ---------------------------------------------------------------- unit test ids (report.coverage)
+
+def list_ids() -> set[str]:
+    """Every unit test id, without running anything: Python by discovery (imports the test modules), C++ by the
+    MG_TEST macros, Lua by the test files' keys."""
+    import re
+    ids = set()
+    if str(P.HARNESS) not in sys.path:
+        sys.path.insert(0, str(P.HARNESS))
+    suite = unittest.TestLoader().discover(str(UNIT_DIR), pattern="test_*.py", top_level_dir=str(P.HARNESS))
+
+    def flat(s):
+        for x in s:
+            yield from (flat(x) if isinstance(x, unittest.TestSuite) else [x])
+    ids |= {f"unit:py:{t.id()}" for t in flat(suite)}
+    for f in sorted((UNIT_DIR / "cpp").glob("*.cpp")):
+        ids |= {f"unit:cpp:{a}.{b}" for a, b in re.findall(r"^MG_TEST\((\w+),\s*(\w+)\)", f.read_text(), re.M)}
+    for f in sorted(LUA_DIR.glob("test_*.lua")):
+        ids |= {f"unit:lua:{f.stem}.{n}" for n in re.findall(r"^\t(\w+) = function\(T\)", f.read_text(), re.M)}
+    return ids

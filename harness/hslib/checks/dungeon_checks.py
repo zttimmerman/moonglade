@@ -77,7 +77,24 @@ def _unscaled_ref(ctx: dict, f: dict) -> dict:
     return rec
 
 
-@check("scale.module_loaded", order=500, capability=CAP_SCALE, stack="up", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "modules/mod-moonglade/src/MoongladeDungeons.cpp",
+    "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.Dungeons",
+    "fork.lock#autobalance_*",
+    "harness/hslib/build.py",
+    "harness/hslib/checks/dungeon_checks.py",
+    "harness/hslib/checks/release_checks.py",
+    "harness/hslib/companion.py",
+    "harness/hslib/dungeon.py",
+    "harness/hslib/era.py",
+    "harness/hslib/pause.py",
+)
+
+
+@check("scale.module_loaded", order=500, capability=CAP_SCALE, stack="up", layer="integration")
 def module_loaded(ctx):
     """The core's modules/ holds the harness symlink to the mod-autobalance checkout at the fork.lock commit, this
     worldserver's log shows the module's config load, `.ab getoffset` typed by a probe answers, and every AutoBalance
@@ -131,7 +148,7 @@ def module_loaded(ctx):
     return ev
 
 
-@check("scale.disabled_stock", order=501, capability=CAP_SCALE, stack="up", tier="full", profile=SCALING_OFF)
+@check("scale.disabled_stock", order=501, capability=CAP_SCALE, stack="up", layer="integration", profile=SCALING_OFF)
 def disabled_stock(ctx):
     """With AutoBalance disabled (scaling-off), the probe alone in The Deadmines reads the final boss's max health,
     and it equals the health the core computes with no module (ceil(BaseHealth x HealthModifier) x the rank's
@@ -158,7 +175,7 @@ def disabled_stock(ctx):
     return ev
 
 
-@check("scale.solo_weaker", order=502, capability=CAP_SCALE, stack="up", tier="full")
+@check("scale.solo_weaker", order=502, capability=CAP_SCALE, stack="up", layer="integration")
 def solo_weaker(ctx):
     """Alone in a fresh Deadmines at its target level (GM mode off), the final boss's max health is below its
     unscaled max health (the same spawn read under scaling-off in this run), and the ratio matches the multiplier
@@ -204,7 +221,7 @@ def _party_reads(s, f, ev, steps) -> list[dict]:
     return reads
 
 
-@check("scale.party_stock", order=503, capability=CAP_SCALE, stack="up", tier="full")
+@check("scale.party_stock", order=503, capability=CAP_SCALE, stack="up", layer="integration")
 def party_stock(ctx):
     """The probe and four addclass companions in a fresh Deadmines, out of combat: `.ab mapstat` counts 5 players and
     the final boss's max health equals its unscaled max health (scaling-off read, this run) to within 1%."""
@@ -226,7 +243,7 @@ def party_stock(ctx):
     return ev
 
 
-@check("scale.counts_companions", order=504, capability=CAP_SCALE, stack="up", tier="full")
+@check("scale.counts_companions", order=504, capability=CAP_SCALE, stack="up", layer="integration")
 def counts_companions(ctx):
     """In a fresh Deadmines the final boss's max health with 1, 3 and 5 players (probe + 0, 2, 4 companions added out of
     combat) strictly increases, and the 5-player value equals the unscaled one to within 1%."""
@@ -254,7 +271,7 @@ OUTDOOR_RULE = ("the comp.assists creature rule (companion.CREATURE_RULE) at the
                 "(companion.LEVEL) around their start point: the first live, unhurt candidate out of combat")
 
 
-@check("scale.outdoor_untouched", order=505, capability=CAP_SCALE, stack="up", tier="full")
+@check("scale.outdoor_untouched", order=505, capability=CAP_SCALE, stack="up", layer="integration")
 def outdoor_untouched(ctx):
     """With scaling on (default profile), an outdoor creature picked by the comp.assists rule has exactly the max health
     the world DB gives it (and, with vanilla mode on, the era side table's rank and HealthModifier), as without the
@@ -293,7 +310,7 @@ def outdoor_untouched(ctx):
     return ev
 
 
-@check("scale.pause_safe", order=506, capability=CAP_SCALE, stack="up", tier="full")
+@check("scale.pause_safe", order=506, capability=CAP_SCALE, stack="up", layer="integration")
 def pause_safe(ctx):
     """The probe alone in The Deadmines with the final boss scaled for one: after a 20 s true pause (the add-on's
     MGPAUSE message) and resume, the boss's max health and `.ab creaturestat` multiplier are unchanged."""
@@ -340,7 +357,7 @@ def _pause(s, on: bool, timeout: float = 10.0) -> dict:
 
 # ================================================================================================ lockouts
 
-@check("lock.no_hourly_cap", order=510, capability=CAP_LOCK, stack="up", tier="full")
+@check("lock.no_hourly_cap", order=510, capability=CAP_LOCK, stack="up", layer="integration")
 def no_hourly_cap(ctx):
     """Five fresh Deadmines copies entered, cleared from the probe's save and left; the sixth entry arrives in a sixth
     distinct copy (SMSG_NEW_WORLD for the map) and no SMSG_TRANSFER_ABORTED TOO_MANY_INSTANCES arrives."""
@@ -382,7 +399,7 @@ def _kill_all(s, f, ev, key="kills"):
     return rows[0]
 
 
-@check("lock.fresh_after_clear", order=511, capability=CAP_LOCK, stack="up", tier="full")
+@check("lock.fresh_after_clear", order=511, capability=CAP_LOCK, stack="up", layer="integration")
 def fresh_after_clear(ctx):
     """The probe and two companions clear The Deadmines (every encounter, completion saved), leave, and the probe enters
     again: a new instance id with mask 0, both companions in that same new copy, and no character_instance row for the
@@ -421,7 +438,7 @@ def fresh_after_clear(ctx):
     return ev
 
 
-@check("lock.partial_kept", order=512, capability=CAP_LOCK, stack="up", tier="full")
+@check("lock.partial_kept", order=512, capability=CAP_LOCK, stack="up", layer="integration")
 def partial_kept(ctx):
     """The probe in The Deadmines with its first encounter done (final not done) walks out (teleport to the start
     point) and enters again: the same instance id, and the first encounter is still done."""
@@ -476,14 +493,14 @@ def _partial(ctx, lfg, difficulty, dismiss=False, level=None):
     return ev
 
 
-@check("lock.partial_kept_dismissed", order=513, capability=CAP_LOCK, stack="up", tier="full")
+@check("lock.partial_kept_dismissed", order=513, capability=CAP_LOCK, stack="up", layer="integration")
 def partial_kept_dismissed(ctx):
     """The probe with two companions kills The Deadmines' first boss (final alive), leaves, dismisses every companion
     (the party breaks up) and enters again alone: the same instance id, and the first boss is still dead."""
     return _partial(ctx, D.DEADMINES, 0, dismiss=True)
 
 
-@check("lock.heroic_fresh_after_clear", order=514, capability=CAP_LOCK, stack="up", tier="full")
+@check("lock.heroic_fresh_after_clear", order=514, capability=CAP_LOCK, stack="up", layer="integration")
 def heroic_fresh_after_clear(ctx):
     """The probe at level 80 with heroic difficulty clears Utgarde Keep (heroic; the core's permanent heroic bind),
     leaves and enters again the same server day: a fresh heroic copy (new instance id, mask 0)."""
@@ -519,14 +536,14 @@ def heroic_fresh_after_clear(ctx):
     return ev
 
 
-@check("lock.heroic_partial_kept", order=515, capability=CAP_LOCK, stack="up", tier="full")
+@check("lock.heroic_partial_kept", order=515, capability=CAP_LOCK, stack="up", layer="integration")
 def heroic_partial_kept(ctx):
     """The probe in Utgarde Keep (heroic) with the first encounter done and the final one not done leaves and enters
     again: the same instance id, first encounter still done."""
     return _partial(ctx, D.UTGARDE_KEEP_HEROIC, 1)
 
 
-@check("lock.login_inside_kept", order=516, capability=CAP_LOCK, stack="up", tier="full")
+@check("lock.login_inside_kept", order=516, capability=CAP_LOCK, stack="up", layer="integration")
 def login_inside_kept(ctx):
     """The probe logged out inside a fully cleared Deadmines copy logs in again: it is in the same instance id, and its
     bind (instance, permanent flag, mask) is unchanged."""
@@ -559,7 +576,7 @@ def login_inside_kept(ctx):
     return ev
 
 
-@check("lock.companion_unstuck", order=517, capability=CAP_LOCK, stack="up", tier="full")
+@check("lock.companion_unstuck", order=517, capability=CAP_LOCK, stack="up", layer="integration")
 def companion_unstuck(ctx):
     """A pool companion that logged out inside an older Deadmines copy, brought into the probe's party in a fresh copy
     and summoned, is in the probe's instance within 30 s and within 10 yd of it."""
@@ -617,7 +634,7 @@ def companion_unstuck(ctx):
 
 # ================================================================================================ slow tier
 
-@check("scale.solo_final_boss", order=520, capability=CAP_SCALE, stack="up", tier="slow")
+@check("scale.solo_final_boss", order=520, capability=CAP_SCALE, stack="up", layer="gate")
 def solo_final_boss(ctx):
     """For each listed dungeon (normal): the probe at the dungeon's target level, auto-geared at the configured quality
     limit, GM mode off, alone with the playerbots self-AI, placed by GM teleport near the final boss in a fresh copy,
@@ -656,7 +673,7 @@ def solo_final_boss(ctx):
     return ev
 
 
-@check("scale.release_notice", order=18, capability=CAP_SCALE, stack="any", tier="slow")
+@check("scale.release_notice", order=18, capability=CAP_SCALE, stack="any", layer="gate")
 def release_notice(ctx):
     """In the release built by tools/release (this run's packaging): THIRD_PARTY carries mod-autobalance with its
     pinned commit and the GPL-2.0-or-later header of src/AutoBalance.cpp, the source assets hold its tree at that

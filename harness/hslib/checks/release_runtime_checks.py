@@ -69,7 +69,6 @@ DEV_ONLY_FILES = {
     "lane.py": "harness lane-B worker",
     "lanes.py": "harness two-lane scheduler",
     "lanestack.py": "harness lane-B stack",
-    "nightly.py": "nightly flake hunt over the checkout",
     "population.py": "population measurement helpers for checks (session files, disk numbers)",
     "publicscan.py": "public-repo scan of the checkout",
     "runner.py": "the harness runner (results, git state, disk in the checkout)",
@@ -78,6 +77,7 @@ DEV_ONLY_FILES = {
     "luaprelude.py": "unit layer: Lua prelude from the checkout's glue XML (test-pyramid)",
     "ownership.py": "impact selection over the checkout's git history (test-pyramid prototype)",
     "selector.py": "impact selection over the checkout's git history (test-pyramid prototype)",
+    "selection.py": "impact selection over the checkout's git history (test-pyramid; `hs run --tier pr`)",
     "unitrun.py": "unit layer runner (`hs test`) over the checkout's tests (test-pyramid)",
     "unittools.py": "unit layer toolchain: Lua 5.1.5 and the C++ test binary built in the checkout (test-pyramid)",
 }
@@ -507,7 +507,23 @@ def real_home_state() -> dict:
 
 # ================================================================================================ mode_resolution
 
-@check("release.mode_resolution", order=14, capability=CAP, stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "tools/release/**",
+    ".github/workflows/*",
+    "fork.lock#release_*",
+    "harness/hslib/app.py",
+    "harness/hslib/backups.py",
+    "harness/hslib/checks/firstlaunch_checks.py",
+    "harness/hslib/checks/release_checks.py",
+    "harness/hslib/checks/release_runtime_checks.py",
+    "harness/hslib/pristine.py",
+)
+
+
+@check("release.mode_resolution", order=14, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def mode_resolution(ctx):
     """Dev keeps the parent commit's full path table (lanes A and B) and no new repo-path use outside the reviewed
     list; a scratch release app resolves to release mode with writable paths under the scratch HOME and inputs under
@@ -625,7 +641,7 @@ def exec_with_hook(bundle: Path, hook: Path, env: dict, args: list[str], timeout
     return {"rc": rc, "events": _hook_events(hook)}
 
 
-@check("release.test_switches_refused", order=14, capability=CAP, stack="down", tier="quick")
+@check("release.test_switches_refused", order=14, capability=CAP, stack="down", layer="integration")
 def test_switches_refused(ctx):
     """Each release test switch is refused, naming it, by ./play, harness/hs, the payload's -m hslib.play / -m hslib,
     the dev app (test hook) and a release app (test hook) without the test flag or outside a live harness run; nothing
@@ -895,7 +911,7 @@ def run_release(app: Path, args: list[str], env: dict, prof: Path, cwd: Path, ti
     return {"rc": rc, "json": js, "stdout_tail": out[-600:], "s": round(time.time() - t0, 1)}
 
 
-@check("release.stack_from_payload", order=14, capability=CAP, stack="down", tier="slow")
+@check("release.stack_from_payload", order=14, capability=CAP, stack="down", layer="gate")
 def stack_from_payload(ctx):
     """Release mode brings the stack up (m0) and down from a scratch copy of the packaged app, a scratch HOME and
     scratch ports, under a sandbox hiding Homebrew and the dev checkout: SOAP answers, mysqld is the payload's, the
@@ -1098,7 +1114,7 @@ def problem_lines(*files: Path) -> list[str]:
     return out
 
 
-@check("release.app_readonly", order=14, capability=CAP, stack="down", tier="slow")
+@check("release.app_readonly", order=14, capability=CAP, stack="down", layer="gate")
 def app_readonly(ctx):
     """Moonglade.app on a read-only disk image (hdiutil attach -readonly) at a path with spaces and a scratch HOME,
     under the no-Homebrew sandbox: the app's first launch runs headless (test hook, scripted pick of client/, loopback
@@ -1261,7 +1277,7 @@ def _dead_pid() -> int:
         pid -= 1
 
 
-@check("release.app_moved", order=17, capability=CAP, stack="down", tier="slow")
+@check("release.app_moved", order=17, capability=CAP, stack="down", layer="gate")
 def app_moved(ctx):
     """The run's shared HOME (first launch completed from the app at one path): the app is moved to a second path
     and opened again (test hook, stand-in client): no first-launch window, the play loop reaches ready and stops
@@ -1324,7 +1340,7 @@ def payload_distrib(app: Path) -> str | None:
     return f"{m.group(1)}, {m.group(2)}".replace(",", "") if m else None
 
 
-@check("release.play_standin", order=16, capability=CAP, stack="down", tier="slow")
+@check("release.play_standin", order=16, capability=CAP, stack="down", layer="gate")
 def play_standin(ctx):
     """The run's shared set-up HOME, scratch ports, the no-Homebrew sandbox: the release app's play loop with the
     stand-in client reaches ready (servers from the payload), the stand-in exits, the stack stops gracefully, a backup
@@ -1423,7 +1439,7 @@ def _smoke(app: Path, home: Path, client: Path, d: Path) -> dict:
     return out
 
 
-@check("release.client_smoke", order=16, capability=CAP, stack="down", tier="slow", gui=True)
+@check("release.client_smoke", order=16, capability=CAP, stack="down", layer="gate", gui=True)
 def client_smoke(ctx):
     """The run's shared set-up HOME (first launch from client/): HOME's play client Wow.exe started under HOME's
     Wine runtime and prefix (the harness's client launch: launch.start_client, release mode) shows its first window,
@@ -1660,7 +1676,7 @@ def bracket_verdict(plan: dict | None, state: dict | None, xlog: list, lane_b: d
     return probs, info
 
 
-@check(PDU_ID, order=998, capability=CAP, stack="down", tier="full")
+@check(PDU_ID, order=998, capability=CAP, stack="down", layer="integration")
 def player_data_untouched(ctx):
     """Bracketing every release.* and firstlaunch.* check of the WHOLE run (all lane-A segments: the runner plans
     the bracket from the run's selection, takes the start fingerprint right before the first of them, after
@@ -1916,7 +1932,7 @@ def _stub_ok(res: dict) -> bool:
             and all(x["at"] < 1.0 and x["at"] < res["closed_at"] for x in ls[:2]))
 
 
-@check("release.readline_stub", order=14, capability=CAP, stack="any", tier="quick")
+@check("release.readline_stub", order=14, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def readline_stub(ctx):
     """tools/release/readline-stub (the release servers' console input, task 5.5): two lines arriving in one read
     both come back at once (well under 1 s, while the pipe is still open), a last line without a newline comes back

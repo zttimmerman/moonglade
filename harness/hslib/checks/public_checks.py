@@ -94,7 +94,20 @@ def _read(rel: str) -> str | None:
     return p.read_text(encoding="utf-8") if p.is_file() else None
 
 
-@check("public.license", order=6, capability=CAP, stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "LICENSE",
+    "NOTICE",
+    "tools/go-public/**",
+    "harness/hslib/checks/naming_checks.py",
+    "harness/hslib/checks/public_checks.py",
+    "harness/hslib/publicscan.py",
+)
+
+
+@check("public.license", order=6, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def public_license(ctx):
     """LICENSE is the verbatim GPL-2.0 text under a GPL-2.0-or-later notice; NOTICE has the Blizzard disclaimer, the
     OpenSpec MIT files and licence, the VMaNGOS data and the branding terms; README states the licence, the
@@ -194,7 +207,7 @@ def scrub_selftest(denylist: Path | None, marker: Path | None = None) -> dict:
         shutil.rmtree(tmp, ignore_errors=True)
 
 
-@check("public.tree_scrub", order=7, capability=CAP, stack="any", tier="quick")
+@check("public.tree_scrub", order=7, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def public_tree_scrub(ctx, denylist: Path | None = None, marker: Path | None = None):
     """Every tracked file (staged blob and path) is free of the built-in patterns (non-noreply emails, home paths,
     Claude Code session URLs, claims that the repo is private or never shared) and of every local denylist line; a
@@ -266,7 +279,7 @@ def game_file_problems(files: dict) -> list[str]:
     return probs
 
 
-@check("public.no_game_files", order=8, capability=CAP, stack="any", tier="quick")
+@check("public.no_game_files", order=8, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def public_no_game_files(ctx):
     """No tracked path has a client/game asset extension (MPQ, DBC, EXE, DLL, BLP, M2, WDT/ADT, WMO, WAV/MP3/OGG,
     TTF/OTF) or such a file's magic bytes, nothing is under docs/research/img/, every image is under branding/, and
@@ -341,7 +354,7 @@ def _run(cmd: list, timeout=900) -> dict:
             "stdout_tail": mask(r.stdout[-600:]), "stderr_tail": mask(r.stderr[-600:]), "s": round(time.time() - t, 1)}
 
 
-@check("public.history_dryrun", order=9, capability=CAP, stack="any", tier="slow")
+@check("public.history_dryrun", order=9, capability=CAP, stack="any", layer="gate")
 def public_history_dryrun(ctx, denylist: Path | None = None, rewrite_cmd: list | None = None):
     """In a scratch dir: tools/go-public/rewrite.sh refuses this checkout and a mirror whose push URL is GitHub,
     changing nothing; a fresh `git clone --mirror` of origin (which scans with hits before) is rewritten, and then the

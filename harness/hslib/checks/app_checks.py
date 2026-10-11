@@ -503,7 +503,25 @@ def icon_counterexamples(png_path: Path, ring: dict | None = None) -> dict:
     return out
 
 
-@check("app.icon", order=380, capability=CAP, stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "harness/app/*",
+    "branding/*",
+    "play",
+    "harness/hslib/camask.py",
+    "harness/hslib/app.py",
+    "harness/hslib/checks/app_checks.py",
+    "harness/hslib/checks/naming_checks.py",
+    "harness/hslib/checks/polish_checks.py",
+    "harness/hslib/checks/release_runtime_checks.py",
+    "harness/hslib/dockshim.py",
+    "harness/hslib/icon.py",
+)
+
+
+@check("app.icon", order=380, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def app_icon(ctx):
     """branding/AppIcon.icns has every standard size 16-1024 px (incl. @2x); its 1024 px image and the PNG are the
     logo on the navy tile, judged with the geometry in AppIcon.json's `tile` record: canvas corners and everything
@@ -587,7 +605,7 @@ def same_icon(path: Path, ref: bytes, t: dict) -> dict:
             "ok": (w, h) == (1024, 1024) and diff == 0 and navy}
 
 
-@check("app.icon_everywhere", order=382, capability=CAP, stack="any", tier="quick")
+@check("app.icon_everywhere", order=382, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def icon_everywhere(ctx):
     """The dev app's and the release app's icon files (CFBundleIconFile; the release app's from this run's packaging
     or, when this run packaged none, from release.py's app wrapper on a scratch app) and the HSDOCK_ICON that
@@ -860,7 +878,7 @@ def running_names(ev: dict) -> dict:
         s.cleanup()
 
 
-@check("app.bundle_valid", order=381, capability=CAP, stack="down", tier="quick")
+@check("app.bundle_valid", order=381, capability=CAP, stack="down", layer="integration")
 def bundle_valid(ctx):
     """From a clean checkout with the committed branding assets, `harness/hs app` (run under a sandbox profile that
     denies and logs every file write outside the repo) builds dist/Moonglade.app: plutil -lint passes; the plist
@@ -934,7 +952,7 @@ def bundle_valid(ctx):
         shutil.rmtree(work, ignore_errors=True)
 
 
-@check("app.names_running", order=381, capability=CAP, stack="down", tier="full", gui=True)
+@check("app.names_running", order=381, capability=CAP, stack="down", layer="integration", gui=True)
 def names_running(ctx):
     """rename-moonglade, the running half of "Built bundle and running app carry the new name": the freshly built app,
     opened through LaunchServices with the notepad stand-in: the launcher's LaunchServices display name is Moonglade
@@ -1162,7 +1180,7 @@ def lifecycle(bundle: Path, ev: dict, tag: str) -> dict:
 
 # ---------------------------------------------------------------- runtime checks
 
-@check("app.launch_lifecycle", order=382, capability=CAP, stack="down", tier="full")
+@check("app.launch_lifecycle", order=382, capability=CAP, stack="down", layer="integration")
 def launch_lifecycle(ctx):
     """`open dist/Moonglade.app` (stand-in client): a "starting" status is recorded, the stack reaches readiness, the
     client is launched by the app's play loop (the app's child, the app launched by LaunchServices, no Terminal),
@@ -1177,7 +1195,7 @@ def launch_lifecycle(ctx):
 TECH_WORDS = re.compile(r"\b(servers?|databases?|mysql|ports?|realms?|soap)\b", re.I)
 
 
-@check("app.startup_failure", order=383, capability=CAP, stack="down", tier="full")
+@check("app.startup_failure", order=383, capability=CAP, stack="down", layer="integration")
 def startup_failure(ctx):
     """With an unusable worldserver DataDir, the opened app never starts the client, records an error dialog whose
     main text is plain (none of server, database, MySQL, port, realm, SOAP) and names the stage it stopped at, and
@@ -1260,7 +1278,7 @@ def verify_failure_stage(ev: dict, text: str, details: str) -> None:
     require(str(A.LOG) in details, "the error dialog's details don't give the log path", dialog=details, **ev)
 
 
-@check("app.single_instance", order=384, capability=CAP, stack="down", tier="full")
+@check("app.single_instance", order=384, capability=CAP, stack="down", layer="integration")
 def single_instance(ctx):
     """(a) With the app running its game, opening the app again records an "already running" message, starts no second
     launcher, play loop, stack or client, and the first session continues and later exits 0. (b) With ./play
@@ -1357,7 +1375,7 @@ def single_instance(ctx):
         first.cleanup()
 
 
-@check("app.relocatable", order=385, capability=CAP, stack="down", tier="full")
+@check("app.relocatable", order=385, capability=CAP, stack="down", layer="integration")
 def relocatable(ctx):
     """A copy of the built app in a temp folder outside dist/ (signature still valid) finds the repo and plays exactly
     as in app.launch_lifecycle: the copy's own launcher runs, starts the repo's play loop, and quits cleanly."""

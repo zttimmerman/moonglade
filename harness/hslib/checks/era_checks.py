@@ -34,7 +34,19 @@ def _sha(p: Path) -> str:
     return hashlib.sha256(p.read_bytes()).hexdigest()
 
 
-@check("era.sql_deterministic", order=140, capability="era-profile", stack="up", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "modules/mod-era-profile/**",
+    "tools/era-diff/**",
+    "modules/mod-era-profile/conf/mod_era_profile.conf.dist#EraProfile",
+    "harness/hslib/checks/era_checks.py",
+    "harness/hslib/era.py",
+)
+
+
+@check("era.sql_deterministic", order=140, capability="era-profile", stack="up", layer="integration")
 def sql_deterministic(ctx):
     """Two fresh `era_diff.py --emit-sql` runs write SQL byte-identical to each other and to the committed
     modules/mod-era-profile/data/sql/db-world/era_*.sql (deterministic, and the committed files are generated)."""
@@ -60,7 +72,7 @@ def sql_deterministic(ctx):
     return ev
 
 
-@check("era.default_on", order=141, capability="era-profile", stack="up", tier="quick")
+@check("era.default_on", order=141, capability="era-profile", stack="up", layer="integration")
 def default_on(ctx):
     """With the default profile (no EraProfile override; the .conf.dist says EraProfile.Enable = 1) the worldserver
     log says vanilla mode is ACTIVE, every applied table verified, and the XP needed at level 20 on the running
@@ -95,7 +107,7 @@ def default_on(ctx):
     return ev
 
 
-@check("era.xp_curve", order=142, capability="era-profile", stack="up", tier="quick")
+@check("era.xp_curve", order=142, capability="era-profile", stack="up", layer="integration")
 def xp_curve(ctx):
     """XP needed for the next level, read from the running server (our PLAYER_NEXT_LEVEL_XP after `.character
     level`), equals VMaNGOS at levels 20, 40, 59 and AzerothCore's base data at levels 10 and 60."""
@@ -120,7 +132,7 @@ def xp_curve(ctx):
     return ev
 
 
-@check("era.quest_xp", order=143, capability="era-profile", stack="up", tier="quick")
+@check("era.quest_xp", order=143, capability="era-profile", stack="up", layer="integration")
 def quest_xp(ctx):
     """At each quest's level, completing and rewarding quest 10 and 5944 gives the VMaNGOS-derived XP and one
     needs-review quest (era-diff: quest level differs) gives AC's stock XP (SMSG_LOG_XPGAIN and PLAYER_XP)."""
@@ -187,7 +199,7 @@ def _template_shape(entry: int) -> dict:
     return {"exp": int(exp), "unit_class": int(cls)}
 
 
-@check("era.elites", order=144, capability="era-profile", stack="up", tier="quick")
+@check("era.elites", order=144, capability="era-profile", stack="up", layer="integration")
 def elites(ctx):
     """On the running server, creatures 678, 436 and 623 have VMaNGOS's elite rank (creature query) and max HP =
     base HP x VMaNGOS HealthModifier at their spawned level (`.npc info`), and a map-571 creature is unchanged from
@@ -301,7 +313,7 @@ def vm_riding() -> dict:
     return out
 
 
-@check("era.mounts", order=145, capability="era-profile", stack="up", tier="quick")
+@check("era.mounts", order=145, capability="era-profile", stack="up", layer="integration")
 def mounts(ctx):
     """On the running server, items 2411 and 18766 show VMaNGOS's required level and price (item query), riding
     33388/33391 show VMaNGOS's level and cost in a riding trainer's window (and in every trainer_spell row), and
@@ -487,7 +499,7 @@ def _phase(name: str, want: str, exp: dict, guid: int) -> dict:
             "character": char_snapshot(guid)}
 
 
-@check("era.toggle_roundtrip", order=146, capability="era-profile", stack="up", tier="full")
+@check("era.toggle_roundtrip", order=146, capability="era-profile", stack="up", layer="integration")
 def toggle_roundtrip(ctx):
     """With the test character at a known level, XP and quest state (vanilla on), restarting with EraProfile.Enable = 0
     shows the stock spot values and restarting with 1 shows the vanilla ones again, while the character's level, XP,
@@ -642,7 +654,7 @@ def elite_stock_hp(c, off: dict, on: dict) -> dict:
             "violations": viol, "exempt_exp_not_0": exempt}
 
 
-@check("era.scope_guard", order=147, capability="era-profile", stack="up", tier="full")
+@check("era.scope_guard", order=147, capability="era-profile", stack="up", layer="integration")
 def scope_guard(ctx):
     """Every out-of-scope row of creature_template, quest_template, item_template, trainer_spell and
     player_xp_for_level hashes identically with vanilla mode off and on; the rows that change are exactly the

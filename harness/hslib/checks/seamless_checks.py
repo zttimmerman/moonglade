@@ -459,7 +459,20 @@ def framexml_untouched(scratch: Path, outputs: dict) -> dict:
             "added_outputs": sorted(outputs)}
 
 
-@check("login.loading_overlay", order=391, capability=CAP_LOGIN, stack="down", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "client-mods/glue/**",
+    "modules/mod-moonglade/src/MoongladeQuiet.cpp",
+    "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.QuietServerText",
+    "harness/hslib/checks/clientinput.py",
+    "harness/hslib/checks/seamless_checks.py",
+    "harness/hslib/mpq.py",
+)
+
+
+@check("login.loading_overlay", order=391, capability=CAP_LOGIN, stack="down", layer="integration")
 def loading_overlay(ctx):
     """Continue on a scratch patched play client: the "Entering Azeroth..." overlay is shown from the Continue press
     until character select (visible in every frame of that time), the client shows no stock connection dialog (each
@@ -506,7 +519,7 @@ def loading_overlay(ctx):
     return ev
 
 
-@check("login.charselect_wording", order=392, capability=CAP_LOGIN, stack="down", tier="full")
+@check("login.charselect_wording", order=392, capability=CAP_LOGIN, stack="down", layer="integration")
 def charselect_wording(ctx):
     """At character select (test account, its one character) the test hook records the realm name and Change Realm
     hidden and the buttons reading "Play" and "Main Menu"; clicking Play (the button's own click) enters the world:
@@ -547,7 +560,7 @@ def _addon_wording() -> dict[str, str]:
     return {m.group(1): _lua_unescape(m.group(2)) for m in re.finditer(r'(\w+) = "((?:[^"\\]|\\.)*)",', block)}
 
 
-@check("client.wording_addon", order=393, capability=CAP_CONN, stack="down", tier="full")
+@check("client.wording_addon", order=393, capability=CAP_CONN, stack="down", layer="integration")
 def wording_addon(ctx):
     """A test character enters the world on a scratch patched play client and logs out: the add-on's report (its
     SavedVariables, written at logout) shows it loaded and enabled; every string it replaces is listed, at least
@@ -679,7 +692,7 @@ def _common_record(s: dict, ev: dict) -> list[str]:
     return rec
 
 
-@check("login.overlay_progress", order=392, capability=CAP_LOGIN, stack="down", tier="full")
+@check("login.overlay_progress", order=392, capability=CAP_LOGIN, stack="down", layer="integration")
 def overlay_progress(ctx):
     """Continue on a scratch patched play client until character select: the loading bar, read back from its width
     every frame by the test hook, starts empty, never decreases, grows at least once inside the event handler of a
@@ -704,7 +717,7 @@ def overlay_progress(ctx):
     return ev
 
 
-@check("login.overlay_progress_reload", order=392, capability=CAP_LOGIN, stack="down", tier="full")
+@check("login.overlay_progress_reload", order=392, capability=CAP_LOGIN, stack="down", layer="integration")
 def overlay_progress_reload(ctx):
     """Zach's repro: Continue -> character select -> Main Menu -> Continue again RELOAD_GAP_S seconds later. The
     first load ends with a full bar; the second load's bar starts empty again, never decreases and ends full at the
@@ -755,7 +768,7 @@ def stock_charselect_gap() -> dict:
 LAYOUT_TOL = 2               # UI units (each GetTop is rounded to the unit)
 
 
-@check("login.charselect_layout", order=392, capability=CAP_LOGIN, stack="down", tier="full")
+@check("login.charselect_layout", order=392, capability=CAP_LOGIN, stack="down", layer="integration")
 def charselect_layout(ctx):
     """At character select (realm controls hidden, the test account's one character) the test hook's layout reading
     (GetTop/GetBottom of CharacterSelectCharacterFrame and the character buttons): the gap between the panel's top and
@@ -845,7 +858,7 @@ def error_session() -> dict:
         drop_scratch(scratch)
 
 
-@check("login.friendly_errors", order=394, capability=CAP_LOGIN, stack="down", tier="full")
+@check("login.friendly_errors", order=394, capability=CAP_LOGIN, stack="down", layer="integration")
 def friendly_errors(ctx):
     """Login server stopped, Continue: the friendly error appears (no server/realm/connect/authenticat/account in its
     message), with Try again / Back to menu; Show details reveals the client's own stock error text (a GlueStrings.lua
@@ -952,7 +965,7 @@ def _hits(texts: list[dict]) -> list[dict]:
     return out
 
 
-@check("client.login_text_clean", order=129, capability=CAP_CONN, stack="up", tier="full")
+@check("client.login_text_clean", order=129, capability=CAP_CONN, stack="up", layer="integration")
 def login_text_clean(ctx):
     """A character logs in through the headless probe and stays in the world 30 s: no SMSG_MOTD and no system or chat
     message addressed to it containing server, realm, AzerothCore, playerbot or mod- (case-insensitive). Then the check

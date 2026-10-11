@@ -178,7 +178,19 @@ def require_given_clear(ev: dict):
 
 # ---------------------------------------------------------------- checks
 
-@check("play.loop_clean_exit", order=300, capability=CAP, stack="down", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "play",
+    "harness/hslib/play.py",
+    "harness/hslib/checks/fixture_checks.py",
+    "harness/hslib/checks/play_checks.py",
+    "harness/hslib/checks/resolution_checks.py",
+)
+
+
+@check("play.loop_clean_exit", order=300, capability=CAP, stack="down", layer="integration")
 def loop_clean_exit(ctx):
     """`./play` blocks while the client runs; when the client exits normally ./play exits 0 within 120 s, worldserver
     logged a graceful halt, and no stack/Wine/Wow.exe process remains, ports 3307/3724/8085/7878 free."""
@@ -262,7 +274,7 @@ def _interrupt_cycle(how: str) -> dict:
         s.cleanup()
 
 
-@check("play.interrupt_clean_exit", order=310, capability=CAP, stack="down", tier="full")
+@check("play.interrupt_clean_exit", order=310, capability=CAP, stack="down", layer="integration")
 def interrupt_clean_exit(ctx):
     """SIGINT (Ctrl-C to the process group) and, in a second run, SIGTERM to ./play with the client up: the client is
     closed, the stack shuts down gracefully, ./play exits within 120 s, nothing from this repo remains. A repeated
@@ -280,7 +292,7 @@ def _ensure_down_between_cycles(ev):
     require(is_clear(r), "something still running between interrupt cycles", between=r, **ev)
 
 
-@check("play.client_crash_cleanup", order=320, capability=CAP, stack="down", tier="full")
+@check("play.client_crash_cleanup", order=320, capability=CAP, stack="down", layer="integration")
 def client_crash_cleanup(ctx):
     """SIGKILL the client's Wine process: ./play detects it, shuts the stack down gracefully, exits nonzero with a
     message naming the client crash, and nothing from this repo remains."""
@@ -319,7 +331,7 @@ def client_crash_cleanup(ctx):
         s.cleanup()
 
 
-@check("play.startup_failure", order=330, capability=CAP, stack="down", tier="full")
+@check("play.startup_failure", order=330, capability=CAP, stack="down", layer="integration")
 def startup_failure(ctx):
     """With an unusable worldserver DataDir ./play exits nonzero with the server's log excerpt, never starts the
     client, and leaves nothing running."""
@@ -357,7 +369,7 @@ def startup_failure(ctx):
         s.cleanup()
 
 
-@check("play.single_instance", order=340, capability=CAP, stack="down", tier="full")
+@check("play.single_instance", order=340, capability=CAP, stack="down", layer="integration")
 def single_instance(ctx):
     """While ./play runs, a second ./play exits nonzero within 5 s naming the first one's pid; the first is unaffected
     (keeps running, then exits 0 normally). Setup also leaves a stale lock (dead pid) that the first must reclaim."""
@@ -538,7 +550,7 @@ print(repr(out))
 """
 
 
-@check("play.offline", order=350, capability=CAP, stack="down", tier="full")
+@check("play.offline", order=350, capability=CAP, stack="down", layer="integration")
 def offline(ctx):
     """The whole play loop runs under a sandbox-exec profile that denies (and logs) every non-loopback outbound
     connection for ./play and all its children; startup, client launch and shutdown succeed, and the denial log
@@ -663,7 +675,7 @@ def _delete_scratch(name: str) -> dict:
     return {"account": name, "deleted": gone, "gm": r.evidence()}
 
 
-@check("play.player_account", order=360, capability=CAP, stack="down", tier="full")
+@check("play.player_account", order=360, capability=CAP, stack="down", layer="integration")
 def player_account(ctx):
     """Default (personal-account) path with a scratch player file: the first ./play writes the file (0600) and
     creates exactly one non-GM account with no characters and prints the login; a second ./play creates nothing and
@@ -770,7 +782,7 @@ def _snapshot(name: str) -> dict:
             "characters": db.query(f"SELECT * FROM characters WHERE account={aid} ORDER BY guid", "characters")}
 
 
-@check("play.player_account_untouched", order=151, capability=CAP, stack="up", tier="full")
+@check("play.player_account_untouched", order=151, capability=CAP, stack="up", layer="integration")
 def player_account_untouched(ctx):
     """A personal account (scratch, created by ./play's own account step, with one character) is byte-identical —
     auth row incl. salt/verifier, account_access, rbac permissions, characters — before and after the fixture reset that

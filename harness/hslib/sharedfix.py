@@ -14,6 +14,7 @@ their folders in this lane's save store.
 from __future__ import annotations
 
 import itertools
+import re
 import shutil
 import statistics
 import threading
@@ -61,14 +62,19 @@ def new_identity(run_tag: int) -> S.Identity:
 
 
 def shared_state(own: set[str] = frozenset()) -> dict:
-    """One reset round: what a test must leave as it found it. Fail-closed: an error is a difference."""
+    """One reset round: what a test must leave as it found it (harness-control "Reset between shared-server tests"):
+    pause state and switch, saves enabled and the autosave interval, the running config profile, and who is online
+    (minus the fixture's own characters). Fail-closed: an error is a difference."""
     t0 = time.perf_counter()
     st = {}
     try:
         p = Z.status()
         st["pause"] = (p["state"], p["enabled"]) if p["ok"] else ("error", p["raw"])
         r = soap.gm("moonglade save status", timeout=10)
-        st["saves"] = (r.output or "").strip()[:200] if r.ok else "error"
+        out = r.output or ""
+        m = re.search(r"auto interval: (\d+)", out)
+        st["saves"] = {"enabled": out.startswith("Moonglade saves: enabled"),
+                       "interval_s": int(m.group(1)) if m else None} if r.ok else "error"
         rp = stack.running_profile()
         st["profile"] = (rp or {}).get("profile")
         rows = db.query("SELECT name FROM characters WHERE online = 1", "characters")
@@ -178,7 +184,7 @@ def prepare_identity(ident: S.Identity) -> dict:
     return {"identity": ident.user, "s": round(time.time() - t0, 2)}
 
 
-def bulk_identities(n: int, workers: int = 8, run_tag: int | None = None) -> dict:
+def bulk_identities(n: int, workers: int = 8, run_tag: int | None = None) -> dict:  # noqa: D401
     """n identities created in parallel at run start; {"identities", "wall_s", "each_s"}."""
     run_tag = run_tag if run_tag is not None else int(time.time()) % 100000
     ids = [new_identity(run_tag) for _ in range(n)]

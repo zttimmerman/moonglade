@@ -25,7 +25,7 @@ PLAY = str(P.ROOT / "play")
 CAP = "power-guard"
 CORES_6_10 = json.dumps({"perf": 6, "total": 10})
 # three file-only checks for the nested guarded run (orders 1, 225, 380): the pause must come before the second
-RUN_CHECKS = ("report.tiers_declared", "client.patch0001_recorded", "app.icon")
+RUN_CHECKS = ("report.layers_declared", "client.patch0001_recorded", "app.icon")
 
 
 def _scratch(tag: str) -> Path:
@@ -141,7 +141,17 @@ class _Job:
 
 # ============================================================================ power.jobs_default
 
-@check("power.jobs_default", order=34, capability=CAP, stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "harness/hslib/checks/power_checks.py",
+    "harness/hslib/guienv.py",
+    "harness/hslib/power.py",
+)
+
+
+@check("power.jobs_default", order=34, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def jobs_default(ctx):
     """power-guard "Build job cap": with no --jobs the build's job count is the performance-core count (stubbed 6 of
     10: every `cmake --build` uses -j 6 and the log line names "6 performance cores"); with no performance-core value
@@ -183,7 +193,7 @@ def jobs_default(ctx):
 
 # ============================================================================ power.jobs_override
 
-@check("power.jobs_override", order=34, capability=CAP, stack="any", tier="quick")
+@check("power.jobs_override", order=34, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def jobs_override(ctx):
     """power-guard "Override is honoured on every entry point": `hs build --jobs 3` and `./bootstrap --jobs 3`
     (plan-only, stubbed 6 performance cores) both build with -j 3, and --jobs 0 is refused by both with a plain
@@ -223,7 +233,7 @@ def pause_resume_cases() -> dict:
             "ignored": _Job("20p", ignore=True).ev()}
 
 
-@check("power.pause_resume", order=35, capability=CAP, stack="any", tier="quick")
+@check("power.pause_resume", order=35, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def pause_resume(ctx):
     """power-guard "Battery pause": a battery of 40 % (plugged in), 34, 38, 49, 50 pauses before the step that read 34,
     prints the pause line once, resumes when 50 is read, runs every step and records one pause (start, end,
@@ -298,7 +308,7 @@ def _nested_run(seq: str, tag: str) -> dict:
         shutil.rmtree(rd, ignore_errors=True)
 
 
-@check("power.run_pause", order=36, capability=CAP, stack="any", tier="quick")
+@check("power.run_pause", order=36, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def run_pause(ctx):
     """power-guard "Harness run pauses between checks": a nested full-tier run of three file-only checks with a
     stubbed battery dropping to 30 % after the first pauses before the second, resumes at 50 %, all three pass, and
@@ -337,7 +347,7 @@ def run_pause(ctx):
 
 # ============================================================================ power.stop_low
 
-@check("power.stop_low", order=37, capability=CAP, stack="any", tier="quick")
+@check("power.stop_low", order=37, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def stop_low(ctx):
     """power-guard "Falling battery stops the job": a battery of 34, 20, 15 % stops a guarded job with a plain message
     (what stopped, why, how to resume), no later step runs, and the record shows the stop at 15 %. In-process, through
@@ -377,7 +387,7 @@ def stop_low(ctx):
 
 # ============================================================================ power.bootstrap_resume
 
-@check("power.bootstrap_resume", order=38, capability=CAP, stack="any", tier="quick")
+@check("power.bootstrap_resume", order=38, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def bootstrap_resume(ctx):
     """power-guard "Stopped bootstrap resumes": a plan-only ./bootstrap whose stubbed battery falls 80, 34, 20, 15 %
     stops at its server-build step (exit nonzero, brew done, build not), and the next ./bootstrap with a healthy
@@ -418,7 +428,7 @@ def bootstrap_resume(ctx):
 
 # ============================================================================ power.switch_refusal
 
-@check("power.switch_refusal", order=39, capability=CAP, stack="any", tier="quick")
+@check("power.switch_refusal", order=39, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def switch_refusal(ctx):
     """power-guard "Switches refused outside the harness": with each power-guard test switch set (outside a harness
     run), `hs build`, `./bootstrap`, `./play` and another `hs` command refuse with a message naming the switch, before

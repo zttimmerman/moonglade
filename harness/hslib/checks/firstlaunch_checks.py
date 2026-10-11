@@ -180,7 +180,25 @@ def _cleanup(d: Path) -> None:
 
 # ================================================================================================ preflight
 
-@check("firstlaunch.preflight", order=15, capability=CAP, stack="any", tier="quick")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "harness/app/launcher.m",
+    "fork.lock#wowsilicon_*",
+    "fork.lock#client_data_*",
+    "harness/hslib/checks/firstlaunch_checks.py",
+    "harness/hslib/checks/release_checks.py",
+    "harness/hslib/checks/release_runtime_checks.py",
+    "harness/hslib/clientinst.py",
+    "harness/hslib/downloads.py",
+    "harness/hslib/firstlaunch.py",
+    "harness/hslib/pe.py",
+    "harness/hslib/pristine.py",
+)
+
+
+@check("firstlaunch.preflight", order=15, capability=CAP, stack="any", layer="unit", parallel_safe=True)
 def preflight(ctx):
     """Each injected preflight problem stops before writing (HOME holds only the log) with its plain message; the disk
     need is the client's size + the cited fixed part, so two clients' needs differ by their size difference."""
@@ -325,7 +343,7 @@ def home_end_state(home: Path) -> tuple[dict, list[str]]:
     return st, probs
 
 
-@check("firstlaunch.flow", order=15, capability=CAP, stack="down", tier="slow")
+@check("firstlaunch.flow", order=15, capability=CAP, stack="down", layer="gate")
 def flow(ctx):
     """Fresh scratch HOME to ready through the release app's first-launch window (test hook, scripted pick of
     client/, loopback downloads); counterexample: a corrupted copy is never called deletable and is redone."""
@@ -657,7 +675,7 @@ def _slim(r: dict) -> dict:
 
 # ================================================================================================ second_open_plays
 
-@check("firstlaunch.second_open_plays", order=15, capability=CAP, stack="down", tier="slow")
+@check("firstlaunch.second_open_plays", order=15, capability=CAP, stack="down", layer="gate")
 def second_open_plays(ctx):
     """A scratch HOME first launch completed (the run's shared fixture): opening the release app again (test hook,
     stand-in client) shows no first-launch window and the play loop's stages run to ready; the stand-in quits and the
@@ -777,7 +795,7 @@ def kill_tree(proc: subprocess.Popen, home: Path) -> dict:
     return {"at": t, "others": others}
 
 
-@check("firstlaunch.source_untouched", order=15, capability=CAP, stack="down", tier="slow")
+@check("firstlaunch.source_untouched", order=15, capability=CAP, stack="down", layer="gate")
 def source_untouched(ctx):
     """A scratch client folder (an APFS clone of client/, its write protection lifted so only the sandbox stands in
     the way) fingerprinted (every path, size, mtime, mode, flags; .exe/.dll/.wtf hashes); first launch runs from it to
@@ -889,7 +907,7 @@ def only_logs(home: Path) -> bool:
     return all(x == "logs" or x.startswith("logs/") for x in home_listing(home))
 
 
-@check("firstlaunch.client_refusals", order=15, capability=CAP, stack="down", tier="full")
+@check("firstlaunch.client_refusals", order=15, capability=CAP, stack="down", layer="integration")
 def client_refusals(ctx):
     """Through the release app's scripted folder pick (test hook), each bad client is refused before anything is
     copied, with a plain message naming the problem (the found version for the wrong build), what is needed
@@ -964,7 +982,7 @@ def monotonic_to_total(ps: list[tuple]) -> bool:
     return bool(ps) and all(b[0] >= a[0] for a, b in zip(ps, ps[1:])) and ps[-1][0] == ps[-1][1]
 
 
-@check("firstlaunch.downloads", order=15, capability=CAP, stack="down", tier="full")
+@check("firstlaunch.downloads", order=15, capability=CAP, stack="down", layer="gate")
 def downloads_check(ctx):
     """Downloads from a loopback server serving the cached pinned files (hashes from fork.lock): with the URL override
     at a closed port the data step stops with the no-connection message; the next launch (one byte of Data.zip
@@ -1130,7 +1148,7 @@ BOT_CHARS_SQL = ("SELECT COUNT(*) FROM acore_characters.characters c JOIN acore_
                  "WHERE a.username LIKE 'rndbot%'")
 
 
-@check("firstlaunch.kill_resume", order=15, capability=CAP, stack="down", tier="slow")
+@check("firstlaunch.kill_resume", order=15, capability=CAP, stack="down", layer="gate")
 def kill_resume(ctx):
     """First launch on a scratch HOME (packaged app, client/ as the source, loopback downloads) SIGKILLed with its
     children during the client copy (byte-copy path), then during the server-data download, the server-data unpack

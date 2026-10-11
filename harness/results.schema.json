@@ -2,44 +2,284 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Moonglade harness results",
   "type": "object",
-  "required": ["meta", "checks"],
+  "required": [
+    "meta",
+    "checks"
+  ],
   "properties": {
     "meta": {
       "type": "object",
-      "required": ["started", "finished", "repo_sha", "fork_lock", "host", "full_run", "tier", "timing", "lanes"],
+      "required": [
+        "started",
+        "finished",
+        "repo_sha",
+        "fork_lock",
+        "host",
+        "full_run",
+        "tier",
+        "timing",
+        "lanes",
+        "layers",
+        "unit"
+      ],
       "properties": {
-        "started": {"type": "string"},
-        "finished": {"type": "string"},
-        "repo_sha": {"type": "string"},
-        "fork_lock": {"type": "object", "required": ["core_sha", "playerbots_sha"]},
-        "host": {"type": "object", "required": ["platform", "machine"]},
-        "full_run": {"type": "boolean"},
-        "tier": {"enum": ["quick", "full", "slow", "gui", "backups"]},
-        "force_clean": {"type": "boolean"},
-        "lanes": {"type": "object", "required": ["lanes", "mode", "assignment", "preflight", "fallback"],
-                  "properties": {"mode": {"enum": [1, 2]}, "lanes": {"enum": [1, 2]},
-                                 "assignment": {"type": "object", "required": ["b_planned", "b_ran", "b_to_a"]},
-                                 "preflight": {"type": ["object", "null"]}, "fallback": {"type": ["string", "null"]}}},
-        "timing": {"type": "object", "required": ["per_check_s", "checks_sum_s", "total_wall_s", "top10",
-                                                  "backups_tier_s", "build_s", "build_by_check_s", "new_checks_s",
-                                                  "warnings"],
-                   "properties": {"per_check_s": {"type": "object"}, "checks_sum_s": {"type": "number"},
-                                  "top10": {"type": "array"}, "backups_tier_s": {"type": "number"},
-                                  "build_s": {"type": "number"}, "build_by_check_s": {"type": "object"},
-                                  "new_checks_s": {"type": ["object", "null"]},
-                                  "warnings": {"type": "array", "items": {"type": "string"}}}}
+        "started": {
+          "type": "string"
+        },
+        "finished": {
+          "type": "string"
+        },
+        "repo_sha": {
+          "type": "string"
+        },
+        "fork_lock": {
+          "type": "object",
+          "required": [
+            "core_sha",
+            "playerbots_sha"
+          ]
+        },
+        "host": {
+          "type": "object",
+          "required": [
+            "platform",
+            "machine"
+          ]
+        },
+        "full_run": {
+          "type": "boolean"
+        },
+        "tier": {
+          "enum": [
+            "unit",
+            "pr",
+            "full"
+          ]
+        },
+        "force_clean": {
+          "type": "boolean"
+        },
+        "lanes": {
+          "type": "object",
+          "required": [
+            "lanes",
+            "mode",
+            "assignment",
+            "preflight",
+            "fallback"
+          ],
+          "properties": {
+            "mode": {
+              "enum": [
+                1,
+                2
+              ]
+            },
+            "lanes": {
+              "enum": [
+                1,
+                2
+              ]
+            },
+            "assignment": {
+              "type": "object",
+              "required": [
+                "b_planned",
+                "b_ran",
+                "b_to_a"
+              ]
+            },
+            "preflight": {
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "fallback": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        },
+        "timing": {
+          "type": "object",
+          "required": [
+            "per_check_s",
+            "checks_sum_s",
+            "total_wall_s",
+            "top10",
+            "build_s",
+            "build_by_check_s",
+            "new_checks_s",
+            "warnings"
+          ],
+          "properties": {
+            "per_check_s": {
+              "type": "object"
+            },
+            "checks_sum_s": {
+              "type": "number"
+            },
+            "top10": {
+              "type": "array"
+            },
+            "build_s": {
+              "type": "number"
+            },
+            "build_by_check_s": {
+              "type": "object"
+            },
+            "new_checks_s": {
+              "type": [
+                "object",
+                "null"
+              ]
+            },
+            "warnings": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "layers": {
+          "type": "object",
+          "required": [
+            "unit",
+            "integration",
+            "journeys",
+            "acceptance",
+            "gate",
+            "build"
+          ],
+          "properties": {
+            "unit": {
+              "type": "object",
+              "required": [
+                "wall_s"
+              ]
+            },
+            "selection": {
+              "type": "object",
+              "required": [
+                "wall_s"
+              ]
+            },
+            "integration": {
+              "type": "object",
+              "required": [
+                "wall_s"
+              ]
+            },
+            "journeys": {
+              "type": "object",
+              "required": [
+                "wall_s"
+              ]
+            },
+            "acceptance": {
+              "type": "object",
+              "required": [
+                "wall_s"
+              ]
+            },
+            "gate": {
+              "type": "object",
+              "required": [
+                "wall_s"
+              ]
+            },
+            "build": {
+              "type": "object",
+              "required": [
+                "wall_s"
+              ]
+            }
+          }
+        },
+        "unit": {
+          "type": "object",
+          "required": [
+            "wall_s",
+            "suites",
+            "processes",
+            "ok"
+          ],
+          "properties": {
+            "suites": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": [
+                  "suite",
+                  "tests"
+                ],
+                "properties": {
+                  "tests": {
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "required": [
+                        "id",
+                        "status",
+                        "duration_s"
+                      ]
+                    }
+                  }
+                }
+              }
+            }
+          }
+        },
+        "selection": {
+          "type": [
+            "object",
+            "null"
+          ]
+        }
       }
     },
     "checks": {
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["id", "status", "duration_s", "evidence"],
+        "required": [
+          "id",
+          "status",
+          "duration_s",
+          "evidence",
+          "layer"
+        ],
         "properties": {
-          "id": {"type": "string"},
-          "status": {"enum": ["pass", "fail", "error", "skip"]},
-          "duration_s": {"type": "number"},
-          "evidence": {"type": "object", "minProperties": 1}
+          "id": {
+            "type": "string"
+          },
+          "status": {
+            "enum": [
+              "pass",
+              "fail",
+              "error",
+              "skip"
+            ]
+          },
+          "duration_s": {
+            "type": "number"
+          },
+          "evidence": {
+            "type": "object",
+            "minProperties": 1
+          },
+          "layer": {
+            "enum": [
+              "unit",
+              "integration",
+              "journey",
+              "gate"
+            ]
+          }
         }
       }
     }

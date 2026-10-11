@@ -38,7 +38,16 @@ def _session_ev(s: C.Session) -> dict:
     return {k: s.ev.get(k) for k in ("account", "character", "prepare", "login", "gm_off", "stale_group")}
 
 
-@check("comp.add_remove", order=130, capability="companion-bots", stack="up", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "harness/hslib/checks/companion_checks.py",
+    "harness/hslib/companion.py",
+)
+
+
+@check("comp.add_remove", order=130, capability="companion-bots", stack="up", layer="integration")
 def add_remove(ctx):
     """`.playerbots bot addclass priest` → within 30 s SMSG_GROUP_LIST shows the test character's party with an online
     member whose characters.class is Priest (an addclass-pool bot); `.playerbots bot remove <name>` → within 30 s it
@@ -70,7 +79,7 @@ def add_remove(ctx):
     return ev
 
 
-@check("comp.follows", order=131, capability="companion-bots", stack="up", tier="full")
+@check("comp.follows", order=131, capability="companion-bots", stack="up", layer="integration")
 def follows(ctx):
     """With a companion beside it, the test character is GM-teleported (`.tele name`) >= 100 yd within its zone →
     within 60 s the companion is within 15 yd of it (live positions from `.gps`)."""
@@ -116,7 +125,7 @@ def _by(guid, victim):
                       and e["attacker"] == guid and e["victim"] == victim)
 
 
-@check("comp.assists", order=132, capability="companion-bots", stack="up", tier="full")
+@check("comp.assists", order=132, capability="companion-bots", stack="up", layer="integration")
 def assists(ctx):
     """GIVEN: the master and its warrior companion stand together (companion summoned and within 10 yd, `.gps`) at a
     staging point 35 yd from a hostile, level-appropriate creature (SQL/DBC rules), with no combat yet, and the
@@ -267,7 +276,7 @@ def _quest_status(qid: int, name: str) -> str:
     return out.split("Status:")[-1].strip().splitlines()[0].strip() if "Status:" in out else out.strip()
 
 
-@check("comp.quest_shared", order=133, capability="companion-bots", stack="up", tier="full")
+@check("comp.quest_shared", order=133, capability="companion-bots", stack="up", layer="integration")
 def quest_shared(ctx):
     """Master has a starter-zone kill quest (SQL rule), companion of a level that can take it, master shares it
     (CMSG_PUSHQUESTTOPARTY) → within 30 s `.quest status` shows it in the companion's log (Incomplete/Complete)."""

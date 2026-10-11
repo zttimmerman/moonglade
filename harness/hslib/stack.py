@@ -468,6 +468,17 @@ def ensure_profile(name: str, timeout: int | None = None) -> dict:
     return out
 
 
+def restart_world(profile: str | None = None, timeout: int | None = None) -> dict:
+    """Restart the worldserver only (mysqld and authserver keep running), with `profile` (test-pyramid: the
+    shared-server fixture's restart after leaked state). Starts everything if the stack is down."""
+    rp = running_profile()
+    out = {"profile": profile or config.DEFAULT_PROFILE, "was": rp}
+    if rp:
+        out["stop_worldserver"] = stop_worldserver(rp["pid"])
+    out["up"] = up(profile=profile or config.DEFAULT_PROFILE, timeout=timeout)
+    return out
+
+
 def stop_worldserver(pid: int) -> dict:
     """Graceful worldserver shutdown (SOAP `server shutdown 1`), SIGTERM/SIGKILL fallback. Also used to swap in the
     unpatched baseline worldserver (core.login_logout_race_baseline) while mysqld + authserver keep running."""

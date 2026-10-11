@@ -307,7 +307,21 @@ def pin_refusals(cache_src: Path) -> dict:
     return res
 
 
-@check("release.pins", order=13, capability=CAP, stack="any", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "tools/release/**",
+    ".github/workflows/*",
+    "harness/hslib/checks/release_paths_golden.json",
+    "fork.lock#release_*",
+    "harness/hslib/build.py",
+    "harness/hslib/checks/release_checks.py",
+    "harness/hslib/downloads.py",
+)
+
+
+@check("release.pins", order=13, capability=CAP, stack="any", layer="integration")
 def pins(ctx):
     """A pinned release input whose cached bytes don't match fork.lock fails packaging, naming the input, and no payload
     is produced; the real cached inputs pass their pins."""
@@ -335,7 +349,7 @@ def pins(ctx):
 
 # ================================================================================================ slow: one packaging
 
-@check("release.dev_untouched", order=13, capability=CAP, stack="any", tier="slow")
+@check("release.dev_untouched", order=13, capability=CAP, stack="any", layer="gate")
 def dev_untouched(ctx):
     """A full local packaging run leaves server/bin, build/CMakeCache.txt, env/player.json, env/settings.json,
     env/client-play, the client/ manifest and the Homebrew Cellar unchanged."""
@@ -355,7 +369,7 @@ def dev_untouched(ctx):
     return ev
 
 
-@check("release.no_abs_paths", order=13, capability=CAP, stack="any", tier="slow")
+@check("release.no_abs_paths", order=13, capability=CAP, stack="any", layer="gate")
 def no_abs_paths(ctx):
     """Every Mach-O in the payload loads only system or in-payload libraries, no load command/rpath/string names
     /opt/homebrew, /usr/local or /Users/ outside the reviewed allowlist, and a planted Homebrew rpath is caught."""
@@ -402,7 +416,7 @@ def no_abs_paths(ctx):
     return ev
 
 
-@check("release.runs_without_homebrew", order=13, capability=CAP, stack="any", tier="slow")
+@check("release.runs_without_homebrew", order=13, capability=CAP, stack="any", layer="gate")
 def runs_without_homebrew(ctx):
     """With /opt/homebrew and /usr/local unreadable (sandbox-exec) and the repo unwritable outside a scratch dir, the
     payload at a path with spaces initialises and starts mysqld on a scratch port, queries it with the bundled client,
@@ -463,7 +477,7 @@ def _archive_names(p: Path) -> list[str]:
         return t.getnames()
 
 
-@check("release.no_game_files", order=13, capability=CAP, stack="any", tier="slow")
+@check("release.no_game_files", order=13, capability=CAP, stack="any", layer="gate")
 def no_game_files(ctx):
     """No release asset lists a game-file path (MPQ, Wow.exe, DBC, maps/vmaps/mmaps, client-data), the zip is under
     200 MB, and a planted MPQ in a scratch zip is caught."""
@@ -638,7 +652,7 @@ def third_party_problems(payload: Path) -> tuple[list[str], dict]:
     return probs, ev
 
 
-@check("release.source_alongside", order=13, capability=CAP, stack="any", tier="slow")
+@check("release.source_alongside", order=13, capability=CAP, stack="any", layer="gate")
 def source_alongside(ctx):
     """Every source asset exists and is in SHA256SUMS with a matching hash, the core and playerbots tarballs hold the
     pinned commit + patches tree, the Moonglade tarball holds the payload's commit, and THIRD_PARTY carries the

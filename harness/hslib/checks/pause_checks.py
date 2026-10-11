@@ -61,7 +61,22 @@ def _status_running(ev: dict, key: str = "status_before") -> dict:
 
 # ---------------------------------------------------------------- the world pauses
 
-@check("pause.combat_frozen", order=440, capability=CAP, stack="up", tier="full")
+# Declared ownership (harness-reporting "Impact selection is fail-safe"): what the checks of this file cover.
+# First cut generated from the product paths they assert on and the harness modules this file imports directly
+# (test-pyramid design 13.1); maintained by hand from here on. Shared infrastructure falls to the smoke set.
+COVERS = (
+    "modules/mod-moonglade/src/MoongladePause.cpp",
+    "modules/mod-moonglade/src/MoongladeAddon.*",
+    "client-mods/addons/Moonglade/*",
+    "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.Pause",
+    "harness/hslib/checks/clientinput.py",
+    "harness/hslib/checks/pause_checks.py",
+    "harness/hslib/checks/seamless_checks.py",
+    "harness/hslib/pause.py",
+)
+
+
+@check("pause.combat_frozen", order=440, capability=CAP, stack="up", layer="integration")
 def combat_frozen(ctx):
     """GIVEN the companion character in melee with a creature (it attacks the character; the character auto-attacks
     it), WHEN the probe sends the pause add-on message and waits 20 s, THEN the character's and the creature's health
@@ -109,7 +124,7 @@ def combat_frozen(ctx):
     return ev
 
 
-@check("pause.aura_frozen", order=441, capability=CAP, stack="up", tier="full")
+@check("pause.aura_frozen", order=441, capability=CAP, stack="up", layer="integration")
 def aura_frozen(ctx):
     """GIVEN a buff with >= 30 s left on the companion character and a DoT ticking on a creature (spells by
     pause.SPELL_RULES, applied with `.aura`), WHEN paused 20 s and resumed, THEN the buff's lost time (pause.lost_ms
@@ -176,7 +191,7 @@ def aura_frozen(ctx):
     return ev
 
 
-@check("pause.cooldown_frozen", order=442, capability=CAP, stack="up", tier="full")
+@check("pause.cooldown_frozen", order=442, capability=CAP, stack="up", layer="integration")
 def cooldown_frozen(ctx):
     """GIVEN a player spell on a >= 30 s cooldown (`.cooldown` then `.cast`, spell by pause.SPELL_RULES player_cd)
     and a creature ability on cooldown (creature_cd: `.cast back`, then `.unaura` starts the creature's cooldown),
@@ -236,7 +251,7 @@ def cooldown_frozen(ctx):
     return ev
 
 
-@check("pause.cast_cancelled", order=443, capability=CAP, stack="up", tier="full")
+@check("pause.cast_cancelled", order=443, capability=CAP, stack="up", layer="integration")
 def cast_cancelled(ctx):
     """GIVEN the companion character casting a >= 2 s cast-time spell (pause.SPELL_RULES cast, `.cast`; its
     SMSG_SPELL_START seen), WHEN the pause begins mid-cast, THEN the client gets the interrupted notice
@@ -287,7 +302,7 @@ def cast_cancelled(ctx):
     return ev
 
 
-@check("pause.respawn_frozen", order=444, capability=CAP, stack="up", tier="full")
+@check("pause.respawn_frozen", order=444, capability=CAP, stack="up", layer="integration")
 def respawn_frozen(ctx):
     """Two pauses, one per GIVEN: the creature with the shortest respawn by rule stands where no creature can chase the
     character, and creatures only update with a player near them (Map::Update marks the cells around players), so
@@ -384,7 +399,7 @@ def respawn_frozen(ctx):
     return ev
 
 
-@check("pause.bots_frozen", order=445, capability=CAP, stack="up", tier="full")
+@check("pause.bots_frozen", order=445, capability=CAP, stack="up", layer="integration")
 def bots_frozen(ctx):
     """GIVEN a playerbot companion in the character's party that is moving (`.playerbots bot addclass priest`; the
     character moves 30 yd and the bot's position changes between two read-outs), WHEN the world is paused for 20 s,
@@ -440,7 +455,7 @@ def bots_frozen(ctx):
     return ev
 
 
-@check("pause.session_alive", order=446, capability=CAP, stack="up", tier="slow")
+@check("pause.session_alive", order=446, capability=CAP, stack="up", layer="gate")
 def session_alive(ctx):
     """GIVEN a paused probe session that sends only keep-alives (the probe pump: CMSG_KEEP_ALIVE every 15 s, nothing
     else), WHEN 5 minutes pass, THEN the session is still in the world (the server still reports paused and the
@@ -474,7 +489,7 @@ def session_alive(ctx):
 
 # ---------------------------------------------------------------- when pausing is allowed
 
-@check("pause.refused_on_taxi", order=447, capability=CAP, stack="up", tier="full")
+@check("pause.refused_on_taxi", order=447, capability=CAP, stack="up", layer="integration")
 def refused_on_taxi(ctx):
     """GIVEN the companion character on a taxi flight (pause.TAXI_RULE; `.cheat taxi on`, CMSG_ACTIVATETAXI at the
     flight master, SMSG_ACTIVATETAXIREPLY ERR_TAXIOK), WHEN the pause add-on message arrives, THEN the client gets the
@@ -534,7 +549,7 @@ def refused_on_taxi(ctx):
     return ev
 
 
-@check("pause.logout_unpauses", order=448, capability=CAP, stack="up", tier="full")
+@check("pause.logout_unpauses", order=448, capability=CAP, stack="up", layer="integration")
 def logout_unpauses(ctx):
     """GIVEN a paused world (the plain harness character pause.PAUSE_CHAR, security 0 and so no instant logout,
     paused it with the add-on message), WHEN the character logs out (CMSG_LOGOUT_REQUEST), THEN the server answers
@@ -585,7 +600,7 @@ DROP_RESUME_S = 5.0         # spec: "within a few seconds" (the session timeout 
 OFFLINE_WAIT_S = 90         # afterwards: the dropped session's character goes offline (WorldSessionMgr, 60 s)
 
 
-@check("pause.disconnect_unpauses", order=451, capability=CAP, stack="up", tier="full")
+@check("pause.disconnect_unpauses", order=451, capability=CAP, stack="up", layer="integration")
 def disconnect_unpauses(ctx):
     """GIVEN a world paused by a connected client (the companion probe session; the server answered "paused" and
     `.moonglade pause status` says paused), WHEN that client's connection is cut without a logout (the probe's socket
@@ -639,7 +654,7 @@ def disconnect_unpauses(ctx):
     return ev
 
 
-@check("pause.disabled_noop", order=449, capability=CAP, stack="up", tier="full")
+@check("pause.disabled_noop", order=449, capability=CAP, stack="up", layer="integration")
 def disabled_noop(ctx):
     """GIVEN Moonglade.Pause.Enable = 0 (the stack restarted with the pause-off config profile; `.moonglade pause
     status` says enabled 0), WHEN the pause add-on message arrives during a fight, THEN nothing pauses: the server
@@ -729,7 +744,7 @@ def _banner_box(path) -> tuple:
     return ((w / 2 - 170 * u) / w, (60 * u) / h, (w / 2 + 170 * u) / w, (140 * u) / h)
 
 
-@check("client.pause_menu", order=450, capability=CAP, stack="down", tier="full")
+@check("client.pause_menu", order=450, capability=CAP, stack="down", layer="integration")
 def pause_menu(ctx):
     """GIVEN the play client in the world (a scratch patched play client, ./play --account test, the harness test
     account; the add-on's pause test mode planted in its SavedVariables), WHEN a hardware Esc (SendInput in the
