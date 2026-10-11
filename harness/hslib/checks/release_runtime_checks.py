@@ -815,6 +815,27 @@ def sandbox_profile(scratch: Path) -> str:
     ]) + "\n"
 
 
+RC4_PROBE = """
+import ctypes, sys
+c = ctypes.CDLL(sys.argv[1])
+c.OSSL_PROVIDER_load.restype = ctypes.c_void_p
+c.OSSL_PROVIDER_load.argtypes = [ctypes.c_void_p, ctypes.c_char_p]
+c.EVP_CIPHER_fetch.restype = ctypes.c_void_p
+c.EVP_CIPHER_fetch.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_char_p]
+print(int(bool(c.OSSL_PROVIDER_load(None, b"legacy"))), int(bool(c.EVP_CIPHER_fetch(None, b"RC4", None))))
+"""
+
+
+def rc4_probe(app: Path, prof: Path, cwd: Path, server_env: dict) -> str:
+    """'<legacy provider loaded> <RC4 fetched>' (e.g. "1 1") from the payload's libcrypto under the no-Homebrew sandbox,
+    with the OPENSSL_* variables of `server_env` (a server's environment), else the error text."""
+    env = {"PATH": "/usr/bin:/bin"} | {k: v for k, v in server_env.items() if k.startswith("OPENSSL_")}
+    r = subprocess.run([SANDBOX_EXEC, "-f", str(prof), str(app / "python/bin/python3"), "-I", "-c", RC4_PROBE,
+                        str(app / "server/lib/libcrypto.3.dylib")], capture_output=True, text=True, env=env, cwd=cwd,
+                       timeout=60)
+    return r.stdout.strip() if r.returncode == 0 else f"rc={r.returncode}: {(r.stderr or r.stdout)[-300:]}"
+
+
 def release_fixture_app(d: Path) -> Path:
     """A clonefile copy of the packaged Moonglade.app at "<d>/Moonglade Test/Moonglade.app". Returns APP (the
     payload folder inside it)."""
@@ -961,6 +982,16 @@ def stack_from_payload(ctx):
                                                       for n, e in errs.items()}}
         require(" " in str(home) and not any(ev["spaced_home"]["invalid_config_lines"].values()),
                 "a server rejected its --config path under a HOME with a space", **ev)
+        # the world session cipher (RC4, ARC4.cpp) needs OpenSSL's legacy provider; this sandbox hides Homebrew, as a
+        # friend's Mac without openssl@3 does. Probe the payload's libcrypto with the worldserver's own OPENSSL_*
+        # environment, and without OPENSSL_MODULES as the counterexample (v0.1.1 asserted at the first client login).
+        ev["rc4"] = {"with_server_env": rc4_probe(app, prof, d, ws_env),
+                     "without_openssl_modules": rc4_probe(app, prof, d, {k: v for k, v in ws_env.items()
+                                                                          if k != "OPENSSL_MODULES"})}
+        require(ev["rc4"]["with_server_env"] == "1 1", "the servers' OpenSSL can't load the legacy provider or RC4 "
+                "without Homebrew (a client login would assert in ARC4.cpp)", **ev)
+        require(ev["rc4"]["without_openssl_modules"] == "0 0", "counterexample: without OPENSSL_MODULES the legacy "
+                "provider still loaded, so the probe can't tell the bundled module from another one", **ev)
         require(ws_env.get("OPENSSL_CONF") == str(home / "etc/openssl.cnf") and (home / "etc/openssl.cnf").is_file()
                 and auth[0]["env"].get("OPENSSL_CONF") == str(home / "etc/openssl.cnf"),
                 "OPENSSL_CONF isn't HOME's openssl.cnf for the servers", **ev)
