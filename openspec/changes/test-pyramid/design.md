@@ -701,3 +701,16 @@ Prototype covers (selector.py `FILE_COVERS`) are by check file; `harness/hslib/c
 | `report.client_pristine` | 0.8 | post | run guard | post-run report |
 | `report.lanes` | 0.0 | post | run guard | post-run report |
 | `report.timing` | 0.0 | post | run guard | post-run report |
+
+## 13. Redesign after the 1.4 no-go (orchestrator, 2026-10-11)
+
+The prototype showed the plan *moved* tests between layers but didn't *reduce* acceptance work enough, and that selection by Python import closure selects nearly everything. Changes, to be re-measured before any migration (tasks 1.5–1.7):
+
+1. **Selection by declared ownership, not import closure.** Every acceptance test declares the product paths it covers (module sources, add-on/glue files, launcher, config sections) in a small `covers=` list. Harness-library changes are covered by the unit layer plus the acceptance tests that *declare* that library; they no longer pull in everything. Fail-safe: a path nobody declares selects the **smoke set** (the launch-to-world journey plus one integration test per area), not the whole suite. A `report.ownership` unit check fails when a product path has no owner.
+2. **FULL only for true foundations:** `patches/core/`, `patches/playerbots/`, `fork.lock` pins of the core or bots, and the build system. Harness, probe, stack and lane code are tested by unit tests and the smoke set. Release/signing paths select the release checks only.
+3. **One integration test per feature behaviour cluster, not per scenario.** A scenario keeps its own `Check:` id, but several scenarios are asserted inside one shared session (for example, saves: manual, quick, undo and load in one character session; lockouts: fresh-after-clear, partial-kept and dismissed in one dungeon session). Budget: an integration session is at most 60 s, and the whole integration layer is at most 12 min serial.
+4. **Bulk fixtures:** all per-test accounts and characters are created once, in parallel, at the start of a run (target ≤10 s total), so per-test setup cost leaves the per-test time.
+5. **Dungeon checks** (519 s today): one `dng.session` integration run covers scale + lock scenarios in at most 3 dungeon entries. Boss fights stay gate-only (`scale.solo_final_boss`).
+6. **Pool only what is proven safe.** Tests that flip server-wide switches (`saves.load_atomic`, pause enable) run serially; the pool saving is taken as measured (−37%), not assumed.
+
+Projected after the redesign (to be measured, not trusted): unit ≈47 s; integration ≤12 min; journeys ≈9.6 min; complete suite ≤22 min; typical feature PR ≈8–12 min; foundation PR ≈22 min; replay mean ≤15 min with the narrower FULL rule.

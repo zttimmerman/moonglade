@@ -1,7 +1,7 @@
 Estimates are agent-hours of builder work, without padding (recent changes ran 2–3× faster than their estimates). Runtime work happens in the main checkout, which needs the stack, and one agent owns the stack at a time. Schedule: after m4-dungeon-scaling merges and before m4-dungeon-companions.
 
 ## 1. Measure and prototype (go/no-go before any migration)
-- [ ] 1.1 Unit-runner prototype (≈ 3 h).
+- [x] 1.1 Unit-runner prototype (≈ 3 h).
   - `hs test` skeleton: `unittest` discovery, per-test timing, results record, the 2 s cap.
   - 20 real Python unit tests: backups rotation, `lanes.preflight_decision`, the runner's selection and budget rules.
   - The Lua 5.1.5 pin (compute the sha256 and cross-check it against lua.org's published checksum; `fork.lock` + `downloads.PINS`), built with the system `cc` into `env/tools/`.
@@ -19,11 +19,14 @@ Estimates are agent-hours of builder work, without padding (recent changes ran 2
   - **Run the slice 3× serially, 3× with the 2-worker pool, and once in reverse order.**
   - **Pass criteria:** identical statuses; reset median ≤ 1 s, max ≤ 3 s; each ported test ≤ its projection in design.md §9.3 + 20 %; the pool's saving is recorded.
   - Also measure the fallback levers (passive observer, shared scratch play client, `lifecycle.persist` in the era restart).
-- [ ] 1.3 Selector prototype and replay (≈ 1.5 h).
+- [x] 1.3 Selector prototype and replay (≈ 1.5 h).
   - Covers + closure selection, FULL triggers, the no-impact list, the `config.py`/`paths.py` constants rule.
   - `hs select --replay 15` over #19–#33, priced with the last full run.
   - Record the selection time (≤ 10 s), each PR's selection and reason, and the mean. Compare with design.md §8's rough table.
-- [ ] 1.4 Go/no-go note (≈ 0.5 h).
+- [x] 1.4 Go/no-go note (≈ 0.5 h).
+- [ ] 1.5 Redesign re-measure (design §13): ownership selector + narrower FULL rule, replay #19–#33 + #1–#3 of the new repo; pass = replay mean ≤15 min, selection ≤10 s (≈ 1.5 h).
+- [ ] 1.6 Clustered integration slice: saves cluster (manual, quick, undo, inworld load in one session) and dungeon cluster (`dng.session`) with bulk fixtures; pass = each session ≤60 s, statuses identical 3× serial / 3× pool / 1× reversed, bulk fixtures ≤10 s (≈ 2.5 h).
+- [ ] 1.7 Go/no-go 2: projected complete suite ≤30 min with the measured numbers; stop and report on a miss (≈ 0.5 h).
   - Write the measured numbers into design.md §12 and the proposal's log.
   - If a pass criterion fails (unit per-test time, reset cost, pool flakes, or a selection over 10 s), stop and report to the orchestrator with the numbers before task 2. Don't migrate on a failed prototype.
 
