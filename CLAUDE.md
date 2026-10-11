@@ -19,6 +19,14 @@ This is a **personal project**. Its source is public under GPL-2.0-or-later; no 
 - **Host:** macOS ARM64. Docker is acceptable for MySQL and/or the server if native builds fight you; record the choice in an ADR.
 - **No client binary patching in v1.** Use config (`Config.wtf`, `realmlist.wtf`) and a launcher script instead. **Read-only** Ghidra analysis of the client is open (Zach, 2026-10-02, ADR-0005): analyze copies under `env/re/`, never modify `client/`. Any binary change still needs an ADR and Zach's explicit yes. **Revertable client patching is open via ADR-0009** (Zach, 2026-10-04): `client/` stays pristine; patches apply only to the derived play client `env/client-play/` from the hash-checked queue `patches/client/`. ADR-0009 approves the mechanism and the first patch (GlueXML signature check) only; every further binary patch needs its own ADR and Zach's yes.
 
+## 3. Pipeline (standard SDLC; Zach, 2026-10-11)
+
+- **Commit:** `.githooks/pre-commit` runs syntax checks and the public-content scan (seconds).
+- **Push:** `.githooks/pre-push` runs the unit tests (`harness/hs test --tests-only`; mocked dependencies, about 11 s). Enable both with `git config core.hooksPath .githooks`.
+- **PR:** GitHub Actions (`.github/workflows/ci.yml`) runs lint, the scan and the unit tests.
+- **Merge:** one PR-tier harness run on the Mac (the integration tests and journeys for what changed). Game tests stay few and cover critical paths only; new tests are mostly unit tests with mocks.
+- **Release or milestone gate:** the full suite.
+
 ## 4. Methodology: OpenSpec (brownfield)
 
 This is delta work on an existing codebase, so use OpenSpec:
@@ -32,7 +40,7 @@ This is delta work on an existing codebase, so use OpenSpec:
 
 - **You (orchestrator):** specs, task breakdown, delegation, integration, STATUS.md, ADRs.
 - **Builder subagents:** implement one task against one spec, with a clean context per task. Builders run the unit layer (`harness/hs test`) plus the one acceptance test they are writing, repeated as needed. They never run an acceptance tier per task.
-- **Verifier subagent:** a fresh context that did not build the change. It receives only the spec deltas, the diff, and harness access. It runs the PR tier once (`harness/hs run --tier pr`: the unit layer, then the integration tests and journeys the change touches, or the complete suite when the selector says FULL), repeats each new or changed test 3×, and returns PASS or FAIL per scenario with evidence. A missed layer budget is a FAIL.
+- **Verifier subagent:** a fresh context that did not build the change. It receives only the spec deltas, the diff, and harness access. It reviews the diff against each scenario, reads the CI result (lint and unit tests), and runs the PR tier once (`harness/hs run --tier pr`: the integration tests and journeys the change touches, or the complete suite when the selector says FULL). It does not repeat tests; a flaky test is logged in STATUS.md and fixed or quarantined. It returns PASS or FAIL per scenario with evidence. A missed layer budget is a FAIL. Only real defects block a merge; polish becomes follow-ups.
 
 **Builders never grade their own work. You never accept a builder's claim of completion without a verifier PASS.**
 

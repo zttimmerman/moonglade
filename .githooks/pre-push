@@ -1,0 +1,4 @@
+#!/bin/sh
+# Pre-push: the unit tests (mocked dependencies; no server, client or Wine). ~40 s.
+root=$(git rev-parse --show-toplevel)
+exec "$root/harness/hs" test --tests-only

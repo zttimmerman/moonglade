@@ -1,0 +1,21 @@
+name: ci
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  unit:
+    runs-on: macos-26
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Lint (syntax and undefined names)
+        run: |
+          python3 -m pip install --quiet --user ruff==0.6.9
+          python3 -m ruff check --select E9,F63,F7,F82 --target-version py311 harness tools
+      - name: Public-content scan
+        run: PYTHONPATH=harness python3 -m hslib.publicscan tree
+      - name: Unit tests
+        run: harness/hs test --tests-only

@@ -166,7 +166,7 @@ COVERS = (
 )
 
 
-@check("setup.preflight", order=31, capability="easy-setup", stack="any", layer="unit", parallel_safe=True)
+@check("setup.preflight", order=31, capability="easy-setup", stack="any", layer="integration", parallel_safe=True)
 def setup_preflight(ctx):
     """In a scratch copy of the repo, ./bootstrap stops before changing anything (scratch tree byte-for-byte unchanged),
     exits nonzero and names the problem and the fix for: an Intel Mac, an old macOS, no Rosetta, no Command Line Tools,
