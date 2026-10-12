@@ -13,7 +13,7 @@ _Updated 2026-10-12 06:05. **Merged today:**
 - m4-instance-tactics (#9), selector needs (#10), m4-party-preset (#8), release-fresh-login (#7), release-home-spaces (#6), ci-pipeline (#5), test-pyramid (#4).
 
 **Next:**
-1. **M4 gate P0s (PR #21, verifier running from 10:00, ~1.5 h):** M4 gate run (09:28) 275 pass / 9 fail. Fixes: `dng.party_clear` pulled Mr. Smite with 3 dead (revived into a trash fight) → a gather that runs out is now a held attempt, revive only when quiet; release.app_readonly/app_moved/client_smoke + firstlaunch.source_untouched were lookups broken by the spaced release HOME (one real minor app bug: `is_wow_client` missed paths with a space; next release). Env-only: setup.fresh_clone (needs 40 GB free, have 30), public.history_dryrun (checkout behind origin), report.layer_budgets (integration 1020/900 s with one lane: 3.7 GB free memory; Mac swap 4.4 GB). Before the gate rerun: Zach restarts the Mac and frees ~10 GB. Then gate rerun, archive m4-dungeon-companions, Zach's play gate.
+1. **M4 gate P0s:** PR #21 **merged** (party pull hold; release checks under a spaced HOME; `is_wow_client` space fix ships next release). Its verifier hit a flaky `dng.party_clear` fail ('Vazruden: no scaled health read', fast kill) → PR #22 (read at first sight/every 2 s/after the fight; check judges gathers from evidence), live Ramparts ×3 read OK; verifier running from 11:38 (~12:45). Then: Zach restarts the Mac + frees ~10 GB (setup.fresh_clone needs 40 GB; 1 lane at 3.7 GB free memory pushed integration to 1020/900 s), gate rerun, archive m4-dungeon-companions, Zach's play gate.
 2. **P0 flaky (watching):** comp.quest_shared; the next failure carries its diagnosis.
 
 **Follow-ups:**
