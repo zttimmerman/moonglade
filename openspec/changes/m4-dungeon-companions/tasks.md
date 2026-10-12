@@ -1,7 +1,8 @@
 Agent-hour estimates for builder work. This change starts after `m4-dungeon-scaling` task 1.1, which proves headless dungeon entry, addclass parties and the selfbot. It can be built after or alongside that change's tasks 2–3, but only one agent owns the stack at a time.
 
 ## 1. Prototype (riskiest assumption first)
-- [ ] 1.1 **Full-run prototype on `spike/m4-dungeon`** (4–5 h): one scripted party clear of The Deadmines with the design.md §4 driver (staging rule, `.mmap path` parse, summon/gather, pulls, wipe recovery), plus one selfbot solo attempt at its first two bosses. Record per encounter: time, wipes, deaths by role, and the GM permissions the companion account lacks. **Stop and report** if the party can't kill VanCleef in 3 attempts; that's the "classic tactics gap" path (design.md §7), a decision for the orchestrator before more building.
+- [x] 1.1 **Full-run prototype on `spike/m4-dungeon`** (4–5 h): one scripted party clear of The Deadmines with the design.md §4 driver (staging rule, `.mmap path` parse, summon/gather, pulls, wipe recovery), plus one selfbot solo attempt at its first two bosses. Record per encounter: time, wipes, deaths by role, and the GM permissions the companion account lacks. **Stop and report** if the party can't kill VanCleef in 3 attempts; that's the "classic tactics gap" path (design.md §7), a decision for the orchestrator before more building.
+  - Result (2026-10-11, `docs/research/m4-full-run.md`): VanCleef died on the first pull in every run that reached him; no tactics gap, so 5.1 is not needed. 4 of 5 runs on the final driver cleared; all wipes were at the first three bosses, mostly while companions were still arriving. The straight-line staging rule failed in 5 of 6 Deadmines bosses and was replaced (design.md §4). The solo selfbot killed the first two bosses. Level-3 account `HSDNGNAV` runs `.mmap path` only.
 
 ## 2. Party preset
 - 2.1 moved to `m4-party-preset`.
