@@ -52,6 +52,10 @@ def instance_table(src: str) -> dict:
         lines[mid] = body_line + body.count("\n", 0, c.start())
     if not table:
         raise TacticsError("no `case <map>: strategyName = \"...\"` entries in the switch")
+    labels = len(re.findall(r"\bcase\s+\d+\s*:", body))
+    if labels != len(table):
+        # e.g. a fall-through `case A: case B: strategyName = ...` would drop map A silently
+        raise TacticsError(f"{labels} case labels but {len(table)} parsed entries in the switch")
     stray = sorted(set(table.values()) - set(all_names))
     if stray:
         # a strategy the switch adds but the function never removes would survive leaving the dungeon

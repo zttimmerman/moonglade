@@ -54,6 +54,8 @@ class Table(UnitCase):
             T.instance_table(STUB.replace('"x-three"\n', '"x-thr"\n'))
         with self.assertRaises(T.TacticsError):
             T.instance_table(STUB.replace("case 1002", "case 1001"))
+        with self.assertRaises(T.TacticsError):     # a fall-through label would drop map 1003 silently
+            T.instance_table(STUB.replace("case 1002", "case 1003: case 1002"))
 
 
 class Judge(UnitCase):
