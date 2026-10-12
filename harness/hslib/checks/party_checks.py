@@ -566,12 +566,20 @@ def party_clear_problems(d: dict) -> list[str]:
         if mask is not None and r.get("bit") is not None and not mask & (1 << r["bit"]):
             out.append(f"{r['boss']}: bit {r['bit']} not in the saved mask {mask}")
         for a in r.get("attempts") or []:
-            if a.get("unready"):
+            # judged from the evidence too, not only the driver's own flag: an attempt that fought (a pull sent, or
+            # fight time) after a staging gather that wasn't ok (or is missing), with the boss not engaged first
+            fought = bool(a.get("pull")) or (a.get("fight_s") or 0) > 0
+            not_gathered = fought and not (a.get("gather") or {}).get("ok") and not a.get("boss_engaged_before_pull")
+            if a.get("unready") or not_gathered:
                 out.append(f"{r['boss']} pull {a.get('n')}: pulled before the party was gathered "
                            f"({(a.get('gather') or {}).get('why')})")
-        # the boss's scaled health: read before the pull, or for an event boss (summoned during the fight) by GUID
+            if a.get("held") and fought:
+                out.append(f"{r['boss']} pull {a.get('n')}: fought while held ({a.get('held')})")
+        # the boss's scaled health: read before the pull, or for an event boss (summoned during the fight) by GUID,
+        # where only a read that succeeded counts
         key = "event_boss" if r.get("event") else "boss_before"
-        if not any((a.get(key) or {}).get("max_health") for a in r.get("attempts") or []):
+        if not any((a.get(key) or {}).get("max_health") and (key == "boss_before" or (a.get(key) or {}).get("ok"))
+                   for a in r.get("attempts") or []):
             out.append(f"{r['boss']}: no scaled health read")
     if mask is None:
         out.append("no completed-encounter mask read")

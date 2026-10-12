@@ -741,6 +741,7 @@ STALL_S = 60                  # a pull with no fight involving the boss after th
 MAX_WIPES = 2                 # design.md §4: max 2 wipes, then FAIL
 RESET_S = 90                  # a wiped-on boss evades and heals back to full within this
 POLL_S = 1.0
+EVENT_READ_S = 2.0            # an event boss seen but not read yet is read again after this long (a new sighting: at once)
 SOLO_PULL_YD = 6              # the selfbot run: stand this far from the boss, inside its aggro radius (SOLO_STAND_YD)
 RUN_RULE = ("order: required encounters (a static spawn of the credit entry; m4-dungeon-scaling design §6) by "
             "DungeonEncounter.dbc orderIndex. Staging: the boss spawn moved 30 yd back toward the previous staging "
@@ -1459,13 +1460,25 @@ def event_boss_guids(events: list[dict], entry: int) -> list[int]:
 
 
 def read_event_boss(s: "Session", enc: dict, mark: int) -> dict:
-    """The summoned boss's scaled health, once it has shown up in a fight: `.npc info` + `.ab creaturestat` by GUID."""
+    """The summoned boss's scaled health, once it has shown up in a fight: `.npc info` + `.ab creaturestat` by GUID.
+    A read that didn't succeed carries no top-level max_health (what it got is kept under "last", for the record)."""
     gs = event_boss_guids(s.ws.events_since(mark), enc["credit_entry"])
+    last = None
     for g in gs:
         r = s.read_selected_boss(g, enc["credit_entry"])
         if r["ok"]:
             return r | {"how": "summoned boss, seen in combat, read by GUID"}
-    return {"ok": False, "seen": len(gs)}
+        last = {k: r.get(k) for k in ("guid", "entry", "max_health", "health_multiplier")}
+    return {"ok": False, "seen": len(gs)} | ({"last": last} if last else {})
+
+
+def event_boss_due(a: dict, seen: int, el: float) -> bool:
+    """Whether the fight loop reads the event boss now: not read yet, seen in combat, and either a GUID not tried yet
+    (a first sighting: at once) or EVENT_READ_S since the last try. PR #21 verify run: Vazruden died 22.7 s into the
+    pull, and the old every-5-s reads (each several seconds long) never landed one."""
+    if (a.get("event_boss") or {}).get("ok") or not seen:
+        return False
+    return seen > a.get("_boss_seen", 0) or el - a.get("_boss_try", -99) >= EVENT_READ_S
 
 
 def event_pull(s: "Session", event: dict) -> dict:
@@ -1553,9 +1566,12 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
         if el > FIGHT_S:
             a["timeout"] = True
             break
-        if event and not (a.get("event_boss") or {}).get("ok") and el - a.get("_boss_try", -99) >= 5:
-            a["_boss_try"] = el
-            a["event_boss"] = read_event_boss(s, enc, mark)
+        if event:
+            seen = len(event_boss_guids(s.ws.events_since(mark), enc["credit_entry"]))
+            if event_boss_due(a, seen, el):
+                a["_boss_try"], a["_boss_seen"] = el, seen
+                a["event_boss_reads"] = a.get("event_boss_reads", 0) + 1
+                a["event_boss"] = read_event_boss(s, enc, mark) | {"t": round(el, 1), "when": "in the fight"}
         if el > STALL_S and not any(stall_breaker(e, u.get("guid"), fighter_guids if event else None)
                                     for e in s.ws.events_since(mark)):
             a["timeout"] = a["stalled"] = True       # nobody ever fought the boss (an event: nobody fought at all)
@@ -1563,6 +1579,7 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
     a["fight_s"] = round(time.time() - t0, 1)
     a["trace"] = trace
     a.pop("_boss_try", None)
+    a.pop("_boss_seen", None)
     evs = s.ws.events_since(mark)
     guids = {c["guid"]: c["name"] for c in comps} | {s.guid: "probe"}
     a["hits_taken"] = {}
@@ -1574,6 +1591,13 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
                              and e.get("victim") == u.get("guid"))
     if comps and s.selfbot:
         a["self_off"] = set_selfbot(s, False)
+    if event and not (a.get("event_boss") or {}).get("ok"):
+        # one more read once the fight is over: a fast kill can end before a read in the fight lands (the probe's
+        # self-AI changes its selection between a read's commands). The corpse stays readable by GUID
+        # (boss_vazruden_the_herald.cpp SummonedCreatureDies only drops it from the summon list; `.ab creaturestat` has
+        # no alive check), and with the self-AI off nothing moves the selection.
+        a["event_boss_reads"] = a.get("event_boss_reads", 0) + 1
+        a["event_boss"] = read_event_boss(s, enc, mark) | {"t": a["fight_s"], "when": "after the fight"}
     if not a.get("killed"):
         b = s.unit(sp["spawn_id"], unit_entry(enc))
         a["boss_after"] = {k: b.get(k) for k in ("health", "max_health", "in_combat")}
