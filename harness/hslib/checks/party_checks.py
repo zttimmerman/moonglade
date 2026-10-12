@@ -316,3 +316,84 @@ def party_preset(ctx):
         raise CheckFail(main.get("message") or "dng.party_preset didn't run", {**ev, "result": main})
     ev["result"] = main
     return ev
+
+
+# ----------------------------------------------------------------------------- m4-instance-tactics
+
+TACTICS_DUNGEONS = (D.UTGARDE_KEEP, D.RAMPARTS, D.DEADMINES)      # the scenario's order (LFGDungeons.dbc ids)
+TACTICS_SPEC_NAMES = {D.UTGARDE_KEEP: "wotlk-uk", D.RAMPARTS: "tbc-ramp", D.DEADMINES: None}   # the spec's wording
+TACTICS_COVERS = COVERS + ("harness/hslib/tactics.py", "harness/hslib/checks/dungeon_checks.py")
+GATHER_S = 20                      # the four companions summoned into the probe's copy (dungeon.Session.gather)
+
+
+def _added_lines(s, guids: set, since: int) -> list[dict]:
+    """"Added <name> instance strategy" whispers (ApplyInstanceStrategies with tellMaster, after a far teleport)."""
+    return [{"sender": e.get("sender"), "msg": e["msg"]} for e in s.ws.events_since(since)
+            if e["kind"] == "chat" and e["type"] == W.CHAT_MSG_WHISPER and e.get("sender") in guids
+            and e["msg"].startswith("Added ") and e["msg"].endswith(" instance strategy")]
+
+
+@check("dng.instance_strategy", order=531, capability=CAP, stack="up", layer="integration", budget_s=90,
+       covers=TACTICS_COVERS)
+def instance_strategy(ctx):
+    """(m4-instance-tactics) One dungeon-probe login at Utgarde Keep's target level: the probe calls the /mg party
+    damage-dealer party (the add-on's plan, hslib/partyplan.py), then enters Utgarde Keep, Hellfire Ramparts and The
+    Deadmines in that order (each a fresh copy: the probe's binds of the three maps are cleared first), summons the
+    four companions into each and reads every companion's `co ?` there. Expected names: parsed from
+    PlayerbotAI::ApplyInstanceStrategies at the pin (hslib/tactics.py), keyed by LFGDungeons.dbc MapID; inside each
+    dungeon every companion lists that dungeon's strategy and none of the other two dungeons'."""
+    from .. import tactics as T
+    from .dungeon_checks import _enter
+    src_path = P.BOTS_SRC / T.SOURCE
+    ev: dict = {"source": f"vendor/mod-playerbots/{T.SOURCE}"}
+    try:
+        tab = T.instance_table(src_path.read_text())
+    except (OSError, T.TacticsError) as e:
+        raise CheckFail(f"GIVEN: can't read the instance strategy table: {e}", ev)
+    fs = [D.facts(x) for x in TACTICS_DUNGEONS]
+    maps = [f["map"] for f in fs]
+    expect = T.expectations(tab["table"], maps)
+    ev |= {"func_line": tab["func_line"], "dungeons": [
+        {"lfg_id": f["lfg_id"], "map": f["map"], "target_level": f["target_level"], "strategy": tab["table"].get(f["map"]),
+         "source_line": tab["lines"].get(f["map"])} for f in fs], "expect": expect,
+        "map_rule": D.FACT_RULES["levels_and_map"]}
+    got = {x["lfg_id"]: x["strategy"] for x in ev["dungeons"]}
+    require(got == TACTICS_SPEC_NAMES, f"GIVEN: the pinned table gives {got} for the scenario's dungeons, the spec "
+            f"names {TACTICS_SPEC_NAMES}", **ev)
+    level = max(f["target_level"] for f in fs)
+    ev["level"] = level
+    plan = PP.plan()
+    t0 = time.time()
+    try:
+        with D.Session(level) as s:
+            ev["session"] = {k: s.ev.get(k) for k in ("login", "stale_group", "revive")}
+            ev["unbind"] = {m: s.unbind(m) for m in maps}
+            require(all(u["ok"] for u in ev["unbind"].values()), "GIVEN: the probe's old binds didn't go away", **ev)
+            ev["login_s"] = round(time.time() - t0, 1)
+            ev["party"] = [add_companion(s, c) for c in PP.commands(plan, "damage")]
+            comps = ev["party"]
+            guids = {c["guid"] for c in comps}
+            ev["party_s"] = round(time.time() - t0, 1)
+            reads, ev["visits"] = [], []
+            for f, e in zip(fs, expect):
+                v: dict = {"lfg_id": f["lfg_id"], "map": f["map"], "want": e["want"]}
+                ev["visits"].append(v)
+                mark = s.ws.mark()
+                _enter(s, f, v, "enter")
+                v["gather"] = g = s.gather(1 + len(comps), timeout=GATHER_S)
+                require(g["ok"], f"GIVEN: the companions didn't all arrive in map {f['map']}", **ev)
+                st = strategies(s, comps)
+                v["co"] = {c["name"]: st[c["guid"]] for c in comps}
+                v["added_whispers"] = _added_lines(s, guids, mark)
+                reads.append({c["name"]: st[c["guid"]]["strategies"] for c in comps})
+                v["at_s"] = round(time.time() - t0, 1)
+            ev["problems"] = T.judge(expect, reads)
+            ev["leave"] = s.leave()
+            ev["clear"] = clear_party(s, plan)
+    except C.CompanionError as e:
+        raise CheckFail(str(e), {**ev, **e.evidence})
+    except C.probe.ProbeError as e:
+        raise CheckFail(f"probe: {e}", {**ev, **e.info})
+    ev["session_s"] = round(time.time() - t0, 1)
+    require(not ev["problems"], "; ".join(ev["problems"]), **ev)
+    return ev
