@@ -859,8 +859,9 @@ class RunBudgetJudge(UnitCase):
         self.assertIn("no samples", self.judge([]))
 
     def test_coverage_and_the_clear(self):
-        self.assertIn("after the run started", self.judge(self.samples(), start=95.0)[0])
-        self.assertIn("before the run ended", self.judge(self.samples(), end=405.0)[0])
+        self.assertEqual(self.judge(self.samples(), start=99.6, end=400.4), [])      # stamped just after the start
+        self.assertIn("after the run started", self.judge(self.samples(), start=89.0)[0])
+        self.assertIn("before the run ended", self.judge(self.samples(), end=411.0)[0])
         gappy = self.samples()
         del gappy[10:13]
         self.assertIn("gap", self.judge(gappy)[0])

@@ -693,8 +693,8 @@ def etime_s(text: str) -> int | None:
 
 def budget_problems(samples: list[dict], errors: list[str], t_start: float | None, t_end: float | None,
                     cleared: bool) -> list[str]:
-    """The THEN of "A clear within the performance budget": samples cover the run (the first at or before its start,
-    the last at or after its end, none more than BUDGET_MAX_GAP_S apart), every sample meets every limit of the
+    """The THEN of "A clear within the performance budget": samples cover the run (the first within one sampling
+    interval of its start, the last within one of its end, none more than BUDGET_MAX_GAP_S apart), every sample meets every limit of the
     performance-budget requirement (population.violations, as perf.server_budget), and the sampler had no errors. A
     run that didn't clear is a problem (the WHEN didn't happen). No samples is a problem, never a pass."""
     out = []
@@ -708,9 +708,11 @@ def budget_problems(samples: list[dict], errors: list[str], t_start: float | Non
     if t_start is None or t_end is None:
         out.append("no run window (start/end) in the run's evidence")
     else:
-        if ts[0] > t_start:
+        # a sample's "t" is stamped after its readings (perf_sample), so the first one, taken as the run starts,
+        # carries a time just after the start: one interval of slack at each end
+        if ts[0] > t_start + pop.SAMPLE_EVERY_S:
             out.append(f"first sample {ts[0] - t_start:.0f} s after the run started")
-        if ts[-1] < t_end:
+        if ts[-1] < t_end - pop.SAMPLE_EVERY_S:
             out.append(f"last sample {t_end - ts[-1]:.0f} s before the run ended")
     gap = max((b - a for a, b in zip(ts, ts[1:])), default=0)
     if gap > BUDGET_MAX_GAP_S:
