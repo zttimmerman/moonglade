@@ -740,6 +740,7 @@ FIGHT_S = 300                 # one pull, at most
 STALL_S = 60                  # a pull with no fight involving the boss after this long is abandoned
 MAX_WIPES = 2                 # design.md §4: max 2 wipes, then FAIL
 RESET_S = 90                  # a wiped-on boss evades and heals back to full within this
+SUMMON_REVIVE_S = 10          # summon_dead: a summoned dead companion is up within this, else `.revive` + summon
 POLL_S = 1.0
 EVENT_READ_S = 2.0            # an event boss seen but not read yet is read again after this long (a new sighting: at once)
 SOLO_PULL_YD = 6              # the selfbot run: stand this far from the boss, inside its aggro radius (SOLO_STAND_YD)
@@ -1384,6 +1385,31 @@ def revive_dead(s: "Session", names: list[str]) -> dict:
     return out
 
 
+def summon_dead(s: "Session", names: list[str], timeout: float = SUMMON_REVIVE_S) -> dict:
+    """Bring the dead companions back to the probe after a wipe: a `summon` whisper (playerbots SummonAction::Teleport:
+    with AiPlayerbot.AllowSummonWhenBotIsDead = 1 and ReviveBotWhenSummoned = 1, a master alive and out of combat
+    resurrects the bot and teleports it next to the master in the same action), so nobody gets up at their corpse
+    beside the reset boss. M4 gate rerun, Ingvar the Plunderer: the four revived where they fell (`.revive`) engaged
+    the reset boss 2.7 s into the next gather, and three died before the pull. A companion still dead after `timeout`
+    gets `.revive` and a summon (the fallback, as before)."""
+    dead = [n for n in names if s.alive(n) != "Yes"]
+    out: dict = {"summoned": dead, "fallback": {}}
+    if not dead:
+        return out
+    for n in dead:
+        s.ws.chat("summon", W.CHAT_MSG_WHISPER, to=n)
+    t0 = time.time()
+    left = list(dead)
+    while left and time.time() - t0 < timeout:
+        time.sleep(POLL_S)
+        left = [n for n in left if s.alive(n) != "Yes"]
+    out["s"] = round(time.time() - t0, 1)
+    for n in left:
+        out["fallback"][n] = s.cmd(f".revive {n}", settle=0.4)
+        s.ws.chat("summon", W.CHAT_MSG_WHISPER, to=n)
+    return out
+
+
 def wait_boss_reset(s: "Session", enc: dict, timeout: float = RESET_S) -> dict:
     sp = enc["spawns"][0]
     v, ok, dt = F.poll(lambda: s.unit(sp["spawn_id"], unit_entry(enc)),
@@ -1724,14 +1750,15 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
                 a["revive_probe"] = revive_dead(s, [probe_name])
             s.cmd(".gm on", settle=0.3)
             s.go(point["x"], point["y"], point["z"] + 0.5, f["map"])
-            # the boss resets first, then the dead get up: revived where they fell (next to the boss and its adds),
-            # they'd be killed again before the next gather (run 7, Gilnid)
+            # the boss resets first, then the dead get up (run 7, Gilnid: revived next to the boss and its adds, they
+            # were killed again before the next gather), and they get up at the probe, not at their corpses: revived
+            # where they fell, next to the reset boss, they pull it again (M4 gate rerun, Ingvar the Plunderer)
             a["reset"] = wait_boss_reset(s, enc)
             if a.get("held"):
                 # the party never fought the boss: what held it up is a fight of its own (trash at the gather or
                 # staging point), which kills members revived into it. They get up once it is over.
                 a["quiet"] = wait_quiet(s, comps)
-            a["revive"] = revive_dead(s, names)
+            a["revive"] = summon_dead(s, names)
             if mode == "solo":
                 s.cmd(".gm off", settle=0.3)
         rec["summary"] = encounter_summary(rec, roles)
