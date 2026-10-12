@@ -2,6 +2,8 @@
 --
 -- /mg party        fills the party to five with companions for the roles the player's own talents don't cover
 -- /mg party clear  dismisses them
+-- /mg bring <name>    one of the player's own characters joins the party as a companion (m4-alt-companions)
+-- /mg dismiss <name>  sends it home
 --
 -- It only sends stock mod-playerbots commands, all of them taken from MG_PARTY_PLAN below. The harness reads the same
 -- table (harness/hslib/partyplan.py) for dng.party_preset, so the check and the add-on can't drift: keep the table a
@@ -84,7 +86,8 @@ MG_PARTY_PLAN = {
 local PLAN = MG_PARTY_PLAN;
 local JOIN_TIMEOUT_S = 30;          -- per join and per answer: addclass takes 1-5 s when a character is free (comp.add_remove)
 local TEXT = {
-	usage = "Moonglade: /mg party fills your party with companions; /mg party clear dismisses them.",
+	usage = "Moonglade: /mg party fills your party with companions; /mg party clear dismisses them; "
+		.. "/mg bring <name> brings one of your own characters along; /mg dismiss <name> sends it home.",
 	no_talents = "Moonglade: your talents haven't loaded yet. Try /mg party again in a moment.",
 	no_class = "Moonglade: can't tell your class yet. Try /mg party again in a moment.",
 	in_group = "Moonglade: your party already has members. Use /mg party clear first.",
@@ -182,7 +185,7 @@ local function onJoin()
 	local key = run.waiting;
 	local c = PLAN.companions[key];
 	for name, unit in pairs(partyNames()) do
-		if ( not run.known[name] ) then
+		if ( not run.known[name] and not MoongladeBring_IsAlt(name) ) then
 			local _, token = UnitClass(unit);
 			if ( token == c.token ) then
 				run.known[name] = true;
@@ -252,13 +255,161 @@ function MoongladeParty_Clear()
 	SendChatMessage(PLAN.clear, "SAY");
 end
 
+-- ----------------------------------------------------------------------------- /mg bring, /mg dismiss
+-- (openspec/changes/m4-alt-companions design.md §2, companion-bots "Your own characters as companions".) Stock
+-- mod-playerbots commands, all taken from MG_BRING_PLAN (a plain literal: alt.bring_dismiss reads it through
+-- harness/hslib/partyplan.py):
+-- - `.playerbots bot add <name>` (PlayerbotMgr.cpp ProcessBotCommand :687-708, AddPlayerBot :85-147): a character of
+--   the player's own account logs in as a companion (AiPlayerbot.AllowAccountBots = 1) and joins the party
+--   (OnBotLogin's GroupInviteOperation); another account's character is refused ("You are not allowed to control
+--   bot"), and the add-on sends nothing else then;
+-- - after it joins, the whisper `reset botAI` (ResetAiAction.cpp:62-64, "AI was reset to defaults"): an alt's
+--   strategies persist in playerbots_db_store from earlier trips (F16), so it starts from its defaults. A companion
+--   that has just logged in can miss the first whisper (task 1.1 spike), so it is sent again every `resend` seconds
+--   until the answer comes, up to the join timeout;
+-- - `.playerbots bot remove <name>` (ProcessBotCommand :710-720): it leaves the party and logs out, saving what it
+--   earned like a played character.
+-- Never sent to an alt (its real gear and talents are the player's; proposal question 1): autogear, talents, init,
+-- maintenance. /mg party whispers only the companions it called itself, never a brought alt (onJoin above), and
+-- AiPlayerbot.AutoGearCommandAltBots = 0 makes the server refuse `autogear` to an alt in any case.
+MG_BRING_PLAN = {
+	add = ".playerbots bot add ",
+	remove = ".playerbots bot remove ",
+	steps = {
+		{ send = { "reset botAI" }, reply = "AI was reset to defaults" },
+	},
+	resend = 5,
+};
+
+local BRING = MG_BRING_PLAN;
+local BRING_TEXT = {
+	usage = "Moonglade: /mg bring <name> brings one of your characters along; /mg dismiss <name> sends it home.",
+	busy = "Moonglade: %s is still on the way.",
+	joined = "Moonglade: %s joined your party.",
+	ready = "Moonglade: %s is ready.",
+	timeout = "Moonglade: %s didn't join within %d seconds. Is it one of your characters, and offline?",
+	no_answer = "Moonglade: %s didn't answer within %d seconds.",
+	dismiss = "Moonglade: sending %s home.",
+};
+MOONGLADE_BRING_TEXT = BRING_TEXT;
+
+-- the alts brought this session, by lower-case name, and the one on its way; /mg party leaves them alone
+local alts = {};
+local bring = nil;      -- the alt on its way: { name (as typed), unitName once joined, step, since, sent }
+function MoongladeBring_IsAlt(name)
+	if ( not name ) then return false; end
+	local n = strlower(name);
+	return alts[n] ~= nil or (bring ~= nil and strlower(bring.name) == n);
+end
+
+-- The commands, in order: { {kind = "command"|"whisper", text = ..., step = n}, ... } (whispers go to the alt once it
+-- has joined, a step after the previous step's answer).
+function MoongladeBring_Commands(name)
+	local out = { { kind = "command", text = BRING.add .. name } };
+	for n, step in ipairs(BRING.steps) do
+		for _, w in ipairs(step.send) do table.insert(out, { kind = "whisper", text = w, step = n }); end
+	end
+	return out;
+end
+
+local bringFrame = CreateFrame("Frame", "MoongladeBringFrame");
+
+local function bringSend(n)
+	bring.step, bring.sent = n, 0;
+	for _, w in ipairs(BRING.steps[n].send) do
+		SendChatMessage(w, "WHISPER", nil, bring.unitName);
+	end
+end
+
+local function bringDone(msg)
+	say(msg);
+	bring = nil;
+	bringFrame:Hide();
+end
+
+local function bringJoin()
+	if ( not bring or bring.unitName ) then return; end
+	for name in pairs(partyNames()) do
+		if ( strlower(name) == strlower(bring.name) ) then
+			bring.unitName = name;
+			alts[strlower(name)] = true;
+			say(format(BRING_TEXT.joined, name));
+			bringSend(1);
+			return;
+		end
+	end
+end
+
+local function bringWhisper(message, sender)
+	if ( not bring or not bring.step or sender ~= bring.unitName ) then return; end
+	local step = BRING.steps[bring.step];
+	if ( step.reply and strfind(message, step.reply, 1, true) ) then
+		if ( BRING.steps[bring.step + 1] ) then
+			bringSend(bring.step + 1);
+		else
+			bringDone(format(BRING_TEXT.ready, bring.unitName));
+		end
+	end
+end
+
+bringFrame:RegisterEvent("PARTY_MEMBERS_CHANGED");
+bringFrame:RegisterEvent("CHAT_MSG_WHISPER");
+bringFrame:SetScript("OnEvent", function(self, event, message, sender)
+	if ( event == "CHAT_MSG_WHISPER" ) then
+		bringWhisper(message, sender);
+	else
+		bringJoin();
+	end
+end);
+bringFrame:SetScript("OnUpdate", function(self, elapsed)
+	if ( not bring ) then self:Hide(); return; end
+	bring.since = bring.since + elapsed;
+	if ( bring.step ) then
+		bring.sent = bring.sent + elapsed;
+		if ( bring.since >= JOIN_TIMEOUT_S ) then
+			bringDone(format(BRING_TEXT.no_answer, bring.unitName, JOIN_TIMEOUT_S));
+		elseif ( bring.sent >= BRING.resend ) then
+			bringSend(bring.step);
+		end
+	elseif ( bring.since >= JOIN_TIMEOUT_S ) then
+		bringDone(format(BRING_TEXT.timeout, bring.name, JOIN_TIMEOUT_S));
+	end
+end);
+bringFrame:Hide();
+
+function MoongladeBring_Start(name)
+	if ( not name or name == "" ) then say(BRING_TEXT.usage); return; end
+	if ( bring ) then say(format(BRING_TEXT.busy, bring.name)); return; end
+	bring = { name = name, since = 0 };
+	bringFrame:Show();
+	SendChatMessage(BRING.add .. name, "SAY");
+end
+
+function MoongladeBring_Dismiss(name)
+	if ( not name or name == "" ) then say(BRING_TEXT.usage); return; end
+	if ( bring and strlower(bring.name) == strlower(name) ) then
+		bring = nil;
+		bringFrame:Hide();
+	end
+	alts[strlower(name)] = nil;
+	say(format(BRING_TEXT.dismiss, name));
+	SendChatMessage(BRING.remove .. name, "SAY");
+end
+
 SLASH_MOONGLADE1 = "/mg";
 SlashCmdList["MOONGLADE"] = function(msg)
-	local cmd = strlower(strtrim(msg or ""));
+	local text = strtrim(msg or "");
+	local cmd = strlower(text);
+	local verb, arg = strmatch(text, "^(%S+)%s*(.-)$");
+	verb = verb and strlower(verb);
 	if ( cmd == "party" ) then
 		MoongladeParty_Start();
 	elseif ( cmd == "party clear" ) then
 		MoongladeParty_Clear();
+	elseif ( verb == "bring" ) then
+		MoongladeBring_Start(arg);
+	elseif ( verb == "dismiss" ) then
+		MoongladeBring_Dismiss(arg);
 	else
 		say(TEXT.usage);
 	end

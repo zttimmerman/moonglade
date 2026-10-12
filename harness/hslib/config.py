@@ -160,6 +160,10 @@ PLAYERBOTS = {
     "AiPlayerbot.AutoAvoidAoe": "1",
     # boss tactics on entering a covered dungeon (PlayerbotAI::ApplyInstanceStrategies, PlayerbotAI.cpp:1636-1770)
     "AiPlayerbot.ApplyInstanceStrategies": "1",
+    # m4-alt-companions (proposal Q1, Zach 2026-10-10: no free gear for alts): `autogear` and `autogear bis` refuse a
+    # bot whose account isn't in the random-bot account list, i.e. the player's own alts (TrainerAction.cpp:578-584,
+    # :322-328; .dist default 1, conf:591-593). Addclass companions are on rndbot<N> accounts, so they still get gear.
+    "AiPlayerbot.AutoGearCommandAltBots": "0",
 }
 AUTOBALANCE_CHAT_OFF = ("AutoBalanceAnnounce.enable", "AutoBalance.PlayerChangeNotify")
 AUTOBALANCE_CONF = "AutoBalance.conf"   # vendor/mod-autobalance/conf/AutoBalance.conf.dist, installed to etc/modules
