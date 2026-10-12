@@ -24,15 +24,8 @@ class PartyPlan(UnitCase):
                 self.assertEqual(c["steps"][1], {"send": [f"talents spec {spec}"], "reply": f"Picking {spec}"})
                 self.assertIsNone(c["steps"][-1]["reply"])
 
-    def test_every_spec_exists_at_the_pin(self):
-        dist = P.BOTS_SRC / "conf" / "playerbots.conf.dist"
-        if not dist.is_file():
-            self.skipTest("vendor/mod-playerbots not checked out")
-        text = dist.read_text()
-        p = PP.plan()
-        for role in PP.ROLES:
-            for c in PP.commands(p, role):
-                self.assertIn(PP.spec_of(c["whispers"]), PP.premade_specs(text, c["class"]), c["companion"])
+    # Each plan spec existing in the pinned playerbots.conf is checked by dng.party_preset against the rendered
+    # conf (vendor/ isn't in a unit run's checkout); the parser it uses is tested here.
 
     def test_counterexample_renamed_spec_is_missing(self):
         conf = "AiPlayerbot.PremadeSpecName.1.2 = protection pve\nAiPlayerbot.PremadeSpecName.5.1 = holy pve\n"

@@ -49,21 +49,15 @@ class PartyConfig(UnitCase):
         self.assertEqual([_value(out.read_text(), k) for k in KEYS], ["0", "0"])
 
     def test_lane_b_env_carries_them(self):
+        # every module key any profile sets, with a stand-in default of 0: the 1s must come from the profile itself
         mods = self.tmp / "mods"
         mods.mkdir()
-        src = P.BOTS_SRC / "conf" / "playerbots.conf.dist"
-        if src.is_file():
-            (mods / "playerbots.conf.dist").write_text(src.read_text())
-        else:
-            self.skipTest("vendor/mod-playerbots not checked out")
-        for d in ("mod_era_profile.conf.dist", "mod_moonglade.conf.dist", "AutoBalance.conf.dist"):
-            for base in (P.MODULES / "mod-era-profile" / "conf", P.MODULES / "mod-moonglade" / "conf",
-                         P.AB_SRC / "conf"):
-                if (base / d).is_file():
-                    (mods / d).write_text((base / d).read_text())
-        try:
-            env = config.module_env(config.overrides("m0"), mods)
-        except config.ConfigError as e:
-            self.skipTest(f"module .conf.dist files not all present: {e}")
+        union: dict[str, set[str]] = {}
+        for name in config.PROFILES:
+            for d, v in config.module_overrides(config.overrides(name)).items():
+                union.setdefault(d, set()).update(v)
+        for d, keys in union.items():
+            (mods / d).write_text("".join(f"{k} = 0\n" for k in sorted(keys)))
+        env = config.module_env(config.overrides("m0"), mods)
         for k in KEYS:
             self.assertEqual(env[config.env_var_name(k)], "1", k)

@@ -41,7 +41,6 @@ JOIN_S = 20                        # per companion: addclass answers in 1-5 s wh
 REPLY_S = 10                       # a whisper's answer
 ASK_EVERY_S = 2.5                  # `co ?` again if unanswered (see strategies)
 STRATEGIES_S = 25                  # every companion's `co ?` answer (see strategies)
-SETTLE_S = 2.0                     # after the last step, before reading strategies (the last step has no answer)
 LEVEL_SLACK = 3                    # spec: within 3 levels
 # armour slots (Player.h EQUIPMENT_SLOT_*): every equipment slot whose item is ITEM_CLASS_ARMOR (cloth to plate, the
 # cloak, neck, rings, trinkets), i.e. all of 0-18 but the spec's exceptions, shirt (BODY 3) and tabard (18), and the
@@ -148,17 +147,20 @@ def strategies(s, comps: list[dict]) -> dict:
     arrived since its last update together, one event per command word (PlayerbotAI::HandleCommands,
     ExternalEventHelper), so a `co ?` landing in the same update as the plan's `co +...` can be dropped, and a
     companion in a long cast answers late (measured: the hunter, up to ~10 s after its last step; it revives its pet)."""
-    since = s.ws.mark()
+    since = since0 = s.ws.mark()
     out = {c["guid"]: {"strategies": None, "asked": 0} for c in comps}
     t0, last_ask = time.time(), 0.0
     while time.time() - t0 < STRATEGIES_S:
-        for e in s.ws.events_since(since):
+        evs = s.ws.events_since(since)
+        since += len(evs)
+        for e in evs:
             if e["kind"] == "chat" and e["type"] == W.CHAT_MSG_WHISPER and e.get("sender") in out \
-                    and e["msg"].startswith("Strategies:") and out[e["sender"]]["strategies"] is None:
+                    and e["msg"].startswith("Strategies:"):
                 body = e["msg"][len("Strategies:"):]
                 out[e["sender"]]["strategies"] = sorted(x.strip() for x in body.split(",") if x.strip())
                 out[e["sender"]]["answered_s"] = round(time.time() - t0, 1)
-        waiting = [c for c in comps if out[c["guid"]]["strategies"] is None]
+        # the latest answer counts; a companion is settled once it shows a role (its last plan step has landed)
+        waiting = [c for c in comps if role_of(out[c["guid"]]["strategies"]) in (None, "other")]
         if not waiting:
             break
         if time.time() - last_ask >= ASK_EVERY_S:
@@ -169,7 +171,7 @@ def strategies(s, comps: list[dict]) -> dict:
         time.sleep(0.2)
     for c in comps:
         if out[c["guid"]]["strategies"] is None:
-            out[c["guid"]]["raw"] = _whispers_from(s, c["guid"], since)[-3:]
+            out[c["guid"]]["raw"] = _whispers_from(s, c["guid"], since0)[-3:]
     return out
 
 
@@ -207,8 +209,6 @@ def call_party(s, plan: dict, role: str, conf_text: str) -> dict:
     for comp, c in zip(cmds, ev["companions"]):
         spec = PP.spec_of(comp["whispers"])
         c |= {"spec": spec, "spec_in_conf": spec in PP.premade_specs(conf_text, comp["class"])}
-    # the last step (autogear, co, wait for attack time, pet) has no answer to wait for: give it a beat
-    time.sleep(SETTLE_S)
     st = strategies(s, ev["companions"])
     for c in ev["companions"]:
         c |= st[c["guid"]]
