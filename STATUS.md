@@ -1,29 +1,23 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-11 20:30. **Merged today:**
-- release-fresh-login (#7): the release check logs in from a spaced HOME with no Homebrew.
-- m4-party-preset (#8): `/mg party`, the AutoBalance chat filter and the companions cheat sheet. Slice 1 of the M4 companions work.
-- test-pyramid (#4): acceptance about 26 min, down from 68.
-- ci-pipeline (#5): pre-commit (syntax + public scan), pre-push (unit tests, about 11 s), GitHub Actions on PRs. The verifier no longer repeats tests.
-- release-home-spaces (#6): the v0.1.2 fixes.
+_Updated 2026-10-11 23:55. **Merged today:**
+- m4 full-run prototype (#11): a `/mg party` party clears The Deadmines headless. VanCleef died on the first pull every time; no tactics gap, no playerbots patch. 4 of 5 runs on the final driver cleared; wipes only at the first three bosses (party pulled while still arriving). Driver `dungeon.run_party`; gate-only checks `dng.party_clear_deadmines`, `dng.solo_two_deadmines`; level-3 account HSDNGNAV (`.mmap path` only). `docs/research/m4-full-run.md`.
+- m4-instance-tactics (#9), selector needs (#10), m4-party-preset (#8), release-fresh-login (#7), release-home-spaces (#6), ci-pipeline (#5), test-pyramid (#4).
 
 **Next:**
-1. A fresh-Mac release check: a real client login with a spaced HOME and no Homebrew.
-2. m4-dungeon-companions, next slice: instance tactics (`dng.instance_strategy`), then full runs.
+1. m4-dungeon-companions 3.4 slice: reliable Deadmines clear. Gather farther back and walk in together; the probe fights as the 5th member (selfbot) instead of watching; replace the prototype ids with `dng.party_clear`. Then the other three dungeons.
+2. Plan: cut 3.1/3.3's tank/healer/aoe checks (proven by full clears; spec-change log, human gate); keep a small rti/cc check.
+3. m4-alt-companions, then the M4 human gate.
 
 **Follow-ups:**
-- F2: logic_scan misses `using namespace`.
-- F3: dng.session1 alone takes 123 s against its 90 s budget.
-- F5: the sleep-lint pending list. A loosening, for the human gate.
-- C6: summary wording.
-- The release checks own `.github/workflows/*`; narrow that to release.yml.
-- **P0 flaky:** journey.pause / client.pause_menu's gold-pixel screenshot heuristic failed once (the add-on's banner report was correct).
-- Selector: the smoke set picked dng.session2 without dng.session1, its GIVEN.
-- Old local logs (env/logs b18-*.json, launch-manual.out, Oct 1–4) contain the play password. They are untracked; Zach to OK deleting them.
-- setup.preflight's control step needs about 35 GB free. It is integration-layer now, but still fails on this Mac.
+- PR #11: unused `timed_out` arg in `next_step`; explicit "boss not found" reason in `fight()`; unit test that every reserved harness account is refused; trim `RUN_COVERS` (dungeon_checks.py); task 1.1 is done but unticked until the change is active.
+- F2: logic_scan misses `using namespace`. F3: dng.session1 123 s vs 90 s budget. F5: sleep-lint pending list (loosening, human gate). C6: summary wording.
+- The release checks own `.github/workflows/*`; narrow to release.yml.
+- **P0 flaky:** journey.pause / client.pause_menu gold-pixel screenshot heuristic failed once.
+- setup.preflight's control step needs about 35 GB free; fails on this Mac.
 
-**Process (Zach):** a standard pipeline. Most new tests are unit tests with mocks; game tests are few and cover critical paths; nothing is repeated. Waiting on Zach's real-Mac test of v0.1.2._
+**Process (Zach):** standard pipeline; mostly unit tests with mocks; few game tests on critical paths; nothing repeated. Waiting on Zach's real-Mac test of v0.1.2._
 
 **Cold start:** read this file, then `openspec list` (Node 20: `export PATH=~/.nvm/versions/node/v20.20.1/bin:$PATH`), then `git -C <repo> worktree list`, `git branch -a`, `gh pr list`, then `harness/hs status`. The skills `.claude/skills/hs-*` hold the procedures (change loop, checks, client debugging, RE). User preferences and decisions are in the orchestrator memory notes (plain language for decisions, Gate 1, front-menu vision, logo).
 
