@@ -26,6 +26,19 @@ class Needs(unittest.TestCase):
         sel = {"dng.session2": ["smoke set: harness/hslib/config.py"]}
         S.add_needs(sel, REGISTRY)
         self.assertIn("dng.session1", sel)
+        self.assertIn("scale.disabled_stock", sel)          # transitively, through dng.session1
+
+    def test_dungeon_session1_needs_the_scaling_off_read_before_it(self):
+        """dng.session1's unscaled reference comes from scale.disabled_stock in the same run (no profile switch
+        inside the session): selecting session1 selects it, and it runs first (scaling-off before scaling-on)."""
+        from hslib.runner import run_key
+        load_all()
+        s1, ds = REGISTRY["dng.session1"], REGISTRY["scale.disabled_stock"]
+        self.assertIn("scale.disabled_stock", s1.needs)
+        sel = {"dng.session1": ["covers fork.lock#autobalance_*"]}
+        S.add_needs(sel, REGISTRY)
+        self.assertEqual(sel["scale.disabled_stock"], ["needed by dng.session1 (its GIVEN)"])
+        self.assertLess(run_key(ds), run_key(s1))
 
 
 if __name__ == "__main__":
