@@ -124,8 +124,8 @@ Source pins: mod-playerbots `7bae1b5c` and core `7f12e89e` (fork.lock). Paths `v
 | Check | Tier | Approx. time |
 |---|---|---|
 | `dng.party_preset`, `dng.party_preset_tank_player` | full | ~2 min each |
-| `dng.tank_holds`, `dng.healer_heals` (one shared UK fight, two records) | full | ~4 min |
-| `dng.avoid_aoe`, `dng.instance_strategy`, `dng.rti_focus`, `dng.cc_on_mark` | full | ~2–4 min each |
+| ~~`dng.tank_holds`, `dng.healer_heals`~~ (cut 2026-10-12, proposal spec-change log) | — | — |
+| `dng.instance_strategy`, `dng.rti_focus` (~~`dng.avoid_aoe`, `dng.cc_on_mark`~~ cut 2026-10-12) | full | ~2–4 min each |
 | `client.party_slash` | gui (path rule: `client-mods/addons`) | — |
 | `dng.party_clear` (4 dungeons), `dng.solo_clear`, `dng.run_budget` (population profile) | slow | ~60–90 min total |
 
