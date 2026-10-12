@@ -14,13 +14,13 @@ A logged-in player SHALL be able to bring another character from their own accou
 #### Scenario: Another account's character is refused
 - **GIVEN** a character that belongs to a different harness account (the HSTEST fixture account's character), offline
 - **WHEN** the probe sends `.playerbots bot add <that name>`
-- **THEN** the reply is the playerbots refusal (`PlayerbotMgr.cpp` "you can only add bots from your own account or linked accounts"), and the character stays offline
+- **THEN** the reply is the playerbots refusal for `add` (`PlayerbotMgr.cpp:110-114`, "You are not allowed to control bot <name>"; the "own account or linked accounts" text belongs to the `addaccount` path, :702-704), and the character stays offline
 - Check: `alt.foreign_refused`
 
 #### Scenario: The slash commands send the right command lists
 - **GIVEN** the Moonglade add-on loaded in the unit-test client stub
 - **WHEN** `/mg bring <alt>` and then `/mg dismiss <alt>` are typed
-- **THEN** the add-on sends exactly the bring list (`reset botAI` whisper, then `.playerbots bot add <alt>`) and then `.playerbots bot remove <alt>`, and a missing name prints the usage line without sending anything. The game side of the same lists is `alt.bring_dismiss`
+- **THEN** the add-on sends exactly the bring list (`.playerbots bot add <alt>`, then, once the alt has joined, the `reset botAI` whisper, resent until answered; a whisper to an offline character is lost) and then `.playerbots bot remove <alt>`, and a missing name prints the usage line without sending anything. The game side of the same lists is `alt.bring_dismiss`
 - Check: `unit:lua:test_addon_bring.bring_and_dismiss_send_the_command_lists`
 
 ### Requirement: An alt keeps what it earns
@@ -45,7 +45,7 @@ By default, the companion system SHALL NOT replace an alt's equipped items or ch
 - **GIVEN** the profiles Moonglade ships and the `/mg party` and `/mg bring` command tables
 - **WHEN** the profile configs are rendered and the tables are read
 - **THEN** every shipped profile sets `AiPlayerbot.AutoGearCommandAltBots = 0`, and no command list sent to an alt contains `autogear`, `init` or `talents`
-- Check: `unit:py:test_alt_config.alt_gear_protected_in_every_profile`
+- Check: `unit:py:tests.unit.test_alt_config.AltConfig.test_alt_gear_protected_in_every_profile`
 
 ### Requirement: Alts feel like party members
 Bringing your own characters SHALL feel like having your RPG party along.

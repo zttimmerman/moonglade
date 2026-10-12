@@ -11,7 +11,6 @@ from .base import UnitCase
 
 KEY = "AiPlayerbot.AutoGearCommandAltBots"
 DIST_ON = f"{KEY} = 1\nAiPlayerbot.MinRandomBots = 50\nPlayerbotsDatabaseInfo = \"x\"\n"
-ID = "test_alt_config.alt_gear_protected_in_every_profile"
 
 
 def _value(text: str, key: str) -> str | None:
@@ -33,10 +32,6 @@ def problems(rendered: dict[str, str], lane_b: dict[str, str], bring: dict) -> l
 
 
 class AltConfig(UnitCase):
-    def id(self):
-        # the spec's Check id (unit ids are otherwise tests.unit.<module>.<Class>.<method>)
-        return ID if self._testMethodName == "test_alt_gear_protected_in_every_profile" else super().id()
-
     def _render(self, profile: str, dist_text: str = DIST_ON, drop_key: bool = False) -> str:
         dist = self.tmp / "playerbots.conf.dist"
         dist.write_text(dist_text)
