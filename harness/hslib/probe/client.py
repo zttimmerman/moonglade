@@ -173,6 +173,7 @@ class WorldSession:
         self._pump_stop = threading.Event()
         self._cv = threading.Condition()
         self.events = []               # parsed server events while pumping (dicts with "kind", "t")
+        self.track_creates = False     # emit "unit_create" events (parse_update_blocks); off by default (volume)
         self.ignored = {}              # opcode name -> count of packets the pump didn't parse
         self.pump_error = None
         self.group = None              # last parsed SMSG_GROUP_LIST (dict) or None
@@ -457,6 +458,15 @@ class WorldSession:
             for b in blocks:
                 if self.player_guid is not None and b["guid"] == self.player_guid:
                     self._emit("self_values", fields=b["fields"])
+            if self.track_creates:
+                # opt-in (dungeon.nav_stages): creature creates with their position, e.g. `.mmap path`'s waypoints
+                try:
+                    creates, _stop = parse_update_blocks(data, compressed=(op == W.SMSG_COMPRESSED_UPDATE_OBJECT))
+                except Exception:   # noqa: BLE001
+                    creates = []
+                for b in creates:
+                    if b["block"] == "create" and b.get("pos"):
+                        self._emit("unit_create", guid=b["guid"], type_id=b["type_id"], pos=b["pos"])
         else:
             name = W.OPCODE_NAMES.get(op, hex(op))
             self.ignored[name] = self.ignored.get(name, 0) + 1
@@ -778,6 +788,117 @@ def parse_values_updates(data: bytes, compressed: bool = False) -> tuple[list[di
                 r.packed_guid()
         else:
             return out, f"block type {t} not parsed"
+    return out, None
+
+
+UPDATETYPE_MOVEMENT, UPDATETYPE_CREATE_OBJECT, UPDATETYPE_CREATE_OBJECT2 = 1, 2, 3    # UpdateData.h OBJECT_UPDATE_TYPE
+# UpdateData.h OBJECT_UPDATE_FLAGS
+UF_TRANSPORT, UF_HAS_TARGET, UF_UNKNOWN, UF_LOWGUID, UF_LIVING = 0x2, 0x4, 0x8, 0x10, 0x20
+UF_STATIONARY, UF_VEHICLE, UF_POSITION, UF_ROTATION = 0x40, 0x80, 0x100, 0x200
+# UnitDefines.h MovementFlags / MovementFlags2; MoveSplineFlag.h
+MF_ONTRANSPORT, MF_FALLING, MF_SWIMMING, MF_FLYING = 0x200, 0x1000, 0x200000, 0x2000000
+MF_SPLINE_ELEVATION, MF_SPLINE_ENABLED = 0x4000000, 0x8000000
+MF2_ALWAYS_ALLOW_PITCHING, MF2_INTERPOLATED_MOVEMENT = 0x20, 0x400
+SPLINE_FINAL_POINT, SPLINE_FINAL_TARGET, SPLINE_FINAL_ANGLE = 0x8000, 0x10000, 0x20000
+
+
+def _movement_block(r) -> dict | None:
+    """Object::BuildMovementUpdate (Object.cpp:341): u16 flags; LIVING -> Unit::BuildMovementPacket (Unit.cpp:15462),
+    9 speeds and, with MOVEMENTFLAG_SPLINE_ENABLED, PacketBuilder::WriteCreate (MovementPacketBuilder.cpp:159);
+    else POSITION or STATIONARY_POSITION; then the LOWGUID/UNKNOWN/HAS_TARGET/TRANSPORT/VEHICLE/ROTATION extras.
+    Returns the position (or None)."""
+    fl = r.u16()
+    pos = None
+    if fl & UF_LIVING:
+        mf, mf2 = r.u32(), r.u16()
+        r.u32()
+        pos = {"x": r.f32(), "y": r.f32(), "z": r.f32(), "o": r.f32()}
+        if mf & MF_ONTRANSPORT:
+            r.packed_guid()
+            r.take(4 * 4 + 4 + 1)
+            if mf2 & MF2_INTERPOLATED_MOVEMENT:
+                r.u32()
+        if mf & (MF_SWIMMING | MF_FLYING) or mf2 & MF2_ALWAYS_ALLOW_PITCHING:
+            r.f32()
+        r.u32()                                    # fall time
+        if mf & MF_FALLING:
+            r.take(16)
+        if mf & MF_SPLINE_ELEVATION:
+            r.f32()
+        r.take(9 * 4)                              # speeds
+        if mf & MF_SPLINE_ENABLED:
+            sf = r.u32()
+            if sf & SPLINE_FINAL_ANGLE:
+                r.f32()
+            elif sf & SPLINE_FINAL_TARGET:
+                r.u64()
+            elif sf & SPLINE_FINAL_POINT:
+                r.take(12)
+            r.take(4 * 3 + 4 * 2 + 4 + 4)          # time passed, duration, id; 2 duration mods; vert. accel, start
+            r.take(12 * r.u32())                   # nodes
+            r.u8()
+            r.take(12)                             # final destination
+    elif fl & UF_POSITION:
+        r.packed_guid()
+        pos = {"x": r.f32(), "y": r.f32(), "z": r.f32()}
+        r.take(12 + 4 + 4)
+    elif fl & UF_STATIONARY:
+        pos = {"x": r.f32(), "y": r.f32(), "z": r.f32(), "o": r.f32()}
+    if fl & UF_UNKNOWN:
+        r.u32()
+    if fl & UF_LOWGUID:
+        r.u32()
+    if fl & UF_HAS_TARGET:
+        r.packed_guid()
+    if fl & UF_TRANSPORT:
+        r.u32()
+    if fl & UF_VEHICLE:
+        r.take(8)
+    if fl & UF_ROTATION:
+        r.take(8)
+    return pos
+
+
+def _values_block(r) -> dict:
+    masks = [r.u32() for _ in range(r.u8())]
+    fields = {}
+    for bi, m in enumerate(masks):
+        for bit in range(32):
+            if (m >> bit) & 1:
+                fields[bi * 32 + bit] = r.u32()
+    return fields
+
+
+def parse_update_blocks(data: bytes, compressed: bool = False) -> tuple[list[dict], str | None]:
+    """Every block of an SMSG_(COMPRESSED_)UPDATE_OBJECT (UpdateData::BuildPacket), creates included
+    (Object::BuildCreateUpdateBlockForPlayer: u8 type, packed guid, u8 TypeID, movement block, values block).
+    Returns ([{"block": "values"|"create"|"movement", "guid", "type_id", "pos", "fields"}], stop reason or None);
+    a block it can't read ends the parse with what came before it."""
+    if compressed:
+        data = zlib.decompress(data[4:])
+    r = W.Reader(data)
+    out = []
+    try:
+        for _ in range(r.u32()):
+            t = r.u8()
+            if t == W.UPDATETYPE_VALUES:
+                g = r.packed_guid()
+                out.append({"block": "values", "guid": g, "fields": _values_block(r)})
+            elif t == UPDATETYPE_MOVEMENT:
+                g = r.packed_guid()
+                out.append({"block": "movement", "guid": g, "pos": _movement_block(r)})
+            elif t in (UPDATETYPE_CREATE_OBJECT, UPDATETYPE_CREATE_OBJECT2):
+                g = r.packed_guid()
+                tid = r.u8()
+                pos = _movement_block(r)
+                out.append({"block": "create", "guid": g, "type_id": tid, "pos": pos, "fields": _values_block(r)})
+            elif t in (W.UPDATETYPE_OUT_OF_RANGE_OBJECTS, W.UPDATETYPE_NEAR_OBJECTS):
+                for _ in range(r.u32()):
+                    r.packed_guid()
+            else:
+                return out, f"block type {t} not parsed"
+    except Exception as e:  # noqa: BLE001  (short read: keep what parsed)
+        return out, f"{type(e).__name__}: {e}"
     return out, None
 
 

@@ -373,6 +373,12 @@ COMP_CHAR = "Hscomp"
 DUNGEON_USER = "HSDUNGEON"
 DUNGEON_PASS = "hsdungeon"
 DUNGEON_CHAR = "Hsdungeon"
+# m4-dungeon-companions (run driver, design.md §4 GM permissions): the navmesh pass's own account at security 3
+# (`.mmap path` is security 3 in the command table; the dungeon account is 2) and its human warrior; it only stands in
+# GM mode in its own copy of a dungeon and asks the core for paths. Never PLAYER.
+DUNGEON_NAV_USER = "HSDNGNAV"
+DUNGEON_NAV_PASS = "hsdngnav"
+DUNGEON_NAV_CHAR = "Hsdngnav"
 
 
 def fork_lock() -> dict:
