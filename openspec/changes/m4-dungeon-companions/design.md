@@ -62,7 +62,7 @@ Source pins: mod-playerbots `7bae1b5c` and core `7f12e89e` (fork.lock). Paths `v
   2. For each missing role, `.playerbots bot addclass <class>`.
   3. Wait for the `SMSG_GROUP_LIST` member (the addon listens for `PARTY_MEMBERS_CHANGED`).
   4. Whisper, in order: `reset botAI` (F16: companions keep old orders across logins), `talents spec <name>`, `autogear`, then the role's `co` line (damage dealers: `co +threat,+wait for attack` and `wait for attack time 3`).
-  - The `wait for attack time` value is a tuning knob set by task 3.3, and the run that justified it is recorded.
+  - The `wait for attack time` value (3 s for damage dealers) was set in `m4-party-preset` without a recorded tuning run; the tuning task was dropped (proposal spec-change log 2026-10-12).
 - **`/mg party clear`:** `.playerbots bot remove <name>` for each companion (ADR-0008's patch takes them out of the party).
 - **No server code**, and permissions are stock:
   - `AiPlayerbot.AddClassCommand = 1` lets a non-GM player use `addclass` (`PlayerbotMgr.cpp:1083-1089`, conf:140);
@@ -71,10 +71,11 @@ Source pins: mod-playerbots `7bae1b5c` and core `7f12e89e` (fork.lock). Paths `v
 
 ## 3. Tactics checks: how they observe
 - **Probe additions** (`harness/hslib/probe/client.py`):
-  - parse `SMSG_SPELLHEALLOG` (caster, target, spell, amount, overheal);
+  - ~~parse `SMSG_SPELLHEALLOG`~~ (dropped 2026-10-12);
   - send and parse `MSG_RAID_TARGET_UPDATE` (set icon: u8 index + u64 guid);
-  - parse `co ?` whisper replies (strategy list).
+  - ~~parse `co ?` whisper replies~~ (dropped 2026-10-12).
   - Formats follow the core's packet builders. The builder cites the file:line of each one (`Unit::SendHealSpellLog`, `Group::SetTargetIcon`).
+- **Cut 2026-10-12** (proposal spec-change log): `dng.tank_holds`, `dng.healer_heals`, `dng.avoid_aoe` and `dng.cc_on_mark`. Their notes below are kept for history; only `dng.rti_focus` is built.
 - **`dng.tank_holds`:**
   - victims of the boss's `SMSG_ATTACKERSTATEUPDATE` swings, counted from 5 s after the first swing (the opener, before the tank's threat builds, is excluded on purpose);
   - threshold: ≥80% on the tank. Reason: tank-swap and knockback mechanics exist, and the first UK boss (Prince Keleseth) has adds. The raw counts are in the evidence;
@@ -115,13 +116,16 @@ Source pins: mod-playerbots `7bae1b5c` and core `7f12e89e` (fork.lock). Paths `v
   - `.playerbots bot self` (GM, `SelfBotLevel = 1`) makes the probe's character AI-driven;
   - "self" AI on the probe is task 1.1's riskiest unknown;
   - if it fails, `dng.solo_clear` becomes `[human-verify]` with that reason, through a spec-change log entry (a loosening, reviewed at the gate).
+  - **As built (task 3.4, `dng.solo_clear`):** replaces the prototype `dng.solo_two_deadmines`. It runs every required Deadmines encounter through `dungeon.run_party` with no companions (mode "solo"), after the same nav pass as `dng.party_clear` and `initself` gear (answer "initself ok"). Per pull the probe (GM mode on) teleports to the staging point, then 6 yd from the boss, turns GM mode off and fights with its self-AI. A retry follows a death or a timed-out pull, at most 2 per encounter. The check fails unless AutoBalance counted 1 player at entry, the run is mode "solo" over all the required encounters, every bit is in the saved mask, `run_party`'s clock is within 45 min, no encounter has more than 2 probe deaths over its pulls, and every pull that fought got "GM mode is OFF" (`solo_clear_problems`).
+- **As built (task 3.4, `dng.run_budget`):** it can't sample `dng.party_clear`'s Deadmines run, because that check runs under the 10-bot `scaling-on` profile and the budget needs the population profile. So it is its own check under the `population` profile (it runs in that group, after the `perf.*` checks when they're selected). The GIVEN is checked: the worldserver's recorded profile is `population` at the default N. Warm-up: when this run's population session ran on the same worldserver it's done; otherwise the check waits until the worldserver has been up `population.WARMUP_S` (570 s, by `ps etime`). The party run is the same routine as `dng.party_clear`'s (`party_checks.party_dungeon`). Around `run_party` only, `population._Sampler` (now stoppable) takes `perf_sample()` every 10 s, plus one sample after the run. The check passes when the clear succeeded, the samples cover the run (the first within 10 s of `run_party`'s start, since a sample is stamped after its readings, the last within 10 s of its end, no gap over 20 s), there are no sampler errors, and `population.violations` finds no sample over any limit (the same per-sample rule as `perf.server_budget`, `budget_problems`).
+- **As built (task 3.4, small fixes):** `run_party`'s early returns (no entry, the wrong player count, the self-AI refused) write `cleared` and `why` into the caller's `out`. The ground retry polls `.gps` until two reads in a row agree on the height (3 s at most) instead of sleeping 1 s.
 
 ## 5. Tiers and verification budget
 | Check | Tier | Approx. time |
 |---|---|---|
 | `dng.party_preset`, `dng.party_preset_tank_player` | full | ~2 min each |
-| `dng.tank_holds`, `dng.healer_heals` (one shared UK fight, two records) | full | ~4 min |
-| `dng.avoid_aoe`, `dng.instance_strategy`, `dng.rti_focus`, `dng.cc_on_mark` | full | ~2–4 min each |
+| ~~`dng.tank_holds`, `dng.healer_heals`~~ (cut 2026-10-12, proposal spec-change log) | — | — |
+| `dng.instance_strategy`, `dng.rti_focus` (~~`dng.avoid_aoe`, `dng.cc_on_mark`~~ cut 2026-10-12) | full | ~2–4 min each |
 | `client.party_slash` | gui (path rule: `client-mods/addons`) | — |
 | `dng.party_clear` (4 dungeons), `dng.solo_clear`, `dng.run_budget` (population profile) | slow | ~60–90 min total |
 

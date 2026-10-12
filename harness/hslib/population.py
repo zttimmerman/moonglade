@@ -318,17 +318,21 @@ def summarize(samples: list[dict]) -> dict:
 
 
 class _Sampler(threading.Thread):
-    def __init__(self, duration_s=SAMPLE_WINDOW_S, every_s=SAMPLE_EVERY_S):
+    """perf_sample() every `every_s` for `duration_s`, or until `stop` is set (dng.run_budget samples for as long as
+    its dungeon run lasts)."""
+
+    def __init__(self, duration_s=SAMPLE_WINDOW_S, every_s=SAMPLE_EVERY_S, stop: threading.Event | None = None):
         super().__init__(daemon=True)
         self.duration_s, self.every_s, self.samples, self.errors = duration_s, every_s, [], []
+        self.stop = stop or threading.Event()
 
     def run(self):
         t0 = time.time()
         k = 0
-        while k * self.every_s <= self.duration_s:
+        while k * self.every_s <= self.duration_s and not self.stop.is_set():
             delay = t0 + k * self.every_s - time.time()
-            if delay > 0:
-                time.sleep(delay)
+            if delay > 0 and self.stop.wait(delay):
+                break
             try:
                 self.samples.append(perf_sample())
             except Exception as e:  # noqa: BLE001  (recorded; a missing sample fails the budget)
