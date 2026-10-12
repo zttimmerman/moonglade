@@ -1,11 +1,16 @@
 """m4-dungeon-companions task 1.1 (prototype): the run driver's pure rules in hslib/dungeon.py (design.md §4): encounter
 order and the required set, the staging point rule (candidate, `.mmap path` parse, primary verdict, the path-point
 fallback), the probe's create-block parser that reads `.mmap path`'s waypoints, and the wipe accounting. Stand-in
-facts and packets with made-up values; the live run is the gate check dng.party_clear_deadmines."""
+facts and packets with made-up values; the live run is the gate check dng.party_clear.
+
+Slice 3.4 adds the gather point and walk-in, the gather readiness rule, the selfbot toggle and the probe-as-fifth-member
+fight setup, each against a stand-in session that records what it was asked to do."""
 import math
 import struct
 
-from hslib import dungeon as D
+from hslib import dungeon as D, play
+from hslib import paths as P
+from hslib.checks import party_checks as PCK
 from hslib.probe import client as PC
 
 from .base import UnitCase
@@ -145,6 +150,8 @@ class Accounting(UnitCase):
         self.assertEqual(D.next_step(False, 1), "retry")
         self.assertEqual(D.next_step(False, 2), "retry")            # the second wipe still gets a third pull
         self.assertEqual(D.next_step(False, 3), "fail")
+        with self.assertRaises(TypeError):
+            D.next_step(False, 1, True)                              # the unused timed_out argument is gone
 
     def test_summary_row(self):
         rec = {"boss": "B", "encounter": 1, "killed": True, "attempts": [
@@ -160,3 +167,337 @@ class Accounting(UnitCase):
         self.assertTrue(row["killed"])
         self.assertEqual(D.role_of_key("mage"), "damage")
         self.assertTrue(math.isclose(D.dist3({"x": 0, "y": 0, "z": 0}, {"x": 3, "y": 4, "z": 0}), 5))
+
+
+# ----------------------------------------------------------------------------- slice 3.4
+
+def line(n, step=4.0):
+    """A straight path from the boss (x=0) away from it, `step` yd apart."""
+    return [{"x": step * k, "y": 0.0, "z": 0.0} for k in range(n)]
+
+
+BOSS = {"x": 0.0, "y": 0.0, "z": 0.0}
+
+
+class GatherPoint(UnitCase):
+    def test_gather_point_is_20_yd_farther_on_foot(self):
+        pts = line(20)                                        # 0..76 yd
+        g = D.gather_point(pts, {"x": 28, "y": 1, "z": 0}, BOSS)   # stage nearest x=28 (index 7)
+        self.assertEqual(g["point"]["x"], 48)                 # first point >= 20 yd farther on foot
+        self.assertEqual((g["index"], g["stage_index"], g["back_yd"]), (12, 7, 20.0))
+        self.assertIsNone(g["why"])
+
+    def test_counterexample_a_path_doubling_back_toward_the_boss_is_skipped(self):
+        # 20 yd on foot past the stage, but the path has turned back to 8 yd from the boss: not a gather point
+        pts = line(8) + [{"x": 24, "y": 4, "z": 0}, {"x": 16, "y": 4, "z": 0}, {"x": 8, "y": 4, "z": 0},
+                         {"x": 8, "y": 30, "z": 0}, {"x": 8, "y": 60, "z": 0}]
+        g = D.gather_point(pts, {"x": 28, "y": 0, "z": 0}, BOSS)
+        self.assertGreaterEqual(D.dist3(g["point"], BOSS), D.dist3(pts[g["stage_index"]], BOSS))
+        self.assertEqual(g["point"], {"x": 8, "y": 30, "z": 0})
+
+    def test_short_path_uses_its_last_point_and_no_path_means_none(self):
+        g = D.gather_point(line(10), {"x": 28, "y": 0, "z": 0}, BOSS)   # only 8 yd beyond the stage
+        self.assertEqual(g["point"]["x"], 36)
+        self.assertIn("last point", g["why"])
+        self.assertIsNone(D.gather_point(line(8), {"x": 28, "y": 0, "z": 0}, BOSS)["point"])   # stage is the end
+        self.assertIsNone(D.gather_point([], {"x": 28, "y": 0, "z": 0}, BOSS)["point"])
+        off = D.gather_point(line(20), {"x": 28, "y": 40, "z": 0}, BOSS)                   # stage off the path
+        self.assertIsNone(off["point"])
+        self.assertIn("not on the path", off["why"])
+
+    def test_walk_in_hops_end_on_the_stage(self):
+        pts = line(20)
+        stage = {"x": 28, "y": 1, "z": 0}
+        g = D.gather_point(pts, stage, BOSS)
+        hops = D.walk_in_points(pts, g, stage)
+        self.assertEqual([h["x"] for h in hops], [40, 32, 28])         # every 2nd point toward the boss, then the stage
+        self.assertEqual(hops[-1], stage)
+        self.assertEqual(D.walk_in_points(pts, {"point": None}, stage), [])
+
+
+class GatherReady(UnitCase):
+    def test_ready_only_when_all_there_alive_and_quiet(self):
+        self.assertEqual(D.gather_ready([], [], 6.0), (True, "ready"))
+        ok, why = D.gather_ready([{"name": "Healer", "yd": 40.0}], [], 99)
+        self.assertFalse(ok)
+        self.assertIn("arriving: Healer", why)
+        self.assertEqual(D.gather_ready([], [], D.QUIET_S - 0.1), (False, "in combat"))
+        ok, why = D.gather_ready([], ["Tank"], 99)
+        self.assertFalse(ok)
+        self.assertIn("dead: Tank", why)
+
+
+class FakeWs:
+    def __init__(self, events=None):
+        self.events = list(events or [])
+        self.sent = []
+        self.selection = None
+
+    def mark(self):
+        return 0
+
+    def set_selection(self, g):
+        self.selection = g
+        self.sent.append(("select", g))
+
+    def chat(self, msg, kind, to=None):
+        self.sent.append(("whisper", to, msg))
+        if hasattr(self, "log"):
+            self.log.append(("whisper", to, msg))
+
+    def wait_event(self, pred, mark, timeout=0):
+        return next((e for e in self.events if pred(e)), None)
+
+    def events_since(self, mark, kind=None):
+        return [e for e in self.events if kind is None or e["kind"] == kind]
+
+
+class FakeSession:
+    """Records commands; `.playerbots bot self` toggles like PlayerbotMgr (Enable/Disable player botAI)."""
+
+    def __init__(self, self_on=False, refuse=False, positions=None, alive=None, events=None, boss_guid=77):
+        self.selfbot = False
+        self._ai = self_on
+        self.refuse = refuse
+        self.log = []
+        self.ws = FakeWs(events)
+        self.guid = 1
+        self.who = {"char": "Probe"}
+        self.positions = positions or {}
+        self.alive_names = alive or {}
+        self.boss_guid = boss_guid
+        self.ws.log = self.log
+
+    def cmd(self, c, settle=0.6, timeout=8):
+        self.log.append(c)
+        if c == ".playerbots bot self":
+            if self.refuse:
+                return ["Self-bot is disabled"]
+            self._ai = not self._ai
+            return [D.SELF_ON if self._ai else D.SELF_OFF]
+        return []
+
+    def gps(self, guid=None):
+        return dict(self.positions.get(guid or self.guid, self.positions.get(self.guid, {})))
+
+    def go(self, x, y, z, map_id=None, timeout=20):
+        self.log.append(("go", round(x), round(y)))
+        self.positions[self.guid] = {"x": x, "y": y, "z": z, "map": 36}
+        return {"event": {"kind": "teleport_near"}}
+
+    def alive(self, name=None):
+        return self.alive_names.get(name, "Yes")
+
+    def unit(self, spawn_id, entry=None):
+        return {"guid": self.boss_guid, "health": 100, "max_health": 100, "in_combat": False} if self.boss_guid else \
+            {"guid": None, "entry": None}
+
+    def binds(self, map_id=None):
+        return [{"mask": 1}]
+
+
+COMPS = [{"companion": "tank", "name": "Tank", "guid": 11}, {"companion": "healer", "name": "Heal", "guid": 12}]
+ENC = {"encounter": 1, "bit": 0, "credit_entry": 1001, "spawns": [{"spawn_id": 10, "x": 0, "y": 0, "z": 0, "name": "B"}]}
+
+
+class SelfBot(UnitCase):
+    def test_turns_on_from_off(self):
+        s = FakeSession(self_on=False)
+        r = D.set_selfbot(s, True)
+        self.assertTrue(r["ok"])
+        self.assertTrue(s.selfbot)
+        self.assertEqual(s.log.count(".playerbots bot self"), 1)
+
+    def test_already_on_is_toggled_back_on(self):
+        s = FakeSession(self_on=True)            # left on: the first toggle answers "Disable"
+        r = D.set_selfbot(s, True)
+        self.assertTrue(r["ok"] and s.selfbot)
+        self.assertEqual(s.log.count(".playerbots bot self"), 2)
+
+    def test_counterexample_refused_is_not_ok(self):
+        s = FakeSession(refuse=True)
+        r = D.set_selfbot(s, True)
+        self.assertFalse(r["ok"])
+        self.assertFalse(s.selfbot)
+        self.assertEqual(r["why"], "refused")
+        self.assertIsNone(D.self_state(["You do not have permission to enable player botAI"]))
+
+
+class FightSetup(UnitCase):
+    def fight(self, s, comps=COMPS, engaged=False):
+        orig = D.POLL_S
+        D.POLL_S = 0
+        try:
+            return D.fight(s, {"map": 36}, ENC, comps, ["Tank", "Heal", "Probe"], "Tank", True, lambda *a: None,
+                           [], engaged=engaged)
+        finally:
+            D.POLL_S = orig
+
+    def test_order_then_selfbot_on_then_off_after_the_kill(self):
+        ev = [{"kind": "attack_start", "attacker": 11, "victim": 77}]
+        s = FakeSession(events=ev)
+        a = self.fight(s)
+        self.assertTrue(a["killed"])
+        whispers = [x for x in s.ws.sent if x[0] == "whisper"]
+        self.assertEqual(whispers[:2], [("whisper", "Tank", "tank attack"), ("whisper", "Tank", "attack")])
+        self.assertIn(("select", 77), s.ws.sent)
+        self.assertTrue(a["self_on"]["ok"])
+        self.assertTrue(a["self_off"]["ok"])
+        self.assertFalse(s.selfbot)                                  # never left on after the pull
+        self.assertEqual(s.log.count(".playerbots bot self"), 2)
+        self.assertTrue(a["pull"]["engaged"])
+        # GM mode goes off right before the order, and the self-AI comes on after it
+        self.assertLess(s.log.index(".gm off"), s.log.index(("whisper", "Tank", "tank attack")))
+        self.assertLess(s.log.index(("whisper", "Tank", "attack")), s.log.index(".playerbots bot self"))
+
+    def test_already_engaged_skips_the_order(self):
+        s = FakeSession()
+        a = self.fight(s, engaged=True)
+        self.assertNotIn("pull", a)
+        self.assertFalse([x for x in s.ws.sent if x[0] == "whisper"])
+        self.assertTrue(a["self_on"]["ok"])
+
+    def test_counterexample_selfbot_refused_stops_the_pull(self):
+        s = FakeSession(refuse=True)
+        a = self.fight(s)
+        self.assertEqual(a["why"], "selfbot not enabled")
+        self.assertTrue(a["timeout"])
+        self.assertNotIn("killed", a)
+
+    def test_boss_not_found_is_an_explicit_reason(self):
+        s = FakeSession(boss_guid=None)
+        a = self.fight(s)
+        self.assertEqual(a["why"], "boss not found")
+        self.assertTrue(a["timeout"])
+        self.assertFalse([x for x in s.ws.sent if x[0] == "whisper"])   # nothing pulled
+
+    def test_probe_death_switches_the_selfbot_off_at_once(self):
+        class Dies(FakeSession):
+            n = 0
+
+            def alive(self, name=None):
+                return "No" if name == "Probe" else "Yes"
+
+            def binds(self, map_id=None):
+                self.n += 1
+                return [{"mask": 1 if self.n > 2 else 0}]
+        s = Dies(events=[{"kind": "attack_start", "attacker": 11, "victim": 77}])
+        a = self.fight(s)
+        self.assertEqual(a["deaths"], ["Probe"])
+        self.assertTrue(a["self_off_on_death"]["ok"])
+        self.assertFalse(s.selfbot)
+
+
+class GatherAt(UnitCase):
+    def run_gather(self, s, comps=COMPS, limit=0.5):
+        orig = D.POLL_S
+        D.POLL_S = 0.01
+        try:
+            return D.gather_at(s, comps, 77, limit=limit)
+        finally:
+            D.POLL_S = orig
+
+    def test_ready_when_everyone_is_close_and_quiet(self):
+        pos = {1: {"x": 0, "y": 0, "z": 0, "map": 36}, 11: {"x": 5, "y": 0, "z": 0, "map": 36},
+               12: {"x": 0, "y": 9, "z": 0, "map": 36}}
+        g = self.run_gather(FakeSession(positions=pos))
+        self.assertTrue(g["ok"])
+
+    def test_counterexample_a_companion_still_arriving_is_summoned_not_pulled(self):
+        pos = {1: {"x": 0, "y": 0, "z": 0, "map": 36}, 11: {"x": 5, "y": 0, "z": 0, "map": 36},
+               12: {"x": 0, "y": 40, "z": 0, "map": 36}}
+        s = FakeSession(positions=pos)
+        g = self.run_gather(s)
+        self.assertFalse(g["ok"])
+        self.assertIn("arriving: Heal", g["why"])
+        self.assertIn(("whisper", "Heal", "summon"), s.ws.sent)
+        self.assertNotIn(("whisper", "Tank", "summon"), s.ws.sent)
+
+    def test_counterexample_recent_fight_is_not_ready(self):
+        import time as _t
+        pos = {1: {"x": 0, "y": 0, "z": 0, "map": 36}, 11: {"x": 5, "y": 0, "z": 0, "map": 36},
+               12: {"x": 0, "y": 9, "z": 0, "map": 36}}
+        ev = [{"kind": "melee_damage", "attacker": 99, "victim": 11, "t": _t.time() + 60}]
+        g = self.run_gather(FakeSession(positions=pos, events=ev))
+        self.assertFalse(g["ok"])
+        self.assertEqual(g["why"], "in combat")
+
+    def test_boss_engaged_ends_the_gather(self):
+        import time as _t
+        pos = {1: {"x": 0, "y": 0, "z": 0, "map": 36}}
+        ev = [{"kind": "melee_damage", "attacker": 77, "victim": 11, "t": _t.time()}]
+        g = self.run_gather(FakeSession(positions=pos, events=ev))
+        self.assertTrue(g["boss_engaged"])
+
+
+class PartyClearJudge(UnitCase):
+    def ev(self, **kw):
+        enc = {"boss": "B", "encounter": 1, "bit": 0, "killed": True,
+               "attempts": [{"boss_before": {"max_health": 4490}}], "summary": {"wipes": 1}}
+        run = {"cleared": True, "mode": "party", "total_s": 900, "required": [1], "final_mask": 1, "encounters": [enc]}
+        run |= kw
+        return {"run": run}
+
+    def test_pass(self):
+        self.assertEqual(PCK.party_clear_problems(self.ev()), [])
+
+    def test_counterexamples(self):
+        self.assertTrue(PCK.party_clear_problems(self.ev(cleared=False)))
+        self.assertTrue(PCK.party_clear_problems(self.ev(mode="watch")))         # the probe only watched
+        self.assertTrue(PCK.party_clear_problems(self.ev(total_s=45 * 60 + 1)))
+        self.assertTrue(PCK.party_clear_problems(self.ev(final_mask=0)))
+        self.assertTrue(PCK.party_clear_problems(self.ev(final_mask=None)))
+        self.assertTrue(PCK.party_clear_problems(self.ev(required=[1, 2])))       # an encounter never reached
+        three = self.ev()
+        three["run"]["encounters"][0]["summary"]["wipes"] = 3
+        self.assertTrue(PCK.party_clear_problems(three))
+        nohp = self.ev()
+        nohp["run"]["encounters"][0]["attempts"] = [{"boss_before": {}}]
+        self.assertTrue(PCK.party_clear_problems(nohp))
+        self.assertTrue(PCK.party_clear_problems({}))
+        unready = self.ev()
+        unready["run"]["encounters"][0]["attempts"][0] |= {"n": 1, "unready": True, "gather": {"why": "arriving: H"}}
+        self.assertIn("before the party was gathered", PCK.party_clear_problems(unready)[0])
+
+
+class ReservedAccounts(UnitCase):
+    """play.player_login refuses every harness account as the player's login (any case); the player's file is a
+    scratch file through a monkeypatched play.player_file, never env/player.json."""
+    RESERVED = ("TEST_USER", "GM_USER", "COMP_USER", "SAVES_USER", "DUNGEON_USER", "DUNGEON_NAV_USER")
+
+    def login_as(self, account):
+        import json
+        pf = self.tmp / "player.json"
+        pf.write_text(json.dumps({"account": account, "password": "abc123"}))
+        orig = play.player_file
+        play.player_file = lambda: pf
+        try:
+            return play.player_login()
+        finally:
+            play.player_file = orig
+
+    def test_every_reserved_account_is_refused(self):
+        for attr in self.RESERVED:
+            for name in (getattr(P, attr), getattr(P, attr).lower()):
+                with self.subTest(account=attr, name=name):
+                    with self.assertRaises(play.PlayerAccountError) as cm:
+                        self.login_as(name)
+                    self.assertIn("reserved", str(cm.exception))
+
+    def test_counterexample_a_normal_name_is_accepted(self):
+        login, new = self.login_as("Someone")
+        self.assertEqual(login["account"], "Someone")
+        self.assertFalse(new)
+
+
+class HoldParty(UnitCase):
+    def test_every_companion_is_told_to_stay(self):
+        s = FakeSession()
+        orig = D.time.sleep
+        D.time.sleep = lambda x: None
+        try:
+            self.assertEqual(D.hold_party(s, COMPS), ["Tank", "Heal"])
+        finally:
+            D.time.sleep = orig
+        self.assertEqual([x for x in s.ws.sent if x[0] == "whisper"],
+                         [("whisper", "Tank", "stay"), ("whisper", "Heal", "stay")])

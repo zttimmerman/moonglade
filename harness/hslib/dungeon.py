@@ -880,7 +880,10 @@ def nav_stages(f: dict, req: list[dict], log=None) -> dict:
                 rec |= {"point": fb["point"], "verdict": "fallback"}
             if rec["point"]:
                 rec["approach"] = approach_points(fb.get("points") or [], rec["point"], boss)
+                rec["gather"] = gather_point(fb.get("points") or [], rec["point"], boss)
+                rec["walk_in"] = walk_in_points(fb.get("points") or [], rec["gather"], rec["point"])
             say({"boss": sp["name"], "verdict": rec["verdict"], "point": rec["point"],
+                 "gather": {k: (rec.get("gather") or {}).get(k) for k in ("point", "back_yd", "why")},
                  "primary_why": (rec.get("primary") or {}).get("why"),
                  "fallback": {k: (rec.get("fallback") or {}).get(k) for k in ("n_points", "path_type", "why")}})
             out["stages"].append(rec)
@@ -953,6 +956,95 @@ def approach_points(points: list[dict], stage: dict, boss: dict) -> list[dict]:
     return out
 
 
+# -- gather farther back, then walk in together (slice 3.4; docs/research/m4-full-run.md finding 2)
+
+GATHER_BACK_YD = 20           # the gather point: at least this much farther from the boss on foot than the staging point
+WALK_STEP = 2                 # path points per walk-in hop (~8 yd, like the approach)
+HOP_WAIT_S = 10               # per hop: wait this long for the party to catch up (within GATHER_YD)
+READY_S = 120                 # the staging readiness wait, at most (then the pull goes ahead, flagged `unready`)
+
+
+def _cum_walk(points: list[dict]) -> list[float]:
+    out = [0.0]
+    for k in range(1, len(points)):
+        out.append(out[-1] + dist3(points[k - 1], points[k]))
+    return out
+
+
+def gather_point(points: list[dict], stage: dict, boss: dict, back: float = GATHER_BACK_YD) -> dict:
+    """Where the party gathers before an encounter: on the boss's path to the previous staging point (points run boss ->
+    previous staging point), the first point at least `back` yd farther on foot than the staging point and no nearer
+    the boss in a straight line; else the path's last point if it is beyond the staging point at all. None (gather at
+    the staging point, the prototype's way) when the staging point isn't on the path or nothing lies beyond it."""
+    if not points:
+        return {"point": None, "why": "no path"}
+    i = min(range(len(points)), key=lambda k: dist3(points[k], stage))
+    if dist3(points[i], stage) > STAGE_OFF_LINE_YD:
+        return {"point": None, "why": "staging point not on the path"}
+    cum = _cum_walk(points)
+    near = dist3(points[i], boss)
+    for j in range(i + 1, len(points)):
+        if cum[j] - cum[i] >= back and dist3(points[j], boss) >= near:
+            return {"point": points[j], "index": j, "stage_index": i, "back_yd": round(cum[j] - cum[i], 1), "why": None}
+    if i < len(points) - 1:
+        j = len(points) - 1
+        return {"point": points[j], "index": j, "stage_index": i, "back_yd": round(cum[j] - cum[i], 1),
+                "why": "path ends sooner: its last point"}
+    return {"point": None, "why": "nothing on the path beyond the staging point"}
+
+
+def walk_in_points(points: list[dict], gather: dict, stage: dict) -> list[dict]:
+    """The hops from the gather point to the staging point along the path: every WALK_STEP-th path point toward the
+    boss, then the staging point itself. Empty when there is no gather point."""
+    if not gather.get("point"):
+        return []
+    gi, si = gather["index"], gather["stage_index"]
+    return [points[k] for k in range(gi - WALK_STEP, si, -WALK_STEP)] + [stage]
+
+
+def gather_ready(far: list[dict], dead: list[str], quiet_s: float) -> tuple[bool, str]:
+    """design.md §4 step 3, slice 3.4: ready only when nobody is dead, nobody is still arriving (everyone within
+    GATHER_YD of the probe) and nobody fought for QUIET_S."""
+    if dead:
+        return False, "dead: " + ", ".join(dead)
+    if far:
+        return False, "arriving: " + ", ".join(x["name"] for x in far)
+    if quiet_s < QUIET_S:
+        return False, "in combat"
+    return True, "ready"
+
+
+# -- the probe as the fifth party member (`.playerbots bot self`; PlayerbotMgr.cpp HandlePlayerbotCommand "self")
+
+SELF_ON, SELF_OFF = "Enable player botAI", "Disable player botAI"
+
+
+def self_state(reply: list[str]) -> bool | None:
+    """The toggle's answer: True (now on), False (now off), None (refused: 'Self-bot is disabled', no permission)."""
+    t = "\n".join(reply)
+    if SELF_ON in t:
+        return True
+    if SELF_OFF in t:
+        return False
+    return None
+
+
+def set_selfbot(s: "Session", want: bool) -> dict:
+    """`.playerbots bot self` is a toggle; send it until the answer says the wanted state (at most twice: an answer
+    of the other state means it was already in the wanted one and has just flipped)."""
+    replies = []
+    for _ in range(2):
+        r = s.cmd(".playerbots bot self", settle=1.0)
+        replies.append(r)
+        st = self_state(r)
+        if st is None:
+            return {"ok": False, "on": s.selfbot, "replies": replies, "why": "refused"}
+        s.selfbot = st
+        if st == want:
+            return {"ok": True, "on": st, "replies": replies}
+    return {"ok": False, "on": s.selfbot, "replies": replies, "why": "toggle didn't settle"}
+
+
 # -- run accounting (pure)
 
 def role_of_key(key: str) -> str:
@@ -970,7 +1062,7 @@ def is_wipe(alive: dict) -> bool:
     return bool(alive) and all(a is False for a in alive.values())
 
 
-def next_step(killed: bool, wipes: int, timed_out: bool = False) -> str:
+def next_step(killed: bool, wipes: int) -> str:
     """After a pull: 'next' (boss dead), 'retry' (a wipe or a stalled pull, wipes still <= MAX_WIPES) or 'fail'."""
     if killed:
         return "next"
@@ -1011,35 +1103,78 @@ def _combat_quiet(s: "Session", guids: set, since: int) -> float:
     return time.time() - last if last else 1e9
 
 
-def gather_at(s: "Session", comps: list[dict], point: dict, boss_guid: int | None = None) -> dict:
-    """design.md §4 steps 2-3: whisper `summon` to the companions that are away until everyone is within GATHER_YD of
-    the probe and nobody fought for QUIET_S (or GATHER_S), or until the boss is in a fight (the companions pulled it on
-    arrival). Healer mana isn't readable headless (prototype: not used)."""
+def _far(s: "Session", comps: list[dict], me: dict | None = None) -> list[dict]:
+    """Companions not within GATHER_YD of the probe (another map, or a `.gps` that answered with the probe's own
+    position because the companion is out of sight, counts as far)."""
+    me = me or s.gps()
+    far = []
+    for c in comps:
+        p = s.gps(c["guid"])
+        d = dist3(me, p) if "x" in me and "x" in p and p.get("map") == me.get("map") else None
+        if d is None or d > GATHER_YD or (d < 0.01 and c["guid"] != s.guid and p == me):
+            far.append({"name": c["name"], "yd": None if d is None else round(d, 1)})
+    return far
+
+
+def gather_at(s: "Session", comps: list[dict], boss_guid: int | None = None, limit: float = GATHER_S,
+              revive: bool = True) -> dict:
+    """design.md §4 steps 2-3 at the probe's position: whisper `summon` to the companions that are away until
+    gather_ready (all alive, all within GATHER_YD, nobody fought for QUIET_S) or `limit` s, or until the boss is in a
+    fight (it was pulled without an order). A companion that died here (trash) is revived once the fight is over, as a
+    player would rez. Healer mana isn't readable headless (prototype: not used)."""
     t0, since, rounds = time.time(), s.ws.mark(), 0
     guids = {c["guid"] for c in comps}
-    far: list = []
+    names = [c["name"] for c in comps]
+    revived: dict = {}
     while True:
-        far = []
-        me = s.gps()
-        for c in comps:
-            p = s.gps(c["guid"])
-            d = dist3(me, p) if "x" in me and "x" in p and p.get("map") == me.get("map") else None
-            if d is None or d > GATHER_YD or (d < 0.01 and c["guid"] != s.guid and p == me):
-                far.append({"name": c["name"], "yd": None if d is None else round(d, 1)})
+        far = _far(s, comps)
+        alive = _alive_map(s, names)
+        dead = [n for n, v in alive.items() if v is False]
         quiet = _combat_quiet(s, guids | {s.guid}, since)
         if boss_guid and _combat_quiet(s, {boss_guid}, since) < 1e8:
-            # the companions engaged the boss on arrival (it stands within reach of the staging point): the fight is on
-            return {"ok": False, "boss_engaged": True, "s": round(time.time() - t0, 1), "rounds": rounds, "far": far}
-        if not far and quiet >= QUIET_S:
-            return {"ok": True, "s": round(time.time() - t0, 1), "rounds": rounds}
-        if time.time() - t0 > GATHER_S:
-            return {"ok": False, "s": round(time.time() - t0, 1), "rounds": rounds, "far": far,
-                    "quiet_s": round(min(quiet, 999), 1)}
+            return {"ok": False, "boss_engaged": True, "s": round(time.time() - t0, 1), "rounds": rounds, "far": far,
+                    "revived": revived}
+        ok, why = gather_ready(far, dead, quiet)
+        if ok:
+            return {"ok": True, "s": round(time.time() - t0, 1), "rounds": rounds, "revived": revived}
+        if time.time() - t0 > limit:
+            return {"ok": False, "s": round(time.time() - t0, 1), "rounds": rounds, "far": far, "dead": dead,
+                    "why": why, "quiet_s": round(min(quiet, 999), 1), "revived": revived}
+        if dead and revive and quiet >= QUIET_S:
+            revived |= revive_dead(s, dead)
+            continue
         if far and rounds * 4 <= time.time() - t0:
             for x in far:
-                s.ws.chat("summon", W.CHAT_MSG_WHISPER, to=x["name"])
+                if alive.get(x["name"]) is not False:
+                    s.ws.chat("summon", W.CHAT_MSG_WHISPER, to=x["name"])
             rounds += 1
         time.sleep(POLL_S)
+
+
+def hold_party(s: "Session", comps: list[dict]) -> list[str]:
+    """Whisper `stay` (playerbots ChatTriggerContext "stay": the stay movement strategy) to every companion, so none of
+    them runs after the probe's next teleport; `follow` (walk_in) undoes it."""
+    for c in comps:
+        s.ws.chat("stay", W.CHAT_MSG_WHISPER, to=c["name"])
+    time.sleep(0.5)
+    return [c["name"] for c in comps]
+
+
+def walk_in(s: "Session", comps: list[dict], hops: list[dict]) -> dict:
+    """Walk the gathered party in: the probe (GM mode on, so nothing aggroes on it alone) hops along the path toward
+    the staging point; the companions follow it on foot (`follow`), and each hop waits until all of them are within
+    GATHER_YD (HOP_WAIT_S at most)."""
+    t0 = time.time()
+    for c in comps:
+        s.ws.chat("follow", W.CHAT_MSG_WHISPER, to=c["name"])
+    steps = []
+    for p in hops:
+        s.go(p["x"], p["y"], p["z"] + 0.5)
+        me = s.gps()
+        far, ok, dt = F.poll(lambda: _far(s, comps, me), lambda x: not x, timeout=HOP_WAIT_S, interval=0.5)
+        steps.append({"to": {k: round(p[k], 1) for k in ("x", "y", "z")}, "caught_up": ok, "wait_s": dt,
+                      "far": None if ok else far})
+    return {"hops": len(hops), "steps": steps, "s": round(time.time() - t0, 1)}
 
 
 def revive_dead(s: "Session", names: list[str]) -> dict:
@@ -1096,16 +1231,24 @@ def pull(s: "Session", boss_guid: int, tank: str | None, comps: list[dict], appr
 
 
 def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[str], tank: str | None,
-          selfbot: bool, say, approach: list[dict] | None = None) -> dict:
+          selfbot: bool, say, approach: list[dict] | None = None, engaged: bool = False) -> dict:
     """One pull: select the boss, order the tank in (or, solo, stand inside the boss's aggro radius with the self-AI),
-    then poll the encounter bit and the fighters' life until the boss is dead, everyone is dead or FIGHT_S."""
+    then poll the encounter bit and the fighters' life until the boss is dead, everyone is dead or FIGHT_S. With
+    companions and selfbot the probe fights too: its self-AI goes on right after the order (engaged: the boss is
+    already in a fight, so no order) and off when the probe dies or the pull ends."""
+    probe_name = s.who["char"]
     sp = enc["spawns"][0]
     bit = 1 << enc["bit"]
     a: dict = {"deaths": [], "wipe": False}
     u = s.unit(sp["spawn_id"], enc["credit_entry"])
     a["boss_before"] = {k: u.get(k) for k in ("guid", "health", "max_health", "in_combat")}
+    if not u.get("guid"):
+        # no live read of the boss (not spawned, an entry mismatch, or not in an active grid): nothing to pull. It
+        # counts like a stalled pull.
+        return a | {"why": "boss not found", "timeout": True, "fight_s": 0.0, "boss_read": {
+            k: u.get(k) for k in ("entry", "entry_mismatch", "raw")}}
     mark = s.ws.mark()
-    if selfbot:
+    if selfbot and not comps:
         stage = s.gps()
         if "x" in stage:
             d = math.hypot(stage["x"] - sp["x"], stage["y"] - sp["y"]) or 1.0
@@ -1113,8 +1256,18 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
             s.go(sp["x"] + (stage["x"] - sp["x"]) / d * SOLO_PULL_YD, sp["y"] + (stage["y"] - sp["y"]) / d * SOLO_PULL_YD,
                  sp["z"] + 1)
             s.cmd(".gm off", settle=0.3)
-    elif u.get("guid"):
-        a["pull"] = pull(s, u["guid"], tank, comps, approach or [])
+    else:
+        if selfbot:
+            # GM mode stays on until the pull (run 2 of slice 3.4: a probe with GM off and no AI at the staging point
+            # kept the party in a trash fight it never finished); off from here, so it fights like a player
+            a["gm_off"] = s.cmd(".gm off", settle=0.3)
+        if not engaged:
+            a["pull"] = pull(s, u["guid"], tank, comps, approach or [])
+        if selfbot:
+            # the probe joins as the fifth fighter after the order (its self-AI picks its own targets)
+            a["self_on"] = set_selfbot(s, True)
+            if not a["self_on"]["ok"]:
+                return a | {"why": "selfbot not enabled", "timeout": True, "fight_s": 0.0}
     t0 = time.time()
     alive = {n: True for n in fighters}
     trace = []
@@ -1127,6 +1280,10 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
         for n in died:
             a["deaths"].append(n)
             say({"died": n, "t": round(time.time() - t0, 1)})
+            if n == probe_name and s.selfbot:
+                # a dead selfbot that leads the group releases its spirit at once (AutoReleaseSpiritAction::
+                # ShouldAutoRelease: groupLeader == bot) and lands outside the dungeon; switched off, it stays a corpse
+                a["self_off_on_death"] = set_selfbot(s, False)
         alive = {n: (now[n] if now[n] is not None else alive[n]) for n in fighters}
         el = time.time() - t0
         if not trace or el - trace[-1]["t"] >= 10:
@@ -1156,6 +1313,8 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
             a["hits_taken"][n] = a["hits_taken"].get(n, 0) + e["damage"]
     a["boss_dmg_seen"] = sum(e["damage"] for e in evs if e["kind"] in ("melee_damage", "spell_damage")
                              and e.get("victim") == u.get("guid"))
+    if comps and s.selfbot:
+        a["self_off"] = set_selfbot(s, False)
     if not a.get("killed"):
         b = s.unit(sp["spawn_id"], enc["credit_entry"])
         a["boss_after"] = {k: b.get(k) for k in ("health", "max_health", "in_combat")}
@@ -1166,18 +1325,22 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
               only: int | None = None, log=None, out: dict | None = None) -> dict:
     """design.md §4: clear the required encounters of f in order with the companions already in the party (comps:
     [{"companion": plan key, "name", "guid"}]; empty with selfbot=True for the solo run). The probe enters a fresh copy
-    with GM mode off (so AutoBalance counts it, design.md §6), gathers the party, then (party run) watches in GM mode
-    while the companions fight, or (selfbot) fights with the playerbots self-AI. Returns the evidence with a summary
-    row per encounter."""
+    with GM mode off (so AutoBalance counts it, design.md §6). Per pull, with companions (slice 3.4): gather at the
+    encounter's gather point (farther back on the path), walk in together to the staging point, GM mode off there,
+    wait until everyone is there and out of combat, then the pull; with selfbot the probe fights as the fifth member
+    (else it watches in GM mode, the prototype). Solo (selfbot, no companions): the self-AI fights alone. Returns the
+    evidence with a summary row per encounter."""
     say = log or (lambda *a: None)
     req, skipped = required_encounters(f)
     if only:
         req = req[:only]
     ev: dict = out if out is not None else {}        # filled in place, so an interrupted run keeps its evidence
+    mode = "party" if comps and selfbot else "solo" if selfbot else "watch"
     ev |= {"rule": RUN_RULE, "required": [e["encounter"] for e in req], "skipped": skipped, "encounters": [],
-           "selfbot": selfbot}
+           "selfbot": selfbot, "mode": mode}
     roles = {c["name"]: role_of_key(c["companion"]) for c in comps}
     names = [c["name"] for c in comps]
+    probe_name = s.who["char"]
     tank = next((c["name"] for c in comps if c["companion"] == "tank"), None)
     t_run = time.time()
     ev["unbind"] = s.unbind(f["map"])
@@ -1190,19 +1353,20 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
     if ev["mapstat"].get("players") != 1 + len(comps):
         return ev | {"cleared": False, "why": f"AutoBalance counts {ev['mapstat'].get('players')} players, not "
                                               f"{1 + len(comps)}"}
-    fighters = names + ([s.ev["character"]["character"]] if selfbot else [])
-    if selfbot:
-        ev["self_on"] = s.cmd(".playerbots bot self", settle=1.0)
-        s.selfbot = any("Enable player botAI" in x for x in ev["self_on"])
-        if not s.selfbot:
+    fighters = names + ([probe_name] if selfbot else [])
+    if mode == "solo":
+        ev["self_on"] = set_selfbot(s, True)
+        if not ev["self_on"]["ok"]:
             return ev | {"cleared": False, "why": "selfbot not enabled"}
     by_enc = {x["encounter"]: x for x in (stages or {}).get("stages", [])}
     for enc in req:
         sp = enc["spawns"][0]
         st = by_enc.get(enc["encounter"]) or {}
         point = st.get("point")
-        rec: dict = {"boss": sp["name"], "encounter": enc["encounter"], "stage": point,
-                     "stage_verdict": st.get("verdict"), "attempts": []}
+        gpt = (st.get("gather") or {}).get("point")
+        rec: dict = {"boss": sp["name"], "encounter": enc["encounter"], "bit": enc["bit"], "stage": point,
+                     "stage_verdict": st.get("verdict"), "gather_point": gpt,
+                     "gather_why": (st.get("gather") or {}).get("why"), "attempts": []}
         ev["encounters"].append(rec)
         if not point:
             rec["why"] = "no staging point"
@@ -1210,17 +1374,43 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
         wipes = 0
         while True:
             a: dict = {"n": len(rec["attempts"]) + 1}
-            s.cmd(".gm on", settle=0.3)
-            s.go(point["x"], point["y"], point["z"] + 0.5)
-            if not selfbot:
-                a["gather"] = gather_at(s, comps, point, s.unit(sp["spawn_id"], enc["credit_entry"]).get("guid"))
-            else:
+            engaged = False
+            if mode == "solo":
+                s.cmd(".gm on", settle=0.3)
+                s.go(point["x"], point["y"], point["z"] + 0.5, f["map"])
                 s.cmd(".gm off", settle=0.3)
                 a["gather"] = {"ok": True, "s": 0}
-            a |= fight(s, f, enc, comps, fighters, tank, selfbot, say, st.get("approach"))
+                if not s.selfbot:           # switched off when the probe died on the last pull
+                    a["self_on"] = set_selfbot(s, True)
+            else:
+                s.cmd(".gm on", settle=0.3)
+                first = gpt if gpt and mode == "party" else point
+                if first is gpt:
+                    # run 1 of slice 3.4: companions that ran after the probe's teleport crossed trash and the next
+                    # boss on the way (deaths, bosses engaged while members were 30-50 yd behind). They stay put, and
+                    # the gather summons them to the gather point instead.
+                    a["hold"] = hold_party(s, comps)
+                s.go(first["x"], first["y"], first["z"] + 0.5, f["map"])
+                boss_guid = s.unit(sp["spawn_id"], enc["credit_entry"]).get("guid")
+                if first is gpt:
+                    # gather farther back (out of the boss's reach), then walk in together
+                    a["gather_back"] = gather_at(s, comps, boss_guid, limit=READY_S)
+                    engaged = bool(a["gather_back"].get("boss_engaged"))
+                    if not engaged:
+                        a["walk_in"] = walk_in(s, comps, st.get("walk_in") or [point])
+                if not engaged:
+                    a["gather"] = gather_at(s, comps, boss_guid, limit=READY_S if mode == "party" else GATHER_S)
+                    engaged = bool(a["gather"].get("boss_engaged"))
+                    a["unready"] = not a["gather"]["ok"] and not engaged
+                a["boss_engaged_before_pull"] = engaged
+            a |= fight(s, f, enc, comps, fighters, tank, selfbot, say, st.get("approach"), engaged=engaged)
             rec["attempts"].append(a)
             say({"boss": sp["name"], "attempt": a["n"], "killed": a.get("killed"), "wipe": a["wipe"],
-                 "fight_s": a["fight_s"], "deaths": a["deaths"]})
+                 "fight_s": a["fight_s"], "deaths": a["deaths"], "why": a.get("why"),
+                 "engaged_early": a.get("boss_engaged_before_pull"), "unready": a.get("unready")})
+            if a.get("why") == "selfbot not enabled":
+                rec["why"] = a["why"]
+                break
             if a.get("wipe") or a.get("timeout"):
                 wipes += 1
             step = next_step(bool(a.get("killed")), wipes)
@@ -1231,13 +1421,17 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
             if step == "fail":
                 a["revive"] = revive_dead(s, fighters)
                 break
-            if selfbot:
-                s.cmd(".gm on", settle=0.3)
-            s.go(point["x"], point["y"], point["z"] + 0.5)
+            if probe_name in fighters:
+                # the probe gets up first (it may have released outside the dungeon), then GM mode, then the stage
+                a["revive_probe"] = revive_dead(s, [probe_name])
+            s.cmd(".gm on", settle=0.3)
+            s.go(point["x"], point["y"], point["z"] + 0.5, f["map"])
             # the boss resets first, then the dead get up: revived where they fell (next to the boss and its adds),
             # they'd be killed again before the next gather (run 7, Gilnid)
             a["reset"] = wait_boss_reset(s, enc)
-            a["revive"] = revive_dead(s, fighters)
+            a["revive"] = revive_dead(s, names)
+            if mode == "solo":
+                s.cmd(".gm off", settle=0.3)
         rec["summary"] = encounter_summary(rec, roles)
         if not rec.get("killed"):
             break
@@ -1246,8 +1440,7 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
     ev["cleared"] = bool(req) and all(r.get("killed") for r in ev["encounters"]) and len(ev["encounters"]) == len(req)
     ev["total_s"] = round(time.time() - t_run, 1)
     ev["table"] = [r.get("summary") or {"boss": r["boss"], "killed": False, "why": r.get("why")} for r in ev["encounters"]]
-    if selfbot and s.selfbot:
-        s.cmd(".playerbots bot self", settle=0.8)
-        s.selfbot = False
+    if s.selfbot:
+        ev["self_off"] = set_selfbot(s, False)
     s.cmd(".gm off", settle=0.3)
     return ev
