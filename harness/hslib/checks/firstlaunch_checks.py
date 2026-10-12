@@ -576,6 +576,15 @@ def standin(d: Path, tag: str) -> dict:
     return {"dir": si, "bat": bat, "started": started, "stop": stop}
 
 
+def server_of_home(argv: list[str], env: dict, home: Path) -> bool:
+    """Whether an authserver/worldserver (its argv and environment) is the one of release HOME `home`. Its argv names
+    HOME when the -c path is absolute; under a HOME with a space (the real one is ~/Library/Application Support/...)
+    -c is relative to HOME/run (stack.conf_value), so then its environment does: release mode sets OPENSSL_CONF to
+    HOME's openssl.cnf (stack.spawn_env)."""
+    h = str(home).rstrip("/") + "/"
+    return any(h in x for x in argv) or str(env.get("OPENSSL_CONF") or "").startswith(h)
+
+
 def app_play(bundle: Path, home: Path, d: Path, tag: str, *, pick: str | None = None, extra_env: dict | None = None,
              sandbox: Path | None = None, timeout: float = 1500, stop_after_ready: bool = True) -> dict:
     """The release app (launcher binary run directly, test hook, no LaunchServices) with a scratch HOME and ports,
@@ -612,10 +621,8 @@ def app_play(bundle: Path, home: Path, d: Path, tag: str, *, pick: str | None = 
             time.sleep(1)
         my_cnf = f"--defaults-file={home / 'my.cnf'}"
         running = {"mysqld": _proc_info(lambda a: my_cnf in a),
-                   "worldserver": _proc_info(lambda a: a[:1] and a[0].endswith("/server/bin/worldserver")
-                                             and any(str(home) in x for x in a)),
-                   "authserver": _proc_info(lambda a: a[:1] and a[0].endswith("/server/bin/authserver")
-                                            and any(str(home) in x for x in a))}
+                   **{n: [x for x in _proc_info(lambda a, n=n: a[:1] and a[0].endswith(f"/server/bin/{n}"))
+                          if server_of_home(x["argv"], x["env"], home)] for n in ("worldserver", "authserver")}}
         ev["while_ready"] = {k: [{"pid": x["pid"], "exe": x["exe"]} for x in v] for k, v in running.items()}
         ev["while_ready_env"] = {k: {kk: vv for kk, vv in (v[0]["env"] if v else {}).items()
                                      if kk in ("OPENSSL_CONF", "AC_AI_PLAYERBOT_MAX_RANDOM_BOTS")}
@@ -853,12 +860,17 @@ def source_untouched(ctx):
                                                                           "free_bytes": 10**13}),
                                P.RELEASE_DOWNLOAD_BASE_ENV: "http://127.0.0.1:9/"}, d, prof, kill_when=in_copy)
         partial = [str(p.relative_to(d / "h2 s")) for p in (d / "h2 s").rglob("*.hs-part")][:3]
+        # free space injected as for the killed run: the disk rule is firstlaunch.preflight's check, and this Mac's
+        # free space (the run's other scratch HOMEs on it) must not decide whether the copy resumes
         res = _engine_sandboxed(app, d / "h2 s", ["--client", str(src)],
-                                {**base, P.RELEASE_DOWNLOAD_BASE_ENV: "http://127.0.0.1:9/"}, d, prof)
+                                {**base, P.FIRSTLAUNCH_TEST_ENV: json.dumps({"free_bytes": 10**13}),
+                                 P.RELEASE_DOWNLOAD_BASE_ENV: "http://127.0.0.1:9/"}, d, prof)
         rst = [(e.get("step"), e.get("state")) for e in res["events"] if e.get("event") == "step"]
         ev["killed_copy"] = {"killed": bool(k["killed"]), "copy_progress_events": seen["n"],
                              "partials_after_kill": partial, "resume_steps": rst, "resume_rc": res["rc"],
                              "client": _client_check(d / "h2 s")}
+        if res["rc"] != 0:
+            ev["killed_copy"]["resume_tail"] = res["out_tail"]
         require(k["killed"] and seen["n"] >= 3, "the run wasn't killed during the client copy", **ev)
         require(("client", "done") in rst and ev["killed_copy"]["client"].get("manifest")
                 and not ev["killed_copy"]["client"].get("mismatches"),
