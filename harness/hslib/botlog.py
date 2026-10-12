@@ -42,3 +42,21 @@ def grep(pattern: str, since: int = 0, path: Path = LOG, flags: int = 0) -> list
 
 def count(pattern: str, since: int = 0, path: Path = LOG) -> int:
     return len(grep(pattern, since, path))
+
+
+WORLDSERVER_LOG = P.LOGS / "worldserver.out"
+
+
+def marks(paths: dict[str, Path] | None = None) -> dict[str, tuple[Path, int]]:
+    """Offsets of the server logs now: pass the result to `excerpt` to keep only what came after (a check's start)."""
+    paths = paths if paths is not None else {"playerbots": LOG, "worldserver": WORLDSERVER_LOG}
+    return {name: (path, offset(path)) for name, path in paths.items()}
+
+
+def excerpt(at: dict[str, tuple[Path, int]], max_lines: int = 150, pattern: str | None = None) -> dict[str, list[str]]:
+    """The last `max_lines` lines of each log written since `marks()` (a log truncated by a worldserver restart in
+    between is read from its start, see `lines`), only those matching regex `pattern` (re.search, case-insensitive)
+    when given. Evidence for a failure that has no other server-side trace."""
+    rx = re.compile(pattern, re.I) if pattern else None
+    return {name: [l for l in lines(off, path) if not rx or rx.search(l)][-max_lines:]
+            for name, (path, off) in at.items()}

@@ -22,7 +22,7 @@ import math
 import re
 import time
 
-from . import db, dbc, fixtures as F, paths as P, soap
+from . import botlog, db, dbc, fixtures as F, paths as P, soap
 from .probe import client as probe
 from .probe import proto as W
 
@@ -165,6 +165,41 @@ def bot_info(guid: int) -> dict:
     g, n, c, r, lv, on, a, t = rows[0]
     return {"guid": int(g), "name": n, "class": int(c), "race": int(r), "level": int(lv), "online": int(on),
             "account": int(a), "account_type": None if t in (None, "NULL") else int(t)}
+
+
+def addclass_pool(cls_id: int) -> list[dict]:
+    """The addclass-pool characters (playerbots_account_type.account_type = ADDCLASS_ACCOUNT_TYPE) of one class, with
+    their online flag and saved party (characters.group_member)."""
+    rows = db.query(f"SELECT c.guid, c.name, c.level, c.online, c.account, "
+                    f"(SELECT gm.guid FROM group_member gm WHERE gm.memberGuid=c.guid) FROM characters c "
+                    f"JOIN {P.DB_NAMES['playerbots']}.playerbots_account_type t ON t.account_id=c.account "
+                    f"WHERE t.account_type={ADDCLASS_ACCOUNT_TYPE} AND c.class={int(cls_id)} ORDER BY c.guid",
+                    "characters")
+    return [{"guid": int(g), "name": n, "level": int(lv), "online": int(on), "account": int(a),
+             "group": None if grp in (None, "NULL") else int(grp)} for g, n, lv, on, a, grp in rows]
+
+
+def addclass_verdict(pool: list[dict], before: set, chat: list[dict], master_group: int | None) -> str:
+    """Which step of the addclass path (PlayerbotMgr.cpp HandlePlayerbotCommand -> AddPlayerBot -> async login ->
+    OnBotLogin -> GroupInviteOperation) a missing companion stopped at, from what the master and the DB can see."""
+    refused = [c["msg"] for c in chat if c.get("type") == W.CHAT_MSG_SYSTEM and "Failure" in (c.get("msg") or "")]
+    if refused:
+        return f"refused by AddPlayerBot: {refused[0]}"
+    online = [c for c in pool if c["online"] and c["guid"] not in before]
+    greeted = {c.get("sender") for c in chat if c.get("sender")} & {c["guid"] for c in online}
+    if not online:
+        return "no pool character of the class came online (the bot login never completed)"
+    seen_in_db = [c["name"] for c in online if master_group is not None and c["group"] == master_group]
+    if seen_in_db:
+        return (f"pool character(s) {seen_in_db} in the master's saved party (DB) but no SMSG_GROUP_LIST with it reached "
+                "the probe in time (late invite or a probe-side miss)")
+    stale = [c["name"] for c in online if c["group"] is not None]
+    if stale:
+        return (f"pool character(s) {stale} online but in another saved party: the invite was lost "
+                "(GroupInviteOperation refuses a target already in a group)")
+    who = [c["name"] for c in online]
+    return (f"pool character(s) {who} online{' and greeted the master' if greeted else ''} but not in the party "
+            "(OnBotLogin / GroupInviteOperation never added it)")
 
 
 def human_start_zone() -> int:
@@ -441,8 +476,10 @@ class Session:
         self.guid = None
         self.ev = {}
         self.companions = {}     # name -> bot_info
+        self.log_marks = None    # botlog.marks() at session start
 
     def __enter__(self):
+        self.log_marks = botlog.marks()     # server logs from here on are a failed addclass's evidence
         self.ev["account"] = ensure_account()
         self.ev["character"] = ensure_character()
         self.ev["prepare"] = prepare_offline(self.level, self.tele)
@@ -530,7 +567,7 @@ class Session:
         characters.class is that class. Returns the evidence (raises CompanionError on timeout)."""
         want = CLASS_IDS[cls]
         before = {m["guid"] for m in self.members()}
-        since = self.ws.mark()
+        since = cmd_mark = self.ws.mark()
         t0 = time.time()
         reply = self.ws.command(f".playerbots bot addclass {cls}", settle=0.5, timeout=5)
         found = None
@@ -547,11 +584,38 @@ class Session:
         ev = {"command": f".playerbots bot addclass {cls}", "reply": reply, "elapsed_s": round(time.time() - t0, 2)}
         if not found:
             raise CompanionError(f"no online {cls} joined the party within {timeout:.0f} s", **ev,
-                                 group=self.ws.group, members=self.members())
+                                 group=self.ws.group, members=self.members(),
+                                 diagnosis=self.addclass_diagnosis(want, before, cmd_mark))
         m, info, e = found
         self.companions[m["name"]] = info
         ev["reset_ai"] = self.reset_ai(m["name"], m["guid"])
         return ev | {"member": m, "bot": info, "group_list": e}
+
+    def addclass_diagnosis(self, want: int, before: set, since: int) -> dict:
+        """Evidence for an addclass that never showed a new member (comp.quest_shared flake, 2026-10-12): what the
+        server told the master since the command (system messages such as AddPlayerBot's "Failure: ..." and the bot's
+        TellMaster "Hello!" whisper, PlayerbotMgr.cpp), the addclass-pool characters of that class right now, the
+        master's saved party, and the server log lines since the session started. Best-effort: a failing query is
+        recorded, never raised (the check already fails)."""
+        out = {"chat_since_command": [{k: e.get(k) for k in ("type", "sender", "msg")}
+                                      for e in self.ws.events_since(since) if e["kind"] == "chat"][-30:]}
+        try:
+            out["pool"] = addclass_pool(want)
+        except Exception as e:      # noqa: BLE001
+            out["pool"] = f"query failed: {e}"
+        try:
+            out["master_group_rows"] = self.group_rows()
+        except Exception as e:      # noqa: BLE001
+            out["master_group_rows"] = f"query failed: {e}"
+        pool = out["pool"] if isinstance(out["pool"], list) else []
+        rows = out["master_group_rows"] if isinstance(out["master_group_rows"], list) else []
+        out["verdict"] = addclass_verdict(pool, before, out["chat_since_command"], int(rows[0][0]) if rows else None)
+        if self.log_marks:
+            names = [re.escape(r["name"]) for r in pool] + [re.escape(_id()[2])]
+            keys = r"GroupInvite|OnBotLogin|addclass|Add class|queue|operation|error|fatal|" + "|".join(names)
+            out["server_log"] = botlog.excerpt(self.log_marks, max_lines=80, pattern=keys)
+            out["server_log_tail"] = botlog.excerpt(self.log_marks, max_lines=25)
+        return out
 
     def reset_ai(self, name: str, guid: int, timeout: float = 10.0) -> dict:
         """Whisper `reset botAI` (ResetAiAction: PlayerbotRepository::Reset + ResetStrategies, reply 'AI was reset to
