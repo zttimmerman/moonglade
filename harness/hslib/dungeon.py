@@ -512,6 +512,7 @@ class Session(C.Session):
         """Whisper `summon` to each companion (playerbots SummonAction; the GM .summon refuses non-GM targets into an
         instance, cs_misc.cpp) until AutoBalance counts n_expected players on the map."""
         t0, tries, ms = time.time(), 0, {}
+        mark = self.ws.mark()
         while time.time() - t0 < timeout:
             for n in list(self.companions):
                 self.ws.chat("summon", W.CHAT_MSG_WHISPER, to=n)
@@ -526,7 +527,23 @@ class Session(C.Session):
                 if time.time() - t_try >= 4:
                     break
         return {"ok": False, "s": round(time.time() - t0, 1), "players": ms.get("players"), "tries": tries,
-                "mapstat": ms}
+                "mapstat": ms, "companions": self.where_companions(mark)}
+
+    def where_companions(self, mark: int) -> dict:
+        """Evidence for a gather that didn't fill the map: each companion's map line from `.pinfo` (cs_misc.cpp
+        HandlePInfoCommand, LANG_PINFO_CHR_MAP: the map, zone and area; online or not) and its whispers since `mark`
+        (playerbots SummonAction answers with TellError when it refuses a summon)."""
+        out = {}
+        for n, info in list(self.companions.items()):
+            try:
+                lines = soap.gm(f"pinfo {n}").output.splitlines()
+            except Exception as e:  # noqa: BLE001  evidence only
+                lines = [f"{type(e).__name__}: {e}"]
+            g = info.get("guid") if isinstance(info, dict) else None
+            out[n] = {"pinfo": [l.strip() for l in lines if re.search(r"Map|Online|Alive|Error", l)][:6],
+                      "whispers": [e["msg"] for e in self.ws.events_since(mark) if e["kind"] == "chat"
+                                   and e["type"] == W.CHAT_MSG_WHISPER and (g is None or e.get("sender") == g)][-6:]}
+        return out
 
 
 # ----------------------------------------------------------------------------- solo final boss (scale.solo_final_boss)

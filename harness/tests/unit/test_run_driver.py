@@ -1092,6 +1092,32 @@ class WipeReviveAtTheProbe(UnitCase):
         self.assertIn(("whisper", "Tank", "summon"), s.log[i:])
 
 
+class GatherInEvidence(UnitCase):
+    """M4 gate rerun, The Deadmines: the entry gather ran out with `.ab mapstat` at 1 player and no word on where the
+    four companions were. A failed gather records each one's `.pinfo` map line and its whispers (summon refusals)."""
+
+    def test_failed_gather_says_where_each_companion_is(self):
+        from types import SimpleNamespace
+        s = FakeSession(events=[{"kind": "chat", "type": D.W.CHAT_MSG_WHISPER, "sender": 11,
+                                 "msg": "Not enough place to summon"},
+                                {"kind": "chat", "type": D.W.CHAT_MSG_WHISPER, "sender": 12, "msg": "Hello!"}])
+        s.companions = {"Tank": {"guid": 11}, "Heal": {"guid": 12}}
+        s.mapstat = lambda: {"players": 1}
+        s.where_companions = lambda mark: D.Session.where_companions(s, mark)
+        out = {"Tank": "Map: The Deadmines, Zone: Westfall\nOnline: Yes", "Heal": "Map: Eastern Kingdoms"}
+        orig_gm, orig_sleep = D.soap.gm, D.time.sleep
+        D.soap.gm = lambda c: SimpleNamespace(output=out[c.split()[1]])
+        D.time.sleep = lambda x: None
+        try:
+            g = D.Session.gather(s, 3, timeout=0)
+        finally:
+            D.soap.gm, D.time.sleep = orig_gm, orig_sleep
+        self.assertFalse(g["ok"])
+        self.assertEqual(g["companions"]["Tank"]["pinfo"][0], "Map: The Deadmines, Zone: Westfall")
+        self.assertEqual(g["companions"]["Tank"]["whispers"], ["Not enough place to summon"])
+        self.assertEqual(g["companions"]["Heal"]["whispers"], ["Hello!"])
+
+
 class WaitQuiet(UnitCase):
     def test_quiet_after_quiet_s_without_a_fight(self):
         orig = (D.POLL_S, D.QUIET_S)
