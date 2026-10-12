@@ -125,13 +125,20 @@ def within(a: float | None, b: float | None, rel: float = 0.01) -> bool:
 
 # ----------------------------------------------------------------------------- account + character
 
-def account_id() -> int | None:
-    v = db.scalar(f"SELECT id FROM account WHERE username='{P.DUNGEON_USER}'", "auth")
+# The dungeon checks' identity; the run driver's navmesh pass uses NAV (design.md §4 GM permissions: `.mmap path` is
+# security 3 in the command table, the dungeon account is 2, so a separate level-3 harness account does the path
+# queries, never PLAYER).
+DUNGEON_ID = {"user": P.DUNGEON_USER, "password": P.DUNGEON_PASS, "char": P.DUNGEON_CHAR, "gmlevel": GM_LEVEL}
+NAV_ID = {"user": P.DUNGEON_NAV_USER, "password": P.DUNGEON_NAV_PASS, "char": P.DUNGEON_NAV_CHAR, "gmlevel": 3}
+
+
+def account_id(who: dict = DUNGEON_ID) -> int | None:
+    v = db.scalar(f"SELECT id FROM account WHERE username='{who['user']}'", "auth")
     return int(v) if v else None
 
 
-def char_row() -> dict | None:
-    rows = db.query(f"SELECT guid, account, level, online, map FROM characters WHERE name='{P.DUNGEON_CHAR}'",
+def char_row(who: dict = DUNGEON_ID) -> dict | None:
+    rows = db.query(f"SELECT guid, account, level, online, map FROM characters WHERE name='{who['char']}'",
                     "characters")
     if not rows:
         return None
@@ -139,51 +146,52 @@ def char_row() -> dict | None:
     return {"guid": int(g), "account": int(a), "level": int(lv), "online": int(on), "map": int(m)}
 
 
-def ensure_account() -> dict:
+def ensure_account(who: dict = DUNGEON_ID) -> dict:
     ev = {}
-    if account_id() is None:
-        ev["create"] = C.gm(f"account create {P.DUNGEON_USER} {P.DUNGEON_PASS}").evidence()
-        _, ok, _ = F.poll(account_id, bool, timeout=15)
+    lvl = who["gmlevel"]
+    if account_id(who) is None:
+        ev["create"] = C.gm(f"account create {who['user']} {who['password']}").evidence()
+        _, ok, _ = F.poll(lambda: account_id(who), bool, timeout=15)
         if not ok:
             raise DungeonError("dungeon account not in auth.account after `account create`", **ev)
-    acct = account_id()
+    acct = account_id(who)
     access = F.access_rows(acct)
-    if access != [[str(GM_LEVEL), "-1"]]:
-        ev["gmlevel"] = C.gm(f"account set gmlevel {P.DUNGEON_USER} {GM_LEVEL} -1").evidence()
-        access, ok, _ = F.poll(lambda: F.access_rows(acct), lambda v: v == [[str(GM_LEVEL), "-1"]], timeout=15)
+    if access != [[str(lvl), "-1"]]:
+        ev["gmlevel"] = C.gm(f"account set gmlevel {who['user']} {lvl} -1").evidence()
+        access, ok, _ = F.poll(lambda: F.access_rows(acct), lambda v: v == [[str(lvl), "-1"]], timeout=15)
         if not ok:
             raise DungeonError("dungeon account security level not set", access=access, **ev)
-    return ev | {"account": P.DUNGEON_USER, "id": acct, "account_access": access}
+    return ev | {"account": who["user"], "id": acct, "account_access": access}
 
 
-def ensure_character() -> dict:
-    if char_row():
-        return {"character": P.DUNGEON_CHAR, "created": False}
-    _, ws, _ = probe.open_world(P.DUNGEON_USER, P.DUNGEON_PASS)
+def ensure_character(who: dict = DUNGEON_ID) -> dict:
+    if char_row(who):
+        return {"character": who["char"], "created": False}
+    _, ws, _ = probe.open_world(who["user"], who["password"])
     with ws:
-        code = ws.char_create(P.DUNGEON_CHAR, F.RACE_HUMAN, F.CLASS_WARRIOR)
+        code = ws.char_create(who["char"], F.RACE_HUMAN, F.CLASS_WARRIOR)
         if code != W.CHAR_CREATE_SUCCESS:
             raise DungeonError("CMSG_CHAR_CREATE rejected", result=f"0x{code:02X} {W.RESPONSE_NAMES.get(code, '?')}")
-    _, ok, _ = F.poll(char_row, bool, timeout=15)
+    _, ok, _ = F.poll(lambda: char_row(who), bool, timeout=15)
     if not ok:
         raise DungeonError("dungeon character not in characters DB after CHAR_CREATE_SUCCESS")
-    return {"character": P.DUNGEON_CHAR, "created": True}
+    return {"character": who["char"], "created": True}
 
 
-def prepare_offline(level: int, tele: str | None = START_TELE) -> dict:
+def prepare_offline(level: int, tele: str | None = START_TELE, who: dict = DUNGEON_ID) -> dict:
     """Level (and, unless tele is None, place) the offline character through the server."""
-    _, ok, _ = F.poll(lambda: char_row()["online"], lambda v: v == 0, timeout=30)
+    _, ok, _ = F.poll(lambda: char_row(who)["online"], lambda v: v == 0, timeout=30)
     if not ok:
-        raise DungeonError("dungeon character still online; offline preparation needs it logged out", row=char_row())
+        raise DungeonError("dungeon character still online; offline preparation needs it logged out", row=char_row(who))
     ev = {}
-    if char_row()["level"] != level:
-        ev["level"] = C.gm(f"character level {P.DUNGEON_CHAR} {level}").evidence()
-        _, ok, _ = F.poll(lambda: char_row()["level"], lambda v: v == level, timeout=15)
+    if char_row(who)["level"] != level:
+        ev["level"] = C.gm(f"character level {who['char']} {level}").evidence()
+        _, ok, _ = F.poll(lambda: char_row(who)["level"], lambda v: v == level, timeout=15)
         if not ok:
             raise DungeonError("dungeon character level not saved", **ev)
     if tele:
         t = F.tele_row(tele)
-        ev["tele"] = C.gm(f"tele name {P.DUNGEON_CHAR} {t['name']}").evidence()
+        ev["tele"] = C.gm(f"tele name {who['char']} {t['name']}").evidence()
         ev["tele_row"] = t
     return ev
 
@@ -222,20 +230,22 @@ class Session(C.Session):
     """The dungeon probe in the world (companion.Session's helpers, on P.DUNGEON_USER / P.DUNGEON_CHAR). On exit the
     companions are removed, GM mode and the selfbot are switched off and the probe logs out."""
 
-    def __init__(self, level: int, tele: str | None = START_TELE):
+    def __init__(self, level: int, tele: str | None = START_TELE, who: dict = DUNGEON_ID):
         super().__init__(level=level, tele=tele or START_TELE)
         self.place = tele
         self.selfbot = False
+        self.who = who
 
     def __enter__(self):
-        self.ev["account"] = ensure_account()
-        self.ev["character"] = ensure_character()
-        self.ev["prepare"] = prepare_offline(self.level, self.place)
-        _, ws, _ = probe.open_world(P.DUNGEON_USER, P.DUNGEON_PASS)
+        who = self.who
+        self.ev["account"] = ensure_account(who)
+        self.ev["character"] = ensure_character(who)
+        self.ev["prepare"] = prepare_offline(self.level, self.place, who)
+        _, ws, _ = probe.open_world(who["user"], who["password"])
         self.ws = ws
         try:
             chars = ws.char_enum()
-            c = next((c for c in chars if c["name"].lower() == P.DUNGEON_CHAR.lower()), None)
+            c = next((c for c in chars if c["name"].lower() == who["char"].lower()), None)
             if not c:
                 raise DungeonError("dungeon character not in char enum", enum=chars)
             self.guid = c["guid"]
@@ -265,19 +275,19 @@ class Session(C.Session):
         super().__exit__(*exc)
 
     def revive_if_dead(self) -> dict:
-        pinfo = soap.gm(f"pinfo {P.DUNGEON_CHAR}").output
+        pinfo = soap.gm(f"pinfo {self.who['char']}").output
         alive = re.search(r"Alive \?: (\w+)", pinfo)
         ev = {"alive_before": alive.group(1) if alive else None}
         if alive and alive.group(1) != "Yes":
             ev["revive"] = self.ws.command(".revive", settle=0.5, timeout=5)
-            alive = re.search(r"Alive \?: (\w+)", soap.gm(f"pinfo {P.DUNGEON_CHAR}").output)
+            alive = re.search(r"Alive \?: (\w+)", soap.gm(f"pinfo {self.who['char']}").output)
             ev["alive_after"] = alive.group(1) if alive else None
             if ev["alive_after"] != "Yes":
                 raise DungeonError("dungeon probe is dead and `.revive` didn't bring it back", **ev)
         return ev
 
     def alive(self, name: str | None = None) -> str | None:
-        m = re.search(r"Alive \?: (\w+)", soap.gm(f"pinfo {name or P.DUNGEON_CHAR}").output)
+        m = re.search(r"Alive \?: (\w+)", soap.gm(f"pinfo {name or self.who['char']}").output)
         return m.group(1) if m else None
 
     # -- commands and movement
@@ -703,4 +713,541 @@ def solo_final_boss(s: "Session", f: dict, log=None) -> dict:
     s.cmd(".playerbots bot self", settle=0.8)
     s.selfbot = False
     s.cmd(".revive", settle=0.3)
+    return ev
+
+
+# ============================================================================ run driver (m4-dungeon-companions §4)
+# Prototype (tasks.md 1.1, docs/research/m4-full-run.md): the companion party clears a dungeon's required encounters
+# boss by boss. Positions come from the world DB (boss spawns, the entrance) and the core's path query; nothing is
+# hand-placed.
+
+STAGE_BACK_YD = 30            # design.md §4: the boss spawn moved 30 yd back toward the previous staging point
+STAGE_OFF_LINE_YD = 10        # design.md §4: a navmesh point farther than this from the candidate is refused
+STAGE_MIN_BOSS_YD = 25        # design.md §4 fallback: at least this far from the boss
+STAGE_WALK_MAX_YD = 45        # prototype: the line's point is refused when it is farther than this on foot (1.5 x 30)
+# `.mmap path` prints only the path's start, end and actual end (cs_mmaps.cpp HandleMmapPathCommand); the points
+# themselves are summoned as VISUAL_WAYPOINT creatures (MotionMaster.h, entry 1; 9 s timed despawn), which the probe
+# reads from their create blocks (probe.client.parse_update_blocks, track_creates).
+VISUAL_WAYPOINT = 1
+WAYPOINT_WAIT_S = 2.5         # the waypoints' create packets after the command (or after the probe's teleport)
+PATH_NORMAL, PATH_INCOMPLETE, PATH_NOPATH = 0x01, 0x04, 0x08     # PathGenerator.h enum PathType
+GATHER_YD = 15                # design.md §4: everyone within 15 yd
+GATHER_S = 60                 # design.md §4: or 60 s
+QUIET_S = 5                   # "out of combat": no melee/spell damage event involving a party member for this long
+FIGHT_S = 300                 # one pull, at most
+STALL_S = 60                  # a pull with no fight involving the boss after this long is abandoned
+MAX_WIPES = 2                 # design.md §4: max 2 wipes, then FAIL
+RESET_S = 90                  # a wiped-on boss evades and heals back to full within this
+POLL_S = 1.0
+SOLO_PULL_YD = 6              # the selfbot run: stand this far from the boss, inside its aggro radius (SOLO_STAND_YD)
+RUN_RULE = ("order: required encounters (a static spawn of the credit entry; m4-dungeon-scaling design §6) by "
+            "DungeonEncounter.dbc orderIndex. Staging: the boss spawn moved 30 yd back toward the previous staging "
+            "point (the entrance for the first), snapped by `.mmap path` (the boss's path to the candidate; its "
+            "ActualEndPosition) and kept if within 10 yd of the candidate and <= 45 yd from the boss on foot; else the boss's `.mmap path` to the "
+            "previous staging point, read point by point (its VISUAL_WAYPOINT summons), and the last point on it that "
+            "is >= 25 yd from the boss (walking from the previous staging point). Pull: the probe selects the boss, "
+            "whispers `tank attack` and `attack` to the tank. Wipe: every fighter dead; `.revive`, back to staging, "
+            "wait for the boss's reset, retry; max 2 wipes.")
+
+
+def required_encounters(f: dict) -> tuple[list[dict], list[dict]]:
+    """(required, skipped): encounters with a static spawn of their credit entry, by orderIndex; the rest are reported
+    as skipped (an event-summoned boss, m4-dungeon-scaling design.md §6)."""
+    req = sorted((e for e in f["encounters"] if e["spawns"]), key=lambda e: e["order"])
+    skipped = [{"encounter": e["encounter"], "credit_entry": e["credit_entry"], "order": e["order"],
+                "why": "skipped: no static spawn"} for e in f["encounters"] if not e["spawns"]]
+    return req, skipped
+
+
+def dist3(a: dict, b: dict) -> float:
+    return math.sqrt((a["x"] - b["x"]) ** 2 + (a["y"] - b["y"]) ** 2 + (a["z"] - b["z"]) ** 2)
+
+
+def stage_candidate(boss: dict, prev: dict, back: float = STAGE_BACK_YD) -> dict:
+    """The boss spawn moved `back` yd (2D) along the straight line toward `prev`; the height follows the line
+    (linear between the two, held at prev's beyond it)."""
+    dx, dy = prev["x"] - boss["x"], prev["y"] - boss["y"]
+    d = math.hypot(dx, dy)
+    if d < 1e-6:
+        return {"x": boss["x"], "y": boss["y"], "z": boss["z"]}
+    t = back / d
+    return {"x": boss["x"] + dx * t, "y": boss["y"] + dy * t, "z": boss["z"] + (prev["z"] - boss["z"]) * min(t, 1.0)}
+
+
+_V3 = r"\((-?[\d.]+(?:e-?\d+)?), (-?[\d.]+(?:e-?\d+)?), (-?[\d.]+(?:e-?\d+)?)\)"
+
+
+def parse_mmap_path(lines: list[str]) -> dict:
+    """`.mmap path` (cs_mmaps.cpp HandleMmapPathCommand): 'Result: <true|false> - Length: <n> - Type: <PathType>',
+    'StartPosition (x, y, z)', 'EndPosition (..)', 'ActualEndPosition (..)'; 'NavMesh not loaded for current map.'"""
+    t = "\n".join(lines)
+    out = {"nav_loaded": "NavMesh not loaded" not in t, "raw": lines[:8]}
+    r = re.search(r"Result: (true|false) - Length: (\d+) - Type: (\d+)", t)
+    if r:
+        out |= {"result": r.group(1) == "true", "length": int(r.group(2)), "type": int(r.group(3))}
+    for key, label in (("start", "StartPosition"), ("end", "EndPosition"), ("actual_end", "ActualEndPosition")):
+        m = re.search(rf"(?<!Actual){label}\s+{_V3}", t)
+        if m:
+            out[key] = {"x": float(m.group(1)), "y": float(m.group(2)), "z": float(m.group(3))}
+    return out
+
+
+def judge_stage(boss: dict, cand: dict, path: dict) -> dict:
+    """The design's candidate: 'primary' when the core's path from the boss reaches within 10 yd of it."""
+    ae = path.get("actual_end")
+    out = {"candidate": cand, "path_type": path.get("type"), "verdict": None}
+    if not ae or path.get("type") is None or path["type"] & PATH_NOPATH:
+        return out | {"why": "no path"}
+    off, boss_yd = dist3(ae, cand), dist3(ae, boss)
+    out |= {"point": ae, "off_yd": round(off, 1), "boss_yd": round(boss_yd, 1)}
+    if off > STAGE_OFF_LINE_YD:
+        return out | {"why": f"snapped {off:.1f} yd off the candidate"}
+    return out | {"verdict": "primary"}
+
+
+def path_points(creates: list[dict]) -> list[dict]:
+    """The waypoints of one `.mmap path` in path order (from the selected unit to the probe): the VISUAL_WAYPOINT
+    creates, deduplicated by GUID and sorted by the GUID's counter (SummonCreature in path order)."""
+    seen = {}
+    for c in creates:
+        if guid_entry(c["guid"]) == VISUAL_WAYPOINT and c.get("pos"):
+            seen.setdefault(c["guid"], c["pos"])
+    return [{"x": p["x"], "y": p["y"], "z": p["z"]} for g, p in sorted(seen.items(), key=lambda kv: kv[0] & 0xFFFFFF)]
+
+
+def walk_to(points: list[dict], point: dict) -> float | None:
+    """Walking distance from the boss (points[0]) along the path to the path point nearest `point`; None when no path
+    point is within STAGE_OFF_LINE_YD of it."""
+    if not points:
+        return None
+    i = min(range(len(points)), key=lambda k: dist3(points[k], point))
+    if dist3(points[i], point) > STAGE_OFF_LINE_YD:
+        return None
+    return round(sum(dist3(points[k], points[k + 1]) for k in range(i)), 1)
+
+
+def fallback_point(points: list[dict], boss: dict, min_yd: float = STAGE_MIN_BOSS_YD) -> dict | None:
+    """design.md §4 fallback: on the path from the boss to the previous staging point, the last point (walking from the
+    previous staging point toward the boss) that is >= min_yd from the boss."""
+    last = None
+    for p in reversed(points):          # points run boss -> previous staging point
+        if dist3(p, boss) >= min_yd:
+            last = p
+    return last
+
+
+def nav_stages(f: dict, req: list[dict], log=None) -> dict:
+    """The navmesh pass: NAV_ID (security 3) in GM mode, alone in a fresh copy of its own, asks the core's path query
+    for every required encounter's staging point (RUN_RULE). Returns {"stages": [{encounter, boss, point, tries}]}."""
+    say = log or (lambda *a: None)
+    out = {"account": NAV_ID["user"], "gmlevel": NAV_ID["gmlevel"], "stages": []}
+    t0 = time.time()
+    with Session(f["target_level"], who=NAV_ID) as s:
+        out["unbind"] = s.unbind(f["map"])
+        s.cmd(".gm on", settle=0.3)
+        e = f["entrance"]
+        r = s.go(e["x"], e["y"], e["z"], f["map"])
+        out["enter"] = r["event"]
+        if not (r["event"] and r["event"]["kind"] == "new_world"):
+            raise DungeonError("nav pass: didn't arrive in the dungeon", **out)
+        prev = {"x": e["x"], "y": e["y"], "z": e["z"]}
+        for enc in req:
+            sp = enc["spawns"][0]
+            boss = {"x": sp["x"], "y": sp["y"], "z": sp["z"]}
+            rec = {"encounter": enc["encounter"], "boss": sp["name"], "spawn": boss, "prev": prev, "point": None,
+                   "verdict": None}
+            cand = stage_candidate(boss, prev)
+            s.go(cand["x"], cand["y"], cand["z"])
+            u = s.unit(sp["spawn_id"], enc["credit_entry"])
+            if u.get("guid"):
+                s.ws.set_selection(u["guid"])
+                time.sleep(0.3)
+                path = parse_mmap_path(s.cmd(".mmap path", settle=0.6))
+                rec["primary"] = judge_stage(boss, cand, path) | {"raw": path.get("raw")}
+                if rec["primary"]["verdict"]:
+                    rec |= {"point": rec["primary"]["point"], "verdict": "primary"}
+            # the path is read for every encounter: the fallback point, and the approach the pull walks if the tank
+            # can't see the boss from the staging point (playerbots AttackAction::Attack needs line of sight)
+            rec["fallback"] = fb = _path_fallback(s, sp, enc, boss, prev)
+            if rec["point"] and fb.get("points"):
+                walk = walk_to(fb["points"], rec["point"])
+                rec["primary"]["walk_yd"] = walk
+                if walk is None or walk > STAGE_WALK_MAX_YD:
+                    # the line's point is near on the map but far on foot (another deck of the ship): refused
+                    rec["primary"] |= {"verdict": None, "why": f"walk {walk} yd from the boss"}
+                    rec |= {"point": None, "verdict": None}
+            if not rec["point"] and fb.get("point"):
+                rec |= {"point": fb["point"], "verdict": "fallback"}
+            if rec["point"]:
+                rec["approach"] = approach_points(fb.get("points") or [], rec["point"], boss)
+            say({"boss": sp["name"], "verdict": rec["verdict"], "point": rec["point"],
+                 "primary_why": (rec.get("primary") or {}).get("why"),
+                 "fallback": {k: (rec.get("fallback") or {}).get(k) for k in ("n_points", "path_type", "why")}})
+            out["stages"].append(rec)
+            if rec["point"]:
+                prev = rec["point"]
+        s.ws.set_selection(0)
+        out["leave"] = s.leave()
+        s.cmd(".gm off", settle=0.3)
+    out["s"] = round(time.time() - t0, 1)
+    return out
+
+
+def _creates_settle(s: "Session", mark: int, quiet: float = 0.75, cap: float = WAYPOINT_WAIT_S) -> int:
+    """Poll until no new waypoint create arrived for `quiet` s (at most `cap` s); returns how many arrived."""
+    t0 = last_t = time.time()
+    n = 0
+    while time.time() - t0 < cap:
+        k = sum(1 for e in s.ws.events_since(mark, "unit_create") if guid_entry(e["guid"]) == VISUAL_WAYPOINT)
+        if k != n:
+            n, last_t = k, time.time()
+        elif n and time.time() - last_t >= quiet:
+            break
+        time.sleep(0.2)
+    return n
+
+
+def _path_fallback(s: "Session", sp: dict, enc: dict, boss: dict, prev: dict) -> dict:
+    """The boss's path to the previous staging point, point by point: the probe (GM) stands on the previous staging
+    point, selects the boss and runs `.mmap path`; the waypoints in sight arrive as creates, and the probe then steps
+    to the boss so the ones near it (out of sight from far away) arrive too, within their 9 s."""
+    s.go(prev["x"], prev["y"], prev["z"] + 0.5)
+    u = s.unit(sp["spawn_id"], enc["credit_entry"])
+    if not u.get("guid"):
+        return {"why": "boss not found from the previous staging point"}
+    s.ws.track_creates = True
+    try:
+        mark = s.ws.mark()
+        s.ws.set_selection(u["guid"])
+        time.sleep(0.3)
+        path = parse_mmap_path(s.cmd(".mmap path", settle=0.6))
+        _creates_settle(s, mark)
+        s.go(boss["x"], boss["y"], boss["z"] + 1)
+        _creates_settle(s, mark)
+        pts = path_points(s.ws.events_since(mark, "unit_create"))
+    finally:
+        s.ws.track_creates = False
+    pt = fallback_point(pts, boss)
+    return {"path_type": path.get("type"), "length": path.get("length"), "raw": path.get("raw"), "n_points": len(pts),
+            "points": pts, "point": pt, "why": None if pt else "no path point >= 25 yd from the boss",
+            "boss_yd": round(dist3(pt, boss), 1) if pt else None}
+
+
+APPROACH_STEP = 2             # path points per approach step (SMOOTH_PATH_STEP_SIZE 4 yd apart: ~8 yd)
+APPROACH_MIN_YD = 8           # the approach stops this close to the boss
+APPROACH_STEPS = 12
+NOT_IN_SIGHT = "not in my sight"   # AttackAction.cpp "attack_target_not_in_sight_error"
+
+
+def approach_points(points: list[dict], stage: dict, boss: dict) -> list[dict]:
+    """The pull's approach: the path points (boss -> previous staging point) from the one nearest the staging point
+    toward the boss, every APPROACH_STEP-th, stopping APPROACH_MIN_YD from the boss."""
+    if not points:
+        return []
+    i = min(range(len(points)), key=lambda k: dist3(points[k], stage))
+    out = []
+    for k in range(i - APPROACH_STEP, -1, -APPROACH_STEP):
+        if dist3(points[k], boss) < APPROACH_MIN_YD:
+            break
+        out.append(points[k])
+    return out
+
+
+# -- run accounting (pure)
+
+def role_of_key(key: str) -> str:
+    """The plan's companion key -> role (MG_PARTY_PLAN: the `tank` and `healer` companions; the rest deal damage)."""
+    return key if key in ("tank", "healer") else "damage"
+
+
+def new_deaths(prev: dict, now: dict) -> list[str]:
+    """Names alive in prev and dead in now ({name: True if alive, False if dead, None if unknown})."""
+    return [n for n, a in now.items() if a is False and prev.get(n) is not False]
+
+
+def is_wipe(alive: dict) -> bool:
+    """Every fighter dead (unknown counts as alive)."""
+    return bool(alive) and all(a is False for a in alive.values())
+
+
+def next_step(killed: bool, wipes: int, timed_out: bool = False) -> str:
+    """After a pull: 'next' (boss dead), 'retry' (a wipe or a stalled pull, wipes still <= MAX_WIPES) or 'fail'."""
+    if killed:
+        return "next"
+    return "retry" if wipes <= MAX_WIPES else "fail"
+
+
+def encounter_summary(rec: dict, roles: dict) -> dict:
+    """One encounter's row: total time over its attempts, wipes, deaths by role, killed (the encounter bit)."""
+    by_role: dict = {}
+    for a in rec["attempts"]:
+        for n in a.get("deaths", []):
+            r = roles.get(n, "probe")
+            by_role[r] = by_role.get(r, 0) + 1
+    return {"boss": rec["boss"], "encounter": rec["encounter"], "attempts": len(rec["attempts"]),
+            "wipes": sum(1 for a in rec["attempts"] if a.get("wipe")), "deaths_by_role": by_role,
+            "time_s": round(sum(a.get("fight_s") or 0 for a in rec["attempts"]), 1),
+            "with_gather_s": round(sum((a.get("fight_s") or 0) + (a.get("gather", {}).get("s") or 0)
+                                       for a in rec["attempts"]), 1),
+            "killed": bool(rec.get("killed"))}
+
+
+# -- the live run
+
+def _alive_map(s: "Session", names: list[str]) -> dict:
+    out = {}
+    for n in names:
+        a = s.alive(n)
+        out[n] = None if a is None else a == "Yes"
+    return out
+
+
+def _combat_quiet(s: "Session", guids: set, since: int) -> float:
+    """Seconds since the last melee/spell damage event involving any of guids (since the mark)."""
+    last = None
+    for e in s.ws.events_since(since):
+        if e["kind"] in ("melee_damage", "spell_damage") and (e.get("attacker") in guids or e.get("victim") in guids):
+            last = e["t"]
+    return time.time() - last if last else 1e9
+
+
+def gather_at(s: "Session", comps: list[dict], point: dict, boss_guid: int | None = None) -> dict:
+    """design.md §4 steps 2-3: whisper `summon` to the companions that are away until everyone is within GATHER_YD of
+    the probe and nobody fought for QUIET_S (or GATHER_S), or until the boss is in a fight (the companions pulled it on
+    arrival). Healer mana isn't readable headless (prototype: not used)."""
+    t0, since, rounds = time.time(), s.ws.mark(), 0
+    guids = {c["guid"] for c in comps}
+    far: list = []
+    while True:
+        far = []
+        me = s.gps()
+        for c in comps:
+            p = s.gps(c["guid"])
+            d = dist3(me, p) if "x" in me and "x" in p and p.get("map") == me.get("map") else None
+            if d is None or d > GATHER_YD or (d < 0.01 and c["guid"] != s.guid and p == me):
+                far.append({"name": c["name"], "yd": None if d is None else round(d, 1)})
+        quiet = _combat_quiet(s, guids | {s.guid}, since)
+        if boss_guid and _combat_quiet(s, {boss_guid}, since) < 1e8:
+            # the companions engaged the boss on arrival (it stands within reach of the staging point): the fight is on
+            return {"ok": False, "boss_engaged": True, "s": round(time.time() - t0, 1), "rounds": rounds, "far": far}
+        if not far and quiet >= QUIET_S:
+            return {"ok": True, "s": round(time.time() - t0, 1), "rounds": rounds}
+        if time.time() - t0 > GATHER_S:
+            return {"ok": False, "s": round(time.time() - t0, 1), "rounds": rounds, "far": far,
+                    "quiet_s": round(min(quiet, 999), 1)}
+        if far and rounds * 4 <= time.time() - t0:
+            for x in far:
+                s.ws.chat("summon", W.CHAT_MSG_WHISPER, to=x["name"])
+            rounds += 1
+        time.sleep(POLL_S)
+
+
+def revive_dead(s: "Session", names: list[str]) -> dict:
+    """`.revive <name>` (cs_misc.cpp HandleReviveCommand, security 2) for every dead party member."""
+    out = {}
+    for n in names:
+        if s.alive(n) != "Yes":
+            out[n] = s.cmd(f".revive {n}", settle=0.4)
+    return out
+
+
+def wait_boss_reset(s: "Session", enc: dict, timeout: float = RESET_S) -> dict:
+    sp = enc["spawns"][0]
+    v, ok, dt = F.poll(lambda: s.unit(sp["spawn_id"], enc["credit_entry"]),
+                       lambda u: bool(u.get("health")) and u["health"] == u.get("max_health") and not u.get("in_combat"),
+                       timeout=timeout, interval=POLL_S)
+    return {"ok": ok, "s": dt, "health": v.get("health"), "max": v.get("max_health")}
+
+
+def pull(s: "Session", boss_guid: int, tank: str | None, comps: list[dict], approach: list[dict]) -> dict:
+    """Select the boss and whisper `tank attack` + `attack` (AttackMyTargetAction: the master's target) to the tank.
+    Until the boss is in a fight (a damage or attack-start event with it) within 3 s of the order, the probe (GM) steps
+    along the approach path, the companions follow, and the order is given again, up to APPROACH_STEPS times."""
+    steps = []
+    tank_guid = next((c["guid"] for c in comps if c["name"] == tank), None)
+    for k in range(APPROACH_STEPS + 1):
+        s.ws.set_selection(boss_guid)
+        time.sleep(0.3)
+        if not tank:
+            return {"steps": steps, "ordered": False}
+        mark = s.ws.mark()
+        s.ws.chat("tank attack", W.CHAT_MSG_WHISPER, to=tank)
+        time.sleep(0.3)
+        s.ws.chat("attack", W.CHAT_MSG_WHISPER, to=tank)
+        e = s.ws.wait_event(lambda e: (e["kind"] == "chat" and e.get("sender") == tank_guid and NOT_IN_SIGHT in e["msg"])
+                            or (e["kind"] in ("melee_damage", "spell_damage", "attack_start")
+                                and boss_guid in (e.get("attacker"), e.get("victim"))), mark, timeout=3)
+        if e and e["kind"] != "chat":
+            return {"steps": steps, "ordered": True, "engaged": True}
+        # no answer and no fight within 3 s counts like "not in my sight": the order is dropped silently unless the
+        # bot is verbose (AttackAction::Attack TellError only `if (verbose)`)
+        answer = e["msg"] if e else None
+        if k >= len(approach):
+            return {"steps": steps, "ordered": True, "engaged": False, "why": "approach path exhausted"}
+        p = approach[k]
+        s.go(p["x"], p["y"], p["z"] + 0.5)
+        steps.append({"to": p, "tank_answer": answer})
+        for c in comps:
+            s.ws.chat("follow", W.CHAT_MSG_WHISPER, to=c["name"])
+        me = s.gps()
+        F.poll(lambda: s.gps(tank_guid), lambda q: "x" in q and "x" in me and dist3(q, me) <= 6 and q != me,
+               timeout=8, interval=0.5)
+    return {"steps": steps, "ordered": True, "engaged": False, "why": "too many steps"}
+
+
+def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[str], tank: str | None,
+          selfbot: bool, say, approach: list[dict] | None = None) -> dict:
+    """One pull: select the boss, order the tank in (or, solo, stand inside the boss's aggro radius with the self-AI),
+    then poll the encounter bit and the fighters' life until the boss is dead, everyone is dead or FIGHT_S."""
+    sp = enc["spawns"][0]
+    bit = 1 << enc["bit"]
+    a: dict = {"deaths": [], "wipe": False}
+    u = s.unit(sp["spawn_id"], enc["credit_entry"])
+    a["boss_before"] = {k: u.get(k) for k in ("guid", "health", "max_health", "in_combat")}
+    mark = s.ws.mark()
+    if selfbot:
+        stage = s.gps()
+        if "x" in stage:
+            d = math.hypot(stage["x"] - sp["x"], stage["y"] - sp["y"]) or 1.0
+            s.cmd(".gm on", settle=0.3)
+            s.go(sp["x"] + (stage["x"] - sp["x"]) / d * SOLO_PULL_YD, sp["y"] + (stage["y"] - sp["y"]) / d * SOLO_PULL_YD,
+                 sp["z"] + 1)
+            s.cmd(".gm off", settle=0.3)
+    elif u.get("guid"):
+        a["pull"] = pull(s, u["guid"], tank, comps, approach or [])
+    t0 = time.time()
+    alive = {n: True for n in fighters}
+    trace = []
+    while True:
+        time.sleep(POLL_S)
+        rows = s.binds(f["map"])
+        mask = rows[0]["mask"] if rows else 0
+        now = _alive_map(s, fighters)
+        died = new_deaths(alive, now)
+        for n in died:
+            a["deaths"].append(n)
+            say({"died": n, "t": round(time.time() - t0, 1)})
+        alive = {n: (now[n] if now[n] is not None else alive[n]) for n in fighters}
+        el = time.time() - t0
+        if not trace or el - trace[-1]["t"] >= 10:
+            trace.append({"t": round(el), "mask": mask, "alive": sum(1 for v in alive.values() if v)})
+        if mask & bit:
+            a["killed"] = True
+            break
+        if is_wipe(alive):
+            a["wipe"] = True
+            break
+        if el > FIGHT_S:
+            a["timeout"] = True
+            break
+        if el > STALL_S and not any(e["kind"] in ("melee_damage", "spell_damage", "attack_start")
+                                    and u.get("guid") in (e.get("attacker"), e.get("victim"))
+                                    for e in s.ws.events_since(mark)):
+            a["timeout"] = a["stalled"] = True       # nobody ever fought the boss
+            break
+    a["fight_s"] = round(time.time() - t0, 1)
+    a["trace"] = trace
+    evs = s.ws.events_since(mark)
+    guids = {c["guid"]: c["name"] for c in comps} | {s.guid: "probe"}
+    a["hits_taken"] = {}
+    for e in evs:
+        if e["kind"] in ("melee_damage", "spell_damage") and e.get("victim") in guids:
+            n = guids[e["victim"]]
+            a["hits_taken"][n] = a["hits_taken"].get(n, 0) + e["damage"]
+    a["boss_dmg_seen"] = sum(e["damage"] for e in evs if e["kind"] in ("melee_damage", "spell_damage")
+                             and e.get("victim") == u.get("guid"))
+    if not a.get("killed"):
+        b = s.unit(sp["spawn_id"], enc["credit_entry"])
+        a["boss_after"] = {k: b.get(k) for k in ("health", "max_health", "in_combat")}
+    return a
+
+
+def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, selfbot: bool = False,
+              only: int | None = None, log=None, out: dict | None = None) -> dict:
+    """design.md §4: clear the required encounters of f in order with the companions already in the party (comps:
+    [{"companion": plan key, "name", "guid"}]; empty with selfbot=True for the solo run). The probe enters a fresh copy
+    with GM mode off (so AutoBalance counts it, design.md §6), gathers the party, then (party run) watches in GM mode
+    while the companions fight, or (selfbot) fights with the playerbots self-AI. Returns the evidence with a summary
+    row per encounter."""
+    say = log or (lambda *a: None)
+    req, skipped = required_encounters(f)
+    if only:
+        req = req[:only]
+    ev: dict = out if out is not None else {}        # filled in place, so an interrupted run keeps its evidence
+    ev |= {"rule": RUN_RULE, "required": [e["encounter"] for e in req], "skipped": skipped, "encounters": [],
+           "selfbot": selfbot}
+    roles = {c["name"]: role_of_key(c["companion"]) for c in comps}
+    names = [c["name"] for c in comps]
+    tank = next((c["name"] for c in comps if c["companion"] == "tank"), None)
+    t_run = time.time()
+    ev["unbind"] = s.unbind(f["map"])
+    e = s.enter(f)
+    ev["enter"] = {k: e.get(k) for k in ("ok", "instance")}
+    if not e["ok"]:
+        return ev | {"cleared": False, "why": "didn't enter"}
+    ev["gather_in"] = s.gather(1 + len(comps), timeout=45)
+    ev["mapstat"] = s.mapstat()
+    if ev["mapstat"].get("players") != 1 + len(comps):
+        return ev | {"cleared": False, "why": f"AutoBalance counts {ev['mapstat'].get('players')} players, not "
+                                              f"{1 + len(comps)}"}
+    fighters = names + ([s.ev["character"]["character"]] if selfbot else [])
+    if selfbot:
+        ev["self_on"] = s.cmd(".playerbots bot self", settle=1.0)
+        s.selfbot = any("Enable player botAI" in x for x in ev["self_on"])
+        if not s.selfbot:
+            return ev | {"cleared": False, "why": "selfbot not enabled"}
+    by_enc = {x["encounter"]: x for x in (stages or {}).get("stages", [])}
+    for enc in req:
+        sp = enc["spawns"][0]
+        st = by_enc.get(enc["encounter"]) or {}
+        point = st.get("point")
+        rec: dict = {"boss": sp["name"], "encounter": enc["encounter"], "stage": point,
+                     "stage_verdict": st.get("verdict"), "attempts": []}
+        ev["encounters"].append(rec)
+        if not point:
+            rec["why"] = "no staging point"
+            break
+        wipes = 0
+        while True:
+            a: dict = {"n": len(rec["attempts"]) + 1}
+            s.cmd(".gm on", settle=0.3)
+            s.go(point["x"], point["y"], point["z"] + 0.5)
+            if not selfbot:
+                a["gather"] = gather_at(s, comps, point, s.unit(sp["spawn_id"], enc["credit_entry"]).get("guid"))
+            else:
+                s.cmd(".gm off", settle=0.3)
+                a["gather"] = {"ok": True, "s": 0}
+            a |= fight(s, f, enc, comps, fighters, tank, selfbot, say, st.get("approach"))
+            rec["attempts"].append(a)
+            say({"boss": sp["name"], "attempt": a["n"], "killed": a.get("killed"), "wipe": a["wipe"],
+                 "fight_s": a["fight_s"], "deaths": a["deaths"]})
+            if a.get("wipe") or a.get("timeout"):
+                wipes += 1
+            step = next_step(bool(a.get("killed")), wipes)
+            if step == "next":
+                a["revive"] = revive_dead(s, fighters)
+                rec["killed"] = True
+                break
+            if step == "fail":
+                a["revive"] = revive_dead(s, fighters)
+                break
+            if selfbot:
+                s.cmd(".gm on", settle=0.3)
+            s.go(point["x"], point["y"], point["z"] + 0.5)
+            # the boss resets first, then the dead get up: revived where they fell (next to the boss and its adds),
+            # they'd be killed again before the next gather (run 7, Gilnid)
+            a["reset"] = wait_boss_reset(s, enc)
+            a["revive"] = revive_dead(s, fighters)
+        rec["summary"] = encounter_summary(rec, roles)
+        if not rec.get("killed"):
+            break
+    rows = s.binds(f["map"])
+    ev["final_mask"] = rows[0]["mask"] if rows else None
+    ev["cleared"] = bool(req) and all(r.get("killed") for r in ev["encounters"]) and len(ev["encounters"]) == len(req)
+    ev["total_s"] = round(time.time() - t_run, 1)
+    ev["table"] = [r.get("summary") or {"boss": r["boss"], "killed": False, "why": r.get("why")} for r in ev["encounters"]]
+    if selfbot and s.selfbot:
+        s.cmd(".playerbots bot self", settle=0.8)
+        s.selfbot = False
+    s.cmd(".gm off", settle=0.3)
     return ev

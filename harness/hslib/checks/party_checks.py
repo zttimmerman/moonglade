@@ -397,3 +397,111 @@ def instance_strategy(ctx):
     ev["session_s"] = round(time.time() - t0, 1)
     require(not ev["problems"], "; ".join(ev["problems"]), **ev)
     return ev
+
+
+# ----------------------------------------------------------------------------- m4-dungeon-companions 1.1 (prototype)
+
+RUN_COVERS = COVERS + ("harness/hslib/checks/dungeon_checks.py",)
+RUN_DIR = P.OUT / "m4-full-run"
+
+
+def _run_log(name: str):
+    """Progress lines to stderr and to harness/out/m4-full-run/<name>.log (not committed): a run lasts minutes."""
+    import json
+    import sys
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    path = RUN_DIR / f"{name}.log"
+
+    def say(x):
+        line = f"{time.strftime('%H:%M:%S')} {json.dumps(x, default=str)}"
+        print(line, file=sys.stderr, flush=True)
+        with path.open("a") as fh:
+            fh.write(line + "\n")
+    return say
+
+
+def _keep(name: str, ev: dict) -> None:
+    import json
+    RUN_DIR.mkdir(parents=True, exist_ok=True)
+    (RUN_DIR / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.json").write_text(json.dumps(ev, indent=1, default=str))
+
+
+@check("dng.party_clear_deadmines", order=532, capability=CAP, stack="up", layer="gate", profile="scaling-on",
+       covers=RUN_COVERS)
+def party_clear_deadmines(ctx):
+    """(m4-dungeon-companions task 1.1, prototype) The dungeon probe calls the /mg party damage-dealer party (the
+    add-on's plan, hslib/partyplan.py) at The Deadmines' target level, enters a fresh copy with GM mode off (AutoBalance
+    counts 5 players: stock difficulty), then watches in GM mode while the companions clear every required encounter
+    in DungeonEncounter.dbc order with dungeon.run_party (design.md §4: staging by `.mmap path` from the level-3 nav
+    account, summon and gather, `tank attack`, at most 2 wipes per boss). Passes when every required encounter's bit
+    is set in the probe's saved mask."""
+    say = _run_log("party")
+    plan = PP.plan()
+    f = D.facts(D.DEADMINES)
+    req, skipped = D.required_encounters(f)
+    ev: dict = {"dungeon": f["lfg_id"], "map": f["map"], "level": f["target_level"],
+                "required": [(e["encounter"], e["spawns"][0]["name"]) for e in req], "skipped": skipped}
+    t0 = time.time()
+    try:
+        ev["nav"] = D.nav_stages(f, req, say)
+        say({"stages": [(x["boss"], x["verdict"], x["point"]) for x in ev["nav"]["stages"]]})
+        with D.Session(f["target_level"]) as s:
+            ev["session"] = {k: s.ev.get(k) for k in ("login", "stale_group", "revive")}
+            ev["party"] = [add_companion(s, c) for c in PP.commands(plan, "damage")]
+            say({"party": [(c["companion"], c["name"]) for c in ev["party"]]})
+            ev["run"] = {}
+            try:
+                D.run_party(s, f, ev["party"], ev["nav"], log=say, out=ev["run"])
+            finally:
+                ev["leave"] = s.leave()
+                ev["clear"] = clear_party(s, plan)
+    except C.CompanionError as e:
+        _keep("party", {**ev, **e.evidence})
+        raise CheckFail(str(e), {**ev, **e.evidence})
+    except C.probe.ProbeError as e:
+        _keep("party", {**ev, **e.info})
+        raise CheckFail(f"probe: {e}", {**ev, **e.info})
+    except BaseException:
+        _keep("party", ev)
+        raise
+    ev["session_s"] = round(time.time() - t0, 1)
+    _keep("party", ev)
+    say({"table": ev["run"].get("table"), "total_s": ev["run"].get("total_s"), "cleared": ev["run"].get("cleared")})
+    require(ev["run"].get("cleared"), f"not cleared: {ev['run'].get('table') or ev['run'].get('why')}", **ev)
+    return ev
+
+
+@check("dng.solo_two_deadmines", order=533, capability=CAP, stack="up", layer="gate", profile="scaling-on",
+       covers=RUN_COVERS)
+def solo_two_deadmines(ctx):
+    """(m4-dungeon-companions task 1.1, optional) The probe alone with the playerbots self-AI (`.playerbots bot self`,
+    gear by `initself=<AutoGearQualityLimit>`) against The Deadmines' first two required bosses, staged like the party
+    run (dungeon.run_party, selfbot=True)."""
+    say = _run_log("solo")
+    f = D.facts(D.DEADMINES)
+    req, _ = D.required_encounters(f)
+    ev: dict = {"dungeon": f["lfg_id"], "level": f["target_level"]}
+    try:
+        ev["nav"] = D.nav_stages(f, req[:2], say)
+        with D.Session(f["target_level"]) as s:
+            q = D.gear_quality()
+            ev["initself"] = {"quality": q, "reply": s.cmd(f".playerbots bot initself={q}", settle=1.5)}
+            s.cmd(".revive", settle=0.3)
+            ev["run"] = {}
+            try:
+                D.run_party(s, f, [], ev["nav"], selfbot=True, only=2, log=say, out=ev["run"])
+            finally:
+                ev["leave"] = s.leave()
+    except C.CompanionError as e:
+        _keep("solo", {**ev, **e.evidence})
+        raise CheckFail(str(e), {**ev, **e.evidence})
+    except C.probe.ProbeError as e:
+        _keep("solo", {**ev, **e.info})
+        raise CheckFail(f"probe: {e}", {**ev, **e.info})
+    except BaseException:
+        _keep("solo", ev)
+        raise
+    _keep("solo", ev)
+    say({"table": ev["run"].get("table"), "cleared": ev["run"].get("cleared")})
+    require(ev["run"].get("cleared"), f"not cleared: {ev['run'].get('table') or ev['run'].get('why')}", **ev)
+    return ev

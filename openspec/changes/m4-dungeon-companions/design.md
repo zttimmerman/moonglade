@@ -99,6 +99,7 @@ Source pins: mod-playerbots `7bae1b5c` and core `7f12e89e` (fork.lock). Paths `v
   - the boss spawn's position, moved 30 yd back toward the previous staging point (the dungeon entrance for the first) along the straight line;
   - then snapped to the navmesh with the core's own path query, via the GM command `.mmap path`, from the previous staging point;
   - if the snapped point is more than 10 yd off the line, use the last navmesh point on the path that is ≥ 25 yd from the boss.
+  - **As built (task 1.1):** the straight-line point fell in rock or on the wrong deck for 5 of 6 Deadmines bosses. The driver now reads the boss's walking path (`.mmap path`, point by point) and uses the line point only if it is within 10 yd of that path and at most 45 yd from the boss on foot; otherwise it uses the last path point at least 25 yd from the boss. Healer mana isn't readable headless, so the gather doesn't wait on it. A wipe revives the party only after the boss resets.
   - This is a rule, not hand-picked coordinates. Task 1.1 confirms `.mmap path` output can be parsed headless, and records a fallback if not.
 - **Per encounter:**
   1. Teleport the probe there (`.go xyz`).
