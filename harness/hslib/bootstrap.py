@@ -152,6 +152,13 @@ class Probe:
     def free_bytes(self) -> int:
         return self._get("free_bytes", lambda: shutil.disk_usage(P.HOME).free)
 
+    def done_steps(self) -> list[str]:
+        """Steps the preflight counts as already done beyond this tree's own done() checks: none, except injected by
+        setup.preflight's control, which runs in a scratch copy (nothing set up) and passes the steps the harness's
+        own, set-up checkout has really finished (read by their done() checks there), so the disk rule needs only
+        what's left on a set-up tree instead of a fresh one's ~35 GB (fix/pr-tier-budgets)."""
+        return list(self._get("done_steps", list))
+
     def answer(self, prompt: str) -> str:
         if "answer" in self.inject:
             say(prompt + str(self.inject["answer"]))
@@ -561,6 +568,11 @@ def preflight(ctx: Ctx, todo_ids: list[str] | None = None) -> dict:
     return ev
 
 
+def preflight_todo(pre_done: dict, done_steps=()) -> list[str]:
+    """The steps left (their done() said no, and they aren't in `done_steps`), in step order: the disk rule's need."""
+    return [i for i, (ok, _w) in pre_done.items() if not ok and i not in set(done_steps or ())]
+
+
 def _locked(path: Path) -> bool:
     """Is a ./play holding its lock? (flock held by another process)"""
     if not path.exists():
@@ -658,7 +670,7 @@ def run(client: str | None, yes: bool = False, check_only: bool = False, allow_t
                 pre_done[s.id] = s.done(ctx)
             except Exception as e:  # noqa: BLE001  (a done() that can't decide counts as not done)
                 pre_done[s.id] = (False, f"{type(e).__name__}: {e}")
-        todo = [i for i, (ok, _w) in pre_done.items() if not ok]
+        todo = preflight_todo(pre_done, ctx.probe.done_steps())
         ev = preflight(ctx, todo)
     except _SkipPreflight:
         ev = None

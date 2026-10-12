@@ -166,13 +166,38 @@ COVERS = (
 )
 
 
+def set_up_here() -> dict:
+    """{step id: (done, why)} for this checkout's setup steps (brew aside, as ./bootstrap's own preflight does), by
+    the steps' read-only done() checks: what's really finished on this already-set-up tree."""
+    from .. import bootstrap as B
+    ctx = B.Ctx(None, False, B.Probe(None))
+    out = {}
+    for s in B.STEPS:
+        if s.id == "brew":
+            continue
+        try:
+            out[s.id] = tuple(s.done(ctx))
+        except Exception as e:  # noqa: BLE001  (as bootstrap: a done() that can't decide counts as not done)
+            out[s.id] = (False, f"{type(e).__name__}: {e}")
+    return out
+
+
+def control_injection(here: dict) -> dict:
+    """The control's only injection: the steps this checkout has really finished. Nothing this Mac reports (processor,
+    macOS, Rosetta, tools, Homebrew, free disk) and nothing about the client is injected."""
+    return {"done_steps": sorted(i for i, (ok, _w) in here.items() if ok)}
+
+
 @check("setup.preflight", order=31, capability="easy-setup", stack="any", layer="integration", parallel_safe=True)
 def setup_preflight(ctx):
     """In a scratch copy of the repo, ./bootstrap stops before changing anything (scratch tree byte-for-byte unchanged),
     exits nonzero and names the problem and the fix for: an Intel Mac, an old macOS, no Rosetta, no Command Line Tools,
     no Homebrew, a missing Brewfile package with the prompt declined, too little disk, a client of another version,
     another language, a path that isn't a zip or folder, and a missing path (injected through $HS_BOOTSTRAP_TEST, which
-    is refused without the test flag or outside a harness run). The un-injected check on this Mac passes."""
+    is refused without the test flag or outside a harness run). The un-injected check on this Mac passes for what's
+    left to set up on this already-set-up checkout (control: the scratch copy has nothing set up, so it is told only
+    which steps this checkout has really finished; every observation of the Mac, its free disk and the client is
+    real)."""
     repo = light_copy("preflight")
     fakes_dir = SCRATCH_ROOT / f"preflight-clients-{os.getpid()}"
     ev: dict = {"scratch": str(repo), "cases": {}}
@@ -221,13 +246,27 @@ def setup_preflight(ctx):
         require(r2["rc"] == 2 and "harness only" in r2["stdout"] and not r2["events"],
                 "--allow-test-inject outside a harness run wasn't refused", **ev)
         # control: the real preflight on this Mac with the real client passes (so the failures above are the injected
-        # conditions, not a preflight that always fails)
+        # conditions, not a preflight that always fails), for what's left on this already-set-up checkout: a fresh
+        # tree's disk need (~35 GB, every step) is more than a nearly full Mac has, and low_disk proves that rule
         before = tree_fingerprint(repo)
-        r3 = run_bootstrap(repo, [str(P.CLIENT), "--check"], base_env)
+        here = set_up_here()
+        cinj = control_injection(here)
+        r3 = run_bootstrap(repo, [str(P.CLIENT), "--check", "--allow-test-inject"],
+                           base_env | {"HS_BOOTSTRAP_TEST": json.dumps(cinj)})
         pre = next((e for e in r3["events"] if e.get("step") == "preflight" and e.get("state") == "done"), None)
-        ev["control"] = {"rc": r3["rc"], "preflight": pre, "seconds": r3["seconds"],
+        start = next((e for e in r3["events"] if e.get("event") == "start"), {})
+        disk = ((pre or {}).get("evidence") or {}).get("disk") or {}
+        ev["control"] = {"rc": r3["rc"], "preflight": pre, "seconds": r3["seconds"], "injected": cinj,
+                         "set_up_here": {k: {"done": ok, "why": w} for k, (ok, w) in here.items()},
+                         "test_inject_keys": start.get("test_inject"), "stdout_tail": r3["stdout"][-800:],
                          "tree_changes": _tree_diff(before, tree_fingerprint(repo))}
-        require(r3["rc"] == 0 and pre, "control: the un-injected preflight didn't pass on this Mac", **ev)
+        require(start.get("test_inject") == ["done_steps"], "control: something besides the finished steps was "
+                                                            "injected", **ev)
+        require(r3["rc"] == 0 and pre, "control: the un-injected preflight didn't pass on this Mac for what's left "
+                                       "to set up on this checkout", **ev)
+        left = sorted(set(disk.get("for_steps") or []))
+        require(left == sorted(i for i, (ok, _w) in here.items() if not ok),
+                f"control: the preflight's steps left {left} aren't this checkout's", **ev)
         require(not ev["control"]["tree_changes"], "control: --check changed the repo tree", **ev)
         return ev
     finally:

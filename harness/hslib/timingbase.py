@@ -18,6 +18,13 @@ Without a path it reads harness/out/last-full-run/results.json, the copy every u
 quick runs never overwrite it; test-loop-speedups).
 
 `join` only adds checks the baseline doesn't have; existing times are never raised (or changed) that way.
+
+A merged check that no full run has executed yet (so a later pr run counts it as new) joins from the pr run that
+measured it, named one by one (fix/pr-tier-budgets):
+
+    harness/hs timing-baseline join <a pr run's results.json> --label <label> --ids <check id> [<check id> ...]
+
+Only the named ids join, each must have passed in that run, and the run's tier is recorded with them.
 """
 from __future__ import annotations
 
@@ -34,12 +41,15 @@ class BaselineError(RuntimeError):
     pass
 
 
-def _run_doc(path: Path) -> dict:
+def _run_doc(path: Path, named: bool = False) -> dict:
+    """A run's results; an unfiltered full-tier run, or (`named`: checks named one by one) an unfiltered pr run."""
     d = json.loads(Path(path).read_text())
     m = d["meta"]
-    if not (m.get("full_run") is True and m.get("tier") == "full" and not m.get("filter")):
-        raise BaselineError(f"{path} isn't an unfiltered full-tier run")
-    return d
+    if m.get("full_run") is True and m.get("tier") == "full" and not m.get("filter"):
+        return d
+    if named and m.get("tier") == "pr" and not m.get("filter"):
+        return d
+    raise BaselineError(f"{path} isn't an unfiltered full-tier run" + (" or an unfiltered pr run" if named else ""))
 
 
 def run_info(path: Path, d: dict) -> dict:
@@ -47,7 +57,7 @@ def run_info(path: Path, d: dict) -> dict:
     p = Path(path).resolve()
     return {"source": str(p.relative_to(P.ROOT)) if P.ROOT in p.parents else str(p), "repo_sha": m.get("repo_sha"),
             "started": m.get("started"), "finished": m.get("finished"), "wall_s": m.get("wall_s"),
-            "machine": (m.get("host") or {}).get("machine")}
+            "machine": (m.get("host") or {}).get("machine"), "tier": m.get("tier")}
 
 
 def entries(d: dict, label: str, ids: set | None = None) -> dict:
@@ -90,22 +100,33 @@ def lane_key(d: dict) -> tuple[int, str]:
     return mode, ("checks" if mode == 1 else "checks_lanes2")
 
 
-def join(path: Path, label: str, baseline_path: Path = TIMING_BASELINE) -> dict:
+def join(path: Path, label: str, baseline_path: Path = TIMING_BASELINE, ids: list[str] | None = None) -> dict:
     """Add the checks `path` executed that the baseline lacks; never touches existing entries. A two-lane run joins
-    the two-lane baseline (checks_lanes2): its first join adds every check it executed."""
+    the two-lane baseline (checks_lanes2): its first join adds every check it executed. With `ids`, only those join
+    (each must have passed in that run), and `path` may be an unfiltered pr run: merged checks no full run has
+    executed yet."""
     base = json.loads(Path(baseline_path).read_text())
     if base.get("schema") != SCHEMA:
         raise BaselineError("not a per-check baseline")
-    d = _run_doc(path)
+    d = _run_doc(path, named=bool(ids))
     if label in base["runs"]:
         raise BaselineError(f"run label {label!r} is already in the baseline")
     mode, key = lane_key(d)
     have = base.setdefault(key, {})
-    new = {i: e for i, e in entries(d, label).items() if i not in have}
+    got = entries(d, label, set(ids) if ids else None)
+    if ids:
+        passed = {r["id"] for r in d["checks"] if r.get("status") == "pass"}
+        bad = sorted(set(ids) - (set(got) & passed))
+        if bad:
+            raise BaselineError(f"{path}: not executed and passed there: {bad}")
+    new = {i: e for i, e in got.items() if i not in have}
     if new:
+        tier = d["meta"].get("tier")
         base["runs"][label] = run_info(path, d) | {"used_for": sorted(new), "lanes": mode,
-                                                   "why": "checks new with this change" if have else
-                                                   f"first {mode}-lane full run (baseline {key})"}
+                                                   "why": (f"merged checks no full run has executed yet, measured in "
+                                                           f"this {tier} run" if ids else
+                                                           "checks new with this change" if have else
+                                                           f"first {mode}-lane full run (baseline {key})")}
         have.update(new)
         Path(baseline_path).write_text(json.dumps(base, indent=1, sort_keys=True) + "\n")
     elif not have:
@@ -126,7 +147,8 @@ def cli(args) -> int:
                                                                      "results.json)"))
             return 1
         try:
-            res = join(path, args.label, Path(getattr(args, "baseline", None) or TIMING_BASELINE))
+            res = join(path, args.label, Path(getattr(args, "baseline", None) or TIMING_BASELINE),
+                       ids=getattr(args, "ids", None) or None)
         except BaselineError as e:
             from .util import log
             log(f"timing-baseline join: {e}")
