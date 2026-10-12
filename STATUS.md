@@ -13,7 +13,7 @@ _Updated 2026-10-12 06:05. **Merged today:**
 - m4-instance-tactics (#9), selector needs (#10), m4-party-preset (#8), release-fresh-login (#7), release-home-spaces (#6), ci-pipeline (#5), test-pyramid (#4).
 
 **Next:**
-1. **M4 milestone gate run (in progress, started 06:05):** full suite once (CLAUDE.md §3; §9's ×3 not used, told Zach). First real four-dungeon `dng.party_clear`. Then archive m4-dungeon-companions and Zach's play gate.
+1. **M4 milestone gate run (done 09:28, FAIL → P0s):** 275 pass / 9 fail (3.5 h). All four dungeons cleared, `dng.solo_clear` and `dng.run_budget` PASS. Fails: `dng.party_clear` (Mr. Smite pulled with 3 dead after the Gilnid timeout; builder fixing in the driver, `fix/party-pull-ready`); release.app_readonly/app_moved/client_smoke (process snapshot missed worldserver/authserver/Wow.exe though they ran; diagnosing); firstlaunch.source_untouched (resume preflight failed; low disk/memory?); setup.fresh_clone + public.history_dryrun (env: 33 GB free, checkout 1 commit behind); report.layer_budgets (integration 1020 > 900 s; memory 3.7 GB free, 1 lane). Then rerun failed checks, archive m4-dungeon-companions, Zach's play gate.
 2. **P0 flaky (watching):** comp.quest_shared; the next failure carries its diagnosis.
 
 **Follow-ups:**
