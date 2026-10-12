@@ -19,6 +19,7 @@ rule from DBC, never typed in: TalentTab.dbc rows with the class in ClassMask [2
 (protection: WARRIOR_TAB_PROTECTION = 2, arms: WARRIOR_TAB_ARMS = 0; PlayerbotAI.h tab enums), then the Talent.dbc row
 in that tab [1] with Row [2] = 0 and the lowest Col [3] (DBCStructure.h:1958-1986); rank 1 is RankID[0] [4]. It is
 confirmed from character_talent after `saveall`. At the end the probe's talents are reset again."""
+import math
 import struct
 import time
 
@@ -796,5 +797,278 @@ def run_budget(ctx):
                                      bool(run.get("cleared")))
     _keep("budget", {**ev, "party": run_ev})
     say({"summary": ev["summary"], "problems": ev["problems"], "total_s": ev["total_s"]})
+    require(not ev["problems"], "; ".join(ev["problems"]), **ev)
+    return ev
+
+
+# ----------------------------------------------------------------------------- m4-dungeon-companions 3.3: dng.rti_focus
+
+RTI_ICON = "skull"
+PACK_YD = 10                       # spec: at least one other hostile spawn within 10 yd
+RTI_SHARE = 0.8                    # spec: at least 80% of the damage dealers' damage events on the skull target
+RTI_FIGHT_S = 120                  # the skull target dies within this after the orders (the spec gives no time)
+RTI_POLL_S = 0.5                   # between `.npc info` rounds over the pack
+RTI_QUIET_S = 5                    # GIVEN: no damage event involving the party for this long before the mark
+RTI_QUIET_MAX_S = 60
+RTI_STAND_YD = 30                  # the party waits at least this far (3D) from every pack member: outside aggro reach
+RTI_ECHO_S = 5                     # the server's MSG_RAID_TARGET_UPDATE broadcast of the mark
+DAMAGE_KINDS = ("melee_damage", "spell_damage")
+UNIT_FLAG_NON_ATTACKABLE, UNIT_FLAG_IMMUNE_TO_PC, UNIT_FLAG_NOT_SELECTABLE = 0x2, 0x100, 0x2000000   # UnitDefines.h
+RANK_BOSS = 3                      # creature_template.rank CREATURE_ELITE_WORLDBOSS (SharedDefines.h)
+PACK_RULE = ("pack (spec): world.creature spawns on the dungeon's map in its difficulty's spawnMask bit whose template "
+             "is hostile to players (FactionTemplate.dbc hostileMask [5] & FACTION_MASK_PLAYER), attackable "
+             "(unit_flags without NON_ATTACKABLE 0x2, IMMUNE_TO_PC 0x100, NOT_SELECTABLE 0x2000000), not a boss (rank "
+             "<> 3 and not an instance_encounters creditEntry); the one nearest (3D) the first required encounter's "
+             "staging point (dungeon.nav_stages) that has at least one other such spawn within 10 yd (3D), with those "
+             "neighbours. Marked: the pack member farthest from the staging point (so the nearest target is never the "
+             "mark), lowest spawn id on a tie")
+
+
+def pack_rule(spawns: list[dict], stage: dict, near: float = PACK_YD) -> dict | None:
+    """PACK_RULE on candidate spawns [{spawn_id, entry, x, y, z, ...}]: {"anchor", "members", "marked"} or None."""
+    def d(a, b):
+        return math.dist((a["x"], a["y"], a["z"]), (b["x"], b["y"], b["z"]))
+    for a in sorted(spawns, key=lambda c: (d(c, stage), c["spawn_id"])):
+        nb = [c for c in spawns if c["spawn_id"] != a["spawn_id"] and d(a, c) <= near]
+        if nb:
+            members = sorted([a] + nb, key=lambda c: c["spawn_id"])
+            marked = max(members, key=lambda c: (round(d(c, stage), 3), -c["spawn_id"]))
+            return {"anchor": a["spawn_id"], "members": members, "marked": marked["spawn_id"],
+                    "stage_yd": {c["spawn_id"]: round(d(c, stage), 1) for c in members}}
+    return None
+
+
+def stand_point(points: list[dict], members: list[dict], avoid: list[dict], min_yd: float = RTI_STAND_YD) -> dict | None:
+    """Where the party waits "next to the pack" (STAND_RULE): of the nav pass's walkable points, the one nearest (3D)
+    the pack among those at least min_yd from every pack member and every other spawn in `avoid` (the map's hostile
+    spawns, bosses included); None if none is."""
+    def d(a, b):
+        return math.dist((a["x"], a["y"], a["z"]), (b["x"], b["y"], b["z"]))
+    keep_off = list(members) + list(avoid)
+    ok = [q for q in points if q and all(d(q, c) >= min_yd for c in keep_off)]
+    if not ok:
+        return None
+    q = min(ok, key=lambda q: (min(d(q, c) for c in members), q["x"], q["y"]))
+    return {"x": q["x"], "y": q["y"], "z": q["z"], "pack_yd": round(min(d(q, c) for c in members), 1),
+            "nearest_hostile_yd": round(min(d(q, c) for c in keep_off), 1)}
+
+
+STAND_RULE = ("stand point: of the nav pass's walkable points for the first encounter (staging point, gather point, "
+              "the boss's `.mmap path` points), the one nearest (3D) the pack among those at least RTI_STAND_YD (30) "
+              "yd from every pack member and every encounter's boss spawn. Before the party arrives the probe (GM "
+              "mode on) removes with `.die` every other PACK_RULE candidate spawn within RTI_CLEAR_YD (30) yd of the "
+              "stand point or of a pack member (clear_set), so only the pack can join the fight. Measured 2026-10-12: "
+              "at the staging point, 19 yd from the pack, the party was fighting before the mark; a point 31 yd from "
+              "the pack on the boss's path pulled Rhahk'Zor; the Deadmines mine has no walkable point 30 yd from "
+              "every hostile spawn within 100 yd of the pack (playerbots' SightDistance)")
+RTI_CLEAR_YD = 30
+
+
+def clear_set(cands: list[dict], members: list[dict], stand: dict, radius: float = RTI_CLEAR_YD) -> list[dict]:
+    """The non-pack candidate spawns within `radius` (3D) of the stand point or of any pack member, nearest the stand
+    point first (STAND_RULE)."""
+    def d(a, b):
+        return math.dist((a["x"], a["y"], a["z"]), (b["x"], b["y"], b["z"]))
+    ids = {c["spawn_id"] for c in members}
+    near = [c for c in cands if c["spawn_id"] not in ids
+            and (d(c, stand) <= radius or any(d(c, m) <= radius for m in members))]
+    return sorted(near, key=lambda c: (d(c, stand), c["spawn_id"]))
+
+
+def _remove(s, c: dict) -> dict:
+    """GM `.die` (cs_misc.cpp HandleDieCommand: Unit::Kill on the selection) on one spawn, read back by `.npc info`."""
+    s.go(c["x"], c["y"], c["z"] + 1)
+    u = s.unit(c["spawn_id"], c["entry"])
+    out = {"spawn_id": c["spawn_id"], "name": c["name"], "health_before": u.get("health")}
+    if u.get("guid") and u.get("health"):
+        s.ws.set_selection(u["guid"])
+        out["reply"] = s.cmd(".die", settle=0.3)
+        s.ws.set_selection(0)
+        _, ok, _ = F.poll(lambda: s.unit(c["spawn_id"]).get("health"), lambda h: h == 0, timeout=5)
+        out["dead"] = ok
+    else:
+        out["dead"] = u.get("health") == 0
+    return out
+
+
+def pack_candidates(f: dict) -> list[dict]:
+    """The PACK_RULE spawns of a dungeon (SQL + FactionTemplate.dbc)."""
+    recs, _ = dbc.read_dbc("FactionTemplate.dbc")
+    fac = ",".join(str(r[0]) for r in recs if r[C.FT_HOSTILE_MASK] & C.FACTION_MASK_PLAYER)
+    bad = UNIT_FLAG_NON_ATTACKABLE | UNIT_FLAG_IMMUNE_TO_PC | UNIT_FLAG_NOT_SELECTABLE
+    credits = ",".join(str(e["credit_entry"]) for e in f["encounters"] if e["credit_entry"]) or "0"
+    rows = db.query(
+        f"SELECT c.guid, c.id, ct.name, c.position_x, c.position_y, c.position_z FROM creature c "
+        f"JOIN creature_template ct ON ct.entry = c.id WHERE c.map = {int(f['map'])} "
+        f"AND (c.spawnMask & {1 << f['difficulty']}) AND ct.faction IN ({fac}) AND (ct.unit_flags & {bad}) = 0 "
+        f"AND ct.`rank` <> {RANK_BOSS} AND c.id NOT IN ({credits}) ORDER BY c.guid", "world")
+    return [{"spawn_id": int(g), "entry": int(e), "name": n, "x": float(x), "y": float(y), "z": float(z)}
+            for g, e, n, x, y, z in rows]
+
+
+def rti_problems(rec: dict, share: float = RTI_SHARE) -> list[str]:
+    """dng.rti_focus's pass rule on the recorded fight. rec: {"orders": {"rti": [names whispered `rti skull`],
+    "companions": [every companion], "tank_attack": bool}, "mark_echo": bool, "skull": guid, "deaths_s": {guid: s},
+    "dps_events_before_death": [{"victim": guid}, ...]}. Every way the scenario's WHEN or THEN can break is a
+    problem."""
+    p = []
+    o = rec.get("orders") or {}
+    missing = sorted(set(o.get("companions") or []) - set(o.get("rti") or []))
+    if not o.get("companions") or missing:
+        p.append(f"WHEN: `rti {RTI_ICON}` not whispered to {missing or 'any companion'}")
+    if not o.get("tank_attack"):
+        p.append("WHEN: `tank attack` not whispered to the tank")
+    if not rec.get("mark_echo"):
+        p.append(f"WHEN: the server never broadcast the {RTI_ICON} mark on the target (MSG_RAID_TARGET_UPDATE)")
+    deaths = rec.get("deaths_s") or {}
+    skull = rec.get("skull")
+    t_skull = deaths.get(skull) if skull is not None else None
+    if t_skull is None:
+        p.append(f"THEN: the {RTI_ICON} target didn't die within {RTI_FIGHT_S} s")
+    else:
+        earlier = [g for g, t in deaths.items() if g != skull and t is not None and t < t_skull]
+        if earlier:
+            p.append(f"THEN: {len(earlier)} other creature(s) died before the {RTI_ICON} target")
+    evs = rec.get("dps_events_before_death") or []
+    if not evs:
+        p.append("THEN: no damage event from the damage dealers before the target died")
+    else:
+        on = sum(1 for e in evs if e.get("victim") == skull)
+        if on / len(evs) < share:
+            p.append(f"THEN: {on}/{len(evs)} ({on / len(evs):.0%}) of the damage dealers' damage events were on the "
+                     f"{RTI_ICON} target, below {share:.0%}")
+    return p
+
+
+def _pack_state(s, members: list[dict]) -> dict:
+    """spawn id -> `.npc info` read (GUID, health) of each pack member, by spawn id (no selection)."""
+    return {c["spawn_id"]: s.unit(c["spawn_id"], c["entry"]) for c in members}
+
+
+@check("dng.rti_focus", order=535, capability=CAP, stack="up", layer="integration", budget_s=240,
+       covers=TACTICS_COVERS)
+def rti_focus(ctx):
+    """(m4-dungeon-companions "Kill skull first") GIVEN the dungeon probe at The Deadmines' target level with the
+    /mg party damage-dealer party (the add-on's plan), in a fresh copy, all five at the
+    stand point (STAND_RULE, near the first encounter's staging point from dungeon.nav_stages) out of combat for 5 s,
+    next to the PACK_RULE pack. WHEN the probe (GM mode on,
+    so it is never in the fight) marks the PACK_RULE creature with the skull (MSG_RAID_TARGET_UPDATE, confirmed by
+    the server's broadcast), whispers `rti skull` to every companion and `tank attack` to the tank. THEN (rti_problems)
+    the skull target is the first creature of the pack to die (`.npc info` health 0, polled over the pack every
+    RTI_POLL_S; the combat log's overkill can't tell a kill, Unit.cpp writes damage minus the health left) and,
+    before it dies, at least 80% of the damage-dealing companions' damage events (combat log: melee and spell
+    damage, attacker = a `damage` companion of the plan) are on it."""
+    f = D.facts(D.DEADMINES)
+    req, _ = D.required_encounters(f)
+    first = req[0]
+    ev: dict = {"dungeon": f["lfg_id"], "map": f["map"], "level": f["target_level"], "first_encounter":
+                (first["encounter"], first["spawns"][0]["name"]), "rule": PACK_RULE}
+    nav = D.nav_stages(f, [first])
+    st = nav["stages"][0]
+    ev["stage"] = {k: st.get(k) for k in ("point", "verdict")}
+    require(st.get("point"), "GIVEN: no staging point for the first encounter", nav=nav, **ev)
+    stage = st["point"]
+    cands = pack_candidates(f)
+    pack = pack_rule(cands, stage)
+    require(pack is not None, f"GIVEN: no hostile spawn with another within {PACK_YD} yd on map {f['map']}", **ev)
+    ev["pack"] = pack
+    members = pack["members"]
+    walkable = [stage, (st.get("gather") or {}).get("point")] + list((st.get("fallback") or {}).get("points") or [])
+    bosses = [sp for e in f["encounters"] for sp in e["spawns"]]
+    stand = stand_point(walkable, members, bosses)
+    ev["stand"] = {"point": stand, "rule": STAND_RULE, "candidates": len([q for q in walkable if q])}
+    require(stand is not None, f"GIVEN: no walkable point {RTI_STAND_YD} yd from the pack and every boss", **ev)
+    ev["clear_set"] = [(c["spawn_id"], c["name"]) for c in clear_set(cands, members, stand)]
+    marked = next(c for c in members if c["spawn_id"] == pack["marked"])
+    plan = PP.plan()
+    t0 = time.time()
+    rec: dict = {}
+    try:
+        with D.Session(f["target_level"]) as s:
+            ev["session"] = {k: s.ev.get(k) for k in ("login", "stale_group", "revive")}
+            ev["unbind"] = s.unbind(f["map"])
+            require(ev["unbind"]["ok"], "GIVEN: the probe's old bind didn't go away", **ev)
+            ev["party"] = comps = [add_companion(s, c) for c in PP.commands(plan, "damage")]
+            guids = {c["guid"] for c in comps}
+            dps = {c["guid"] for c in comps if D.role_of_key(c["companion"]) == "damage"}
+            tank = next(c for c in comps if c["companion"] == "tank")
+            ev["enter"] = s.enter(f)
+            require(ev["enter"]["ok"], "GIVEN: the probe didn't enter a fresh copy", **ev)
+            s.cmd(".gm on", settle=0.3)
+            ev["cleared"] = [_remove(s, c) for c in clear_set(cands, members, stand)]
+            require(all(x["dead"] for x in ev["cleared"]), "GIVEN: a spawn near the pack or the stand point didn't "
+                    "go away", **ev)
+            ev["go_stand"] = s.go(stand["x"], stand["y"], stand["z"])
+            ev["gather"] = s.gather(1 + len(comps), timeout=GATHER_S)
+            require(ev["gather"]["ok"], "GIVEN: the companions didn't all arrive", **ev)
+            ev["at_stage"] = {"probe": s.gps(), "companions_far": D._far(s, comps)}
+            # GIVEN: out of combat (no damage event involving the party) for RTI_QUIET_S
+            mark0, tq = s.ws.mark(), time.time()
+            while time.time() - tq < RTI_QUIET_MAX_S:
+                if time.time() - tq >= RTI_QUIET_S and D._combat_quiet(s, guids | {s.guid}, mark0) >= RTI_QUIET_S:
+                    break
+                time.sleep(0.5)
+            early = [e for e in s.ws.events_since(mark0) if e["kind"] in DAMAGE_KINDS
+                     and {e.get("attacker"), e.get("victim")} & guids]
+            ev["quiet_wait_s"] = round(time.time() - tq, 1)
+            require(time.time() - tq >= RTI_QUIET_S and D._combat_quiet(s, guids | {s.guid}, mark0) >= RTI_QUIET_S,
+                    f"GIVEN: the party was still fighting {RTI_QUIET_MAX_S} s after gathering", early=early[-5:], **ev)
+            before = _pack_state(s, members)
+            ev["pack_before"] = {k: {x: v.get(x) for x in ("guid", "health", "max_health", "in_combat")}
+                                 for k, v in before.items()}
+            alive = [k for k, v in before.items() if v.get("guid") and v.get("health")]
+            require(len(alive) == len(members), f"GIVEN: {len(members) - len(alive)} pack member(s) not alive and "
+                    "readable before the mark", **ev)
+            require(not any(v.get("in_combat") for v in before.values()), "GIVEN: the pack was already in combat", **ev)
+            skull = before[marked["spawn_id"]]["guid"]
+            pack_guids = {v["guid"]: k for k, v in before.items()}
+            # WHEN: the mark, then the orders
+            since = s.ws.mark()
+            s.ws.set_selection(skull)          # the player clicks the creature, then sets its marker
+            s.ws.set_raid_target(W.RAID_ICONS[RTI_ICON], skull)
+            echo = s.ws.wait_event(lambda e: e["kind"] == "raid_target" and e["icons"].get(W.RAID_ICONS[RTI_ICON])
+                                   == skull, since, timeout=RTI_ECHO_S)
+            ev["mark_echo"] = echo
+            orders = {"companions": [c["name"] for c in comps], "rti": [], "tank_attack": False}
+            for c in comps:
+                s.ws.chat(f"rti {RTI_ICON}", W.CHAT_MSG_WHISPER, to=c["name"])
+                orders["rti"].append(c["name"])
+            s.ws.chat("tank attack", W.CHAT_MSG_WHISPER, to=tank["name"])
+            orders["tank_attack"] = True
+            t_orders = time.time()
+            deaths: dict = {}
+            polls = []
+            while time.time() - t_orders < RTI_FIGHT_S and skull not in deaths:
+                now = _pack_state(s, members)
+                t = round(time.time() - t_orders, 1)
+                polls.append({"t": t, "health": {k: v.get("health") for k, v in now.items()}})
+                for k, v in now.items():
+                    g = before[k]["guid"]
+                    if v.get("health") == 0 and g not in deaths:
+                        deaths[g] = t
+                time.sleep(RTI_POLL_S)
+            evs = s.ws.events_since(since)
+            t_dead = deaths.get(skull)
+            cut = (t_orders + t_dead) if t_dead is not None else time.time()
+            dps_evs = [{"victim": e["victim"], "attacker": e["attacker"], "kind": e["kind"], "t": round(e["t"] - t_orders, 1)}
+                       for e in evs if e["kind"] in DAMAGE_KINDS and e.get("attacker") in dps and e["t"] <= cut]
+            rec = {"orders": orders, "mark_echo": echo is not None, "skull": skull, "deaths_s": deaths,
+                   "dps_events_before_death": dps_evs}
+            by_victim: dict = {}
+            for e in dps_evs:
+                k = "skull" if e["victim"] == skull else pack_guids.get(e["victim"], hex(e["victim"]))
+                by_victim[str(k)] = by_victim.get(str(k), 0) + 1
+            ev |= {"orders": orders, "skull_guid": skull, "deaths_s": {hex(g): t for g, t in deaths.items()},
+                   "dps_events_by_victim": by_victim, "dps_events": len(dps_evs), "polls": polls[-6:],
+                   "fight_s": round(time.time() - t_orders, 1)}
+            ev["problems"] = rti_problems(rec)
+            # leave the rest of the pack to the party, then go
+            ev["leave"] = s.leave()
+            ev["clear"] = clear_party(s, plan)
+    except C.CompanionError as e:
+        raise CheckFail(str(e), {**ev, **e.evidence})
+    except C.probe.ProbeError as e:
+        raise CheckFail(f"probe: {e}", {**ev, **e.info})
+    ev["session_s"] = round(time.time() - t0, 1)
     require(not ev["problems"], "; ".join(ev["problems"]), **ev)
     return ev

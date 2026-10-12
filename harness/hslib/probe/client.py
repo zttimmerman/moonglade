@@ -432,6 +432,8 @@ class WorldSession:
         elif op == W.SMSG_SPELLNONMELEEDAMAGELOG:
             v, a = r.packed_guid(), r.packed_guid()
             self._emit("spell_damage", attacker=a, victim=v, spell=r.u32(), damage=r.u32(), overkill=r.u32())
+        elif op == W.MSG_RAID_TARGET_UPDATE:
+            self._emit("raid_target", **W.parse_raid_target(data))
         elif op == W.MSG_QUEST_PUSH_RESULT:
             g, m = r.u64(), r.u8()
             self._emit("quest_push_result", guid=g, msg=m, msg_name=W.QUEST_PARTY_MSG.get(m, "?"))
@@ -577,6 +579,10 @@ class WorldSession:
     def push_quest_to_party(self, quest_id: int):
         """CMSG_PUSHQUESTTOPARTY (PushQuestToParty::Read): uint32 quest id; the 'Share quest' button."""
         self.send(W.CMSG_PUSHQUESTTOPARTY, struct.pack("<I", quest_id))
+
+    def set_raid_target(self, icon: int, guid: int):
+        """MSG_RAID_TARGET_UPDATE (set icon; W.raid_target): what right-click > Target Marker Icons does."""
+        self.send(W.MSG_RAID_TARGET_UPDATE, W.raid_target(icon, guid))
 
     def leave_group(self):
         """CMSG_GROUP_DISBAND (no payload): leave the current party."""

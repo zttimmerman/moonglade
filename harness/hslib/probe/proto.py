@@ -53,6 +53,10 @@ SMSG_LOGIN_VERIFY_WORLD = 0x236
 SMSG_NEW_WORLD = 0x03E
 SMSG_TRANSFER_ABORTED = 0x040     # m4-dungeon-scaling: uint32 map, uint8 reason (Player::SendTransferAborted)
 MSG_SET_DUNGEON_DIFFICULTY = 0x329   # m4-dungeon-scaling: uint32 mode (HandleSetDungeonDifficultyOpcode)
+MSG_RAID_TARGET_UPDATE = 0x321      # m4-dungeon-companions 3.1 (Opcodes.h); format: parse_raid_target / raid_target
+# raid target icons: index = the core's m_targetIcons slot (Group.h TARGETICONCOUNT 8); names as playerbots reads them
+# in `rti <icon>` (vendor/mod-playerbots/src/Ai/Base/Value/RtiTargetValue.cpp GetRtiIndex)
+RAID_ICONS = {"star": 0, "circle": 1, "diamond": 2, "triangle": 3, "moon": 4, "square": 5, "cross": 6, "skull": 7}
 TRANSFER_ABORT_TOO_MANY_INSTANCES = 0x04   # Player.h TransferAbortReason
 SMSG_GROUP_UNINVITE = 0x077
 CMSG_GROUP_DISBAND = 0x07B
@@ -311,3 +315,27 @@ class Reader:
 
     def remaining(self) -> int:
         return len(self.d) - self.p
+
+
+def raid_target(icon: int, target_guid: int) -> bytes:
+    """Client MSG_RAID_TARGET_UPDATE (set one icon): uint8 icon, uint64 target guid (GroupHandler.cpp
+    HandleRaidTargetUpdateOpcode: `recvData >> x`, then `recvData >> guid` unless x == 0xFF, the list request)."""
+    if not 0 <= icon < len(RAID_ICONS):
+        raise ValueError(f"raid icon {icon} out of range")
+    return struct.pack("<BQ", icon, target_guid)
+
+
+def parse_raid_target(data: bytes) -> dict:
+    """Server MSG_RAID_TARGET_UPDATE. Group::SetTargetIcon (Group.cpp): uint8 0 (set), uint64 who, uint8 icon,
+    uint64 target (an empty target clears the icon). Group::SendTargetIconList: uint8 1 (list), then (uint8 icon,
+    uint64 target) for each set icon. ObjectGuid is written as a full uint64 (ObjectGuid.cpp operator<<)."""
+    r = Reader(data)
+    mode = r.u8()
+    if mode == 0:
+        who, icon, target = r.u64(), r.u8(), r.u64()
+        return {"mode": "set", "who": who, "icons": {icon: target}}
+    icons = {}
+    while len(r.d) - r.p >= 9:
+        icon = r.u8()
+        icons[icon] = r.u64()
+    return {"mode": "list", "who": None, "icons": icons}
