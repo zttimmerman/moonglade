@@ -1,31 +1,22 @@
 ## ADDED Requirements
 
-### Requirement: The tank holds the monsters
-In a dungeon fight the tank companion SHALL take the boss's attacks, and damage-dealing companions SHALL NOT pull it off.
+### Requirement: The tank holds the monsters and the healer keeps the party alive
+In a dungeon fight the tank companion SHALL hold the boss and the healer companion SHALL keep the party alive, well enough that the party finishes the listed dungeons.
 
-#### Scenario: Boss attacks land on the tank
-- **GIVEN** the probe and a `/mg party` companion party at the dungeon's target level in a fresh Utgarde Keep (normal), staged out of combat near the first encounter's boss (the encounter with the lowest `orderIndex` in DungeonEncounter.dbc)
-- **WHEN** the probe selects the boss and whispers `tank attack` to the tank, and the party fights it
-- **THEN** from 5 s after the first boss swing until the boss dies, at least 80% of the boss's melee swings (`SMSG_ATTACKERSTATEUPDATE`, attacker = boss) hit the tank. The evidence holds the swing counts per victim. Without the tank (counterexample: the party with the tank removed), the same measure is below 80%
-- Check: `dng.tank_holds`
-
-### Requirement: The healer keeps the party alive
-The healer companion SHALL heal party members who take damage in a dungeon fight.
-
-#### Scenario: Heals land during a boss fight
-- **GIVEN** the same staged fight as "Boss attacks land on the tank"
-- **WHEN** the fight runs to the boss's death
-- **THEN** the healer cast at least one heal on the tank (`SMSG_SPELLHEALLOG`, caster = healer, target = tank), no party member died, and the evidence holds the heal count, the total healed and each member's lowest health percentage
-- Check: `dng.healer_heals`
+#### Scenario: The roles carry a full clear
+- **GIVEN** the probe and a `/mg party` companion party (warrior tank, priest healer, two damage dealers) at each listed dungeon's target level, with the dungeon at full five-player strength
+- **WHEN** the run driver takes the party through every required encounter
+- **THEN** every listed dungeon is finished with at most 2 wipes per encounter (the "Party clears each listed dungeon" scenario), and the evidence holds deaths per role for every pull
+- Check: `dng.party_clear`
 
 ### Requirement: Companions step out of ground effects
-A companion SHALL move out of a hostile persistent ground effect (a dynamic-object area aura) whose radius is within `AiPlayerbot.MaxAoeAvoidRadius`.
+A companion SHALL move out of a hostile persistent ground effect whose radius is within `AiPlayerbot.MaxAoeAvoidRadius`.
 
 #### Scenario: Out of the fire
-- **GIVEN** a companion in combat with a hostile creature, where the creature's victim is the companion
-- **WHEN** the GM probe makes the creature cast, at its victim (`.cast target <spell>`), a hostile persistent area spell chosen by rule: Spell.dbc has an effect `SPELL_EFFECT_PERSISTENT_AREA_AURA` with a periodic-damage aura, the radius is at most `MaxAoeAvoidRadius`, the spell isn't in `AoeAvoidSpellWhitelist`, and it has the lowest ID among those whose dynamic object lasts at least 10 s
-- **THEN** within 5 s the companion is farther from the effect's centre than its radius. With `AiPlayerbot.AutoAvoidAoe = 0` (counterexample profile `aoe-avoid-off`), it is still inside after 5 s
-- Check: `dng.avoid_aoe`
+- **GIVEN** Zach in a listed dungeon with a `/mg party` party
+- **WHEN** a boss or monster puts a damaging effect on the ground under a companion
+- **THEN** the companion steps out of it within a few seconds
+- [human-verify] This is stock playerbots behaviour (`AiPlayerbot.AutoAvoidAoe`, default on) that Moonglade doesn't change; a game test for it would be another slow end-to-end check of a third-party default. It is judged by playing at the M4 human gate.
 
 ### Requirement: Orders work in dungeons
 Raid-icon focus and crowd-control orders from the player SHALL be obeyed by companions.
@@ -37,10 +28,10 @@ Raid-icon focus and crowd-control orders from the player SHALL be obeyed by comp
 - Check: `dng.rti_focus`
 
 #### Scenario: Sheep the moon
-- **GIVEN** the same kind of pack, with a mage companion
-- **WHEN** the probe marks a humanoid creature in the pack (creature_template `type` 7) with the moon icon and whispers `rti cc moon` to the mage before the pull
-- **THEN** within 15 s of the pull the moon-marked creature carries the mage's polymorph aura (a Spell.dbc spell whose effect applies `SPELL_AURA_TRANSFORM` and that the mage knows), and no companion damages it while the aura lasts
-- Check: `dng.cc_on_mark`
+- **GIVEN** Zach in a listed dungeon with a `/mg party` party that includes a mage
+- **WHEN** he marks a humanoid in a pack with the moon icon and whispers `rti cc moon` to the mage before the pull (cheat sheet)
+- **THEN** the mage polymorphs it and the party leaves it alone while it lasts
+- [human-verify] Stock playerbots behaviour driven by the same raid-icon order that `dng.rti_focus` already proves end to end; judged by playing at the M4 human gate.
 
 ### Requirement: Companions feel like a good party
 Companions SHALL make dungeon runs smoother rather than more annoying.

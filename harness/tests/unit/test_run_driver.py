@@ -773,3 +773,164 @@ class GroundRetry(UnitCase):
         zig = [{"x": 0.0, "y": 0.0, "z": 0.0}] + [{"x": 0.0, "y": 4.0 * k, "z": 0.0} for k in range(1, 15)] + \
               [{"x": 4.0 * k, "y": 56.0 - 2 * k, "z": 0.0} for k in range(1, 9)] + [here]
         self.assertIn("walk", D.judge_ground(BOSS, here, self.path(here), zig)["why"])        # far on foot
+
+
+class SoloClearJudge(UnitCase):
+    """dng.solo_clear's pass rule (spec "Solo clear of The Deadmines")."""
+
+    def ev(self, deaths=(), **kw):
+        enc = {"boss": "B", "encounter": 1, "bit": 0, "killed": True,
+               "attempts": [{"n": 1, "deaths": list(deaths), "gm_off": [PCK.GM_OFF]}]}
+        run = {"cleared": True, "mode": "solo", "total_s": 900, "required": [1], "final_mask": 1,
+               "mapstat": {"players": 1}, "encounters": [enc]}
+        run |= kw
+        return {"required": [(1, "B")], "run": run}
+
+    def test_pass(self):
+        self.assertEqual(PCK.solo_clear_problems(self.ev()), [])
+        self.assertEqual(PCK.solo_clear_problems(self.ev(deaths=["Probe"])), [])
+
+    def test_two_deaths_over_retries_pass_a_third_fails(self):
+        ev = self.ev()
+        ev["run"]["encounters"][0]["attempts"] = [
+            {"n": 1, "deaths": ["Probe"], "wipe": True, "gm_off": [PCK.GM_OFF]},
+            {"n": 2, "deaths": ["Probe"], "wipe": True, "gm_off": [PCK.GM_OFF]},
+            {"n": 3, "deaths": [], "killed": True, "gm_off": [PCK.GM_OFF]}]
+        self.assertEqual(PCK.solo_clear_problems(ev), [])
+        ev["run"]["encounters"][0]["attempts"][2]["deaths"] = ["Probe"]       # a 3rd death, even on the kill
+        self.assertIn("3 deaths", PCK.solo_clear_problems(ev)[0])
+
+    def test_counterexamples(self):
+        self.assertIn("bit 0 not in the saved mask", PCK.solo_clear_problems(self.ev(final_mask=0))[0])  # missing bit
+        self.assertTrue(PCK.solo_clear_problems(self.ev(final_mask=None)))
+        self.assertIn("limit", PCK.solo_clear_problems(self.ev(total_s=45 * 60 + 1))[0])           # over 45 min
+        self.assertTrue(PCK.solo_clear_problems(self.ev(total_s=None)))
+        self.assertTrue(PCK.solo_clear_problems(self.ev(cleared=False)))
+        self.assertTrue(PCK.solo_clear_problems(self.ev(mode="party")))          # not alone
+        self.assertTrue(PCK.solo_clear_problems(self.ev(mapstat={"players": 5})))
+        self.assertTrue(PCK.solo_clear_problems(self.ev(required=[1, 2])))      # encounter 2 never reached
+        self.assertTrue(PCK.solo_clear_problems(self.ev(required=[])))
+        part = self.ev()
+        part["required"] = [(1, "B"), (2, "C")]                                  # a narrowed run
+        self.assertTrue(PCK.solo_clear_problems(part))
+        gm = self.ev()
+        gm["run"]["encounters"][0]["attempts"][0]["gm_off"] = []                 # GM mode not confirmed off
+        self.assertIn("GM mode", PCK.solo_clear_problems(gm)[0])
+        self.assertTrue(PCK.solo_clear_problems({}))
+
+    def test_a_pull_that_never_fought_needs_no_gm_answer(self):
+        ev = self.ev()
+        ev["run"]["encounters"][0]["attempts"].insert(0, {"n": 0, "why": "boss not found", "deaths": []})
+        self.assertEqual(PCK.solo_clear_problems(ev), [])
+
+
+def sample(t, ws=3.0, my=0.5, au=0.05, p95=40, med=20):
+    return {"t": t, "worldserver_gb": ws, "mysqld_gb": my, "authserver_gb": au, "host": {"free_inactive_gb": 4.0},
+            "server_info": {"p95_ms": p95, "median_ms": med}}
+
+
+class RunBudgetJudge(UnitCase):
+    """dng.run_budget's pass rule (spec "A clear within the performance budget")."""
+
+    def samples(self, over=None):
+        out = [sample(100 + 10 * k) for k in range(31)]               # 100 .. 400, every 10 s
+        for k, kw in (over or {}).items():
+            out[k] = sample(out[k]["t"], **kw)
+        return out
+
+    def judge(self, samples, errors=(), start=100.0, end=400.0, cleared=True):
+        return PCK.budget_problems(samples, list(errors), start, end, cleared)
+
+    def test_pass(self):
+        self.assertEqual(self.judge(self.samples()), [])
+
+    def test_one_sample_over_a_limit_fails(self):
+        for kw in ({"ws": 6.01}, {"my": 1.01}, {"ws": 5.9, "my": 0.99, "au": 0.2}, {"p95": 101}, {"med": 51}):
+            probs = self.judge(self.samples({12: kw}))
+            self.assertEqual(len(probs), 1, kw)
+            self.assertIn("sample 12", probs[0])
+
+    def test_an_unreadable_value_fails(self):
+        s = self.samples()
+        s[5]["server_info"] = {"error": "SOAP unreachable"}
+        self.assertIn("update_p95_ms=None", self.judge(s)[0])
+
+    def test_no_samples_fails(self):
+        self.assertIn("no samples", self.judge([]))
+
+    def test_coverage_and_the_clear(self):
+        self.assertEqual(self.judge(self.samples(), start=99.6, end=400.4), [])      # stamped just after the start
+        self.assertIn("after the run started", self.judge(self.samples(), start=89.0)[0])
+        self.assertIn("before the run ended", self.judge(self.samples(), end=411.0)[0])
+        gappy = self.samples()
+        del gappy[10:13]
+        self.assertIn("gap", self.judge(gappy)[0])
+        self.assertIn("didn't clear", self.judge(self.samples(), cleared=False)[0])
+        self.assertIn("sampler error", self.judge(self.samples(), errors=["OSError: x"])[0])
+        self.assertIn("no run window", self.judge(self.samples(), start=None)[0])
+
+    def test_etime(self):
+        self.assertEqual(PCK.etime_s("  05:23\n"), 323)
+        self.assertEqual(PCK.etime_s("01:02:03"), 3723)
+        self.assertEqual(PCK.etime_s("2-01:02:03"), 2 * 86400 + 3723)
+        self.assertIsNone(PCK.etime_s(""))
+        self.assertIsNone(PCK.etime_s("abc"))
+
+
+class SamplerStop(UnitCase):
+    def test_stop_ends_sampling_early(self):
+        import threading
+        from hslib import population as pop
+        orig = pop.perf_sample
+        pop.perf_sample = lambda: {"t": 0}
+        try:
+            stop = threading.Event()
+            sm = pop._Sampler(duration_s=3600, every_s=0.05, stop=stop)
+            sm.start()
+            import time as _t
+            _t.sleep(0.2)
+            stop.set()
+            sm.join(timeout=2)
+            self.assertFalse(sm.is_alive())
+            self.assertGreaterEqual(len(sm.samples), 2)
+        finally:
+            pop.perf_sample = orig
+
+
+class Landing(UnitCase):
+    def test_z_settled(self):
+        self.assertTrue(D.z_settled({"z": 40.0}, {"z": 40.02}))
+        self.assertFalse(D.z_settled({"z": 41.0}, {"z": 40.0}))       # still falling
+        self.assertFalse(D.z_settled(None, {"z": 40.0}))
+        self.assertFalse(D.z_settled({}, {"z": 40.0}))
+
+    def test_landed_polls_until_the_height_stops_changing(self):
+        class Falls:
+            zs = [41.0, 40.5, 40.0, 40.0, 40.0]
+            n = 0
+
+            def gps(self, guid=None):
+                self.n += 1
+                return {"x": 1, "y": 2, "z": self.zs[min(self.n - 1, len(self.zs) - 1)]}
+        s = Falls()
+        self.assertEqual(D.landed(s)["z"], 40.0)
+        self.assertEqual(s.n, 4)
+
+
+class EarlyReturnWhy(UnitCase):
+    def test_a_failed_entry_puts_the_reason_in_the_callers_out(self):
+        class S(FakeSession):
+            def unbind(self, m):
+                return {}
+
+            def enter(self, f):
+                return {"ok": False}
+        out: dict = {}
+        orig = D.required_encounters
+        D.required_encounters = lambda f: ([], [])
+        try:
+            D.run_party(S(), {"map": 36}, [], None, selfbot=True, out=out)
+        finally:
+            D.required_encounters = orig
+        self.assertEqual(out["why"], "didn't enter")
+        self.assertFalse(out["cleared"])

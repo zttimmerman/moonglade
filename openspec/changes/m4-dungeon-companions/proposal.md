@@ -26,7 +26,7 @@ This is the second of three M4 changes (see `m4-dungeon-scaling`'s proposal for 
 - **mod-playerbots config** (`harness/hslib/config.py`, `playerbots` section, every profile): the existing defaults `AutoAvoidAoe = 1` and `ApplyInstanceStrategies = 1` are stated explicitly, so a future default change upstream can't silently turn them off (design.md §2).
 - **Harness:**
   - `dungeon.py` gains a full-run driver (boss by boss in encounter order, with wipe recovery);
-  - the probe learns `SMSG_SPELLHEALLOG` and raid-icon packets;
+  - the probe learns raid-icon packets (`SMSG_SPELLHEALLOG` dropped, spec-change log 2026-10-12);
   - new `dng.*` checks.
 - **Docs:** a player cheat sheet, `docs/companions-in-dungeons.md`, covering the slash command, the orders and what the companions do on their own.
 - **If the prototype shows a tactic gap in classic dungeons** (task 1.1 here), the fix goes through the check-upstream-first procedure. That means a mod-playerbots pin bump, a cherry-pick or our own `patches/playerbots/0002`, with ADR-0008's queue, and it becomes its own task with an estimate.
@@ -70,4 +70,9 @@ This is the second of three M4 changes (see `m4-dungeon-scaling`'s proposal for 
 - Any spec loosening logged in the three M4 changes' spec-change logs.
 
 ## Spec-change log
-- (none yet)
+- **2026-10-12 (loosening, for the M4 human gate).** Fewer game tests, per Zach's 2026-10-11 pipeline rule (game tests few and on critical paths). `dng.tank_holds` and `dng.healer_heals` are replaced by one requirement checked by `dng.party_clear`: four companions and the player can't finish a full-strength dungeon unless the tank holds and the healer heals, and each of the four dungeons has cleared in a builder run (one dungeon per run; the first four-dungeon run is at the gate). `dng.avoid_aoe` and `dng.cc_on_mark` become `[human-verify]` at the M4 gate: both test stock playerbots defaults Moonglade doesn't change. `dng.rti_focus` stays as the one orders check. What's lost:
+  - the 80%-of-swings and heal-count measures;
+  - the requirement text "damage-dealing companions SHALL NOT pull it off" (the new requirement only asks that the tank holds well enough for the party to finish);
+  - the healer scenario's "no party member died" in one boss fight; `dng.party_clear` allows up to 2 wipes per encounter;
+  - the counterexamples: no tank, no healer, `aoe-avoid-off`, and no `rti cc` (the no-`rti` counterexample for `dng.rti_focus` stays, at unit level);
+  - task 3.3's "tune `wait for attack time` and record why": the 3 s value was set in `m4-party-preset` without a recorded tuning run, and "record why" is dropped. The four-dungeon clears with that value are the evidence it works.

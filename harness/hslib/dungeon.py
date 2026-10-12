@@ -993,6 +993,28 @@ def _path_here(s: "Session", sp: dict, enc: dict, at: dict | None, cache: dict |
     return path, pts
 
 
+LAND_S = 3.0                  # landed(): at most this long for the probe's height to settle after a teleport
+LAND_Z_YD = 0.05
+
+
+def z_settled(prev: dict | None, cur: dict) -> bool:
+    """Two `.gps` reads in a row at the same height (within LAND_Z_YD): the probe has landed."""
+    return bool(prev) and "z" in prev and "z" in cur and abs(prev["z"] - cur["z"]) <= LAND_Z_YD
+
+
+def landed(s: "Session", timeout: float = LAND_S) -> dict:
+    """The probe's `.gps` once its height stops changing (it falls to the floor below a teleport point), or the last
+    read after `timeout`."""
+    prev = s.gps()
+    t0 = time.time()
+    while time.time() - t0 < timeout:
+        cur = s.gps()
+        if z_settled(prev, cur):
+            return cur
+        prev = cur
+    return prev
+
+
 def _ground_stage(s: "Session", sp: dict, enc: dict, boss: dict, prev: dict, cache: dict | None = None) -> dict:
     """The staging retry when both the line's point and the path fallback fail: for each of GROUND_TRIES, the
     candidate (turned_candidate) at the boss's height + 1 (the probe lands on the floor below; `.go xyz x y` without z would take the map's
@@ -1002,8 +1024,7 @@ def _ground_stage(s: "Session", sp: dict, enc: dict, boss: dict, prev: dict, cac
     for back, turn in GROUND_TRIES:
         cand = turned_candidate(boss, prev, back, turn)
         s.go(cand["x"], cand["y"], boss["z"] + 1)
-        time.sleep(1.0)                   # falls to the floor below, if any
-        me = s.gps()
+        me = landed(s)                    # falls to the floor below, if any
         if "x" not in me:
             tries.append({"back": back, "turn": turn, "why": "no position"})
             continue
@@ -1467,7 +1488,7 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
             s.cmd(".gm on", settle=0.3)
             s.go(sp["x"] + (stage["x"] - sp["x"]) / d * SOLO_PULL_YD, sp["y"] + (stage["y"] - sp["y"]) / d * SOLO_PULL_YD,
                  sp["z"] + 1)
-            s.cmd(".gm off", settle=0.3)
+            a["gm_off"] = s.cmd(".gm off", settle=0.3)
     else:
         if selfbot:
             # GM mode stays on until the pull (run 2 of slice 3.4: a probe with GM off and no AI at the staging point
@@ -1564,21 +1585,24 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
     probe_name = s.who["char"]
     tank = next((c["name"] for c in comps if c["companion"] == "tank"), None)
     t_run = time.time()
+    ev["t_start"] = round(t_run, 1)                  # the run's clock (dng.run_budget's sampling window)
     ev["unbind"] = s.unbind(f["map"])
     e = s.enter(f)
     ev["enter"] = {k: e.get(k) for k in ("ok", "instance")}
     if not e["ok"]:
-        return ev | {"cleared": False, "why": "didn't enter"}
+        ev.update(cleared=False, why="didn't enter")     # in place: the caller's `out` gets the reason too
+        return ev
     ev["gather_in"] = s.gather(1 + len(comps), timeout=45)
     ev["mapstat"] = s.mapstat()
     if ev["mapstat"].get("players") != 1 + len(comps):
-        return ev | {"cleared": False, "why": f"AutoBalance counts {ev['mapstat'].get('players')} players, not "
-                                              f"{1 + len(comps)}"}
+        ev.update(cleared=False, why=f"AutoBalance counts {ev['mapstat'].get('players')} players, not {1 + len(comps)}")
+        return ev
     fighters = names + ([probe_name] if selfbot else [])
     if mode == "solo":
         ev["self_on"] = set_selfbot(s, True)
         if not ev["self_on"]["ok"]:
-            return ev | {"cleared": False, "why": "selfbot not enabled"}
+            ev.update(cleared=False, why="selfbot not enabled")
+            return ev
     by_enc = {x["encounter"]: x for x in (stages or {}).get("stages", [])}
     for enc in req:
         sp = enc["spawns"][0]
@@ -1662,6 +1686,7 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
     ev["final_mask"] = rows[0]["mask"] if rows else None
     ev["cleared"] = bool(req) and all(r.get("killed") for r in ev["encounters"]) and len(ev["encounters"]) == len(req)
     ev["total_s"] = round(time.time() - t_run, 1)
+    ev["t_end"] = round(time.time(), 1)
     ev["table"] = [r.get("summary") or {"boss": r["boss"], "killed": False, "why": r.get("why")} for r in ev["encounters"]]
     if s.selfbot:
         ev["self_off"] = set_selfbot(s, False)
