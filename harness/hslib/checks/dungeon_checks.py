@@ -876,7 +876,7 @@ def session1(ctx):
 
 
 @check("dng.session2", order=503, capability=CAP_LOCK, stack="up", layer="integration", profile=SCALING_ON,
-       budget_s=90, children=SESSION2)
+       budget_s=90, children=SESSION2, needs=("dng.session1",))
 def session2(ctx):
     """Continues dng.session1's login, in its Deadmines copy A, with two of its four companions kept in the party:
     (lock.partial_kept) the first boss killed (final alive), the probe walks out and enters again: copy A, the first

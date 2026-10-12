@@ -272,11 +272,24 @@ def select(paths: list[str] | None, m: Map, price, old_source=None, new_source=N
         out["smoke_set"] = m.smoke_set(price)
         for t in out["smoke_set"]:
             sel.setdefault(t, []).append("smoke set: " + ", ".join(out["smoke_paths"][:3]))
+    add_needs(sel, m.tests)
     out["gate_owed"] = gate_owed(sel, m.tests)
     out["targeted"] = {t: (sel[t] if t in sel else TARGETED_NOT_SELECTED)
                        for t, c in sorted(m.tests.items()) if getattr(c, "targeted", False)}
     out["duration_s"] = round(time.perf_counter() - t0, 3)
     return out
+
+
+def add_needs(selected: dict, tests: dict) -> None:
+    """Select every check a selected check `needs` (its GIVEN continues that check's state), transitively."""
+    todo = list(selected)
+    while todo:
+        t = todo.pop()
+        for n in getattr(tests.get(t), "needs", ()) or ():
+            if n not in selected:
+                selected[n] = []
+                todo.append(n)
+            selected[n].append(f"needed by {t} (its GIVEN)")
 
 
 def gate_owed(selected: dict, tests: dict) -> dict:

@@ -65,6 +65,7 @@ class Check:
     children: tuple = field(default_factory=tuple)
     identity: bool = False        # gets its own fixture account + two characters (ctx["identity"]); always for scope=character
     targeted: bool = False        # on TARGETED: selected by covers only, run in every full run, timed apart
+    needs: tuple = ()             # checks whose state this one's GIVEN continues (selected with it)
 
 
 REGISTRY: dict[str, Check] = {}
@@ -74,7 +75,7 @@ CHILDREN: dict[str, str] = {}     # child scenario id -> the session check that 
 def check(id: str, order: int, capability: str, stack: str = "any", layer: str | None = None,
           profile: str | None = None, gui: bool = False, ci_only: bool = False, covers=None,
           scope: str = "exclusive", budget_s: float | None = None, parallel_safe: bool = False, children=(),
-          identity: bool = False, targeted: bool = False):
+          identity: bool = False, targeted: bool = False, needs=()):
     """Register a check (see the module doc for the fields). `layer` must be one of LAYERS."""
     def deco(fn):
         if id in REGISTRY or id in CHILDREN:
@@ -88,7 +89,7 @@ def check(id: str, order: int, capability: str, stack: str = "any", layer: str |
         cov = covers if covers is not None else fn.__globals__.get("COVERS", ())
         REGISTRY[id] = Check(id, fn, order, capability, stack, (fn.__doc__ or "").strip(), layer, profile, gui,
                              ci_only, tuple(cov), scope, budget_s, parallel_safe, tuple(children),
-                             identity or scope == "character", targeted)
+                             identity or scope == "character", targeted, tuple(needs))
         for c in children:
             if c in REGISTRY or c in CHILDREN:
                 raise RuntimeError(f"duplicate check id {c} (child of {id})")
