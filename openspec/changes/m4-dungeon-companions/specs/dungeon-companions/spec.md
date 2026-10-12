@@ -22,16 +22,16 @@ A companion SHALL move out of a hostile persistent ground effect whose radius is
 Raid-icon focus and crowd-control orders from the player SHALL be obeyed by companions.
 
 #### Scenario: Kill skull first
-- **GIVEN** a companion party next to a pack of at least two hostile creatures in a dungeon (pack chosen by rule: the hostile, non-boss `creature` spawn nearest the first boss's staging point that has at least one other hostile spawn within 10 yd, together with those neighbours)
-- **WHEN** the probe marks one creature with the skull icon (`MSG_RAID_TARGET_UPDATE`), whispers `rti skull` to the party and `tank attack` to the tank
-- **THEN** that creature dies first, and before it dies at least 80% of the damage-dealing companions' damage events land on it
-- Check: `dng.rti_focus`
+- **GIVEN** Zach in a listed dungeon with a `/mg party` party, next to a pack of monsters
+- **WHEN** he marks one with the skull icon and whispers `rti skull` to the party and `tank attack` to the tank (cheat sheet)
+- **THEN** the party kills the skull-marked monster first
+- [human-verify] Playerbots' default `rti` value is already the skull (`RtiValue.cpp:10`), and the damage and tank targets prefer the rti target (`DpsTargetValue.cpp:283`, `TankTargetValue.cpp:112-128`), so a game test can't show the order matters: the party focuses the skull with or without it. A headless test also needs a pack with nothing else in sight, which The Deadmines doesn't have without clearing 13 spawns first (two live attempts, 2026-10-12). Judged by playing at the M4 human gate.
 
 #### Scenario: Sheep the moon
 - **GIVEN** Zach in a listed dungeon with a `/mg party` party that includes a mage
 - **WHEN** he marks a humanoid in a pack with the moon icon and whispers `rti cc moon` to the mage before the pull (cheat sheet)
 - **THEN** the mage polymorphs it and the party leaves it alone while it lasts
-- [human-verify] Stock playerbots behaviour driven by the same raid-icon order that `dng.rti_focus` already proves end to end; judged by playing at the M4 human gate.
+- [human-verify] Stock playerbots behaviour driven by the same raid-icon orders as "Kill skull first"; judged by playing at the M4 human gate.
 
 ### Requirement: Companions feel like a good party
 Companions SHALL make dungeon runs smoother rather than more annoying.

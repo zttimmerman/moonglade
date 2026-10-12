@@ -10,9 +10,9 @@ Agent-hour estimates for builder work. This change starts after `m4-dungeon-scal
 - 2.3 moved to `m4-party-preset`.
 
 ## 3. Harness and checks
-- [ ] 3.1 **Probe addition** (1 h): `MSG_RAID_TARGET_UPDATE` send/parse, its format cited to the core's packet builder. (`SMSG_SPELLHEALLOG` and the `co ?` parser dropped with `dng.healer_heals`, spec-change log 2026-10-12.)
+- 3.1 cut 2026-10-12 (spec-change log; built on branch `change/m4-rti-focus`, unmerged). Original: **Probe addition** (1 h): `MSG_RAID_TARGET_UPDATE` send/parse, its format cited to the core's packet builder. (`SMSG_SPELLHEALLOG` and the `co ?` parser dropped with `dng.healer_heals`, spec-change log 2026-10-12.)
 - 3.2 moved to `m4-instance-tactics`. Unchanged original text: (3 h), ≥3× each plus counterexamples (a wrong spec in the plan; `ApplyInstanceStrategies = 0`).
-- [ ] 3.3 **`dng.rti_focus`** (2–3 h) plus a unit-level counterexample (no `rti` order). `dng.tank_holds`, `dng.healer_heals`, `dng.avoid_aoe` and `dng.cc_on_mark` were cut (spec-change log 2026-10-12).
+- 3.3 cut 2026-10-12 (spec-change log; built on branch `change/m4-rti-focus`, unmerged). Original: **`dng.rti_focus`** (2–3 h) plus a unit-level counterexample (no `rti` order). `dng.tank_holds`, `dng.healer_heals`, `dng.avoid_aoe` and `dng.cc_on_mark` were cut (spec-change log 2026-10-12).
 - [ ] 3.4 **Run driver hardening plus `dng.party_clear` (4 dungeons), `dng.solo_clear`, `dng.run_budget`** (6–8 h, mostly run time): every run's evidence kept under `env/` (not committed), with a summary table in `docs/research/m4-dungeon-runs.md`.
 - 3.5 moved to `m4-party-preset`.
 
