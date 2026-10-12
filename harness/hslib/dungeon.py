@@ -892,6 +892,10 @@ def nav_stages(f: dict, req: list[dict], log=None) -> dict:
             # the path is read for every encounter: the fallback point, and the approach the pull walks if the tank
             # can't see the boss from the staging point (playerbots AttackAction::Attack needs line of sight)
             rec["fallback"] = fb = _path_fallback(s, sp, enc, boss, prev, cache)
+            if fb.get("point") and not path_usable(fb.get("path_type")):
+                # a path with no navmesh route (Utgarde Keep: from the entrance to Prince Keleseth, type 10 =
+                # shortcut | no path) is a straight line through the walls; its "points" are not a walk
+                rec["fallback"] = fb = fb | {"point": None, "points": [], "why": f"no path (type {fb['path_type']})"}
             if rec["point"] and fb.get("points"):
                 walk = walk_to(fb["points"], rec["point"])
                 rec["primary"]["walk_yd"] = walk
@@ -901,13 +905,29 @@ def nav_stages(f: dict, req: list[dict], log=None) -> dict:
                     rec |= {"point": None, "verdict": None}
             if not rec["point"] and fb.get("point"):
                 rec |= {"point": fb["point"], "verdict": "fallback"}
+            if rec["point"] and rec["verdict"] == "primary" and not fb.get("points"):
+                # the line's point, but no usable walk to check it against: the boss's own path to it, read here
+                path, pts = _path_here(s, sp, enc, rec["point"], cache)
+                j = judge_ground(boss, rec["point"], path, pts)
+                rec["primary"]["walk_check"] = {k: j.get(k) for k in ("verdict", "why", "walk_yd")}
+                if j.get("verdict"):
+                    fb = {"points": pts}
+                else:
+                    rec |= {"point": None, "verdict": None}
+            if not rec["point"]:
+                # neither: the line's point at the boss's own height (its floor) instead of a height interpolated
+                # between the two ends (which put Keleseth's candidate under the floor), GROUND_TRIES
+                rec["ground"] = g = _ground_stage(s, sp, enc, boss, prev, cache)
+                if g.get("point"):
+                    rec |= {"point": g["point"], "verdict": "ground"}
+                    fb = {"points": g["points"]}
             if rec["point"]:
                 rec["approach"] = approach_points(fb.get("points") or [], rec["point"], boss)
                 rec["gather"] = gather_point(fb.get("points") or [], rec["point"], boss)
                 rec["walk_in"] = walk_in_points(fb.get("points") or [], rec["gather"], rec["point"])
             say({"boss": sp["name"], "verdict": rec["verdict"], "point": rec["point"],
                  "gather": {k: (rec.get("gather") or {}).get(k) for k in ("point", "back_yd", "why")},
-                 "primary_why": (rec.get("primary") or {}).get("why"),
+                 "primary_why": (rec.get("primary") or {}).get("why"), "ground": (rec.get("ground") or {}).get("tries"),
                  "fallback": {k: (rec.get("fallback") or {}).get(k) for k in ("n_points", "path_type", "why")}})
             out["stages"].append(rec)
             if rec["point"]:
@@ -917,6 +937,87 @@ def nav_stages(f: dict, req: list[dict], log=None) -> dict:
         s.cmd(".gm off", settle=0.3)
     out["s"] = round(time.time() - t0, 1)
     return out
+
+
+# the ground retry's candidates: (yd from the boss, turn in degrees from the line toward the previous staging point),
+# nearest the design's point first: 30 yd on the line, 45 yd on it, then 30 yd turned 45/90/135 degrees either way
+GROUND_TRIES = ((STAGE_BACK_YD, 0), (45, 0), (STAGE_BACK_YD, 45), (STAGE_BACK_YD, -45), (STAGE_BACK_YD, 90),
+                (STAGE_BACK_YD, -90), (STAGE_BACK_YD, 135), (STAGE_BACK_YD, -135))
+
+
+def turned_candidate(boss: dict, prev: dict, back: float, turn_deg: float) -> dict:
+    """The point `back` yd (2D) from the boss in the direction of prev turned by turn_deg, at the boss's height."""
+    a = math.atan2(prev["y"] - boss["y"], prev["x"] - boss["x"]) + math.radians(turn_deg)
+    return {"x": boss["x"] + back * math.cos(a), "y": boss["y"] + back * math.sin(a), "z": boss["z"]}
+
+
+def path_usable(path_type: int | None) -> bool:
+    """A `.mmap path` result the staging rule can use: known, and without PATHFIND_NOPATH (PathGenerator.h)."""
+    return path_type is not None and not path_type & PATH_NOPATH
+
+
+def judge_ground(boss: dict, cand: dict, path: dict, points: list[dict]) -> dict:
+    """The ground retry's verdict: a usable path from the boss that ends within STAGE_OFF_LINE_YD of the candidate,
+    at least STAGE_MIN_BOSS_YD from the boss and at most STAGE_WALK_MAX_YD from it on foot."""
+    out = judge_stage(boss, cand, path)
+    if not out.get("verdict"):
+        return out
+    if not path_usable(path.get("type")):
+        return out | {"verdict": None, "why": f"path type {path.get('type')}"}
+    if out["boss_yd"] < STAGE_MIN_BOSS_YD:
+        return out | {"verdict": None, "why": f"{out['boss_yd']} yd from the boss"}
+    walk = walk_to(points, out["point"]) if points else None
+    out["walk_yd"] = walk
+    if walk is None or walk > STAGE_WALK_MAX_YD:
+        return out | {"verdict": None, "why": f"walk {walk} yd from the boss"}
+    return out
+
+
+def _path_here(s: "Session", sp: dict, enc: dict, at: dict | None, cache: dict | None = None) -> tuple[dict, list]:
+    """The boss's `.mmap path` to the probe (standing at `at`, or where it is), read point by point."""
+    if at:
+        s.go(at["x"], at["y"], at["z"] + 0.5)
+    u = nav_unit(s, sp, enc, cache)
+    if not u.get("guid"):
+        return {"why": "boss not found"}, []
+    s.ws.track_creates = True
+    try:
+        mark = s.ws.mark()
+        s.ws.set_selection(u["guid"])
+        time.sleep(0.3)
+        path = parse_mmap_path(s.cmd(".mmap path", settle=0.6))
+        _creates_settle(s, mark)
+        pts = path_points(s.ws.events_since(mark, "unit_create"))
+    finally:
+        s.ws.track_creates = False
+    return path, pts
+
+
+def _ground_stage(s: "Session", sp: dict, enc: dict, boss: dict, prev: dict, cache: dict | None = None) -> dict:
+    """The staging retry when both the line's point and the path fallback fail: for each of GROUND_TRIES, the
+    candidate (turned_candidate) at the boss's height + 1 (the probe lands on the floor below; `.go xyz x y` without z would take the map's
+    top surface, the keep's roof in Utgarde Keep), then the boss's `.mmap path` to it, read point by point; the first
+    judge_ground pass wins."""
+    tries = []
+    for back, turn in GROUND_TRIES:
+        cand = turned_candidate(boss, prev, back, turn)
+        s.go(cand["x"], cand["y"], boss["z"] + 1)
+        time.sleep(1.0)                   # falls to the floor below, if any
+        me = s.gps()
+        if "x" not in me:
+            tries.append({"back": back, "turn": turn, "why": "no position"})
+            continue
+        here = {k: me[k] for k in ("x", "y", "z")}
+        path, pts = _path_here(s, sp, enc, None, cache)
+        if path.get("why"):
+            tries.append({"back": back, "turn": turn, "why": path["why"]})
+            continue
+        j = judge_ground(boss, here, path, pts)
+        tries.append({"back": back, "turn": turn, "at": here, "path_type": path.get("type"), "n_points": len(pts),
+                      **{k: j.get(k) for k in ("verdict", "why", "boss_yd", "walk_yd")}})
+        if j.get("verdict"):
+            return {"point": j["point"], "points": pts, "tries": tries}
+    return {"point": None, "points": [], "tries": tries}
 
 
 def path_entry(enc: dict) -> int | None:

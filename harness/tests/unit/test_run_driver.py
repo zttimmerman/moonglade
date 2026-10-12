@@ -732,3 +732,44 @@ class PerDungeonSetup(UnitCase):
             PCK.party_clear({})
         self.assertIn("initself", str(cm.exception))
         self.assertFalse([c for c in self.calls if c[0] == "run"])
+
+
+class GroundRetry(UnitCase):
+    """Utgarde Keep: the boss's path from the entrance has no navmesh route (type 10 = shortcut | no path), so the
+    fallback is refused and the staging point is retried at the boss's own floor height, turned around the boss."""
+
+    def test_no_path_types_are_unusable(self):
+        self.assertTrue(D.path_usable(D.PATH_NORMAL))
+        self.assertTrue(D.path_usable(D.PATH_INCOMPLETE))
+        self.assertFalse(D.path_usable(10))                    # PATHFIND_SHORTCUT | PATHFIND_NOPATH
+        self.assertFalse(D.path_usable(D.PATH_NOPATH))
+        self.assertFalse(D.path_usable(None))
+
+    def test_turned_candidates_at_the_boss_height(self):
+        boss, prev = {"x": 0.0, "y": 0.0, "z": 40.0}, {"x": 0.0, "y": -100.0, "z": 12.0}
+        c = D.turned_candidate(boss, prev, 30, 0)
+        self.assertTrue(math.isclose(c["y"], -30, abs_tol=1e-6) and math.isclose(c["x"], 0, abs_tol=1e-6))
+        self.assertEqual(c["z"], 40.0)                         # the boss's floor, not the interpolated height
+        c = D.turned_candidate(boss, prev, 30, 90)
+        self.assertTrue(math.isclose(c["x"], 30, abs_tol=1e-6) and math.isclose(c["y"], 0, abs_tol=1e-6))
+        self.assertEqual(D.GROUND_TRIES[0], (D.STAGE_BACK_YD, 0))   # the design's point first
+
+    def path(self, end, t=D.PATH_NORMAL):
+        return {"type": t, "actual_end": end}
+
+    def test_judge_ground(self):
+        here = {"x": 30.0, "y": 0.0, "z": 0.0}
+        pts = line(9)                                          # boss at 0 .. 32 yd, 4 yd apart
+        j = D.judge_ground(BOSS, here, self.path(here), pts)
+        self.assertEqual(j["verdict"], "primary")
+        self.assertEqual(j["walk_yd"], 28.0)                   # path point nearest 30 yd: 28 yd on foot
+
+    def test_counterexamples_judge_ground(self):
+        here = {"x": 30.0, "y": 0.0, "z": 0.0}
+        self.assertIsNone(D.judge_ground(BOSS, here, self.path(here, 10), line(9))["verdict"])     # no path
+        self.assertIsNone(D.judge_ground(BOSS, here, self.path({"x": 50.0, "y": 0.0, "z": 0.0}), line(9))["verdict"])
+        near = {"x": 12.0, "y": 0.0, "z": 0.0}
+        self.assertIn("from the boss", D.judge_ground(BOSS, near, self.path(near), line(9))["why"])  # < 25 yd
+        zig = [{"x": 0.0, "y": 0.0, "z": 0.0}] + [{"x": 0.0, "y": 4.0 * k, "z": 0.0} for k in range(1, 15)] + \
+              [{"x": 4.0 * k, "y": 56.0 - 2 * k, "z": 0.0} for k in range(1, 9)] + [here]
+        self.assertIn("walk", D.judge_ground(BOSS, here, self.path(here), zig)["why"])        # far on foot
