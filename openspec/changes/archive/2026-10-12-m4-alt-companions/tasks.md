@@ -14,8 +14,8 @@ Agent-hour estimates for builder work. This change is independent of the other t
 
 ## 3. Checks
 - [x] 3.1 **`alt.bring_dismiss`, `alt.foreign_refused`, `alt.gear_untouched`** (2–3 h): one shared game session (one login, one alt), each check once plus unit-level counterexamples.
-- [ ] 3.2 **`alt.progress_kept`** (2 h, uses front-menu-saves' load path), plus a unit-level counterexample (an alt-row change during the load must FAIL the comparison).
-  - Built (a child of the `alt.bring_dismiss` session) with its unit counterexample. Both 2026-10-12 game runs failed its GIVEN: the second kill found no creature, because the first kill's corpse stayed selected and `.npc info <spawn>` reads the selection. Fixed (`kill_one` clears the selection; unit regression in `test_alt_checks.KillOne`). Not re-run live: the builder's two-run budget was spent. Its other rules held in both runs: XP 93→114 and 114→130, load `done`, alt rows unchanged.
+- [x] 3.2 **`alt.progress_kept`** (2 h, uses front-menu-saves' load path), plus a unit-level counterexample (an alt-row change during the load must FAIL the comparison).
+  - Built (a child of the `alt.bring_dismiss` session) with its unit counterexample. Both 2026-10-12 game runs failed its GIVEN: the second kill found no creature, because the first kill's corpse stayed selected and `.npc info <spawn>` reads the selection. Fixed (`kill_one` clears the selection; unit regression in `test_alt_checks.KillOne`). Not re-run live: the builder's two-run budget was spent. Its other rules held in both runs: XP 93→114 and 114→130, load `done`, alt rows unchanged. Live PASS on the fixed code in the PR-tier runs of PR #16 (3.2 s; XP 130→180, rows unchanged after the master's load).
 - [x] 3.3 **Unit tests** (1 h): `unit:lua:test_addon_bring.bring_and_dismiss_send_the_command_lists`, `unit:py:test_alt_config.alt_gear_protected_in_every_profile`. (`client.bring_slash` and the `altgear-on` profile were cut; spec-change log 2026-10-12.)
 
 ## 4. Docs
