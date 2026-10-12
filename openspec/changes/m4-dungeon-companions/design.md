@@ -75,6 +75,7 @@ Source pins: mod-playerbots `7bae1b5c` and core `7f12e89e` (fork.lock). Paths `v
   - send and parse `MSG_RAID_TARGET_UPDATE` (set icon: u8 index + u64 guid);
   - parse `co ?` whisper replies (strategy list).
   - Formats follow the core's packet builders. The builder cites the file:line of each one (`Unit::SendHealSpellLog`, `Group::SetTargetIcon`).
+- **Cut 2026-10-12** (proposal spec-change log): `dng.tank_holds`, `dng.healer_heals`, `dng.avoid_aoe` and `dng.cc_on_mark`. Their notes below are kept for history; only `dng.rti_focus` is built.
 - **`dng.tank_holds`:**
   - victims of the boss's `SMSG_ATTACKERSTATEUPDATE` swings, counted from 5 s after the first swing (the opener, before the tank's threat builds, is excluded on purpose);
   - threshold: ≥80% on the tank. Reason: tank-swap and knockback mechanics exist, and the first UK boss (Prince Keleseth) has adds. The raw counts are in the evidence;

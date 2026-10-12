@@ -70,4 +70,4 @@ This is the second of three M4 changes (see `m4-dungeon-scaling`'s proposal for 
 - Any spec loosening logged in the three M4 changes' spec-change logs.
 
 ## Spec-change log
-- (none yet)
+- **2026-10-12 (loosening, for the M4 human gate).** Fewer game tests, per Zach's 2026-10-11 pipeline rule (game tests few and on critical paths). `dng.tank_holds` and `dng.healer_heals` are replaced by one requirement checked by `dng.party_clear`: four companions and the player can't finish a full-strength dungeon unless the tank holds and the healer heals, and the clears now pass in all four dungeons. `dng.avoid_aoe` and `dng.cc_on_mark` become `[human-verify]` at the M4 gate: both test stock playerbots defaults Moonglade doesn't change. `dng.rti_focus` stays as the one orders check. What's lost: the 80%-of-swings and heal-count measures, and the AoE counterexample profile.
