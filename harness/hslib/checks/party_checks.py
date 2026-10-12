@@ -401,7 +401,7 @@ def instance_strategy(ctx):
 
 # ----------------------------------------------------------------------------- m4-dungeon-companions 1.1 (prototype)
 
-RUN_COVERS = COVERS + ("harness/hslib/checks/dungeon_checks.py",)
+RUN_COVERS = COVERS
 RUN_DIR = P.OUT / "m4-full-run"
 
 
@@ -426,49 +426,97 @@ def _keep(name: str, ev: dict) -> None:
     (RUN_DIR / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.json").write_text(json.dumps(ev, indent=1, default=str))
 
 
-@check("dng.party_clear_deadmines", order=532, capability=CAP, stack="up", layer="gate", profile="scaling-on",
+@check("dng.party_clear", order=532, capability=CAP, stack="up", layer="gate", profile="scaling-on",
        covers=RUN_COVERS)
-def party_clear_deadmines(ctx):
-    """(m4-dungeon-companions task 1.1, prototype) The dungeon probe calls the /mg party damage-dealer party (the
-    add-on's plan, hslib/partyplan.py) at The Deadmines' target level, enters a fresh copy with GM mode off (AutoBalance
-    counts 5 players: stock difficulty), then watches in GM mode while the companions clear every required encounter
-    in DungeonEncounter.dbc order with dungeon.run_party (design.md §4: staging by `.mmap path` from the level-3 nav
-    account, summon and gather, `tank attack`, at most 2 wipes per boss). Passes when every required encounter's bit
-    is set in the probe's saved mask."""
+def party_clear(ctx):
+    """openspec/changes/m4-dungeon-companions specs/dungeon-runs "Party clears each listed dungeon" (slice 3.4: The
+    Deadmines only). GIVEN the dungeon probe at the dungeon's target level (LFGDungeons.dbc) with `initself` gear, a
+    /mg party damage-dealer party (the add-on's plan, hslib/partyplan.py) and a fresh copy entered with GM mode off
+    (AutoBalance counts 5 players). WHEN dungeon.run_party takes them to each required encounter in
+    DungeonEncounter.dbc order (design.md §4: staging by `.mmap path` from the level-3 nav account; gather farther back
+    on the path, walk in together, GM mode off, wait until everyone is within 15 yd and out of combat, then the pull),
+    with the probe fighting as the fifth member through `.playerbots bot self`. THEN within 45 minutes every required
+    encounter's bit is set in the probe's saved completed-encounter mask, with at most 2 wipes per encounter; the
+    evidence holds per encounter the time, wipes, deaths by role and the boss's scaled health."""
     say = _run_log("party")
     plan = PP.plan()
-    f = D.facts(D.DEADMINES)
-    req, skipped = D.required_encounters(f)
-    ev: dict = {"dungeon": f["lfg_id"], "map": f["map"], "level": f["target_level"],
-                "required": [(e["encounter"], e["spawns"][0]["name"]) for e in req], "skipped": skipped}
+    ev: dict = {"dungeons": []}
     t0 = time.time()
-    try:
-        ev["nav"] = D.nav_stages(f, req, say)
-        say({"stages": [(x["boss"], x["verdict"], x["point"]) for x in ev["nav"]["stages"]]})
-        with D.Session(f["target_level"]) as s:
-            ev["session"] = {k: s.ev.get(k) for k in ("login", "stale_group", "revive")}
-            ev["party"] = [add_companion(s, c) for c in PP.commands(plan, "damage")]
-            say({"party": [(c["companion"], c["name"]) for c in ev["party"]]})
-            ev["run"] = {}
-            try:
-                D.run_party(s, f, ev["party"], ev["nav"], log=say, out=ev["run"])
-            finally:
-                ev["leave"] = s.leave()
-                ev["clear"] = clear_party(s, plan)
-    except C.CompanionError as e:
-        _keep("party", {**ev, **e.evidence})
-        raise CheckFail(str(e), {**ev, **e.evidence})
-    except C.probe.ProbeError as e:
-        _keep("party", {**ev, **e.info})
-        raise CheckFail(f"probe: {e}", {**ev, **e.info})
-    except BaseException:
-        _keep("party", ev)
-        raise
+    for lfg in (D.DEADMINES,):          # slice 3.4: The Deadmines; the other listed dungeons follow
+        f = D.facts(lfg)
+        req, skipped = D.required_encounters(f)
+        d: dict = {"dungeon": f["lfg_id"], "map": f["map"], "level": f["target_level"],
+                   "required": [(e["encounter"], e["spawns"][0]["name"]) for e in req], "skipped": skipped}
+        ev["dungeons"].append(d)
+        try:
+            d["nav"] = D.nav_stages(f, req, say)
+            say({"stages": [(x["boss"], x["verdict"], x["point"], (x.get("gather") or {}).get("back_yd"))
+                            for x in d["nav"]["stages"]]})
+            with D.Session(f["target_level"]) as s:
+                d["session"] = {k: s.ev.get(k) for k in ("login", "stale_group", "revive")}
+                q = D.gear_quality()
+                d["initself"] = {"quality": q, "reply": s.cmd(f".playerbots bot initself={q}", settle=1.5)}
+                d["party"] = [add_companion(s, c) for c in PP.commands(plan, "damage")]
+                say({"party": [(c["companion"], c["name"]) for c in d["party"]]})
+                d["run"] = {}
+                try:
+                    D.run_party(s, f, d["party"], d["nav"], selfbot=True, log=say, out=d["run"])
+                finally:
+                    d["leave"] = s.leave()
+                    d["clear"] = clear_party(s, plan)
+        except C.CompanionError as e:
+            _keep("party", {**ev, **e.evidence})
+            raise CheckFail(str(e), {**ev, **e.evidence})
+        except C.probe.ProbeError as e:
+            _keep("party", {**ev, **e.info})
+            raise CheckFail(f"probe: {e}", {**ev, **e.info})
+        except BaseException:
+            _keep("party", ev)
+            raise
+        d["problems"] = party_clear_problems(d)
+        say({"table": d["run"].get("table"), "total_s": d["run"].get("total_s"), "cleared": d["run"].get("cleared"),
+             "problems": d["problems"]})
     ev["session_s"] = round(time.time() - t0, 1)
     _keep("party", ev)
-    say({"table": ev["run"].get("table"), "total_s": ev["run"].get("total_s"), "cleared": ev["run"].get("cleared")})
-    require(ev["run"].get("cleared"), f"not cleared: {ev['run'].get('table') or ev['run'].get('why')}", **ev)
+    problems = [f"{d['dungeon']}: {p}" for d in ev["dungeons"] for p in d["problems"]]
+    require(not problems, "; ".join(problems), **ev)
     return ev
+
+
+CLEAR_LIMIT_S = 45 * 60            # spec: within 45 minutes per dungeon
+
+
+def party_clear_problems(d: dict) -> list[str]:
+    """The THEN of "Party clears each listed dungeon" for one dungeon's evidence: every required encounter killed
+    (its bit set, read live from the probe's bind), at most MAX_WIPES wipes each, within CLEAR_LIMIT_S, and every
+    encounter row carries its scaled health. Missing evidence is a problem, never a pass."""
+    run = d.get("run") or {}
+    out = []
+    if not run.get("cleared"):
+        out.append(f"not cleared: {run.get('table') or run.get('why')}")
+    if run.get("mode") != "party":
+        out.append(f"the probe didn't fight as a party member (mode {run.get('mode')})")
+    total = run.get("total_s")
+    if total is None or total > CLEAR_LIMIT_S:
+        out.append(f"run time {total} s, limit {CLEAR_LIMIT_S} s")
+    req = set(run.get("required") or [])
+    mask = run.get("final_mask")
+    bits = {r["encounter"]: r for r in run.get("encounters") or []}
+    for e in req:
+        r = bits.get(e)
+        if not r:
+            out.append(f"encounter {e}: not reached")
+            continue
+        sm = r.get("summary") or {}
+        if (sm.get("wipes") or 0) > D.MAX_WIPES:
+            out.append(f"{r['boss']}: {sm.get('wipes')} wipes")
+        if mask is not None and r.get("bit") is not None and not mask & (1 << r["bit"]):
+            out.append(f"{r['boss']}: bit {r['bit']} not in the saved mask {mask}")
+        if not any((a.get("boss_before") or {}).get("max_health") for a in r.get("attempts") or []):
+            out.append(f"{r['boss']}: no scaled health read")
+    if mask is None:
+        out.append("no completed-encounter mask read")
+    return out
 
 
 @check("dng.solo_two_deadmines", order=533, capability=CAP, stack="up", layer="gate", profile="scaling-on",
