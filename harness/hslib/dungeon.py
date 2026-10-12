@@ -1139,7 +1139,7 @@ def approach_points(points: list[dict], stage: dict, boss: dict) -> list[dict]:
 GATHER_BACK_YD = 20           # the gather point: at least this much farther from the boss on foot than the staging point
 WALK_STEP = 2                 # path points per walk-in hop (~8 yd, like the approach)
 HOP_WAIT_S = 10               # per hop: wait this long for the party to catch up (within GATHER_YD)
-READY_S = 120                 # the staging readiness wait, at most (then the pull goes ahead, flagged `unready`)
+READY_S = 120                 # the staging readiness wait, at most (then no pull: a held attempt, retried)
 
 
 def _cum_walk(points: list[dict]) -> list[float]:
@@ -1257,7 +1257,8 @@ def encounter_summary(rec: dict, roles: dict) -> dict:
     return {"boss": rec["boss"], "encounter": rec["encounter"], "attempts": len(rec["attempts"]),
             "wipes": sum(1 for a in rec["attempts"] if a.get("wipe")),
             "timeouts": sum(1 for a in rec["attempts"] if a.get("timeout") and not a.get("wipe")),
-            "stalled": sum(1 for a in rec["attempts"] if a.get("stalled")), "deaths_by_role": by_role,
+            "stalled": sum(1 for a in rec["attempts"] if a.get("stalled")),
+            "held": sum(1 for a in rec["attempts"] if a.get("held")), "deaths_by_role": by_role,
             "time_s": round(sum(a.get("fight_s") or 0 for a in rec["attempts"]), 1),
             "with_gather_s": round(sum((a.get("fight_s") or 0) + (a.get("gather", {}).get("s") or 0)
                                        for a in rec["attempts"]), 1),
@@ -1320,7 +1321,9 @@ def gather_at(s: "Session", comps: list[dict], boss_guid: int | None = None, lim
         if time.time() - t0 > limit:
             return {"ok": False, "s": round(time.time() - t0, 1), "rounds": rounds, "far": far, "dead": dead,
                     "why": why, "quiet_s": round(min(quiet, 999), 1), "revived": revived}
-        if dead and revive and quiet >= QUIET_S:
+        # no damage event since the gather began is no proof the fight around a corpse is over until QUIET_S of the
+        # gather's own time has passed (M4 gate run, Mr. Smite: the dead got up into the trash fight that killed them)
+        if dead and revive and min(quiet, time.time() - t0) >= QUIET_S:
             revived |= revive_dead(s, dead)
             continue
         if far and rounds * 4 <= time.time() - t0:
@@ -1328,6 +1331,20 @@ def gather_at(s: "Session", comps: list[dict], boss_guid: int | None = None, lim
                 if alive.get(x["name"]) is not False:
                     s.ws.chat("summon", W.CHAT_MSG_WHISPER, to=x["name"])
             rounds += 1
+        time.sleep(POLL_S)
+
+
+def wait_quiet(s: "Session", comps: list[dict], timeout: float = RESET_S) -> dict:
+    """Until nobody in the party (nor the probe) has dealt or taken melee/spell damage for QUIET_S of this wait's own
+    time, or `timeout` s: a fight that ran past a gather is over (its mobs dead or reset) before the dead get up."""
+    t0, since = time.time(), s.ws.mark()
+    guids = {c["guid"] for c in comps} | {s.guid}
+    while True:
+        quiet = min(_combat_quiet(s, guids, since), time.time() - t0)
+        if quiet >= QUIET_S:
+            return {"ok": True, "s": round(time.time() - t0, 1)}
+        if time.time() - t0 > timeout:
+            return {"ok": False, "s": round(time.time() - t0, 1), "quiet_s": round(quiet, 1)}
         time.sleep(POLL_S)
 
 
@@ -1647,9 +1664,19 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
                 if not engaged:
                     a["gather"] = gather_at(s, comps, boss_guid, limit=READY_S if mode == "party" else GATHER_S)
                     engaged = bool(a["gather"].get("boss_engaged"))
-                    a["unready"] = not a["gather"]["ok"] and not engaged
+                    if not a["gather"]["ok"] and not engaged:
+                        # design.md §4: no pull until the party is gathered. A gather that ran out (dead, still
+                        # arriving or in a fight) is a held attempt: no order, and it uses the retry budget
+                        # (M4 gate run: Mr. Smite pulled with three companions dead, a wipe).
+                        a["held"] = a["gather"].get("why") or "not gathered"
+                    # `unready` (a pull sent before the party was gathered) fails dng.party_clear; with the hold above
+                    # it can only be True if that guard is broken
+                    a["unready"] = not a["gather"]["ok"] and not engaged and not a.get("held")
                 a["boss_engaged_before_pull"] = engaged
-            a |= fight(s, f, enc, comps, fighters, tank, selfbot, say, st.get("approach"), engaged=engaged)
+            if a.get("held"):
+                a |= {"deaths": [], "wipe": False, "fight_s": 0.0, "why": f"held, not gathered: {a['held']}"}
+            else:
+                a |= fight(s, f, enc, comps, fighters, tank, selfbot, say, st.get("approach"), engaged=engaged)
             rec["attempts"].append(a)
             say({"boss": sp["name"], "attempt": a["n"], "killed": a.get("killed"), "wipe": a["wipe"],
                  "timeout": a.get("timeout"),
@@ -1658,7 +1685,7 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
             if a.get("why") == "selfbot not enabled":
                 rec["why"] = a["why"]
                 break
-            if a.get("wipe") or a.get("timeout"):
+            if a.get("wipe") or a.get("timeout") or a.get("held"):
                 wipes += 1
             step = next_step(bool(a.get("killed")), wipes)
             if step == "next":
@@ -1676,6 +1703,10 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
             # the boss resets first, then the dead get up: revived where they fell (next to the boss and its adds),
             # they'd be killed again before the next gather (run 7, Gilnid)
             a["reset"] = wait_boss_reset(s, enc)
+            if a.get("held"):
+                # the party never fought the boss: what held it up is a fight of its own (trash at the gather or
+                # staging point), which kills members revived into it. They get up once it is over.
+                a["quiet"] = wait_quiet(s, comps)
             a["revive"] = revive_dead(s, names)
             if mode == "solo":
                 s.cmd(".gm off", settle=0.3)
