@@ -10,7 +10,7 @@ Agent-hour estimates for builder work. This change starts after `m4-dungeon-scal
 
 ## 3. Harness and checks
 - [ ] 3.1 **Probe additions** (2 h): `SMSG_SPELLHEALLOG`, `MSG_RAID_TARGET_UPDATE` send/parse, `co ?` reply parser, each format cited to the core's packet builder.
-- [ ] 3.2 **`dng.instance_strategy`** (the party checks moved to `m4-party-preset`) (3 h), ≥3× each plus counterexamples (a wrong spec in the plan; `ApplyInstanceStrategies = 0`).
+- 3.2 moved to `m4-instance-tactics`. Unchanged original text: (3 h), ≥3× each plus counterexamples (a wrong spec in the plan; `ApplyInstanceStrategies = 0`).
 - [ ] 3.3 **`dng.tank_holds`, `dng.healer_heals`, `dng.avoid_aoe`, `dng.rti_focus`, `dng.cc_on_mark`** (5–6 h), ≥3× each plus counterexamples (no tank; no healer; `aoe-avoid-off`; no `rti` order; no `rti cc`). Tune `wait for attack time` here and record why.
 - [ ] 3.4 **Run driver hardening plus `dng.party_clear` (4 dungeons), `dng.solo_clear`, `dng.run_budget`** (6–8 h, mostly run time): every run's evidence kept under `env/` (not committed), with a summary table in `docs/research/m4-dungeon-runs.md`.
 - 3.5 moved to `m4-party-preset`.
