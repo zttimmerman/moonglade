@@ -59,4 +59,34 @@ Format: scaled max health / pulls / wipes / deaths by role / fight time / time i
 - No four-dungeon run end to end (the milestone gate does that).
 - No new Deadmines run in this slice: its driver path is unchanged, and the nav pass gave identical verdicts.
 - Only 2 runs per new dungeon (the brief's cap), not 3.
-- `dng.solo_clear` and `dng.run_budget` aren't built yet.
+- `dng.solo_clear` and `dng.run_budget` aren't built yet (built in the next section).
+
+## Solo clear and the performance budget (2026-10-12)
+
+Change `m4-dungeon-companions`, task 3.4, last slice, branch `change/m4-solo-budget`. Two gate checks, both on The Deadmines (LFG 6, map 36, level 19):
+- **`dng.solo_clear`** replaces the prototype `dng.solo_two_deadmines`. The probe runs alone, driven by its self-AI (`.playerbots bot self`), with `initself=rare`, through `dungeon.run_party` in mode "solo", against every required encounter. AutoBalance counts 1 player, so the world health multiplier is 0.167.
+- **`dng.run_budget`** is the same party run as `dng.party_clear`'s Deadmines run (`party_checks.party_dungeon`), under the population profile at its default size (N = 500). It waits for the warm-up first: the worldserver was restarted with that profile 15–16 s before the check, so it waited 554–555 s. Then it samples every 10 s from `run_party`'s start to its end. It can't share `dng.party_clear`'s run, because that check uses the 10-bot `scaling-on` profile.
+- **Builder runs:** `hs run --only dng.solo_clear --only dng.run_budget`, twice. Each invocation restarts the worldserver once per profile.
+- **Evidence:** `harness/out/m4-full-run/solo-<time>.json`, `budget-<time>.json` (samples included), `solo.log`, `budget.log` (not committed).
+
+### Solo
+| Run | Result | Deaths per boss | Fight time per boss (Rhahk'Zor, Gilnid, Mr. Smite, Cookie, Greenskin, VanCleef) | Total (`run_party` clock) | Check |
+|---|---|---|---|---|---|
+| 1 | cleared, mask 125 | 0 at every boss | 12.5, 24.0, 53.3, 36.6, 57.6, 15.7 s | 241 s | PASS (338 s) |
+| 2 | cleared, mask 125 | 0 at every boss | 12.5, 30.2, 55.4, 45.9, 38.7, 9.4 s | 234 s | PASS (330 s) |
+
+Every boss died on its first pull. The solo-scaled max health was Rhahk'Zor 751, Gilnid 486, Mr. Smite 648, Cookie 486, Greenskin 486 and VanCleef 648. Every pull's `.gm off` answered "GM mode is OFF".
+
+### Budget (population N = 500)
+Limits: worldserver ≤ 6.0 GB, mysqld ≤ 1.0 GB, all three ≤ 7.0 GB (max(RSS, footprint)); world-update p95 ≤ 100 ms, median ≤ 50 ms (`.server info`, per sample).
+
+| Run | Party clear | Samples | Peak worldserver | Peak mysqld | Peak authserver | Peak total | Update p95 (median / max over samples) | Update median (median / max) | Host free+inactive (min) | Check |
+|---|---|---|---|---|---|---|---|---|---|---|
+| 1 | cleared, 0 wipes, 766 s | 78 | 5.186 GB | 0.763 GB | 0.013 GB | 5.961 GB | 6 / 12 ms | 2 / 2 ms | 2.62 GB | FAIL: coverage rule defect (see below); every limit held |
+| 2 | cleared, 0 wipes (damage dealers died once each at Gilnid and Mr. Smite), 851 s | 87 | 5.168 GB | 0.762 GB | 0.014 GB | 5.943 GB | 7 / 10 ms | 2 / 2 ms | 2.88 GB | PASS (1513 s) |
+
+### Findings
+1. **The solo self-AI clears The Deadmines with room to spare:** about 4 minutes, no deaths. With the 0.167 multiplier every boss has under 800 HP. The party run is the harder fight (multiplier 1.0, about 13–14 min).
+2. **Run 1's budget failure was a bug in the check, not the stack.** A sample's time is stamped after its readings. The first sample, taken as the run started, carried a time 0.1 s after `run_party`'s start and failed the "at or before the start" rule. The rule now allows one sampling interval at each end. Re-judged under the fixed rule, run 1's own samples pass. Changing one of them (p95 101 ms, or worldserver 6.01 GB) fails it, and so does an empty sample list.
+3. **Headroom:** memory dominates. Worldserver peaked at 5.19 GB against the 6.0 GB limit. Update times stayed far under the limits (p95 at most 12 ms).
+4. **Wall time:** `dng.run_budget` takes about 25 min, made up of the worldserver restart, the 9.5-minute warm-up, the nav pass and the 13–14-minute clear. When the `perf.*` checks run in the same full run, they warm the world first and the wait is skipped. `dng.solo_clear` takes about 5.5 min.
