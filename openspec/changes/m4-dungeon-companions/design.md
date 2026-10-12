@@ -75,7 +75,7 @@ Source pins: mod-playerbots `7bae1b5c` and core `7f12e89e` (fork.lock). Paths `v
   - send and parse `MSG_RAID_TARGET_UPDATE` (set icon: u8 index + u64 guid);
   - ~~parse `co ?` whisper replies~~ (dropped 2026-10-12).
   - Formats follow the core's packet builders. The builder cites the file:line of each one (`Unit::SendHealSpellLog`, `Group::SetTargetIcon`).
-- **Cut 2026-10-12** (proposal spec-change log): `dng.tank_holds`, `dng.healer_heals`, `dng.avoid_aoe` and `dng.cc_on_mark`. Their notes below are kept for history; only `dng.rti_focus` is built.
+- **Cut 2026-10-12** (proposal spec-change log): `dng.tank_holds`, `dng.healer_heals`, `dng.avoid_aoe` and `dng.cc_on_mark`; later the same day `dng.rti_focus` too (playerbots' default `rti` is already the skull). Their notes below are kept for history.
 - **`dng.tank_holds`:**
   - victims of the boss's `SMSG_ATTACKERSTATEUPDATE` swings, counted from 5 s after the first swing (the opener, before the tank's threat builds, is excluded on purpose);
   - threshold: ≥80% on the tank. Reason: tank-swap and knockback mechanics exist, and the first UK boss (Prince Keleseth) has adds. The raw counts are in the evidence;
@@ -125,7 +125,7 @@ Source pins: mod-playerbots `7bae1b5c` and core `7f12e89e` (fork.lock). Paths `v
 |---|---|---|
 | `dng.party_preset`, `dng.party_preset_tank_player` | full | ~2 min each |
 | ~~`dng.tank_holds`, `dng.healer_heals`~~ (cut 2026-10-12, proposal spec-change log) | — | — |
-| `dng.instance_strategy`, `dng.rti_focus` (~~`dng.avoid_aoe`, `dng.cc_on_mark`~~ cut 2026-10-12) | full | ~2–4 min each |
+| `dng.instance_strategy` (~~`dng.rti_focus`, `dng.avoid_aoe`, `dng.cc_on_mark`~~ cut 2026-10-12) | full | ~2–4 min each |
 | `client.party_slash` | gui (path rule: `client-mods/addons`) | — |
 | `dng.party_clear` (4 dungeons), `dng.solo_clear`, `dng.run_budget` (population profile) | slow | ~60–90 min total |
 
