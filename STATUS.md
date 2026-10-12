@@ -1,7 +1,9 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-12 04:10. **Merged today:**
+_Updated 2026-10-12 05:35. **Merged today:**
+- m4-alt-companions (#16, archived #18): `/mg bring <name>` / `/mg dismiss <name>`; alts never get autogear. All alt.* checks PASS live. Gaps logged for the gate: loot and talent halves not exercised.
+- PR-tier fixes (#17): dng.session1 needs scale.disabled_stock (124→78 s); `hs timing-baseline join --ids`; setup.preflight control proves a set-up tree (no more 35 GB need).
 - m4 solo clear + run budget (#15): gate checks `dng.solo_clear` (builder 2/2, 0 deaths, ~4 min) and `dng.run_budget` (population N=500; worldserver peak 5.17 of 6.0 GB, p95 ≤12 ms). Plus the behaviour-test trim (loosening logged for the M4 gate): tank/healer → `dng.party_clear`; aoe and cc → human-verify; `dng.rti_focus` stays.
 - m4 four-dungeon party clear (#13): `dng.party_clear` covers Deadmines, Razorfen Downs, Hellfire Ramparts, Utgarde Keep. Final boss always required (Vazruden staged on his summoner); Tuten'kash (gong) skipped by rule. Builder runs: RFD 2/2, Ramparts 2/2, UK cleared after a staging fix. No tactics gap. Verifier PASS (PR tier 91/0).
 - m4 Deadmines party clear (#12): gate check `dng.party_clear` (Deadmines). Party gathers back on the boss's path, walks in, pulls only when ready; the probe fights as 5th member (selfbot). Builder runs: 3/3 cleared, final driver PASS (1 wipe, Mr. Smite). Verifier PASS (PR tier 86/0).
@@ -9,7 +11,7 @@ _Updated 2026-10-12 04:10. **Merged today:**
 - m4-instance-tactics (#9), selector needs (#10), m4-party-preset (#8), release-fresh-login (#7), release-home-spaces (#6), ci-pipeline (#5), test-pyramid (#4).
 
 **Next:**
-1. m4-alt-companions (building; spec trimmed 2026-10-12 on its branch: GUI check and altgear-on profile → unit tests).
+1. **P0 flaky:** comp.quest_shared (addclass priest didn't join in 30 s once in #16's PR tier; passed alone at once). Fix: keep a Playerbots.log excerpt on failure, then diagnose.
 2. m4-dungeon-companions 3.1/3.3: `MSG_RAID_TARGET_UPDATE` + `dng.rti_focus` (~3–4 h); 4.2 As built; archive.
 3. M4 milestone gate: full suite ×3 (first real four-dungeon `dng.party_clear` run), then Zach's play gate.
 
@@ -20,7 +22,8 @@ _Updated 2026-10-12 04:10. **Merged today:**
 - F2: logic_scan misses `using namespace`. F3: dng.session1 123 s vs 90 s budget. F5: sleep-lint pending list (loosening, human gate). C6: summary wording.
 - The release checks own `.github/workflows/*`; narrow to release.yml.
 - **P0 flaky:** journey.pause / client.pause_menu gold-pixel screenshot heuristic failed once.
-- setup.preflight's control step needs about 35 GB free; fails on this Mac.
+- Alt follow-ups: loot one corpse and assert the item; alt with a talent (level ≥10); `no_answer` timeout counts from /mg bring start.
+- Timing baseline: many merged checks never joined; join at the next full run (3 entries come from a PR run).
 
 **Process (Zach):** standard pipeline; mostly unit tests with mocks; few game tests on critical paths; nothing repeated. Waiting on Zach's real-Mac test of v0.1.2._
 
