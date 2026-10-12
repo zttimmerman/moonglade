@@ -1,14 +1,16 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-11 19:10. **Merged today:**
+_Updated 2026-10-11 20:30. **Merged today:**
+- release-fresh-login (#7): the release check logs in from a spaced HOME with no Homebrew.
+- m4-party-preset (#8): `/mg party`, the AutoBalance chat filter and the companions cheat sheet. Slice 1 of the M4 companions work.
 - test-pyramid (#4): acceptance about 26 min, down from 68.
 - ci-pipeline (#5): pre-commit (syntax + public scan), pre-push (unit tests, about 11 s), GitHub Actions on PRs. The verifier no longer repeats tests.
 - release-home-spaces (#6): the v0.1.2 fixes.
 
 **Next:**
 1. A fresh-Mac release check: a real client login with a spaced HOME and no Homebrew.
-2. m4-dungeon-companions in slices of a day or less.
+2. m4-dungeon-companions, next slice: instance tactics (`dng.instance_strategy`), then full runs.
 
 **Follow-ups:**
 - F2: logic_scan misses `using namespace`.
@@ -16,7 +18,9 @@ _Updated 2026-10-11 19:10. **Merged today:**
 - F5: the sleep-lint pending list. A loosening, for the human gate.
 - C6: summary wording.
 - The release checks own `.github/workflows/*`; narrow that to release.yml.
-- The first Lua unit build in a fresh worktree failed once under the push hook.
+- **P0 flaky:** journey.pause / client.pause_menu's gold-pixel screenshot heuristic failed once (the add-on's banner report was correct).
+- Selector: the smoke set picked dng.session2 without dng.session1, its GIVEN.
+- Old local logs (env/logs b18-*.json, launch-manual.out, Oct 1–4) contain the play password. They are untracked; Zach to OK deleting them.
 - setup.preflight's control step needs about 35 GB free. It is integration-layer now, but still fails on this Mac.
 
 **Process (Zach):** a standard pipeline. Most new tests are unit tests with mocks; game tests are few and cover critical paths; nothing is repeated. Waiting on Zach's real-Mac test of v0.1.2._
