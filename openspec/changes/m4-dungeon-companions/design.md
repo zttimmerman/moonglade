@@ -62,7 +62,7 @@ Source pins: mod-playerbots `7bae1b5c` and core `7f12e89e` (fork.lock). Paths `v
   2. For each missing role, `.playerbots bot addclass <class>`.
   3. Wait for the `SMSG_GROUP_LIST` member (the addon listens for `PARTY_MEMBERS_CHANGED`).
   4. Whisper, in order: `reset botAI` (F16: companions keep old orders across logins), `talents spec <name>`, `autogear`, then the role's `co` line (damage dealers: `co +threat,+wait for attack` and `wait for attack time 3`).
-  - The `wait for attack time` value is a tuning knob set by task 3.3, and the run that justified it is recorded.
+  - The `wait for attack time` value (3 s for damage dealers) was set in `m4-party-preset` without a recorded tuning run; the tuning task was dropped (proposal spec-change log 2026-10-12).
 - **`/mg party clear`:** `.playerbots bot remove <name>` for each companion (ADR-0008's patch takes them out of the party).
 - **No server code**, and permissions are stock:
   - `AiPlayerbot.AddClassCommand = 1` lets a non-GM player use `addclass` (`PlayerbotMgr.cpp:1083-1089`, conf:140);
@@ -71,9 +71,9 @@ Source pins: mod-playerbots `7bae1b5c` and core `7f12e89e` (fork.lock). Paths `v
 
 ## 3. Tactics checks: how they observe
 - **Probe additions** (`harness/hslib/probe/client.py`):
-  - parse `SMSG_SPELLHEALLOG` (caster, target, spell, amount, overheal);
+  - ~~parse `SMSG_SPELLHEALLOG`~~ (dropped 2026-10-12);
   - send and parse `MSG_RAID_TARGET_UPDATE` (set icon: u8 index + u64 guid);
-  - parse `co ?` whisper replies (strategy list).
+  - ~~parse `co ?` whisper replies~~ (dropped 2026-10-12).
   - Formats follow the core's packet builders. The builder cites the file:line of each one (`Unit::SendHealSpellLog`, `Group::SetTargetIcon`).
 - **Cut 2026-10-12** (proposal spec-change log): `dng.tank_holds`, `dng.healer_heals`, `dng.avoid_aoe` and `dng.cc_on_mark`. Their notes below are kept for history; only `dng.rti_focus` is built.
 - **`dng.tank_holds`:**
