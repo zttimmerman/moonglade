@@ -22,7 +22,8 @@ confirmed from character_talent after `saveall`. At the end the probe's talents 
 import struct
 import time
 
-from .. import companion as C, db, dbc, dungeon as D, fixtures as F, partyplan as PP, paths as P, soap
+from .. import companion as C, config, db, dbc, dungeon as D, fixtures as F, partyplan as PP, paths as P, soap, stack
+from .. import population as pop
 from ..probe import proto as W
 from ..registry import CheckFail, CheckSkip, check, require
 
@@ -454,6 +455,49 @@ def initself_ok(reply: list[str]) -> bool:
     return any(INITSELF_OK in x for x in reply or [])
 
 
+def party_dungeon(lfg: int, plan: dict, say, ev: dict, keep: str, during=None) -> dict:
+    """One listed dungeon's party run (dng.party_clear, dng.run_budget): its facts, nav pass, a session at its target
+    level with `initself` gear, the /mg party damage-dealer party, dungeon.run_party with the probe as the fifth
+    member (selfbot), then leave and clear the party. The dungeon's evidence is appended to ev["dungeons"] and
+    returned. `during(d)`, if given, is a context manager entered just around run_party (dng.run_budget's sampler).
+    A failure keeps the evidence under `keep` and raises CheckFail."""
+    import contextlib
+    f = D.facts(lfg)
+    req, skipped = D.required_encounters(f)
+    d: dict = {"dungeon": f["lfg_id"], "map": f["map"], "level": f["target_level"],
+               "required": [(e["encounter"], e["spawns"][0]["name"]) for e in req], "skipped": skipped}
+    ev["dungeons"].append(d)
+    try:
+        d["nav"] = D.nav_stages(f, req, say)
+        say({"stages": [(x["boss"], x["verdict"], x["point"], (x.get("gather") or {}).get("back_yd"))
+                        for x in d["nav"]["stages"]]})
+        with D.Session(f["target_level"]) as s:
+            d["session"] = {k: s.ev.get(k) for k in ("login", "stale_group", "revive")}
+            q = D.gear_quality()
+            d["initself"] = {"quality": q, "reply": s.cmd(f".playerbots bot initself={q}", settle=1.5)}
+            if not initself_ok(d["initself"]["reply"]):
+                raise C.CompanionError(f"initself: no '{INITSELF_OK}' answer", initself=d["initself"])
+            d["party"] = [add_companion(s, c) for c in PP.commands(plan, "damage")]
+            say({"party": [(c["companion"], c["name"]) for c in d["party"]]})
+            d["run"] = {}
+            try:
+                with (during(d) if during else contextlib.nullcontext()):
+                    D.run_party(s, f, d["party"], d["nav"], selfbot=True, log=say, out=d["run"])
+            finally:
+                d["leave"] = s.leave()
+                d["clear"] = clear_party(s, plan)
+    except C.CompanionError as e:
+        _keep(keep, {**ev, **e.evidence})
+        raise CheckFail(str(e), {**ev, **e.evidence})
+    except C.probe.ProbeError as e:
+        _keep(keep, {**ev, **e.info})
+        raise CheckFail(f"probe: {e}", {**ev, **e.info})
+    except BaseException:
+        _keep(keep, ev)
+        raise
+    return d
+
+
 @check("dng.party_clear", order=532, capability=CAP, stack="up", layer="gate", profile="scaling-on",
        covers=RUN_COVERS)
 def party_clear(ctx):
@@ -478,38 +522,7 @@ def party_clear(ctx):
     ev: dict = {"dungeons": [], "listed": list(D.LISTED), "ran": list(lfgs), "partial": partial}
     t0 = time.time()
     for lfg in lfgs:
-        f = D.facts(lfg)
-        req, skipped = D.required_encounters(f)
-        d: dict = {"dungeon": f["lfg_id"], "map": f["map"], "level": f["target_level"],
-                   "required": [(e["encounter"], e["spawns"][0]["name"]) for e in req], "skipped": skipped}
-        ev["dungeons"].append(d)
-        try:
-            d["nav"] = D.nav_stages(f, req, say)
-            say({"stages": [(x["boss"], x["verdict"], x["point"], (x.get("gather") or {}).get("back_yd"))
-                            for x in d["nav"]["stages"]]})
-            with D.Session(f["target_level"]) as s:
-                d["session"] = {k: s.ev.get(k) for k in ("login", "stale_group", "revive")}
-                q = D.gear_quality()
-                d["initself"] = {"quality": q, "reply": s.cmd(f".playerbots bot initself={q}", settle=1.5)}
-                if not initself_ok(d["initself"]["reply"]):
-                    raise C.CompanionError(f"initself: no '{INITSELF_OK}' answer", initself=d["initself"])
-                d["party"] = [add_companion(s, c) for c in PP.commands(plan, "damage")]
-                say({"party": [(c["companion"], c["name"]) for c in d["party"]]})
-                d["run"] = {}
-                try:
-                    D.run_party(s, f, d["party"], d["nav"], selfbot=True, log=say, out=d["run"])
-                finally:
-                    d["leave"] = s.leave()
-                    d["clear"] = clear_party(s, plan)
-        except C.CompanionError as e:
-            _keep("party", {**ev, **e.evidence})
-            raise CheckFail(str(e), {**ev, **e.evidence})
-        except C.probe.ProbeError as e:
-            _keep("party", {**ev, **e.info})
-            raise CheckFail(f"probe: {e}", {**ev, **e.info})
-        except BaseException:
-            _keep("party", ev)
-            raise
+        d = party_dungeon(lfg, plan, say, ev, "party")
         d["problems"] = party_clear_problems(d)
         say({"table": d["run"].get("table"), "total_s": d["run"].get("total_s"), "cleared": d["run"].get("cleared"),
              "problems": d["problems"]})
@@ -565,25 +578,80 @@ def party_clear_problems(d: dict) -> list[str]:
     return out
 
 
-@check("dng.solo_two_deadmines", order=533, capability=CAP, stack="up", layer="gate", profile="scaling-on",
+SOLO_MAX_DEATHS = 2                # spec "Solo clear of The Deadmines": at most 2 deaths per encounter
+GM_OFF = "GM mode is OFF"          # cs_gm.cpp HandleGMCommand "off": LANG_GM_OFF
+
+
+def solo_clear_problems(ev: dict) -> list[str]:
+    """The THEN of "Solo clear of The Deadmines" (and its GIVEN as far as the run shows it): the probe alone (AutoBalance
+    counted 1 player at entry), driven by its self-AI (run mode "solo"), every required encounter's bit set in the
+    saved mask within CLEAR_LIMIT_S, at most SOLO_MAX_DEATHS deaths per encounter, and GM mode answered off before
+    every pull that fought. Missing evidence is a problem, never a pass."""
+    run = ev.get("run") or {}
+    out = []
+    if not run.get("cleared"):
+        out.append(f"not cleared: {run.get('table') or run.get('why')}")
+    if run.get("mode") != "solo":
+        out.append(f"not a solo self-AI run (mode {run.get('mode')})")
+    players = (run.get("mapstat") or {}).get("players")
+    if players != 1:
+        out.append(f"AutoBalance counted {players} players at entry, not the probe alone")
+    total = run.get("total_s")
+    if total is None or total > CLEAR_LIMIT_S:
+        out.append(f"run time {total} s, limit {CLEAR_LIMIT_S} s")
+    want = [e for e, _name in ev.get("required") or []]
+    req = run.get("required") or []
+    if not req or (want and sorted(want) != sorted(req)):
+        out.append(f"the run's encounters {req} aren't the dungeon's required {want}")
+    mask = run.get("final_mask")
+    if mask is None:
+        out.append("no completed-encounter mask read")
+    bits = {r["encounter"]: r for r in run.get("encounters") or []}
+    for e in req:
+        r = bits.get(e)
+        if not r:
+            out.append(f"encounter {e}: not reached")
+            continue
+        deaths = sum(len(a.get("deaths") or []) for a in r.get("attempts") or [])
+        if deaths > SOLO_MAX_DEATHS:
+            out.append(f"{r['boss']}: {deaths} deaths (at most {SOLO_MAX_DEATHS})")
+        if mask is not None and r.get("bit") is not None and not mask & (1 << r["bit"]):
+            out.append(f"{r['boss']}: bit {r['bit']} not in the saved mask {mask}")
+        for a in r.get("attempts") or []:
+            if a.get("why"):              # nothing fought on this pull (boss not found, self-AI refused)
+                continue
+            if not any(GM_OFF in x for x in a.get("gm_off") or []):
+                out.append(f"{r['boss']} pull {a.get('n')}: GM mode not confirmed off ({a.get('gm_off')})")
+    return out
+
+
+@check("dng.solo_clear", order=533, capability=CAP, stack="up", layer="gate", profile="scaling-on",
        covers=RUN_COVERS)
-def solo_two_deadmines(ctx):
-    """(m4-dungeon-companions task 1.1, optional) The probe alone with the playerbots self-AI (`.playerbots bot self`,
-    gear by `initself=<AutoGearQualityLimit>`) against The Deadmines' first two required bosses, staged like the party
-    run (dungeon.run_party, selfbot=True)."""
+def solo_clear(ctx):
+    """openspec/changes/m4-dungeon-companions specs/dungeon-runs "Solo clear of The Deadmines": GIVEN the dungeon
+    probe alone at The Deadmines' target level (LFGDungeons.dbc) with `initself` gear, entered with GM mode off
+    (AutoBalance counts 1 player), driven by the playerbots self-AI (`.playerbots bot self`), in a fresh copy (the
+    unbind before entry). WHEN dungeon.run_party (no companions, selfbot: mode "solo") takes it to each required
+    encounter in DungeonEncounter.dbc order, staged by the same nav pass as dng.party_clear; per pull the probe stands
+    inside the boss's aggro radius with GM mode off and its self-AI fights. THEN within 45 minutes (run_party's clock)
+    every required encounter's bit is set in the saved completed-encounter mask, with at most 2 deaths per encounter
+    (solo_clear_problems). Replaces the task 1.1 prototype dng.solo_two_deadmines."""
     say = _run_log("solo")
     f = D.facts(D.DEADMINES)
-    req, _ = D.required_encounters(f)
-    ev: dict = {"dungeon": f["lfg_id"], "level": f["target_level"]}
+    req, skipped = D.required_encounters(f)
+    ev: dict = {"dungeon": f["lfg_id"], "map": f["map"], "level": f["target_level"],
+                "required": [(e["encounter"], e["spawns"][0]["name"]) for e in req], "skipped": skipped}
     try:
-        ev["nav"] = D.nav_stages(f, req[:2], say)
+        ev["nav"] = D.nav_stages(f, req, say)
         with D.Session(f["target_level"]) as s:
+            ev["session"] = {k: s.ev.get(k) for k in ("login", "stale_group", "revive")}
             q = D.gear_quality()
             ev["initself"] = {"quality": q, "reply": s.cmd(f".playerbots bot initself={q}", settle=1.5)}
-            s.cmd(".revive", settle=0.3)
+            if not initself_ok(ev["initself"]["reply"]):
+                raise C.CompanionError(f"initself: no '{INITSELF_OK}' answer", initself=ev["initself"])
             ev["run"] = {}
             try:
-                D.run_party(s, f, [], ev["nav"], selfbot=True, only=2, log=say, out=ev["run"])
+                D.run_party(s, f, [], ev["nav"], selfbot=True, log=say, out=ev["run"])
             finally:
                 ev["leave"] = s.leave()
     except C.CompanionError as e:
@@ -595,7 +663,136 @@ def solo_two_deadmines(ctx):
     except BaseException:
         _keep("solo", ev)
         raise
+    ev["problems"] = solo_clear_problems(ev)
     _keep("solo", ev)
-    say({"table": ev["run"].get("table"), "cleared": ev["run"].get("cleared")})
-    require(ev["run"].get("cleared"), f"not cleared: {ev['run'].get('table') or ev['run'].get('why')}", **ev)
+    say({"table": ev["run"].get("table"), "total_s": ev["run"].get("total_s"), "cleared": ev["run"].get("cleared"),
+         "problems": ev["problems"]})
+    require(not ev["problems"], "; ".join(ev["problems"]), **ev)
+    return ev
+
+
+# ----------------------------------------------------------------------------- dng.run_budget
+
+BUDGET_MAX_GAP_S = 2 * pop.SAMPLE_EVERY_S     # samples every 10 s: a gap over 20 s means a sample went missing
+
+
+def etime_s(text: str) -> int | None:
+    """`ps -o etime=` ([[dd-]hh:]mm:ss) in seconds; None when unreadable."""
+    t = (text or "").strip()
+    try:
+        days, _, rest = t.rpartition("-")
+        parts = [int(x) for x in rest.split(":")]
+        if not 2 <= len(parts) <= 3:
+            return None
+        while len(parts) < 3:
+            parts.insert(0, 0)
+        return int(days or 0) * 86400 + parts[0] * 3600 + parts[1] * 60 + parts[2]
+    except ValueError:
+        return None
+
+
+def budget_problems(samples: list[dict], errors: list[str], t_start: float | None, t_end: float | None,
+                    cleared: bool) -> list[str]:
+    """The THEN of "A clear within the performance budget": samples cover the run (the first at or before its start,
+    the last at or after its end, none more than BUDGET_MAX_GAP_S apart), every sample meets every limit of the
+    performance-budget requirement (population.violations, as perf.server_budget), and the sampler had no errors. A
+    run that didn't clear is a problem (the WHEN didn't happen). No samples is a problem, never a pass."""
+    out = []
+    if not cleared:
+        out.append("the party didn't clear The Deadmines")
+    if not samples:
+        return out + ["no samples"]
+    if errors:
+        out.append(f"{len(errors)} sampler error(s): {errors[0]}")
+    ts = [x["t"] for x in samples]
+    if t_start is None or t_end is None:
+        out.append("no run window (start/end) in the run's evidence")
+    else:
+        if ts[0] > t_start:
+            out.append(f"first sample {ts[0] - t_start:.0f} s after the run started")
+        if ts[-1] < t_end:
+            out.append(f"last sample {t_end - ts[-1]:.0f} s before the run ended")
+    gap = max((b - a for a, b in zip(ts, ts[1:])), default=0)
+    if gap > BUDGET_MAX_GAP_S:
+        out.append(f"a {gap:.0f} s gap between samples (every {pop.SAMPLE_EVERY_S} s)")
+    bad = pop.violations(samples)
+    if bad:
+        out.append(f"{len(bad)} budget violation(s): {bad[0]}")
+    return out
+
+
+def warm_up(ctx: dict, rp: dict, say) -> dict:
+    """The performance-budget requirement measures after warm-up. If this run's population session already ran (the
+    perf.* checks, same worldserver), the world is warm; else wait until the worldserver has been up pop.WARMUP_S."""
+    s = ctx.get("population_session")
+    if isinstance(s, dict) and (s.get("running_profile") or {}).get("pid") == rp.get("pid"):
+        return {"from": "this run's population session (same worldserver)", "waited_s": 0}
+    import subprocess
+    r = subprocess.run(["ps", "-o", "etime=", "-p", str(rp["pid"])], capture_output=True, text=True)
+    age = etime_s(r.stdout)
+    if age is None:
+        raise CheckFail(f"worldserver {rp['pid']}: no uptime from ps ({r.stdout!r})")
+    wait = max(0, pop.WARMUP_S - age)
+    say({"warm_up": {"worldserver_age_s": age, "wait_s": wait}})
+    time.sleep(wait)
+    return {"worldserver_age_s": age, "waited_s": wait, "warmup_s": pop.WARMUP_S,
+            "online_random_bots": pop.online_bots()}
+
+
+@check("dng.run_budget", order=534, capability=CAP, stack="up", layer="gate", profile="population",
+       covers=RUN_COVERS)
+def run_budget(ctx):
+    """openspec/changes/m4-dungeon-companions specs/dungeon-runs "A clear within the performance budget": GIVEN the
+    population profile at its default size (the running worldserver's recorded profile and N) after warm-up, and the
+    probe with a /mg party party. WHEN the party clears The Deadmines with the run driver (party_dungeon, the same
+    routine as dng.party_clear's Deadmines run; it can't share that run, which uses the 10-bot scaling-on profile).
+    THEN the samples, taken every 10 s from the start of run_party to its end (population._Sampler, plus one at the
+    end), meet every limit of performance-budget "Server-side budget under the population profile" (population.LIMITS:
+    worldserver <= 6.0 GB, mysqld <= 1.0 GB, all three <= 7.0 GB as max(RSS, footprint); world-update p95 <= 100 ms and
+    median <= 50 ms from `.server info`), checked per sample by population.violations; the evidence holds the
+    samples (budget_problems)."""
+    import contextlib
+    import threading
+    say = _run_log("budget")
+    rp = stack.running_profile()
+    n = config.population_n()
+    ev: dict = {"running_profile": rp, "n": n, "limits": pop.LIMITS}
+    require(bool(rp) and rp["profile"] == "population" and rp.get("n") == n,
+            f"the worldserver isn't running the population profile at its default size N={n}", **ev)
+    ev["warm_up"] = warm_up(ctx, rp, say)
+    box: dict = {}
+
+    @contextlib.contextmanager
+    def sampling(_d):
+        stop = threading.Event()
+        sm = pop._Sampler(duration_s=CLEAR_LIMIT_S + 600, stop=stop)
+        box["sampler"] = sm
+        sm.start()
+        try:
+            yield
+        finally:
+            stop.set()
+            sm.join(timeout=60)
+            try:
+                sm.samples.append(pop.perf_sample())        # the run's end
+            except Exception as e:  # noqa: BLE001  (recorded; fails the budget)
+                sm.errors.append(f"{type(e).__name__}: {e}")
+
+    run_ev: dict = {"dungeons": []}
+    try:
+        d = party_dungeon(D.DEADMINES, PP.plan(), say, run_ev, "budget", during=sampling)
+    except CheckFail as e:
+        sm = box.get("sampler")
+        raise CheckFail(str(e), {**ev, **e.evidence, "samples": sm.samples if sm else None})
+    sm = box["sampler"]
+    run = d["run"]
+    ev |= {"dungeon": d["dungeon"], "cleared": run.get("cleared"), "total_s": run.get("total_s"),
+           "table": run.get("table"), "window": [run.get("t_start"), run.get("t_end")],
+           "samples_taken": len(sm.samples), "summary": pop.summarize(sm.samples),
+           "violations": pop.violations(sm.samples)[:40], "sampler_errors": sm.errors, "samples": sm.samples}
+    ev["problems"] = budget_problems(sm.samples, sm.errors, run.get("t_start"), run.get("t_end"),
+                                     bool(run.get("cleared")))
+    _keep("budget", {**ev, "party": run_ev})
+    say({"summary": ev["summary"], "problems": ev["problems"], "total_s": ev["total_s"]})
+    require(not ev["problems"], "; ".join(ev["problems"]), **ev)
     return ev
