@@ -14,14 +14,14 @@ A logged-in player SHALL be able to bring another character from their own accou
 #### Scenario: Another account's character is refused
 - **GIVEN** a character that belongs to a different harness account (the HSTEST fixture account's character), offline
 - **WHEN** the probe sends `.playerbots bot add <that name>`
-- **THEN** the reply is the playerbots refusal (`PlayerbotMgr.cpp` "you can only add bots from your own account or linked accounts"), and the character stays offline
+- **THEN** the reply is the playerbots refusal for `add` (`PlayerbotMgr.cpp:110-114`, "You are not allowed to control bot <name>"; the "own account or linked accounts" text belongs to the `addaccount` path, :702-704), and the character stays offline
 - Check: `alt.foreign_refused`
 
-#### Scenario: Slash commands in the real client
-- **GIVEN** a harness test character with an alt on the same account, logged in with the real client (GUI tier)
+#### Scenario: The slash commands send the right command lists
+- **GIVEN** the Moonglade add-on loaded in the unit-test client stub
 - **WHEN** `/mg bring <alt>` and then `/mg dismiss <alt>` are typed
-- **THEN** the party frame shows the alt within 30 s, then shows no party within 30 s of dismissing
-- Check: `client.bring_slash`
+- **THEN** the add-on sends exactly the bring list (`.playerbots bot add <alt>`, then, once the alt has joined, the `reset botAI` whisper, resent until answered; a whisper to an offline character is lost) and then `.playerbots bot remove <alt>`, and a missing name prints the usage line without sending anything. The game side of the same lists is `alt.bring_dismiss`
+- Check: `unit:lua:test_addon_bring.bring_and_dismiss_send_the_command_lists`
 
 ### Requirement: An alt keeps what it earns
 Progress an alt makes as a companion (XP, levels, loot, money, item durability) SHALL be saved to that character as if played. Loading a per-character save of the master SHALL NOT change the alt.
@@ -38,8 +38,14 @@ By default, the companion system SHALL NOT replace an alt's equipped items or ch
 #### Scenario: Gear and talents unchanged
 - **GIVEN** the alt with its equipped items (`character_inventory` slots 0–18 item entries) and talents (`character_talent`) recorded
 - **WHEN** it is brought in, `/mg party` runs alongside it, the master whispers it `autogear`, and the party fights one creature
-- **THEN** the alt's equipped item entries and talents are unchanged, and the `autogear` whisper gets the playerbots refusal. The counterexample, with `AutoGearCommandAltBots = 1` (profile `altgear-on`), changes at least one equipped item
+- **THEN** the alt's equipped item entries and talents are unchanged, and the `autogear` whisper gets the playerbots refusal
 - Check: `alt.gear_untouched`
+
+#### Scenario: The setting that protects alts is on
+- **GIVEN** the profiles Moonglade ships and the `/mg party` and `/mg bring` command tables
+- **WHEN** the profile configs are rendered and the tables are read
+- **THEN** every shipped profile sets `AiPlayerbot.AutoGearCommandAltBots = 0`, and no command list sent to an alt contains `autogear`, `init` or `talents`
+- Check: `unit:py:tests.unit.test_alt_config.AltConfig.test_alt_gear_protected_in_every_profile`
 
 ### Requirement: Alts feel like party members
 Bringing your own characters SHALL feel like having your RPG party along.

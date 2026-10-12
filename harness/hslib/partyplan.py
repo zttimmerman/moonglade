@@ -107,12 +107,12 @@ def parse_table(text: str):
     return t
 
 
-def plan(path=PARTY_LUA) -> dict:
-    """MG_PARTY_PLAN from the add-on file: the constructor after `MG_PARTY_PLAN =`, up to its matching brace."""
+def lua_table(name: str, path=PARTY_LUA):
+    """A global table literal from the add-on file: the constructor after `<name> =`, up to its matching brace."""
     text = path.read_text()
-    m = re.search(r"^MG_PARTY_PLAN\s*=\s*\{", text, re.M)
+    m = re.search(rf"^{re.escape(name)}\s*=\s*\{{", text, re.M)
     if not m:
-        raise PlanError(f"no MG_PARTY_PLAN table in {path.name}")
+        raise PlanError(f"no {name} table in {path.name}")
     start, depth, i, in_str, in_comment = m.end() - 1, 0, m.end() - 1, False, False
     while i < len(text):
         c = text[i]
@@ -134,7 +134,12 @@ def plan(path=PARTY_LUA) -> dict:
             if depth == 0:
                 break
         i += 1
-    p = parse_table(text[start:i + 1])
+    return parse_table(text[start:i + 1])
+
+
+def plan(path=PARTY_LUA) -> dict:
+    """MG_PARTY_PLAN from the add-on file."""
+    p = lua_table("MG_PARTY_PLAN", path)
     for k in ("addclass", "clear", "companions", "party"):
         if k not in p:
             raise PlanError(f"MG_PARTY_PLAN has no {k}")
@@ -170,3 +175,41 @@ def premade_specs(conf_text: str, class_word: str) -> list[str]:
     """AiPlayerbot.PremadeSpecName.<class id>.<n> values for a class (a playerbots.conf or its .dist)."""
     cid = CLASS_IDS[class_word]
     return re.findall(rf"^AiPlayerbot\.PremadeSpecName\.{cid}\.\d+\s*=\s*(.*?)\s*$", conf_text, re.M)
+
+
+# m4-alt-companions (design.md §2): what is never sent to a player's own character brought along with /mg bring
+ALT_FORBIDDEN = ("autogear", "talents", "init", "maintenance")
+
+
+def bring_plan(path=PARTY_LUA) -> dict:
+    """MG_BRING_PLAN from the add-on file (/mg bring, /mg dismiss): {"add", "remove", "steps": [{"send", "reply"}],
+    "resend"}; fail-closed like plan()."""
+    p = lua_table("MG_BRING_PLAN", path)
+    if not isinstance(p, dict):
+        raise PlanError("MG_BRING_PLAN is not a keyed table")
+    for k in ("add", "remove", "steps"):
+        if k not in p:
+            raise PlanError(f"MG_BRING_PLAN has no {k}")
+    if not isinstance(p["steps"], list) or not all(isinstance(st, dict) and isinstance(st.get("send"), list)
+                                                   for st in p["steps"]):
+        raise PlanError("MG_BRING_PLAN.steps is not a list of {send = {...}} steps")
+    return p
+
+
+def bring_commands(p: dict, name: str) -> dict:
+    """The bring and dismiss lists for one character: {"add": command, "steps": [{"send", "reply"}] (whispers to it
+    once it has joined), "whispers": [...], "remove": command}."""
+    steps = [{"send": list(st["send"]), "reply": st.get("reply")} for st in p["steps"]]
+    return {"add": p["add"] + name, "steps": steps, "whispers": [w for st in steps for w in st["send"]],
+            "remove": p["remove"] + name}
+
+
+def alt_forbidden(lines: list[str]) -> list[str]:
+    """The lines of a command list sent to an alt that would change its gear or talents (first word in ALT_FORBIDDEN,
+    or `init=`)."""
+    out = []
+    for line in lines:
+        word = line.strip().split(" ", 1)[0].split("=", 1)[0].lower()
+        if word in ALT_FORBIDDEN:
+            out.append(line)
+    return out

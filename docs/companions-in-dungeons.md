@@ -12,6 +12,21 @@
 - **Damage dealers wait for the tank.** They hold back for 3 seconds after a fight starts, and ease off before they pull a monster off the tank. The hunter's pet stays passive, so it never starts a fight.
 - **`/mg party` needs an empty party.** Use `/mg party clear` first. If a companion doesn't join or answer within 30 seconds, the command stops and says so.
 
+## Bring your own characters
+
+| Type | What happens |
+|---|---|
+| `/mg bring <name>` | One of your other characters joins your party as a companion. It must be on your account and logged out. |
+| `/mg dismiss <name>` | It leaves your party and logs out. |
+
+- **It plays as itself.** It keeps its own level, gear, talents and spells. It isn't raised to your level, so a much lower character may struggle.
+- **It keeps what it earns.** XP, levels, loot and gold from the trip are saved to that character when it leaves, as if you'd played it. Loading a save of your main character doesn't rewind it.
+- **Its gear and talents are safe.** `/mg bring` and `/mg party` never send it gear or talent commands. If you whisper it `autogear`, it refuses: "You cannot use autogear on alt bots".
+- **It starts fresh.** When it joins, it forgets orders you gave it on an earlier trip.
+- **Where it is.** It joins from wherever it last logged out. Type `summon` to bring your companions to you.
+- **Party first, then alts.** `/mg party` needs an empty party, so call your generated companions before you bring an alt.
+- **Only your own characters.** A character from another account is refused ("You are not allowed to control bot").
+
 ## Give orders
 
 - Say an order in party chat (`/p attack`) and every companion hears it.
@@ -44,4 +59,4 @@
 - **Boss tactics:** in some Outland and Northrend dungeons, companions also use boss-specific tactics. Hellfire Ramparts and Utgarde Keep are among them. Classic dungeons have none.
 - **When you die**, the companions keep fighting if they can. If everyone dies, they release and run back with you.
 
-These are stock mod-playerbots commands, as of our pinned version. Where each one comes from: `client-mods/addons/Moonglade/MoongladeParty.lua` and `openspec/changes/m4-dungeon-companions/design.md` §1.
+These are stock mod-playerbots commands, as of our pinned version. Where each one comes from: `client-mods/addons/Moonglade/MoongladeParty.lua`, `openspec/changes/m4-dungeon-companions/design.md` §1 and `openspec/changes/m4-alt-companions/design.md`.
