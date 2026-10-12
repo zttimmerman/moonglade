@@ -72,9 +72,9 @@ Source pins: mod-playerbots `7bae1b5c` and core `7f12e89e` (fork.lock). Paths `v
 ## 3. Tactics checks: how they observe
 - **Probe additions** (`harness/hslib/probe/client.py`):
   - ~~parse `SMSG_SPELLHEALLOG`~~ (dropped 2026-10-12);
-  - send and parse `MSG_RAID_TARGET_UPDATE` (set icon: u8 index + u64 guid);
+  - ~~send and parse `MSG_RAID_TARGET_UPDATE`~~ (cut 2026-10-12; built on branch `change/m4-rti-focus`, unmerged);
   - ~~parse `co ?` whisper replies~~ (dropped 2026-10-12).
-  - Formats follow the core's packet builders. The builder cites the file:line of each one (`Unit::SendHealSpellLog`, `Group::SetTargetIcon`).
+  - Formats follow the core's packet builders. The builder cites the file:line of each one (`Unit::SendHealSpellLog`, `Group::SetTargetIcon`; both now cut).
 - **Cut 2026-10-12** (proposal spec-change log): `dng.tank_holds`, `dng.healer_heals`, `dng.avoid_aoe` and `dng.cc_on_mark`; later the same day `dng.rti_focus` too (playerbots' default `rti` is already the skull). Their notes below are kept for history.
 - **`dng.tank_holds`:**
   - victims of the boss's `SMSG_ATTACKERSTATEUPDATE` swings, counted from 5 s after the first swing (the opener, before the tank's threat builds, is excluded on purpose);

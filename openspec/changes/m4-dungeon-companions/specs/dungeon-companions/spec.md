@@ -25,7 +25,7 @@ Raid-icon focus and crowd-control orders from the player SHALL be obeyed by comp
 - **GIVEN** Zach in a listed dungeon with a `/mg party` party, next to a pack of monsters
 - **WHEN** he marks one with the skull icon and whispers `rti skull` to the party and `tank attack` to the tank (cheat sheet)
 - **THEN** the party kills the skull-marked monster first
-- [human-verify] Playerbots' default `rti` target is already the skull (`RtiTargetValue`), so a game test can't show the order matters: the party focuses the skull with or without it. A headless test also needs a pack with nothing else in sight, which The Deadmines doesn't have without clearing 13 spawns first (two live attempts, 2026-10-12). Judged by playing at the M4 human gate.
+- [human-verify] Playerbots' default `rti` value is already the skull (`RtiValue.cpp:10`), and the damage and tank targets prefer the rti target (`DpsTargetValue.cpp:283`, `TankTargetValue.cpp:112-128`), so a game test can't show the order matters: the party focuses the skull with or without it. A headless test also needs a pack with nothing else in sight, which The Deadmines doesn't have without clearing 13 spawns first (two live attempts, 2026-10-12). Judged by playing at the M4 human gate.
 
 #### Scenario: Sheep the moon
 - **GIVEN** Zach in a listed dungeon with a `/mg party` party that includes a mage
