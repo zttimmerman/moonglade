@@ -1,19 +1,20 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-12 05:35. **Merged today:**
+_Updated 2026-10-12 06:05. **Merged today:**
+- comp.quest_shared diagnosis (#19): a failed addclass now keeps server-side evidence and names the step that stopped. Cause still unconfirmed (leading guess: OnBotLogin leave-vs-invite race).
+- Skull-first order to the gate (#20): `dng.rti_focus` → human-verify (playerbots' default rti is already the skull). Built code kept on `change/m4-rti-focus`, unmerged.
 - m4-alt-companions (#16, archived #18): `/mg bring <name>` / `/mg dismiss <name>`; alts never get autogear. All alt.* checks PASS live. Gaps logged for the gate: loot and talent halves not exercised.
 - PR-tier fixes (#17): dng.session1 needs scale.disabled_stock (124→78 s); `hs timing-baseline join --ids`; setup.preflight control proves a set-up tree (no more 35 GB need).
-- m4 solo clear + run budget (#15): gate checks `dng.solo_clear` (builder 2/2, 0 deaths, ~4 min) and `dng.run_budget` (population N=500; worldserver peak 5.17 of 6.0 GB, p95 ≤12 ms). Plus the behaviour-test trim (loosening logged for the M4 gate): tank/healer → `dng.party_clear`; aoe and cc → human-verify; `dng.rti_focus` stays.
+- m4 solo clear + run budget (#15): gate checks `dng.solo_clear` (builder 2/2, 0 deaths, ~4 min) and `dng.run_budget` (population N=500; worldserver peak 5.17 of 6.0 GB, p95 ≤12 ms). Plus the behaviour-test trim (loosening logged for the M4 gate): tank/healer → `dng.party_clear`; aoe and cc → human-verify; `dng.rti_focus` later cut too (#20).
 - m4 four-dungeon party clear (#13): `dng.party_clear` covers Deadmines, Razorfen Downs, Hellfire Ramparts, Utgarde Keep. Final boss always required (Vazruden staged on his summoner); Tuten'kash (gong) skipped by rule. Builder runs: RFD 2/2, Ramparts 2/2, UK cleared after a staging fix. No tactics gap. Verifier PASS (PR tier 91/0).
 - m4 Deadmines party clear (#12): gate check `dng.party_clear` (Deadmines). Party gathers back on the boss's path, walks in, pulls only when ready; the probe fights as 5th member (selfbot). Builder runs: 3/3 cleared, final driver PASS (1 wipe, Mr. Smite). Verifier PASS (PR tier 86/0).
 - m4 full-run prototype (#11): a `/mg party` party clears The Deadmines headless. VanCleef died on the first pull every time; no tactics gap, no playerbots patch. 4 of 5 runs on the final driver cleared; wipes only at the first three bosses (party pulled while still arriving). Driver `dungeon.run_party`; gate-only checks `dng.party_clear`, `dng.solo_clear`; level-3 account HSDNGNAV (`.mmap path` only). `docs/research/m4-full-run.md`.
 - m4-instance-tactics (#9), selector needs (#10), m4-party-preset (#8), release-fresh-login (#7), release-home-spaces (#6), ci-pipeline (#5), test-pyramid (#4).
 
 **Next:**
-1. **P0 flaky:** comp.quest_shared (addclass priest didn't join in 30 s once in #16's PR tier; passed alone at once). Fix: keep a Playerbots.log excerpt on failure, then diagnose.
-2. m4-dungeon-companions 3.1/3.3: `MSG_RAID_TARGET_UPDATE` + `dng.rti_focus` (~3–4 h); 4.2 As built; archive.
-3. M4 milestone gate: full suite ×3 (first real four-dungeon `dng.party_clear` run), then Zach's play gate.
+1. **M4 milestone gate run (in progress, started 06:05):** full suite once (CLAUDE.md §3; §9's ×3 not used, told Zach). First real four-dungeon `dng.party_clear`. Then archive m4-dungeon-companions and Zach's play gate.
+2. **P0 flaky (watching):** comp.quest_shared; the next failure carries its diagnosis.
 
 **Follow-ups:**
 - PR #15: first gate run must actually run solo_clear/run_budget; warm_up accepts a shorter HS_POP_WARMUP_S; sampler join race; misleading gm_off reason when `.gps` has no x.
