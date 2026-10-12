@@ -216,6 +216,9 @@ def main(argv=None) -> int:
     if _os.environ.get(SELFTEST_ENV) and _os.environ.get("HS_HARNESS_RUN") != "1":
         log(f"${SELFTEST_ENV} is a test switch of the fixture.* self-tests (inside a harness run only); unset it")
         return 2
+    if _os.environ.get("HS_DNG_PARTY_ONLY") and a.cmd != "run":           # dng.party_clear's builder switch
+        log("$HS_DNG_PARTY_ONLY narrows dng.party_clear in a builder `hs run` only; unset it")
+        return 2
     from .guienv import PREFLIGHT_TEST_ENV
     for _var in PREFLIGHT_TEST_ENV:                                      # report.gui_preflight's nested runs only
         if _os.environ.get(_var) and (a.cmd != "run" or _os.environ.get("HS_HARNESS_RUN") != "1"):
