@@ -1082,3 +1082,121 @@ class GatherReviveAfterQuiet(UnitCase):
         self.assertFalse(g["ok"])
         self.assertEqual(g["revived"], {})
         self.assertNotIn(".revive Heal", s.log)
+
+
+VAZ = (0xF130 << 48) | (1001 << 24) | 5            # the event boss (ENC's credit entry 1001), summoned mid-fight
+
+
+class EventBossFastKill(UnitCase):
+    """PR #21 verify run, Hellfire Ramparts: Vazruden died 22.7 s into the pull, seen once in combat, and no by-GUID read
+    of its scaled health ever landed (event_boss {"ok": false, "seen": 1}): dng.party_clear failed "no scaled health
+    read". The read goes at once on a first sighting, again every EVENT_READ_S, and once more after the fight (self-AI
+    off); a boss that can't be read still fails the check."""
+
+    class S(FakeSession):
+        def __init__(self, readable, polls=2, **kw):
+            super().__init__(events=[{"kind": "attack_start", "attacker": VAZ, "victim": 11}], **kw)
+            self.readable, self.polls, self.n, self.reads = readable, polls, 0, []
+
+        def binds(self, map_id=None):
+            self.n += 1
+            return [{"mask": 1 if self.n > self.polls else 0}]
+
+        def read_selected_boss(self, guid, entry, tries=3):
+            ok = self.readable(self)
+            self.reads.append((guid, self.selfbot, ok))
+            # a failed read can still have parsed some other creature's health (the self-AI moved the selection)
+            return {"guid": guid, "entry": entry if ok else None, "max_health": 19227 if ok else 4000,
+                    "health_multiplier": 1.0 if ok else None, "ok": ok}
+
+    def fight(self, s):
+        e = dict(ENC) | {"event": {"stage": ANCHOR["stage"]}}
+        orig = D.POLL_S
+        D.POLL_S = 0
+        try:
+            return D.fight(s, {"map": 543}, e, COMPS, ["Tank", "Heal", "Probe"], "Tank", True, lambda *x: None, [])
+        finally:
+            D.POLL_S = orig
+
+    @staticmethod
+    def row(a):
+        e = {"boss": "Herald", "encounter": 1, "bit": 0, "killed": True, "event": {"summoner": "Herald"},
+             "attempts": [a], "summary": {"wipes": 0}}
+        return {"run": {"cleared": True, "mode": "party", "total_s": 900, "required": [1], "final_mask": 1,
+                        "encounters": [e]}}
+
+    def test_counterexample_fast_kill_is_read_after_the_fight(self):
+        # every read in the fight fails (self-AI on); the kill comes before the old 5 s retry
+        s = self.S(readable=lambda s_: not s_.selfbot)
+        a = self.fight(s)
+        self.assertTrue(a["killed"])
+        eb = a["event_boss"]
+        self.assertTrue(eb["ok"])
+        self.assertEqual((eb["max_health"], eb["guid"], eb["when"]), (19227, VAZ, "after the fight"))
+        self.assertTrue(s.reads[0][1])                            # read at once on the first sighting, in the fight
+        self.assertEqual(s.reads[-1], (VAZ, False, True))         # the last one with the self-AI off
+        self.assertEqual(PCK.party_clear_problems(self.row(a | {"n": 1, "gather": {"ok": True}})), [])
+        self.assertNotIn("_boss_seen", a)
+
+    def test_read_in_the_fight_needs_no_read_after(self):
+        s = self.S(readable=lambda s_: True)
+        a = self.fight(s)
+        self.assertEqual((a["event_boss"]["when"], a["event_boss_reads"], len(s.reads)), ("in the fight", 1, 1))
+
+    def test_counterexample_unreadable_boss_still_fails_the_check(self):
+        s = self.S(readable=lambda s_: False)
+        a = self.fight(s)
+        eb = a["event_boss"]
+        self.assertFalse(eb["ok"])
+        self.assertNotIn("max_health", eb)                        # the failed read's 4000 is kept aside, not counted
+        self.assertEqual(eb["last"]["max_health"], 4000)
+        self.assertEqual(eb["when"], "after the fight")
+        self.assertIn("Herald: no scaled health read",
+                      PCK.party_clear_problems(self.row(a | {"n": 1, "gather": {"ok": True}})))
+
+    def test_counterexample_a_failed_read_with_a_health_value_is_not_a_read(self):
+        a = {"n": 1, "gather": {"ok": True}, "fight_s": 20, "event_boss": {"ok": False, "max_health": 4000}}
+        self.assertIn("Herald: no scaled health read", PCK.party_clear_problems(self.row(a)))
+
+    def test_read_cadence(self):
+        self.assertFalse(D.event_boss_due({}, 0, 30))                         # not seen: nothing to read
+        self.assertTrue(D.event_boss_due({}, 1, 0.1))                         # the first sighting: at once
+        a = {"_boss_try": 10.0, "_boss_seen": 1}
+        self.assertFalse(D.event_boss_due(a, 1, 10 + D.EVENT_READ_S - 0.1))
+        self.assertTrue(D.event_boss_due(a, 1, 10 + D.EVENT_READ_S))
+        self.assertTrue(D.event_boss_due(a, 2, 10.5))                         # a new GUID: at once
+        self.assertFalse(D.event_boss_due(a | {"event_boss": {"ok": True}}, 2, 99))
+        self.assertLess(D.EVENT_READ_S, 5)                                    # faster than the old every-5-s retry
+
+
+class PartyClearFromEvidence(UnitCase):
+    """Verifier concern (PR #21): the check trusted the driver's own `unready` flag. It also judges the evidence: an
+    attempt that fought while held, or fought after a staging gather that wasn't ok without the boss engaged first."""
+
+    def ev(self, a):
+        e = {"boss": "B", "encounter": 1, "bit": 0, "killed": True, "summary": {"wipes": 0},
+             "attempts": [{"n": 1} | a, {"n": 2, "gather": {"ok": True}, "pull": {"ordered": True}, "fight_s": 30.0,
+                                         "killed": True, "boss_before": {"max_health": 100}}]}
+        return {"run": {"cleared": True, "mode": "party", "total_s": 900, "required": [1], "final_mask": 1,
+                        "encounters": [e]}}
+
+    def test_good_attempts_pass(self):
+        held = {"held": "dead: Heal", "gather": {"ok": False, "why": "dead: Heal"}, "fight_s": 0.0, "unready": False}
+        self.assertEqual(PCK.party_clear_problems(self.ev(held)), [])
+        engaged = {"gather": {"ok": False, "boss_engaged": True}, "boss_engaged_before_pull": True, "fight_s": 25.0,
+                   "unready": False, "wipe": True}
+        self.assertEqual(PCK.party_clear_problems(self.ev(engaged)), [])
+
+    def test_counterexample_fought_while_held(self):
+        a = {"held": "dead: Heal", "gather": {"ok": False, "why": "dead: Heal"}, "fight_s": 12.0, "unready": False}
+        self.assertIn("B pull 1: fought while held (dead: Heal)", PCK.party_clear_problems(self.ev(a)))
+        a = {"held": "in combat", "gather": {"ok": True}, "pull": {"ordered": True}, "fight_s": 0.0}
+        self.assertIn("B pull 1: fought while held (in combat)", PCK.party_clear_problems(self.ev(a)))
+
+    def test_counterexample_pulled_after_a_failed_gather_without_the_flag(self):
+        a = {"gather": {"ok": False, "why": "arriving: Heal"}, "pull": {"ordered": True}, "fight_s": 30.0,
+             "unready": False, "boss_engaged_before_pull": False, "wipe": True}
+        self.assertEqual(PCK.party_clear_problems(self.ev(a)),
+                         ["B pull 1: pulled before the party was gathered (arriving: Heal)"])
+        a = {"pull": {"ordered": True}, "fight_s": 30.0}                     # no staging gather at all
+        self.assertTrue(any("before the party was gathered" in p for p in PCK.party_clear_problems(self.ev(a))))
