@@ -979,7 +979,8 @@ class PullOnlyWhenGathered(UnitCase):
                    "hold_party": lambda s_, comps: [c["name"] for c in comps],
                    "wait_boss_reset": lambda s_, enc: {"ok": True, "s": 0},
                    "wait_quiet": lambda s_, comps, timeout=0: steps.append(("quiet",)) or {"ok": True, "s": 0},
-                   "revive_dead": lambda s_, names: steps.append(("revive", tuple(names))) or {}}
+                   "revive_dead": lambda s_, names: steps.append(("revive", tuple(names))) or {},
+                   "summon_dead": lambda s_, names: steps.append(("summon", tuple(names))) or {}}
         orig = {k: getattr(D, k, None) for k in patches}
         for k, v in patches.items():
             setattr(D, k, v)
@@ -1012,7 +1013,7 @@ class PullOnlyWhenGathered(UnitCase):
         self.assertEqual(rec["summary"]["wipes"], 0)
         # the dead get up only after the party's fight is over
         i = steps.index(("quiet",))
-        self.assertEqual(steps[i + 1], ("revive", ("Tank", "Heal")))
+        self.assertEqual(steps[i + 1], ("summon", ("Tank", "Heal")))
         rec["attempts"][1]["boss_before"] = {"max_health": 100}
         self.assertEqual(PCK.party_clear_problems({"run": ev | {"final_mask": 1}}), [])
 
@@ -1042,6 +1043,79 @@ class PullOnlyWhenGathered(UnitCase):
         a |= {"unready": True, "gather": {"why": "dead: Heal"}, "boss_before": {"max_health": 100}}
         problems = PCK.party_clear_problems({"run": ev | {"final_mask": 1}})
         self.assertEqual(problems, ["B pull 1: pulled before the party was gathered (dead: Heal)"])
+
+
+class WipeReviveAtTheProbe(UnitCase):
+    """M4 gate rerun (main 02a7e1a), Utgarde Keep, Ingvar the Plunderer: after the second wipe the four companions were
+    revived where they fell (`.revive`), next to the reset boss; it was in a fight with them 2.7 s into the next
+    gather and three died before any pull. After a wipe the dead are summoned (playerbots revives a summoned dead bot
+    at its master), and `.revive` at the corpse is only the fallback for one still dead."""
+
+    def test_after_a_wipe_the_dead_are_summoned_after_the_reset(self):
+        ev, _, steps = PullOnlyWhenGathered().drive([PullOnlyWhenGathered.OK], kill=False)
+        rec = ev["encounters"][0]
+        self.assertEqual(len(rec["attempts"]), D.MAX_WIPES + 1)
+        comps = [x for x in steps if x[0] in ("summon", "revive") and x[1] != ("Probe",)]
+        # between attempts the companions are summoned; nothing is revived in place before the last attempt ended
+        self.assertEqual(comps[:D.MAX_WIPES], [("summon", ("Tank", "Heal"))] * D.MAX_WIPES)
+        self.assertNotIn("revive", [x[0] for x in comps[:D.MAX_WIPES]])
+
+    def summon(self, s, timeout=0.05):
+        orig = D.POLL_S
+        D.POLL_S = 0.01
+        try:
+            return D.summon_dead(s, ["Tank", "Heal"], timeout=timeout)
+        finally:
+            D.POLL_S = orig
+
+    def test_summoned_dead_get_up_without_a_revive_at_the_corpse(self):
+        s = FakeSession(alive={"Tank": "No", "Heal": "Yes"})
+        orig_chat = s.ws.chat
+
+        def chat(msg, kind, to=None):
+            orig_chat(msg, kind, to)
+            if msg == "summon":
+                s.alive_names[to] = "Yes"          # SummonAction: resurrected and teleported to the master
+        s.ws.chat = chat
+        r = self.summon(s)
+        self.assertEqual(r["summoned"], ["Tank"])
+        self.assertEqual(r["fallback"], {})
+        self.assertIn(("whisper", "Tank", "summon"), s.log)
+        self.assertNotIn(("whisper", "Heal", "summon"), s.log)
+        self.assertFalse(any(isinstance(c, str) and c.startswith(".revive") for c in s.log))
+
+    def test_counterexample_still_dead_gets_the_revive_and_a_summon(self):
+        s = FakeSession(alive={"Tank": "No", "Heal": "No"})
+        r = self.summon(s)
+        self.assertEqual(sorted(r["fallback"]), ["Heal", "Tank"])
+        i = s.log.index(".revive Tank")
+        self.assertIn(("whisper", "Tank", "summon"), s.log[i:])
+
+
+class GatherInEvidence(UnitCase):
+    """M4 gate rerun, The Deadmines: the entry gather ran out with `.ab mapstat` at 1 player and no word on where the
+    four companions were. A failed gather records each one's `.pinfo` map line and its whispers (summon refusals)."""
+
+    def test_failed_gather_says_where_each_companion_is(self):
+        from types import SimpleNamespace
+        s = FakeSession(events=[{"kind": "chat", "type": D.W.CHAT_MSG_WHISPER, "sender": 11,
+                                 "msg": "Not enough place to summon"},
+                                {"kind": "chat", "type": D.W.CHAT_MSG_WHISPER, "sender": 12, "msg": "Hello!"}])
+        s.companions = {"Tank": {"guid": 11}, "Heal": {"guid": 12}}
+        s.mapstat = lambda: {"players": 1}
+        s.where_companions = lambda mark: D.Session.where_companions(s, mark)
+        out = {"Tank": "Map: The Deadmines, Zone: Westfall\nOnline: Yes", "Heal": "Map: Eastern Kingdoms"}
+        orig_gm, orig_sleep = D.soap.gm, D.time.sleep
+        D.soap.gm = lambda c: SimpleNamespace(output=out[c.split()[1]])
+        D.time.sleep = lambda x: None
+        try:
+            g = D.Session.gather(s, 3, timeout=0)
+        finally:
+            D.soap.gm, D.time.sleep = orig_gm, orig_sleep
+        self.assertFalse(g["ok"])
+        self.assertEqual(g["companions"]["Tank"]["pinfo"][0], "Map: The Deadmines, Zone: Westfall")
+        self.assertEqual(g["companions"]["Tank"]["whispers"], ["Not enough place to summon"])
+        self.assertEqual(g["companions"]["Heal"]["whispers"], ["Hello!"])
 
 
 class WaitQuiet(UnitCase):
