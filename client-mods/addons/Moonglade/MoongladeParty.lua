@@ -51,17 +51,17 @@ MG_PARTY_PLAN = {
 		mage = { class = "mage", token = "MAGE", steps = {
 			{ send = { "reset botAI" }, reply = "AI was reset to defaults" },
 			{ send = { "talents spec frost pve" }, reply = "Picking frost pve" },
-			{ send = { "autogear", "co +threat,+wait for attack", "wait for attack time 3" } },
+			{ send = { "autogear", "co +threat,+wait for attack", "wait for attack time 3" }, reply = "Wait for attack time set to 3" },
 		} },
 		rogue = { class = "rogue", token = "ROGUE", steps = {
 			{ send = { "reset botAI" }, reply = "AI was reset to defaults" },
 			{ send = { "talents spec combat pve" }, reply = "Picking combat pve" },
-			{ send = { "autogear", "co +threat,+wait for attack", "wait for attack time 3" } },
+			{ send = { "autogear", "co +threat,+wait for attack", "wait for attack time 3" }, reply = "Wait for attack time set to 3" },
 		} },
 		hunter = { class = "hunter", token = "HUNTER", steps = {
 			{ send = { "reset botAI" }, reply = "AI was reset to defaults" },
 			{ send = { "talents spec mm pve" }, reply = "Picking mm pve" },
-			{ send = { "autogear", "co +threat,+wait for attack", "wait for attack time 3", "pet passive" } },
+			{ send = { "autogear", "co +threat,+wait for attack", "wait for attack time 3", "pet passive" }, reply = "Wait for attack time set to 3" },
 		} },
 	},
 	-- the player's role -> the companions it gets, in the order they're added
@@ -151,7 +151,7 @@ end
 
 local addNext;
 
--- Send the companion's step `n`; a step without a reply finishes the companion.
+-- Send the companion's step `n`; the companion is finished after its last step (and that step's reply, if it has one).
 local function sendStep(n)
 	local c = PLAN.companions[run.queue[run.i]];
 	local step = c.steps[n];
@@ -199,7 +199,12 @@ local function onWhisper(message, sender)
 	if ( not run or not run.step or sender ~= run.name ) then return; end
 	local step = PLAN.companions[run.queue[run.i]].steps[run.step];
 	if ( step.reply and strfind(message, step.reply, 1, true) ) then
-		sendStep(run.step + 1);
+		if ( PLAN.companions[run.queue[run.i]].steps[run.step + 1] ) then
+			sendStep(run.step + 1);
+		else
+			run.step = nil;
+			addNext();
+		end
 	end
 end
 

@@ -41,6 +41,8 @@ local function call_party(w, opts)
 			if msg == "reset botAI" then w.fire("CHAT_MSG_WHISPER", "AI was reset to defaults", to) end
 			local spec = msg:match("^talents spec (.+)$")
 			if spec then w.fire("CHAT_MSG_WHISPER", "Picking " .. spec, to) end
+			local secs = msg:match("^wait for attack time (%d+)$")
+			if secs then w.fire("CHAT_MSG_WHISPER", "Wait for attack time set to " .. secs .. " seconds", to) end
 		end
 	end
 	return names

@@ -22,7 +22,13 @@ class PartyPlan(UnitCase):
                 # gear and strategies only after the spec pick has answered (a spec pick resets strategies)
                 self.assertEqual(c["steps"][0], {"send": ["reset botAI"], "reply": "AI was reset to defaults"})
                 self.assertEqual(c["steps"][1], {"send": [f"talents spec {spec}"], "reply": f"Picking {spec}"})
-                self.assertIsNone(c["steps"][-1]["reply"])
+                # damage dealers confirm their last step ("Wait for attack time set to N seconds", WaitForAttackAction.cpp)
+                # before the next companion; a `co ?` in the same bot update would displace their `co +...`
+                last = c["steps"][-1]["reply"]
+                if "wait for attack time 3" in c["steps"][-1]["send"]:
+                    self.assertEqual(last, "Wait for attack time set to 3")
+                else:
+                    self.assertIsNone(last)
 
     # Each plan spec existing in the pinned playerbots.conf is checked by dng.party_preset against the rendered
     # conf (vendor/ isn't in a unit run's checkout); the parser it uses is tested here.
