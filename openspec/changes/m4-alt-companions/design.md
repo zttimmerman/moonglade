@@ -32,7 +32,7 @@ mod-playerbots pin `7bae1b5c`. `pb/` = `vendor/mod-playerbots/src/`, `conf` = `v
 | Check | Tier |
 |---|---|
 | `alt.bring_dismiss`, `alt.foreign_refused`, `alt.progress_kept`, `alt.gear_untouched` | full, ~1–3 min each |
-| `client.bring_slash` | gui |
+| ~~`client.bring_slash`~~ (cut 2026-10-12; now `unit:lua:test_addon_bring.*`) | unit |
 
 - **Accounts:**
   - the probe uses the harness companion account (P.COMP_USER);
@@ -40,5 +40,5 @@ mod-playerbots pin `7bae1b5c`. `pb/` = `vendor/mod-playerbots/src/`, `conf` = `v
   - `alt.foreign_refused` targets the HSTEST fixture account's character;
   - PLAYER's account and characters are never touched (builder checklist 9 and 11).
 - **Counterexamples:**
-  - profile `altgear-on` (`AutoGearCommandAltBots = 1`) for `alt.gear_untouched`;
+  - ~~profile `altgear-on`~~ (cut 2026-10-12; a unit test checks every shipped profile sets `AutoGearCommandAltBots = 0`);
   - an alt on another account for `alt.foreign_refused` (the refusal is the pass condition; the counterexample adds the account link with `.playerbots account link` and shows the add succeeds, proving the check can tell the difference).

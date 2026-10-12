@@ -34,4 +34,4 @@ This is the third of three M4 changes (the split is explained in `m4-dungeon-sca
 - **Saves interplay.** An alt's progress must survive the main character's save load, and its own save list must stay consistent. This is covered by `alt.progress_kept` and the front-menu-saves spec ("loading … SHALL NOT change any other character").
 
 ## Spec-change log
-- (none yet)
+- **2026-10-12 (loosening, for the M4 human gate).** Fewer game tests, per Zach's 2026-10-11 pipeline rule. The real-client GUI check `client.bring_slash` becomes a Lua unit test of the slash handler; the game side of the same command lists stays covered by `alt.bring_dismiss`. The `altgear-on` counterexample profile (a second server restart) becomes a unit test that every shipped profile sets `AutoGearCommandAltBots = 0`. What's lost: proof that the party frame draws the alt, and a live proof that the setting is what blocks autogear (the `autogear` refusal in `alt.gear_untouched` still shows it live).
