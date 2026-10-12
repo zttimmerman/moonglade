@@ -67,6 +67,12 @@ class Staging(UnitCase):
         self.assertEqual(D.fallback_point(pts, boss), {"x": 26, "y": 0, "z": 0})
         self.assertIsNone(D.fallback_point([{"x": 5, "y": 0, "z": 0}], boss))
 
+    def test_walk_distance_along_the_path(self):
+        pts = [{"x": 0, "y": 0, "z": 0}, {"x": 0, "y": 10, "z": 0}, {"x": 10, "y": 10, "z": 0}, {"x": 10, "y": 0, "z": 0}]
+        self.assertEqual(D.walk_to(pts, {"x": 10, "y": 1, "z": 0}), 30.0)   # 10 yd away straight, 30 on foot
+        self.assertIsNone(D.walk_to(pts, {"x": 50, "y": 50, "z": 0}))     # not on the path at all
+        self.assertIsNone(D.walk_to([], {"x": 0, "y": 0, "z": 0}))
+
     def test_approach_walks_the_path_toward_the_boss(self):
         boss = {"x": 0, "y": 0, "z": 0}
         pts = [{"x": 4 * k, "y": 0, "z": 0} for k in range(11)]        # boss -> previous staging point, 4 yd apart

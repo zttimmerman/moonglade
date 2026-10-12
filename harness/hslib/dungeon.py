@@ -724,6 +724,7 @@ def solo_final_boss(s: "Session", f: dict, log=None) -> dict:
 STAGE_BACK_YD = 30            # design.md §4: the boss spawn moved 30 yd back toward the previous staging point
 STAGE_OFF_LINE_YD = 10        # design.md §4: a navmesh point farther than this from the candidate is refused
 STAGE_MIN_BOSS_YD = 25        # design.md §4 fallback: at least this far from the boss
+STAGE_WALK_MAX_YD = 45        # prototype: the line's point is refused when it is farther than this on foot (1.5 x 30)
 # `.mmap path` prints only the path's start, end and actual end (cs_mmaps.cpp HandleMmapPathCommand); the points
 # themselves are summoned as VISUAL_WAYPOINT creatures (MotionMaster.h, entry 1; 9 s timed despawn), which the probe
 # reads from their create blocks (probe.client.parse_update_blocks, track_creates).
@@ -742,7 +743,7 @@ SOLO_PULL_YD = 6              # the selfbot run: stand this far from the boss, i
 RUN_RULE = ("order: required encounters (a static spawn of the credit entry; m4-dungeon-scaling design §6) by "
             "DungeonEncounter.dbc orderIndex. Staging: the boss spawn moved 30 yd back toward the previous staging "
             "point (the entrance for the first), snapped by `.mmap path` (the boss's path to the candidate; its "
-            "ActualEndPosition) and kept if within 10 yd of the candidate; else the boss's `.mmap path` to the "
+            "ActualEndPosition) and kept if within 10 yd of the candidate and <= 45 yd from the boss on foot; else the boss's `.mmap path` to the "
             "previous staging point, read point by point (its VISUAL_WAYPOINT summons), and the last point on it that "
             "is >= 25 yd from the boss (walking from the previous staging point). Pull: the probe selects the boss, "
             "whispers `tank attack` and `attack` to the tank. Wipe: every fighter dead; `.revive`, back to staging, "
@@ -814,6 +815,17 @@ def path_points(creates: list[dict]) -> list[dict]:
     return [{"x": p["x"], "y": p["y"], "z": p["z"]} for g, p in sorted(seen.items(), key=lambda kv: kv[0] & 0xFFFFFF)]
 
 
+def walk_to(points: list[dict], point: dict) -> float | None:
+    """Walking distance from the boss (points[0]) along the path to the path point nearest `point`; None when no path
+    point is within STAGE_OFF_LINE_YD of it."""
+    if not points:
+        return None
+    i = min(range(len(points)), key=lambda k: dist3(points[k], point))
+    if dist3(points[i], point) > STAGE_OFF_LINE_YD:
+        return None
+    return round(sum(dist3(points[k], points[k + 1]) for k in range(i)), 1)
+
+
 def fallback_point(points: list[dict], boss: dict, min_yd: float = STAGE_MIN_BOSS_YD) -> dict | None:
     """design.md §4 fallback: on the path from the boss to the previous staging point, the last point (walking from the
     previous staging point toward the boss) that is >= min_yd from the boss."""
@@ -857,6 +869,13 @@ def nav_stages(f: dict, req: list[dict], log=None) -> dict:
             # the path is read for every encounter: the fallback point, and the approach the pull walks if the tank
             # can't see the boss from the staging point (playerbots AttackAction::Attack needs line of sight)
             rec["fallback"] = fb = _path_fallback(s, sp, enc, boss, prev)
+            if rec["point"] and fb.get("points"):
+                walk = walk_to(fb["points"], rec["point"])
+                rec["primary"]["walk_yd"] = walk
+                if walk is None or walk > STAGE_WALK_MAX_YD:
+                    # the line's point is near on the map but far on foot (another deck of the ship): refused
+                    rec["primary"] |= {"verdict": None, "why": f"walk {walk} yd from the boss"}
+                    rec |= {"point": None, "verdict": None}
             if not rec["point"] and fb.get("point"):
                 rec |= {"point": fb["point"], "verdict": "fallback"}
             if rec["point"]:
@@ -992,9 +1011,10 @@ def _combat_quiet(s: "Session", guids: set, since: int) -> float:
     return time.time() - last if last else 1e9
 
 
-def gather_at(s: "Session", comps: list[dict], point: dict) -> dict:
+def gather_at(s: "Session", comps: list[dict], point: dict, boss_guid: int | None = None) -> dict:
     """design.md §4 steps 2-3: whisper `summon` to the companions that are away until everyone is within GATHER_YD of
-    the probe and nobody fought for QUIET_S (or GATHER_S). Healer mana isn't readable headless (prototype: not used)."""
+    the probe and nobody fought for QUIET_S (or GATHER_S), or until the boss is in a fight (the companions pulled it on
+    arrival). Healer mana isn't readable headless (prototype: not used)."""
     t0, since, rounds = time.time(), s.ws.mark(), 0
     guids = {c["guid"] for c in comps}
     far: list = []
@@ -1007,6 +1027,9 @@ def gather_at(s: "Session", comps: list[dict], point: dict) -> dict:
             if d is None or d > GATHER_YD or (d < 0.01 and c["guid"] != s.guid and p == me):
                 far.append({"name": c["name"], "yd": None if d is None else round(d, 1)})
         quiet = _combat_quiet(s, guids | {s.guid}, since)
+        if boss_guid and _combat_quiet(s, {boss_guid}, since) < 1e8:
+            # the companions engaged the boss on arrival (it stands within reach of the staging point): the fight is on
+            return {"ok": False, "boss_engaged": True, "s": round(time.time() - t0, 1), "rounds": rounds, "far": far}
         if not far and quiet >= QUIET_S:
             return {"ok": True, "s": round(time.time() - t0, 1), "rounds": rounds}
         if time.time() - t0 > GATHER_S:
@@ -1190,7 +1213,7 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
             s.cmd(".gm on", settle=0.3)
             s.go(point["x"], point["y"], point["z"] + 0.5)
             if not selfbot:
-                a["gather"] = gather_at(s, comps, point)
+                a["gather"] = gather_at(s, comps, point, s.unit(sp["spawn_id"], enc["credit_entry"]).get("guid"))
             else:
                 s.cmd(".gm off", settle=0.3)
                 a["gather"] = {"ok": True, "s": 0}
@@ -1201,16 +1224,20 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
             if a.get("wipe") or a.get("timeout"):
                 wipes += 1
             step = next_step(bool(a.get("killed")), wipes)
-            a["revive"] = revive_dead(s, fighters)
             if step == "next":
+                a["revive"] = revive_dead(s, fighters)
                 rec["killed"] = True
                 break
             if step == "fail":
+                a["revive"] = revive_dead(s, fighters)
                 break
             if selfbot:
                 s.cmd(".gm on", settle=0.3)
             s.go(point["x"], point["y"], point["z"] + 0.5)
+            # the boss resets first, then the dead get up: revived where they fell (next to the boss and its adds),
+            # they'd be killed again before the next gather (run 7, Gilnid)
             a["reset"] = wait_boss_reset(s, enc)
+            a["revive"] = revive_dead(s, fighters)
         rec["summary"] = encounter_summary(rec, roles)
         if not rec.get("killed"):
             break
