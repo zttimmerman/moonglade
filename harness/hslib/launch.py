@@ -256,8 +256,11 @@ def prefix_processes(excluded: list | None = None, prefix: Path | None = None) -
 #                        (it waits); the client is a separate pid whose argv is the Windows path `Z:\...\Wow.exe`.
 #   whisky (Wine 7.7):   one pid: `.../wine64 Wow.exe` -> `.../wine64-preloader /.../wine64 Wow.exe` (still
 #                        loading) -> `.../wine64-preloader Wow.exe` (the client itself).
-_WOW_WINDOWS = re.compile(r"^(?:[a-z]:\\\S*\\)?wow\.exe(?:\s|$)", re.I)
-_WOW_PRELOADER = re.compile(r"/wine(?:64)?-preloader (?:[a-z]:\\\S*\\)?wow\.exe(?:\s|$)", re.I)
+# The Windows path may hold spaces (the release HOME is ~/Library/Application Support/Moonglade); a folder name never
+# holds ":" or "\", so the path can't run on into another program's path ("...\start.exe /exec Z:\...\Wow.exe").
+_WIN_DIR = r"(?:[a-z]:\\(?:[^\\:]*\\)*)?"
+_WOW_WINDOWS = re.compile(r"^" + _WIN_DIR + r"wow\.exe(?:\s|$)", re.I)
+_WOW_PRELOADER = re.compile(r"/wine(?:64)?-preloader " + _WIN_DIR + r"wow\.exe(?:\s|$)", re.I)
 
 
 def is_wow_client(cmd: str) -> bool:
