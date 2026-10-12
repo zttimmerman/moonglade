@@ -268,7 +268,7 @@ class Session(C.Session):
         if self.ws:
             try:
                 if self.selfbot:
-                    self.cmd(".playerbots bot self", settle=0.5)
+                    self.ev["self_off_on_exit"] = set_selfbot(self, False)
                 self.cmd(".gm off", settle=0.3)
             except Exception as e:      # noqa: BLE001  best-effort; logout below
                 self.ev.setdefault("cleanup_errors", []).append(str(e))
@@ -562,9 +562,11 @@ def gear_quality() -> str:
 # src/server/scripts/Outland/HellfireCitadel/HellfireRamparts/boss_vazruden_the_herald.cpp, Reset() and
 # SummonedCreatureDies()); the solo probe stands at the first sentry's summon point from that file, so the sentries
 # engage it. Keyed by the final encounter's credit entry (instance_encounters.creditEntry).
-EVENT_STAGE = {17537: {"x": -1372.56, "y": 1724.31, "z": 82.967,
+# path_entry: the creature summoned there (the party run's `.mmap path` needs a unit on the ground: the herald flies, and
+# its path ends in the air), NPC_HELLFIRE_SENTRY = 17517 in hellfire_ramparts.h.
+EVENT_STAGE = {17537: {"x": -1372.56, "y": 1724.31, "z": 82.967, "path_entry": 17517,
                        "source": "boss_vazruden_the_herald.cpp Reset(): SummonCreature(NPC_HELLFIRE_SENTRY, -1372.56f, "
-                                 "1724.31f, 82.967f)"}}
+                                 "1724.31f, 82.967f); hellfire_ramparts.h NPC_HELLFIRE_SENTRY = 17517"}}
 
 
 def solo_anchor(f: dict) -> dict:
@@ -750,13 +752,33 @@ RUN_RULE = ("order: required encounters (a static spawn of the credit entry; m4-
             "wait for the boss's reset, retry; max 2 wipes.")
 
 
-def required_encounters(f: dict) -> tuple[list[dict], list[dict]]:
-    """(required, skipped): encounters with a static spawn of their credit entry, by orderIndex; the rest are reported
-    as skipped (an event-summoned boss, m4-dungeon-scaling design.md §6)."""
-    req = sorted((e for e in f["encounters"] if e["spawns"]), key=lambda e: e["order"])
+def required_encounters(f: dict, anchor=None) -> tuple[list[dict], list[dict]]:
+    """(required, skipped), by orderIndex. Required: encounters with a static spawn of their credit entry, and always
+    the final encounter (spec "The listed dungeons can be finished with companions"; m4-dungeon-scaling design.md §6).
+    The rest are reported as skipped (an event-summoned boss, the Razorfen Downs gong). A final encounter with no static
+    spawn (Hellfire Ramparts: Vazruden is summoned by Vazruden the Herald) is staged on its summoner's static spawn
+    (`anchor`, default solo_anchor: the same rule as scale.solo_final_boss) and marked `event`: its fight starts at the
+    script's summon point (EVENT_STAGE), and its live reads use the summoner's entry (`unit_entry`)."""
+    fin = f.get("final")
+    fin_id = fin["encounter"] if fin else None
+    req = [e for e in f["encounters"] if e["spawns"]]
     skipped = [{"encounter": e["encounter"], "credit_entry": e["credit_entry"], "order": e["order"],
-                "why": "skipped: no static spawn"} for e in f["encounters"] if not e["spawns"]]
-    return req, skipped
+                "why": "skipped: no static spawn"} for e in f["encounters"] if not e["spawns"] and e["encounter"] != fin_id]
+    if fin and not fin["spawns"]:
+        a = (anchor or solo_anchor)(f)
+        st = a.get("stage")
+        where = st or a
+        req.append(fin | {"spawns": [{"spawn_id": a["spawn_id"], "x": where["x"], "y": where["y"], "z": where["z"],
+                                      "name": a["name"]}],
+                          "unit_entry": a["entry"],
+                          "event": {"summoner": a["name"], "summoner_entry": a["entry"], "rule": a.get("rule"),
+                                    "summoner_spawn": {k: a[k] for k in ("x", "y", "z")}, "stage": st}})
+    return sorted(req, key=lambda e: e["order"]), skipped
+
+
+def unit_entry(enc: dict) -> int:
+    """The entry a live read of the encounter's spawn must show: the credit creature, or an event boss's summoner."""
+    return enc.get("unit_entry") or enc["credit_entry"]
 
 
 def dist3(a: dict, b: dict) -> float:
@@ -854,11 +876,12 @@ def nav_stages(f: dict, req: list[dict], log=None) -> dict:
         for enc in req:
             sp = enc["spawns"][0]
             boss = {"x": sp["x"], "y": sp["y"], "z": sp["z"]}
+            cache: dict = {}
             rec = {"encounter": enc["encounter"], "boss": sp["name"], "spawn": boss, "prev": prev, "point": None,
                    "verdict": None}
             cand = stage_candidate(boss, prev)
             s.go(cand["x"], cand["y"], cand["z"])
-            u = s.unit(sp["spawn_id"], enc["credit_entry"])
+            u = nav_unit(s, sp, enc, cache)
             if u.get("guid"):
                 s.ws.set_selection(u["guid"])
                 time.sleep(0.3)
@@ -868,7 +891,11 @@ def nav_stages(f: dict, req: list[dict], log=None) -> dict:
                     rec |= {"point": rec["primary"]["point"], "verdict": "primary"}
             # the path is read for every encounter: the fallback point, and the approach the pull walks if the tank
             # can't see the boss from the staging point (playerbots AttackAction::Attack needs line of sight)
-            rec["fallback"] = fb = _path_fallback(s, sp, enc, boss, prev)
+            rec["fallback"] = fb = _path_fallback(s, sp, enc, boss, prev, cache)
+            if fb.get("point") and not path_usable(fb.get("path_type")):
+                # a path with no navmesh route (Utgarde Keep: from the entrance to Prince Keleseth, type 10 =
+                # shortcut | no path) is a straight line through the walls; its "points" are not a walk
+                rec["fallback"] = fb = fb | {"point": None, "points": [], "why": f"no path (type {fb['path_type']})"}
             if rec["point"] and fb.get("points"):
                 walk = walk_to(fb["points"], rec["point"])
                 rec["primary"]["walk_yd"] = walk
@@ -878,13 +905,29 @@ def nav_stages(f: dict, req: list[dict], log=None) -> dict:
                     rec |= {"point": None, "verdict": None}
             if not rec["point"] and fb.get("point"):
                 rec |= {"point": fb["point"], "verdict": "fallback"}
+            if rec["point"] and rec["verdict"] == "primary" and not fb.get("points"):
+                # the line's point, but no usable walk to check it against: the boss's own path to it, read here
+                path, pts = _path_here(s, sp, enc, rec["point"], cache)
+                j = judge_ground(boss, rec["point"], path, pts)
+                rec["primary"]["walk_check"] = {k: j.get(k) for k in ("verdict", "why", "walk_yd")}
+                if j.get("verdict"):
+                    fb = {"points": pts}
+                else:
+                    rec |= {"point": None, "verdict": None}
+            if not rec["point"]:
+                # neither: the line's point at the boss's own height (its floor) instead of a height interpolated
+                # between the two ends (which put Keleseth's candidate under the floor), GROUND_TRIES
+                rec["ground"] = g = _ground_stage(s, sp, enc, boss, prev, cache)
+                if g.get("point"):
+                    rec |= {"point": g["point"], "verdict": "ground"}
+                    fb = {"points": g["points"]}
             if rec["point"]:
                 rec["approach"] = approach_points(fb.get("points") or [], rec["point"], boss)
                 rec["gather"] = gather_point(fb.get("points") or [], rec["point"], boss)
                 rec["walk_in"] = walk_in_points(fb.get("points") or [], rec["gather"], rec["point"])
             say({"boss": sp["name"], "verdict": rec["verdict"], "point": rec["point"],
                  "gather": {k: (rec.get("gather") or {}).get(k) for k in ("point", "back_yd", "why")},
-                 "primary_why": (rec.get("primary") or {}).get("why"),
+                 "primary_why": (rec.get("primary") or {}).get("why"), "ground": (rec.get("ground") or {}).get("tries"),
                  "fallback": {k: (rec.get("fallback") or {}).get(k) for k in ("n_points", "path_type", "why")}})
             out["stages"].append(rec)
             if rec["point"]:
@@ -894,6 +937,120 @@ def nav_stages(f: dict, req: list[dict], log=None) -> dict:
         s.cmd(".gm off", settle=0.3)
     out["s"] = round(time.time() - t0, 1)
     return out
+
+
+# the ground retry's candidates: (yd from the boss, turn in degrees from the line toward the previous staging point),
+# nearest the design's point first: 30 yd on the line, 45 yd on it, then 30 yd turned 45/90/135 degrees either way
+GROUND_TRIES = ((STAGE_BACK_YD, 0), (45, 0), (STAGE_BACK_YD, 45), (STAGE_BACK_YD, -45), (STAGE_BACK_YD, 90),
+                (STAGE_BACK_YD, -90), (STAGE_BACK_YD, 135), (STAGE_BACK_YD, -135))
+
+
+def turned_candidate(boss: dict, prev: dict, back: float, turn_deg: float) -> dict:
+    """The point `back` yd (2D) from the boss in the direction of prev turned by turn_deg, at the boss's height."""
+    a = math.atan2(prev["y"] - boss["y"], prev["x"] - boss["x"]) + math.radians(turn_deg)
+    return {"x": boss["x"] + back * math.cos(a), "y": boss["y"] + back * math.sin(a), "z": boss["z"]}
+
+
+def path_usable(path_type: int | None) -> bool:
+    """A `.mmap path` result the staging rule can use: known, and without PATHFIND_NOPATH (PathGenerator.h)."""
+    return path_type is not None and not path_type & PATH_NOPATH
+
+
+def judge_ground(boss: dict, cand: dict, path: dict, points: list[dict]) -> dict:
+    """The ground retry's verdict: a usable path from the boss that ends within STAGE_OFF_LINE_YD of the candidate,
+    at least STAGE_MIN_BOSS_YD from the boss and at most STAGE_WALK_MAX_YD from it on foot."""
+    out = judge_stage(boss, cand, path)
+    if not out.get("verdict"):
+        return out
+    if not path_usable(path.get("type")):
+        return out | {"verdict": None, "why": f"path type {path.get('type')}"}
+    if out["boss_yd"] < STAGE_MIN_BOSS_YD:
+        return out | {"verdict": None, "why": f"{out['boss_yd']} yd from the boss"}
+    walk = walk_to(points, out["point"]) if points else None
+    out["walk_yd"] = walk
+    if walk is None or walk > STAGE_WALK_MAX_YD:
+        return out | {"verdict": None, "why": f"walk {walk} yd from the boss"}
+    return out
+
+
+def _path_here(s: "Session", sp: dict, enc: dict, at: dict | None, cache: dict | None = None) -> tuple[dict, list]:
+    """The boss's `.mmap path` to the probe (standing at `at`, or where it is), read point by point."""
+    if at:
+        s.go(at["x"], at["y"], at["z"] + 0.5)
+    u = nav_unit(s, sp, enc, cache)
+    if not u.get("guid"):
+        return {"why": "boss not found"}, []
+    s.ws.track_creates = True
+    try:
+        mark = s.ws.mark()
+        s.ws.set_selection(u["guid"])
+        time.sleep(0.3)
+        path = parse_mmap_path(s.cmd(".mmap path", settle=0.6))
+        _creates_settle(s, mark)
+        pts = path_points(s.ws.events_since(mark, "unit_create"))
+    finally:
+        s.ws.track_creates = False
+    return path, pts
+
+
+def _ground_stage(s: "Session", sp: dict, enc: dict, boss: dict, prev: dict, cache: dict | None = None) -> dict:
+    """The staging retry when both the line's point and the path fallback fail: for each of GROUND_TRIES, the
+    candidate (turned_candidate) at the boss's height + 1 (the probe lands on the floor below; `.go xyz x y` without z would take the map's
+    top surface, the keep's roof in Utgarde Keep), then the boss's `.mmap path` to it, read point by point; the first
+    judge_ground pass wins."""
+    tries = []
+    for back, turn in GROUND_TRIES:
+        cand = turned_candidate(boss, prev, back, turn)
+        s.go(cand["x"], cand["y"], boss["z"] + 1)
+        time.sleep(1.0)                   # falls to the floor below, if any
+        me = s.gps()
+        if "x" not in me:
+            tries.append({"back": back, "turn": turn, "why": "no position"})
+            continue
+        here = {k: me[k] for k in ("x", "y", "z")}
+        path, pts = _path_here(s, sp, enc, None, cache)
+        if path.get("why"):
+            tries.append({"back": back, "turn": turn, "why": path["why"]})
+            continue
+        j = judge_ground(boss, here, path, pts)
+        tries.append({"back": back, "turn": turn, "at": here, "path_type": path.get("type"), "n_points": len(pts),
+                      **{k: j.get(k) for k in ("verdict", "why", "boss_yd", "walk_yd")}})
+        if j.get("verdict"):
+            return {"point": j["point"], "points": pts, "tries": tries}
+    return {"point": None, "points": [], "tries": tries}
+
+
+def path_entry(enc: dict) -> int | None:
+    """The creature whose `.mmap path` an event encounter is staged by (EVENT_STAGE path_entry), else None."""
+    return ((enc.get("event") or {}).get("stage") or {}).get("path_entry")
+
+
+def nav_unit(s: "Session", sp: dict, enc: dict, cache: dict | None = None) -> dict:
+    """The unit the navmesh pass selects for `.mmap path`: the encounter's spawn (by spawn id), or for an event
+    encounter the creature its script summons at the stage (path_entry), found once among the creates the probe sees
+    standing there (GM mode) and kept in `cache`."""
+    pe = path_entry(enc)
+    if not pe:
+        return s.unit(sp["spawn_id"], unit_entry(enc))
+    cache = cache if cache is not None else {}
+    if cache.get("guid"):
+        return {"guid": cache["guid"], "entry": pe, "summoned": True}
+    back = s.gps()
+    s.ws.track_creates = True
+    try:
+        mark = s.ws.mark()
+        s.go(sp["x"], sp["y"], sp["z"] + 1)
+        _, ok, _ = F.poll(lambda: [e for e in s.ws.events_since(mark, "unit_create") if guid_entry(e["guid"]) == pe],
+                          bool, timeout=WAYPOINT_WAIT_S * 2, interval=0.3)
+        gs = [e["guid"] for e in s.ws.events_since(mark, "unit_create") if guid_entry(e["guid"]) == pe]
+    finally:
+        s.ws.track_creates = False
+    if "x" in back:
+        s.go(back["x"], back["y"], back["z"])
+    if not gs:
+        return {"guid": None, "entry": pe, "why": f"no creature {pe} seen at the event stage"}
+    cache["guid"] = gs[0]
+    return {"guid": gs[0], "entry": pe, "summoned": True}
 
 
 def _creates_settle(s: "Session", mark: int, quiet: float = 0.75, cap: float = WAYPOINT_WAIT_S) -> int:
@@ -910,12 +1067,12 @@ def _creates_settle(s: "Session", mark: int, quiet: float = 0.75, cap: float = W
     return n
 
 
-def _path_fallback(s: "Session", sp: dict, enc: dict, boss: dict, prev: dict) -> dict:
+def _path_fallback(s: "Session", sp: dict, enc: dict, boss: dict, prev: dict, cache: dict | None = None) -> dict:
     """The boss's path to the previous staging point, point by point: the probe (GM) stands on the previous staging
     point, selects the boss and runs `.mmap path`; the waypoints in sight arrive as creates, and the probe then steps
     to the boss so the ones near it (out of sight from far away) arrive too, within their 9 s."""
     s.go(prev["x"], prev["y"], prev["z"] + 0.5)
-    u = s.unit(sp["spawn_id"], enc["credit_entry"])
+    u = nav_unit(s, sp, enc, cache)
     if not u.get("guid"):
         return {"why": "boss not found from the previous staging point"}
     s.ws.track_creates = True
@@ -1077,7 +1234,9 @@ def encounter_summary(rec: dict, roles: dict) -> dict:
             r = roles.get(n, "probe")
             by_role[r] = by_role.get(r, 0) + 1
     return {"boss": rec["boss"], "encounter": rec["encounter"], "attempts": len(rec["attempts"]),
-            "wipes": sum(1 for a in rec["attempts"] if a.get("wipe")), "deaths_by_role": by_role,
+            "wipes": sum(1 for a in rec["attempts"] if a.get("wipe")),
+            "timeouts": sum(1 for a in rec["attempts"] if a.get("timeout") and not a.get("wipe")),
+            "stalled": sum(1 for a in rec["attempts"] if a.get("stalled")), "deaths_by_role": by_role,
             "time_s": round(sum(a.get("fight_s") or 0 for a in rec["attempts"]), 1),
             "with_gather_s": round(sum((a.get("fight_s") or 0) + (a.get("gather", {}).get("s") or 0)
                                        for a in rec["attempts"]), 1),
@@ -1188,7 +1347,7 @@ def revive_dead(s: "Session", names: list[str]) -> dict:
 
 def wait_boss_reset(s: "Session", enc: dict, timeout: float = RESET_S) -> dict:
     sp = enc["spawns"][0]
-    v, ok, dt = F.poll(lambda: s.unit(sp["spawn_id"], enc["credit_entry"]),
+    v, ok, dt = F.poll(lambda: s.unit(sp["spawn_id"], unit_entry(enc)),
                        lambda u: bool(u.get("health")) and u["health"] == u.get("max_health") and not u.get("in_combat"),
                        timeout=timeout, interval=POLL_S)
     return {"ok": ok, "s": dt, "health": v.get("health"), "max": v.get("max_health")}
@@ -1230,6 +1389,58 @@ def pull(s: "Session", boss_guid: int, tank: str | None, comps: list[dict], appr
     return {"steps": steps, "ordered": True, "engaged": False, "why": "too many steps"}
 
 
+def stall_breaker(e: dict, boss_guid: int | None, fighter_guids: set | None = None) -> bool:
+    """A combat event that shows the pull is under way: one involving the boss, or (an event boss, whose summoner
+    never fights: fighter_guids given) one involving any fighter."""
+    if e["kind"] not in ("melee_damage", "spell_damage", "attack_start"):
+        return False
+    who = (e.get("attacker"), e.get("victim"))
+    if fighter_guids is not None:
+        return any(g in fighter_guids for g in who)
+    return boss_guid is not None and boss_guid in who
+
+
+def event_boss_guids(events: list[dict], entry: int) -> list[int]:
+    """GUIDs of the event boss (its credit entry), in the order first seen in combat events or as the probe's self-AI
+    target (UNIT_FIELD_TARGET in the probe's own value updates)."""
+    seen: list[int] = []
+    lo = hi = 0
+    for e in events:
+        gs = []
+        if e["kind"] in ("melee_damage", "spell_damage", "attack_start"):
+            gs = [e.get("attacker"), e.get("victim")]
+        elif e["kind"] == "self_values":
+            fl = e.get("fields") or {}
+            if UNIT_FIELD_TARGET in fl or UNIT_FIELD_TARGET + 1 in fl:
+                lo, hi = fl.get(UNIT_FIELD_TARGET, lo), fl.get(UNIT_FIELD_TARGET + 1, hi)
+                gs = [(hi << 32) | lo]
+        for g in gs:
+            if g and g not in seen and guid_entry(g) == entry:
+                seen.append(g)
+    return seen
+
+
+def read_event_boss(s: "Session", enc: dict, mark: int) -> dict:
+    """The summoned boss's scaled health, once it has shown up in a fight: `.npc info` + `.ab creaturestat` by GUID."""
+    gs = event_boss_guids(s.ws.events_since(mark), enc["credit_entry"])
+    for g in gs:
+        r = s.read_selected_boss(g, enc["credit_entry"])
+        if r["ok"]:
+            return r | {"how": "summoned boss, seen in combat, read by GUID"}
+    return {"ok": False, "seen": len(gs)}
+
+
+def event_pull(s: "Session", event: dict) -> dict:
+    """The pull of an event boss: the probe (GM mode already off) teleports onto the script's summon point
+    (EVENT_STAGE, cited there), so what the script summoned engages it."""
+    st = event.get("stage")
+    if not st:
+        return {"ordered": False, "why": "no event stage"}
+    r = s.go(st["x"], st["y"], st["z"] + 0.5)
+    return {"ordered": True, "event_stage": {k: st[k] for k in ("x", "y", "z")},
+            "arrived": bool(r.get("event")), "source": st.get("source")}
+
+
 def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[str], tank: str | None,
           selfbot: bool, say, approach: list[dict] | None = None, engaged: bool = False) -> dict:
     """One pull: select the boss, order the tank in (or, solo, stand inside the boss's aggro radius with the self-AI),
@@ -1239,8 +1450,9 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
     probe_name = s.who["char"]
     sp = enc["spawns"][0]
     bit = 1 << enc["bit"]
+    event = enc.get("event")
     a: dict = {"deaths": [], "wipe": False}
-    u = s.unit(sp["spawn_id"], enc["credit_entry"])
+    u = s.unit(sp["spawn_id"], unit_entry(enc))
     a["boss_before"] = {k: u.get(k) for k in ("guid", "health", "max_health", "in_combat")}
     if not u.get("guid"):
         # no live read of the boss (not spawned, an entry mismatch, or not in an active grid): nothing to pull. It
@@ -1261,7 +1473,12 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
             # GM mode stays on until the pull (run 2 of slice 3.4: a probe with GM off and no AI at the staging point
             # kept the party in a trash fight it never finished); off from here, so it fights like a player
             a["gm_off"] = s.cmd(".gm off", settle=0.3)
-        if not engaged:
+        if event and selfbot and not engaged:
+            # an event boss (Vazruden): its summoner is passive and out of reach, so there is nothing to order the tank
+            # at. The probe (GM off) steps onto the script's summon point; what spawns there engages it, and the
+            # companions (following their master, `dps assist`/`tank`) join the fight.
+            a["pull"] = event_pull(s, event)
+        elif not engaged:
             a["pull"] = pull(s, u["guid"], tank, comps, approach or [])
         if selfbot:
             # the probe joins as the fifth fighter after the order (its self-AI picks its own targets)
@@ -1271,6 +1488,7 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
     t0 = time.time()
     alive = {n: True for n in fighters}
     trace = []
+    fighter_guids = {c["guid"] for c in comps} | {s.guid}
     while True:
         time.sleep(POLL_S)
         rows = s.binds(f["map"])
@@ -1297,13 +1515,16 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
         if el > FIGHT_S:
             a["timeout"] = True
             break
-        if el > STALL_S and not any(e["kind"] in ("melee_damage", "spell_damage", "attack_start")
-                                    and u.get("guid") in (e.get("attacker"), e.get("victim"))
+        if event and not (a.get("event_boss") or {}).get("ok") and el - a.get("_boss_try", -99) >= 5:
+            a["_boss_try"] = el
+            a["event_boss"] = read_event_boss(s, enc, mark)
+        if el > STALL_S and not any(stall_breaker(e, u.get("guid"), fighter_guids if event else None)
                                     for e in s.ws.events_since(mark)):
-            a["timeout"] = a["stalled"] = True       # nobody ever fought the boss
+            a["timeout"] = a["stalled"] = True       # nobody ever fought the boss (an event: nobody fought at all)
             break
     a["fight_s"] = round(time.time() - t0, 1)
     a["trace"] = trace
+    a.pop("_boss_try", None)
     evs = s.ws.events_since(mark)
     guids = {c["guid"]: c["name"] for c in comps} | {s.guid: "probe"}
     a["hits_taken"] = {}
@@ -1316,7 +1537,7 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
     if comps and s.selfbot:
         a["self_off"] = set_selfbot(s, False)
     if not a.get("killed"):
-        b = s.unit(sp["spawn_id"], enc["credit_entry"])
+        b = s.unit(sp["spawn_id"], unit_entry(enc))
         a["boss_after"] = {k: b.get(k) for k in ("health", "max_health", "in_combat")}
     return a
 
@@ -1365,6 +1586,7 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
         point = st.get("point")
         gpt = (st.get("gather") or {}).get("point")
         rec: dict = {"boss": sp["name"], "encounter": enc["encounter"], "bit": enc["bit"], "stage": point,
+                     "event": enc.get("event"),
                      "stage_verdict": st.get("verdict"), "gather_point": gpt,
                      "gather_why": (st.get("gather") or {}).get("why"), "attempts": []}
         ev["encounters"].append(rec)
@@ -1391,7 +1613,7 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
                     # the gather summons them to the gather point instead.
                     a["hold"] = hold_party(s, comps)
                 s.go(first["x"], first["y"], first["z"] + 0.5, f["map"])
-                boss_guid = s.unit(sp["spawn_id"], enc["credit_entry"]).get("guid")
+                boss_guid = s.unit(sp["spawn_id"], unit_entry(enc)).get("guid")
                 if first is gpt:
                     # gather farther back (out of the boss's reach), then walk in together
                     a["gather_back"] = gather_at(s, comps, boss_guid, limit=READY_S)
@@ -1406,6 +1628,7 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
             a |= fight(s, f, enc, comps, fighters, tank, selfbot, say, st.get("approach"), engaged=engaged)
             rec["attempts"].append(a)
             say({"boss": sp["name"], "attempt": a["n"], "killed": a.get("killed"), "wipe": a["wipe"],
+                 "timeout": a.get("timeout"),
                  "fight_s": a["fight_s"], "deaths": a["deaths"], "why": a.get("why"),
                  "engaged_early": a.get("boss_engaged_before_pull"), "unready": a.get("unready")})
             if a.get("why") == "selfbot not enabled":

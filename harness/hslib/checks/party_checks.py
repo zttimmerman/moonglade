@@ -24,7 +24,7 @@ import time
 
 from .. import companion as C, db, dbc, dungeon as D, fixtures as F, partyplan as PP, paths as P, soap
 from ..probe import proto as W
-from ..registry import CheckFail, check, require
+from ..registry import CheckFail, CheckSkip, check, require
 
 CAP = "dungeon-companions"
 COVERS = (
@@ -426,23 +426,58 @@ def _keep(name: str, ev: dict) -> None:
     (RUN_DIR / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}.json").write_text(json.dumps(ev, indent=1, default=str))
 
 
+ONLY_ENV = "HS_DNG_PARTY_ONLY"     # builder runs: one listed dungeon's LFG id (or several, comma-separated)
+INITSELF_OK = "initself ok"        # PlayerbotMgr.cpp HandlePlayerbotCommand "initself": messages.push_back("initself ok")
+
+
+def party_clear_dungeons(env: dict) -> tuple[tuple, bool]:
+    """(the LFG ids dng.party_clear runs, partial). Every listed dungeon (dungeon.LISTED, in order) unless ONLY_ENV
+    names some of them; it's honoured only inside a harness run (HS_HARNESS_RUN=1, which `hs run` sets), and a
+    narrowed run is partial: the check then never passes (it skips with the dungeon's evidence, or fails). An id that
+    isn't a listed dungeon is refused."""
+    raw = (env.get(ONLY_ENV) or "").strip()
+    if not raw:
+        return D.LISTED, False
+    if env.get("HS_HARNESS_RUN") != "1":
+        raise CheckFail(f"${ONLY_ENV} is a builder switch for `hs run` only; unset it")
+    try:
+        ids = tuple(int(x) for x in raw.split(",") if x.strip())
+    except ValueError:
+        raise CheckFail(f"${ONLY_ENV}={raw!r}: expected LFGDungeons.dbc ids of listed dungeons {D.LISTED}")
+    bad = [i for i in ids if i not in D.LISTED]
+    if bad or not ids:
+        raise CheckFail(f"${ONLY_ENV}={raw!r}: {bad or 'nothing'} not among the listed dungeons {D.LISTED}")
+    return tuple(i for i in D.LISTED if i in ids), True
+
+
+def initself_ok(reply: list[str]) -> bool:
+    return any(INITSELF_OK in x for x in reply or [])
+
+
 @check("dng.party_clear", order=532, capability=CAP, stack="up", layer="gate", profile="scaling-on",
        covers=RUN_COVERS)
 def party_clear(ctx):
-    """openspec/changes/m4-dungeon-companions specs/dungeon-runs "Party clears each listed dungeon" (slice 3.4: The
-    Deadmines only). GIVEN the dungeon probe at the dungeon's target level (LFGDungeons.dbc) with `initself` gear, a
+    """openspec/changes/m4-dungeon-companions specs/dungeon-runs "Party clears each listed dungeon": The Deadmines,
+    Razorfen Downs, Hellfire Ramparts and Utgarde Keep (normal), one after another (dungeon.LISTED). GIVEN the dungeon probe at the dungeon's target level (LFGDungeons.dbc) with `initself` gear, a
     /mg party damage-dealer party (the add-on's plan, hslib/partyplan.py) and a fresh copy entered with GM mode off
     (AutoBalance counts 5 players). WHEN dungeon.run_party takes them to each required encounter in
     DungeonEncounter.dbc order (design.md §4: staging by `.mmap path` from the level-3 nav account; gather farther back
     on the path, walk in together, GM mode off, wait until everyone is within 15 yd and out of combat, then the pull),
     with the probe fighting as the fifth member through `.playerbots bot self`. THEN within 45 minutes every required
     encounter's bit is set in the probe's saved completed-encounter mask, with at most 2 wipes per encounter; the
-    evidence holds per encounter the time, wipes, deaths by role and the boss's scaled health."""
+    evidence holds per encounter the time, wipes, deaths by role and the boss's scaled health. Every dungeon fact
+    (map, target level, entrance, encounters and their order) is read by dungeon.facts' rules (LFGDungeons.dbc,
+    DungeonEncounter.dbc, world DB); the instance tactics (wotlk-uk for 574, tbc-ramp for 543) are playerbots' own
+    ApplyInstanceStrategies on entry. The 45-minute clock is run_party's: from the unbind before entry to the last
+    encounter (the nav pass, the login and the party's setup are outside it). $HS_DNG_PARTY_ONLY narrows a builder
+    run to some dungeons (party_clear_dungeons); such a run never passes."""
+    import os
     say = _run_log("party")
+    lfgs, partial = party_clear_dungeons(os.environ)
     plan = PP.plan()
-    ev: dict = {"dungeons": []}
+    ev: dict = {"dungeons": [], "listed": list(D.LISTED), "ran": list(lfgs), "partial": partial}
     t0 = time.time()
-    for lfg in (D.DEADMINES,):          # slice 3.4: The Deadmines; the other listed dungeons follow
+    for lfg in lfgs:
         f = D.facts(lfg)
         req, skipped = D.required_encounters(f)
         d: dict = {"dungeon": f["lfg_id"], "map": f["map"], "level": f["target_level"],
@@ -456,6 +491,8 @@ def party_clear(ctx):
                 d["session"] = {k: s.ev.get(k) for k in ("login", "stale_group", "revive")}
                 q = D.gear_quality()
                 d["initself"] = {"quality": q, "reply": s.cmd(f".playerbots bot initself={q}", settle=1.5)}
+                if not initself_ok(d["initself"]["reply"]):
+                    raise C.CompanionError(f"initself: no '{INITSELF_OK}' answer", initself=d["initself"])
                 d["party"] = [add_companion(s, c) for c in PP.commands(plan, "damage")]
                 say({"party": [(c["companion"], c["name"]) for c in d["party"]]})
                 d["run"] = {}
@@ -480,6 +517,9 @@ def party_clear(ctx):
     _keep("party", ev)
     problems = [f"{d['dungeon']}: {p}" for d in ev["dungeons"] for p in d["problems"]]
     require(not problems, "; ".join(problems), **ev)
+    if partial:
+        raise CheckSkip(f"partial run (${ONLY_ENV}): only {list(lfgs)} of {list(D.LISTED)}, all cleared; "
+                        f"not a gate pass", ev)
     return ev
 
 
@@ -516,7 +556,9 @@ def party_clear_problems(d: dict) -> list[str]:
             if a.get("unready"):
                 out.append(f"{r['boss']} pull {a.get('n')}: pulled before the party was gathered "
                            f"({(a.get('gather') or {}).get('why')})")
-        if not any((a.get("boss_before") or {}).get("max_health") for a in r.get("attempts") or []):
+        # the boss's scaled health: read before the pull, or for an event boss (summoned during the fight) by GUID
+        key = "event_boss" if r.get("event") else "boss_before"
+        if not any((a.get(key) or {}).get("max_health") for a in r.get("attempts") or []):
             out.append(f"{r['boss']}: no scaled health read")
     if mask is None:
         out.append("no completed-encounter mask read")
