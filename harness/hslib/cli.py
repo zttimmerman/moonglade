@@ -178,6 +178,8 @@ def main(argv=None) -> int:
     tb.add_argument("results", nargs="?", help="a full run's results.json (default: harness/out/last-full-run/"
                                                "results.json, the last unfiltered full run)")
     tb.add_argument("--label", required=True)
+    tb.add_argument("--ids", nargs="+", help="join only these checks (each passed in the run); the run may then be an "
+                                             "unfiltered pr run: merged checks no full run has executed yet")
     tb.add_argument("--baseline", type=Path, help=argparse.SUPPRESS)      # report.last_full_run: a scratch baseline
     ka = sub.add_parser("keep-awake", help="keep this Mac and its display awake (the assertion every `hs run` holds) "
                                            "for N hours (default 8) or until stopped (Ctrl-C)")

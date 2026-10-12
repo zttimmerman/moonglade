@@ -784,8 +784,11 @@ def _scenario(res: dict, cid: str, fn) -> bool:
     return res[cid]["status"] == "pass"
 
 
+# needs scale.disabled_stock: its scaling-off read (about 12 s, in the scaling-off group, which runs before this one) is
+# session 1's unscaled reference. Without it in the run, _unscaled_ref switches the stack to scaling-off and back
+# inside this session (two worldserver restarts, about 55 s), which overruns the 90 s budget (PR #16's pr run: 124 s).
 @check("dng.session1", order=502, capability=CAP_SCALE, stack="up", layer="integration", profile=SCALING_ON,
-       budget_s=90, children=SESSION1)
+       budget_s=90, children=SESSION1, needs=("scale.disabled_stock",))
 def session1(ctx):
     """One dungeon probe login: scale.module_loaded, then in a fresh Deadmines alone: scale.solo_weaker and
     scale.pause_safe (a 5 s pause), then with 2 and 4 companions added: scale.counts_companions and scale.party_stock.

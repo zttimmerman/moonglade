@@ -420,6 +420,27 @@
    "s": 0.63,
    "status_in_run": "pass"
   },
+  "dng.instance_strategy": {
+   "build_s": 0.0,
+   "duration_s": 55.02,
+   "run": "m4-party-pr16-pr-run",
+   "s": 55.02,
+   "status_in_run": "pass"
+  },
+  "dng.party_preset": {
+   "build_s": 0.0,
+   "duration_s": 45.91,
+   "run": "m4-party-pr16-pr-run",
+   "s": 45.91,
+   "status_in_run": "pass"
+  },
+  "dng.party_preset_tank_player": {
+   "build_s": 0.0,
+   "duration_s": 18.36,
+   "run": "m4-party-pr16-pr-run",
+   "s": 18.36,
+   "status_in_run": "pass"
+  },
   "dng.session1": {
    "build_s": 0.0,
    "duration_s": 75.49,
@@ -2411,6 +2432,22 @@
   "python": "3.14.7"
  },
  "runs": {
+  "m4-party-pr16-pr-run": {
+   "finished": "2026-10-12T08:43:09+00:00",
+   "lanes": 1,
+   "machine": "arm64",
+   "repo_sha": "3098215f4e48f2957c9ec23d337f4a96312bbb76",
+   "source": "harness/results.json",
+   "started": "2026-10-12T08:26:01+00:00",
+   "tier": "pr",
+   "used_for": [
+    "dng.instance_strategy",
+    "dng.party_preset",
+    "dng.party_preset_tank_player"
+   ],
+   "wall_s": 1027.8,
+   "why": "merged checks no full run has executed yet, measured in this pr run"
+  },
   "power-guard": {
    "finished": "2026-10-08T12:34:05+00:00",
    "machine": "arm64",
