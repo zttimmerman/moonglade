@@ -450,6 +450,9 @@ class PartyClearJudge(UnitCase):
         nohp["run"]["encounters"][0]["attempts"] = [{"boss_before": {}}]
         self.assertTrue(PCK.party_clear_problems(nohp))
         self.assertTrue(PCK.party_clear_problems({}))
+        unready = self.ev()
+        unready["run"]["encounters"][0]["attempts"][0] |= {"n": 1, "unready": True, "gather": {"why": "arriving: H"}}
+        self.assertIn("before the party was gathered", PCK.party_clear_problems(unready)[0])
 
 
 class ReservedAccounts(UnitCase):
@@ -480,3 +483,16 @@ class ReservedAccounts(UnitCase):
         login, new = self.login_as("Someone")
         self.assertEqual(login["account"], "Someone")
         self.assertFalse(new)
+
+
+class HoldParty(UnitCase):
+    def test_every_companion_is_told_to_stay(self):
+        s = FakeSession()
+        orig = D.time.sleep
+        D.time.sleep = lambda x: None
+        try:
+            self.assertEqual(D.hold_party(s, COMPS), ["Tank", "Heal"])
+        finally:
+            D.time.sleep = orig
+        self.assertEqual([x for x in s.ws.sent if x[0] == "whisper"],
+                         [("whisper", "Tank", "stay"), ("whisper", "Heal", "stay")])

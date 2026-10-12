@@ -512,6 +512,10 @@ def party_clear_problems(d: dict) -> list[str]:
             out.append(f"{r['boss']}: {sm.get('wipes')} wipes")
         if mask is not None and r.get("bit") is not None and not mask & (1 << r["bit"]):
             out.append(f"{r['boss']}: bit {r['bit']} not in the saved mask {mask}")
+        for a in r.get("attempts") or []:
+            if a.get("unready"):
+                out.append(f"{r['boss']} pull {a.get('n')}: pulled before the party was gathered "
+                           f"({(a.get('gather') or {}).get('why')})")
         if not any((a.get("boss_before") or {}).get("max_health") for a in r.get("attempts") or []):
             out.append(f"{r['boss']}: no scaled health read")
     if mask is None:

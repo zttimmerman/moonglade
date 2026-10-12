@@ -1151,6 +1151,15 @@ def gather_at(s: "Session", comps: list[dict], boss_guid: int | None = None, lim
         time.sleep(POLL_S)
 
 
+def hold_party(s: "Session", comps: list[dict]) -> list[str]:
+    """Whisper `stay` (playerbots ChatTriggerContext "stay": the stay movement strategy) to every companion, so none of
+    them runs after the probe's next teleport; `follow` (walk_in) undoes it."""
+    for c in comps:
+        s.ws.chat("stay", W.CHAT_MSG_WHISPER, to=c["name"])
+    time.sleep(0.5)
+    return [c["name"] for c in comps]
+
+
 def walk_in(s: "Session", comps: list[dict], hops: list[dict]) -> dict:
     """Walk the gathered party in: the probe (GM mode on, so nothing aggroes on it alone) hops along the path toward
     the staging point; the companions follow it on foot (`follow`), and each hop waits until all of them are within
@@ -1372,6 +1381,11 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
             else:
                 s.cmd(".gm on", settle=0.3)
                 first = gpt if gpt and mode == "party" else point
+                if first is gpt:
+                    # run 1 of slice 3.4: companions that ran after the probe's teleport crossed trash and the next
+                    # boss on the way (deaths, bosses engaged while members were 30-50 yd behind). They stay put, and
+                    # the gather summons them to the gather point instead.
+                    a["hold"] = hold_party(s, comps)
                 s.go(first["x"], first["y"], first["z"] + 0.5, f["map"])
                 boss_guid = s.unit(sp["spawn_id"], enc["credit_entry"]).get("guid")
                 if first is gpt:
