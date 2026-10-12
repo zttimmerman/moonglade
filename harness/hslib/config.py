@@ -152,6 +152,15 @@ AUTOBALANCE = {
 #   AutoBalance.PlayerChangeNotify  welcome / "X entered" / "X left" lines -> 0 above
 #   (no key)  ABPlayerScript.cpp:224 "leaving_instance_combat_change", sent when the party size changed during a fight
 #             and the fight ends; no setting turns it off (design.md "As built", reported to the orchestrator)
+# m4-party-preset (m4-dungeon-companions design.md §1.1-§1.2, §2): mod-playerbots settings in every profile, after the
+# profile's own. Both are playerbots.conf.dist defaults at our pin (conf:468, :472), set explicitly so an upstream
+# default change can't silently turn them off.
+PLAYERBOTS = {
+    # companions step out of ground effects (AiFactory.cpp:290-291 adds `avoid aoe` when the master is a real player)
+    "AiPlayerbot.AutoAvoidAoe": "1",
+    # boss tactics on entering a covered dungeon (PlayerbotAI::ApplyInstanceStrategies, PlayerbotAI.cpp:1636-1770)
+    "AiPlayerbot.ApplyInstanceStrategies": "1",
+}
 AUTOBALANCE_CHAT_OFF = ("AutoBalanceAnnounce.enable", "AutoBalance.PlayerChangeNotify")
 AUTOBALANCE_CONF = "AutoBalance.conf"   # vendor/mod-autobalance/conf/AutoBalance.conf.dist, installed to etc/modules
 
@@ -254,6 +263,7 @@ MODULE_SECTIONS = {"playerbots": "playerbots.conf.dist", "era": ERA_CONF + ".dis
 def module_overrides(prof: dict) -> dict[str, dict[str, str]]:
     """{module .conf.dist name: overrides} for a profile's overrides (what write_all renders into module confs)."""
     return {"playerbots.conf.dist": {"PlayerbotsDatabaseInfo": _dbinfo("playerbots"), **prof.get("playerbots", {}),
+                                     **PLAYERBOTS,
                                      # command server binds 0.0.0.0 with no address option
                                      # (PlayerbotCommandServer.cpp:62); off in every profile.
                                      "AiPlayerbot.CommandServerPort": "0"},

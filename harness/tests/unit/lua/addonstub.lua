@@ -67,7 +67,40 @@ function A.new(opts)
 	end
 	env.StaticPopupDialogs = { CAMP = { text = env.CAMP_TIMER } }
 	env.format = string.format
-	function env.UnitName(unit) if unit == "player" then return opts.player or "Hsprobe" end end
+	-- the party (MoongladeParty.lua): w.party = { { name = , token = }, ... } is party1..partyN (a test adds members
+	-- and fires PARTY_MEMBERS_CHANGED, as the client does on SMSG_GROUP_LIST); opts.class is the player's class token
+	-- (UnitClass's second return), opts.talents the points per talent tree (GetTalentTabInfo's third return; nil = the
+	-- client hasn't loaded talents yet, so GetTalentTabInfo returns nothing)
+	w.party = opts.party or {}
+	local function partyIndex(unit) local i = unit and unit:match("^party(%d)$"); return i and tonumber(i) end
+	function env.UnitName(unit)
+		if unit == "player" then return opts.player or "Hsprobe" end
+		local m = w.party[partyIndex(unit) or 0]
+		return m and m.name
+	end
+	function env.UnitClass(unit)
+		if unit == "player" then
+			if opts.class then return "<class>", opts.class end
+			return nil
+		end
+		local m = w.party[partyIndex(unit) or 0]
+		if m then return "<class>", m.token end
+	end
+	function env.GetTalentTabInfo(tab)
+		if not opts.talents then return nil end
+		return "<tree " .. tab .. ">", "<icon>", opts.talents[tab] or 0, "<background>", 0
+	end
+	function env.GetNumPartyMembers() return #w.party end
+	function env.GetNumRaidMembers() return opts.raid or 0 end
+	-- SendChatMessage(msg, chatType, language, target): recorded (a dot command typed in chat goes to the server as a
+	-- SAY line, which the server runs as a command)
+	function env.SendChatMessage(msg, chatType, lang, target) w.record("SendChatMessage", msg, chatType, lang, target) end
+	-- the chat window: AddMessage records into DEFAULT_CHAT_FRAME.messages
+	local chat = w.frame{ name = "ChatFrame1", parent = ui }
+	chat.messages = {}
+	env.DEFAULT_CHAT_FRAME = chat
+	env.SlashCmdList = {}
+	function env.strtrim(s) return (s:gsub("^%s+", ""):gsub("%s+$", "")) end
 	function env.InCinematic() return nil end
 	function env.CreateFrame(ftype, name, parent, template)
 		local f = w.frame{ type = ftype, name = name, parent = parent }

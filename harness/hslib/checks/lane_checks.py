@@ -213,7 +213,7 @@ def _tree_mtimes(root: Path) -> dict:
     return out
 
 
-@check("lane.refusal", order=33, capability=CAP, stack="any", layer="unit", parallel_safe=True)
+@check("lane.refusal", order=33, capability=CAP, stack="any", layer="unit", parallel_safe=False)
 def lane_refusal(ctx):
     """second-stack "Lane B refused outside a harness run" (HS_LANE part): with HS_LANE=b and no live harness run
     (no run id, or a spoofed HS_HARNESS_RUN=1 with a dead run id), `hs up`, `./play`, `hs lane init`, `hs lane reset`,

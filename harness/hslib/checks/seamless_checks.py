@@ -1029,11 +1029,11 @@ def friendly_errors(ctx):
 # ---------------------------------------------------------------- login text (probe)
 
 PROBE_STAY_S = 30            # spec: stays in the world for 30 s
-FORBIDDEN_LOGIN = ("server", "realm", "azerothcore", "playerbot", "mod-")
+FORBIDDEN_LOGIN = ("server", "realm", "azerothcore", "playerbot", "mod-", "autobalance")   # autobalance: m4-party-preset
 # chat types that are other people talking openly (SharedDefines.h enum ChatMsg), not text addressed to the character
 PUBLIC_CHAT = {0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x10, 0x11, 0x27, 0x29, 0x2C, 0x2D,
                0x30, 0x31, 0x33}
-SELF_TEST_TEXT = "Moonglade self-test: server realm AzerothCore playerbot mod-test"
+SELF_TEST_TEXT = "Moonglade self-test: server realm AzerothCore playerbot mod-test AutoBalance"
 
 
 def _addressed(t: dict) -> bool:
@@ -1055,12 +1055,12 @@ def _hits(texts: list[dict]) -> list[dict]:
 
 
 @check("client.login_text_clean", order=129, capability=CAP_CONN, stack="up", layer="integration", targeted=True,
-       covers=("modules/mod-moonglade/src/MoongladeQuiet.cpp",
+       covers=("modules/mod-moonglade/src/MoongladeQuiet.cpp", "modules/mod-moonglade/src/logic/ChatFilter*",
                "modules/mod-moonglade/conf/mod_moonglade.conf.dist#Moonglade.QuietServerText",
                "harness/hslib/checks/seamless_checks.py"))   # targeted (design 16): its own code; a headless probe
 def login_text_clean(ctx):
     """A character logs in through the headless probe and stays in the world 30 s: no SMSG_MOTD and no system or chat
-    message addressed to it containing server, realm, AzerothCore, playerbot or mod- (case-insensitive). Then the check
+    message addressed to it containing server, realm, AzerothCore, playerbot, mod- or AutoBalance (case-insensitive). Then the check
     shows it can see such a message: a GM announcement with those words (SOAP) reaches the same session and is
     flagged."""
     from .. import soap

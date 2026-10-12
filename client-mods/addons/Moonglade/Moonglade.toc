@@ -1,8 +1,9 @@
 ## Interface: 30300
 ## Title: Moonglade
-## Notes: Moonglade game wording (Exit to Menu and friends), the game menu's pause and your saves.
+## Notes: Moonglade game wording (Exit to Menu and friends), the game menu's pause, your saves and /mg party.
 ## Author: Moonglade
 ## Version: 1
 ## SavedVariables: MoongladeTest, MoongladeSettings
 Moonglade.lua
 MoongladeSaves.lua
+MoongladeParty.lua
