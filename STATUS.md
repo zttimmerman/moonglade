@@ -1,17 +1,18 @@
 # STATUS
 
 ## ▶ Handoff / resume here (rewrite on every material change)
-_Updated 2026-10-11 23:55. **Merged today:**
+_Updated 2026-10-12 01:20. **Merged today:**
+- m4 Deadmines party clear (#12): gate check `dng.party_clear` (Deadmines). Party gathers back on the boss's path, walks in, pulls only when ready; the probe fights as 5th member (selfbot). Builder runs: 3/3 cleared, final driver PASS (1 wipe, Mr. Smite). Verifier PASS (PR tier 86/0).
 - m4 full-run prototype (#11): a `/mg party` party clears The Deadmines headless. VanCleef died on the first pull every time; no tactics gap, no playerbots patch. 4 of 5 runs on the final driver cleared; wipes only at the first three bosses (party pulled while still arriving). Driver `dungeon.run_party`; gate-only checks `dng.party_clear_deadmines`, `dng.solo_two_deadmines`; level-3 account HSDNGNAV (`.mmap path` only). `docs/research/m4-full-run.md`.
 - m4-instance-tactics (#9), selector needs (#10), m4-party-preset (#8), release-fresh-login (#7), release-home-spaces (#6), ci-pipeline (#5), test-pyramid (#4).
 
 **Next:**
-1. m4-dungeon-companions 3.4 slice: reliable Deadmines clear. Gather farther back and walk in together; the probe fights as the 5th member (selfbot) instead of watching; replace the prototype ids with `dng.party_clear`. Then the other three dungeons.
+1. m4-dungeon-companions 3.4, next slice (building): `dng.party_clear` for Razorfen Downs, Hellfire Ramparts, Utgarde Keep. Then `dng.solo_clear` + `dng.run_budget`.
 2. Plan: cut 3.1/3.3's tank/healer/aoe checks (proven by full clears; spec-change log, human gate); keep a small rti/cc check.
 3. m4-alt-companions, then the M4 human gate.
 
 **Follow-ups:**
-- PR #11: unused `timed_out` arg in `next_step`; explicit "boss not found" reason in `fight()`; unit test that every reserved harness account is refused; trim `RUN_COVERS` (dungeon_checks.py); task 1.1 is done but unticked until the change is active.
+- PR #12: early boss engagement (15/20 pulls) recorded, not failed (gate note); 45-min clock excludes nav/login; timed-out pulls not shown in the wipes row; selfbot spirit-release race on death; assert initself; Session.__exit__ should use set_selfbot; 3.4 doc/evidence paths. Task 1.1 done but unticked until the change is active.
 - F2: logic_scan misses `using namespace`. F3: dng.session1 123 s vs 90 s budget. F5: sleep-lint pending list (loosening, human gate). C6: summary wording.
 - The release checks own `.github/workflows/*`; narrow to release.yml.
 - **P0 flaky:** journey.pause / client.pause_menu gold-pixel screenshot heuristic failed once.
