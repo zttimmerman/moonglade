@@ -110,3 +110,37 @@ The self-AI works headless. It matches `scale.solo_final_boss`'s VanCleef kills 
 - Runs 1–3: the party killed Rhahk'Zor, Gilnid, Mr. Smite and Cookie every time (0–2 wipes per boss). Captain Greenskin was never engaged, because of the staging bug above (now fixed). So VanCleef hasn't been tried yet.
 - Wipes happen mostly during the gather. The bots arrive one at a time at a staging point with trash nearby, and the pack or the boss kills them before the pull. The next pull, against the reset boss with the trash dead, wins.
 - Decision: continue. Run 4 has the walking-distance fix, and it needs VanCleef data.
+
+## Slice 3.4: party clear as a check (2026-10-12)
+
+Change `m4-dungeon-companions`, task 3.4, The Deadmines only, branch `change/m4-party-clear`. The prototype's driver lost pulls at the first three bosses while companions were still arriving. Its probe only watched, so four companions fought a dungeon scaled for five players. This slice makes two changes to the driver (design.md §4, "As built (task 3.4)") and turns the run into the gate check `dng.party_clear`. That check replaces `dng.party_clear_deadmines`.
+
+- **Gather farther back, walk in together.** The companions are told to `stay`. The probe (GM mode on) teleports to a gather point on the boss's walking path, at least 20 yd farther from the boss on foot than the staging point, and summons them there. Once everyone is alive, within 15 yd and out of combat for 5 s (or after 120 s), the probe hops along the path to the staging point and waits for the party at each hop. At the staging point the same readiness wait runs again, and only then is the pull sent. A pull sent before the party is ready fails the check.
+- **The probe fights as the fifth member.** It enters with GM mode off, so AutoBalance counts 5 players (world health multiplier 1.0, Rhahk'Zor at 4490 HP). It gets `initself` gear. At the pull it turns GM mode off, orders the tank in, then switches on `.playerbots bot self`. The self-AI goes off again when the probe dies and after each pull. A selfbot that leads the group releases its spirit as soon as it dies (playerbots `AutoReleaseSpiritAction::ShouldAutoRelease`: `groupLeader == bot`), and the ghost lands in a graveyard outside the dungeon.
+- **Fidelity note.** While the selfbot is on, the companions' master isn't a "real player" (`IsRealPlayer`: no PlayerbotAI attached), so a companion that dies mid-fight also releases its spirit at once and leaves the map, instead of waiting for a rez. The driver revives everyone after each pull, and the next gather summons them back.
+
+### Runs
+Three runs, all with the selfbot fighting and 5 players counted. "Early" means the boss was already fighting (a companion engaged it) before the pull order, so no order was sent. The names are the members who were still more than 15 yd away at that moment.
+
+| Run | Driver | Result | Wipes (per boss) | Total |
+|---|---|---|---|---|
+| 1 | gather back + walk in + selfbot | **cleared**, mask 125, PASS | none | 871 s |
+| 2 | + companions `stay` before the probe's teleport (run 1: they ran after it through trash and died on the way) | cleared, mask 125, but **FAIL**: Mr. Smite's first pull went out unready (2 dead after 120 s of unbroken trash combat) | none (that pull timed out after 300 s) | 1192 s |
+| 3 | + GM mode stays on until the pull (run 2: the probe stood at the staging point with GM off and no AI, and the trash fight around it never ended) | **cleared**, mask 125, PASS | Mr. Smite 1 | 1066 s |
+
+Per boss (pulls / wipes / deaths by role / fight time / time including the gather / early engagement):
+
+| Boss (scaled max HP) | Run 1 | Run 2 | Run 3 |
+|---|---|---|---|
+| Rhahk'Zor (4490) | 1 / 0 / — / 18 s / 21 s / early, all present | 1 / 0 / — / 17 s / 19 s / early, all present | 1 / 0 / — / 29 s / 31 s / no |
+| Gilnid (2904) | 1 / 0 / probe 1, tank 1 / 109 s / 220 s / early, tank away | 1 / 0 / — / 46 s / 92 s / no | 1 / 0 / tank 1, healer 1, damage 1 / 56 s / 59 s / early, tank and rogue away |
+| Mr. Smite (3872) | 1 / 0 / probe 1 / 73 s / 145 s / early, all present | 2 / 0 (one 300 s timeout) / tank 1, healer 1, damage 1, probe 1 / 376 s / 499 s / pull 1 **unready**; pull 2 early, 3 away | 2 / 1 / tank 1, healer 1, damage 2, probe 1 / 94 s / 162 s / early both times; pull 2 with healer and mage away |
+| Cookie (2904) | 1 / 0 / — / 39 s / 39 s / early, healer and mage away | 1 / 0 / damage 1 / 12 s / 14 s / early, mage away | 1 / 0 / — / 13 s / 15 s / early, mage away |
+| Captain Greenskin (2904) | 1 / 0 / — / 44 s / 47 s / no | 1 / 0 / — / 40 s / 43 s / no | 1 / 0 / — / 24 s / 27 s / early, all present |
+| Edwin VanCleef (3872) | 1 / 0 / — / 13 s / 13 s / early, tank and rogue away | 1 / 0 / — / 22 s / 22 s / early, tank and rogue away | 1 / 0 / — / 33 s / 35 s / early, all present |
+
+### Findings
+1. **The wipes moved from 0–2 per boss to 0–1 per run.** The prototype's final driver had 2–5 wipes per run, all at the first three bosses. This slice had 0, 0 and 1 (Mr. Smite in run 3). Every boss died on its first pull except Mr. Smite in runs 2 and 3. All three runs set every required bit (mask 125), in 14.5–20 min.
+2. **The bosses usually start fighting before the order.** In 15 of 20 pulls the boss was already fighting before the pull order. In 9 of those, one or more companions were still more than 15 yd away: they hadn't caught up from the gather or the walk-in, or they were fighting trash. This happened most at Cookie and VanCleef, whose gather points are close to the previous boss's room. The staging point is at least 25 yd from the boss, but the companions' own targeting reaches farther. The check fails only when the driver sends its own pull unready. It doesn't fail when a companion engages early; that's recorded per pull.
+3. **The gather point itself is often in trash.** It took up to 124 s per boss (the 120 s limit was hit at Gilnid and Mr. Smite in run 3). Companions died there in runs 1 and 2. The driver revives the dead only once combat has stopped for 5 s, as a player would rez.
+4. **Not done in this slice:** the other three listed dungeons, `dng.solo_clear` (`dng.solo_two_deadmines` is unchanged), and `dng.run_budget`. Next: reduce early engagement, for example by holding the companions at the gather point until the walk-in, or by a staging point farther from the boss when it has trash nearby. Then check `dng.party_clear` 3× in a row before the other dungeons.
