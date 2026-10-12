@@ -934,3 +934,151 @@ class EarlyReturnWhy(UnitCase):
             D.required_encounters = orig
         self.assertEqual(out["why"], "didn't enter")
         self.assertFalse(out["cleared"])
+
+
+class PullOnlyWhenGathered(UnitCase):
+    """M4 gate run (main c88bffd), The Deadmines run 2: the staging gather ran out its 120 s with three companions dead
+    in a trash fight, and the driver pulled Mr. Smite anyway (`unready`, a wipe, dng.party_clear FAIL). design.md §4:
+    the pull goes only when the party is gathered; a gather that runs out is a held attempt (no pull), and the dead get
+    up only once the fight around them is over."""
+
+    class S(FakeSession):
+        def unbind(self, m):
+            return {}
+
+        def enter(self, f):
+            return {"ok": True, "instance": 1}
+
+        def gather(self, n, timeout=45):
+            return {"ok": True}
+
+        def mapstat(self):
+            return {"players": 3}
+
+    def drive(self, gathers, kill=True):
+        """run_party over one encounter with the gather answers in `gathers` (one per gather_at call, the last one
+        repeated); returns (ev, the gather answer each fight followed, the order of steps)."""
+        s = self.S()
+        steps, fights, answers = [], [], list(gathers)
+        stages = {"stages": [{"encounter": 1, "point": {"x": 0, "y": 0, "z": 0},
+                              "gather": {"point": {"x": 20, "y": 0, "z": 0}}, "walk_in": [{"x": 0, "y": 0, "z": 0}]}]}
+
+        def gather_at(s_, comps, boss_guid=None, limit=0, revive=True):
+            g = dict(answers.pop(0) if len(answers) > 1 else answers[0])
+            steps.append(("gather", g["ok"] or bool(g.get("boss_engaged"))))
+            return g
+
+        def fight(s_, f, enc, comps, fighters, tank, selfbot, say, approach=None, engaged=False):
+            fights.append(steps[-1])
+            steps.append(("fight",))
+            return {"deaths": [], "wipe": False, "fight_s": 30.0, "killed": True} if kill else \
+                {"deaths": ["Tank", "Heal", "Probe"], "wipe": True, "fight_s": 30.0}
+
+        patches = {"required_encounters": lambda f: ([ENC], []), "gather_at": gather_at, "fight": fight,
+                   "walk_in": lambda s_, comps, hops: {"hops": len(hops), "steps": []},
+                   "hold_party": lambda s_, comps: [c["name"] for c in comps],
+                   "wait_boss_reset": lambda s_, enc: {"ok": True, "s": 0},
+                   "wait_quiet": lambda s_, comps, timeout=0: steps.append(("quiet",)) or {"ok": True, "s": 0},
+                   "revive_dead": lambda s_, names: steps.append(("revive", tuple(names))) or {}}
+        orig = {k: getattr(D, k, None) for k in patches}
+        for k, v in patches.items():
+            setattr(D, k, v)
+        try:
+            ev = D.run_party(s, {"map": 36}, COMPS, stages, selfbot=True)
+        finally:
+            for k, v in orig.items():
+                if v is None:
+                    delattr(D, k)
+                else:
+                    setattr(D, k, v)
+        return ev, fights, steps
+
+    DEAD = {"ok": False, "s": 120.5, "dead": ["Heal"], "why": "dead: Heal", "far": []}
+    OK = {"ok": True, "s": 2.6}
+
+    def test_a_gather_that_runs_out_is_held_not_pulled(self):
+        # the gate's sequence: the gather back is not ok, the staging gather is not ok (dead), then a good retry
+        ev, fights, steps = self.drive([self.DEAD, self.DEAD, self.OK, self.OK])
+        rec = ev["encounters"][0]
+        held, pulled = rec["attempts"]
+        self.assertEqual(held["held"], "dead: Heal")
+        self.assertFalse(held["unready"])
+        self.assertNotIn("pull", held)
+        self.assertEqual((held["wipe"], held["fight_s"], held["deaths"]), (False, 0.0, []))
+        # one fight, and only right after a gather that was ok
+        self.assertEqual(fights, [("gather", True)])
+        self.assertTrue(rec["killed"] and ev["cleared"])
+        self.assertEqual(rec["summary"]["held"], 1)
+        self.assertEqual(rec["summary"]["wipes"], 0)
+        # the dead get up only after the party's fight is over
+        i = steps.index(("quiet",))
+        self.assertEqual(steps[i + 1], ("revive", ("Tank", "Heal")))
+        rec["attempts"][1]["boss_before"] = {"max_health": 100}
+        self.assertEqual(PCK.party_clear_problems({"run": ev | {"final_mask": 1}}), [])
+
+    def test_counterexample_never_gathered_is_never_pulled_and_fails_the_clear(self):
+        ev, fights, _ = self.drive([self.DEAD])
+        rec = ev["encounters"][0]
+        self.assertEqual(fights, [])
+        self.assertEqual(len(rec["attempts"]), D.MAX_WIPES + 1)        # bounded: held attempts use the retry budget
+        self.assertTrue(all(a["held"] and not a["unready"] for a in rec["attempts"]))
+        self.assertFalse(ev["cleared"])
+        problems = PCK.party_clear_problems({"run": ev})
+        self.assertTrue(any(p.startswith("not cleared") for p in problems))
+        self.assertFalse(any("before the party was gathered" in p for p in problems))
+
+    def test_boss_engaged_during_the_gather_still_fights(self):
+        engaged = {"ok": False, "boss_engaged": True, "s": 3.0}
+        ev, fights, _ = self.drive([self.OK, engaged])
+        a = ev["encounters"][0]["attempts"][0]
+        self.assertTrue(a["boss_engaged_before_pull"])
+        self.assertNotIn("held", a)
+        self.assertEqual(len(fights), 1)
+
+    def test_counterexample_the_old_pull_is_still_a_problem(self):
+        # the check is unchanged: evidence of a pull while not gathered still fails dng.party_clear
+        ev, _, _ = self.drive([self.OK])
+        a = ev["encounters"][0]["attempts"][0]
+        a |= {"unready": True, "gather": {"why": "dead: Heal"}, "boss_before": {"max_health": 100}}
+        problems = PCK.party_clear_problems({"run": ev | {"final_mask": 1}})
+        self.assertEqual(problems, ["B pull 1: pulled before the party was gathered (dead: Heal)"])
+
+
+class WaitQuiet(UnitCase):
+    def test_quiet_after_quiet_s_without_a_fight(self):
+        orig = (D.POLL_S, D.QUIET_S)
+        D.POLL_S, D.QUIET_S = 0.01, 0.05
+        try:
+            r = D.wait_quiet(FakeSession(), COMPS, timeout=1)
+        finally:
+            D.POLL_S, D.QUIET_S = orig
+        self.assertTrue(r["ok"])
+        self.assertGreaterEqual(r["s"], 0.05)            # the wait itself must be quiet, not just "no event yet"
+
+    def test_counterexample_an_ongoing_fight_is_not_quiet(self):
+        import time as _t
+        ev = [{"kind": "melee_damage", "attacker": 99, "victim": 12, "t": _t.time() + 60}]
+        orig = D.POLL_S
+        D.POLL_S = 0.01
+        try:
+            r = D.wait_quiet(FakeSession(events=ev), COMPS, timeout=0.2)
+        finally:
+            D.POLL_S = orig
+        self.assertFalse(r["ok"])
+
+
+class GatherReviveAfterQuiet(UnitCase):
+    def test_counterexample_no_revive_before_quiet_s_of_the_gathers_own_time(self):
+        # a dead companion at the gather's start: no damage event seen yet is not proof the fight is over
+        pos = {1: {"x": 0, "y": 0, "z": 0, "map": 36}, 11: {"x": 5, "y": 0, "z": 0, "map": 36},
+               12: {"x": 0, "y": 9, "z": 0, "map": 36}}
+        s = FakeSession(positions=pos, alive={"Heal": "No"})
+        orig = D.POLL_S
+        D.POLL_S = 0.01
+        try:
+            g = D.gather_at(s, COMPS, 77, limit=0.5)
+        finally:
+            D.POLL_S = orig
+        self.assertFalse(g["ok"])
+        self.assertEqual(g["revived"], {})
+        self.assertNotIn(".revive Heal", s.log)
