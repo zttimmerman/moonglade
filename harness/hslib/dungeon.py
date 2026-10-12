@@ -1257,6 +1257,10 @@ def fight(s: "Session", f: dict, enc: dict, comps: list[dict], fighters: list[st
                  sp["z"] + 1)
             s.cmd(".gm off", settle=0.3)
     else:
+        if selfbot:
+            # GM mode stays on until the pull (run 2 of slice 3.4: a probe with GM off and no AI at the staging point
+            # kept the party in a trash fight it never finished); off from here, so it fights like a player
+            a["gm_off"] = s.cmd(".gm off", settle=0.3)
         if not engaged:
             a["pull"] = pull(s, u["guid"], tank, comps, approach or [])
         if selfbot:
@@ -1390,12 +1394,10 @@ def run_party(s: "Session", f: dict, comps: list[dict], stages: dict | None, sel
                 boss_guid = s.unit(sp["spawn_id"], enc["credit_entry"]).get("guid")
                 if first is gpt:
                     # gather farther back (out of the boss's reach), then walk in together
-                    a["gather_back"] = gather_at(s, comps, boss_guid)
+                    a["gather_back"] = gather_at(s, comps, boss_guid, limit=READY_S)
                     engaged = bool(a["gather_back"].get("boss_engaged"))
                     if not engaged:
                         a["walk_in"] = walk_in(s, comps, st.get("walk_in") or [point])
-                if mode == "party":
-                    a["gm_off"] = s.cmd(".gm off", settle=0.3)
                 if not engaged:
                     a["gather"] = gather_at(s, comps, boss_guid, limit=READY_S if mode == "party" else GATHER_S)
                     engaged = bool(a["gather"].get("boss_engaged"))

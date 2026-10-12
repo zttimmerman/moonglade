@@ -242,6 +242,8 @@ class FakeWs:
 
     def chat(self, msg, kind, to=None):
         self.sent.append(("whisper", to, msg))
+        if hasattr(self, "log"):
+            self.log.append(("whisper", to, msg))
 
     def wait_event(self, pred, mark, timeout=0):
         return next((e for e in self.events if pred(e)), None)
@@ -344,6 +346,9 @@ class FightSetup(UnitCase):
         self.assertFalse(s.selfbot)                                  # never left on after the pull
         self.assertEqual(s.log.count(".playerbots bot self"), 2)
         self.assertTrue(a["pull"]["engaged"])
+        # GM mode goes off right before the order, and the self-AI comes on after it
+        self.assertLess(s.log.index(".gm off"), s.log.index(("whisper", "Tank", "tank attack")))
+        self.assertLess(s.log.index(("whisper", "Tank", "attack")), s.log.index(".playerbots bot self"))
 
     def test_already_engaged_skips_the_order(self):
         s = FakeSession()
