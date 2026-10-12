@@ -13,7 +13,7 @@ _Updated 2026-10-12 06:05. **Merged today:**
 - m4-instance-tactics (#9), selector needs (#10), m4-party-preset (#8), release-fresh-login (#7), release-home-spaces (#6), ci-pipeline (#5), test-pyramid (#4).
 
 **Next:**
-1. **M4 gate rerun (next; after Zach restarts the Mac and frees ~10 GB):** P0s fixed: #21 (party pull hold; release checks under a spaced HOME; `is_wow_client` space fix, ships next release) and #22 (Vazruden read at first sight/2 s/after the fight; check judges gathers from evidence). #22 verifier PASS incl. unnarrowed `dng.party_clear` (all four cleared, 4.5–14.5 min). Rerun: `hs run --tier full` once from a clean main equal to origin/main (public.history_dryrun), ≥40 GB free (setup.fresh_clone), memory ≥5 GB so 2 lanes (layer budgets). Then archive m4-dungeon-companions (tick 1.1/3.4/4.2), Zach's play gate. Follow-ups from #22: after-fight read not yet seen live; `read_selected_boss` should compare parsed GUID; Deadmines bosses often engaged before the pull (5/7). Process: a verifier ran `pkill caffeinate` (stops any caffeinate by name); verifier briefs must forbid it.
+1. **M4 gate rerun 2 (13:29–16:50, FAIL → P0s):** 281 pass / 3 fail. Fixed since run 1: release/firstlaunch/fresh_clone/history all PASS. Fails: `dng.party_clear` (Deadmines: 'AutoBalance counts 1 players, not 5' right after dng.run_budget; Utgarde Keep: Ingvar wiped ×2 + timeout, earlier runs killed him first try; RFD and Ramparts PASS); `report.layer_budgets` (integration 1014/900 s: one lane again, 3.4 GB free memory). Diagnosing both party fails (from 16:52, ~75 min). Next gate run: Zach quits Chrome first (needs ≥5 GB free memory for two lanes).
 2. **P0 flaky (watching):** comp.quest_shared; the next failure carries its diagnosis.
 
 **Follow-ups:**
