@@ -13,7 +13,9 @@ _Updated 2026-10-12 06:05. **Merged today:**
 - m4-instance-tactics (#9), selector needs (#10), m4-party-preset (#8), release-fresh-login (#7), release-home-spaces (#6), ci-pipeline (#5), test-pyramid (#4).
 
 **Next:**
-1. **M4 gate rerun 2 (13:29–16:50, FAIL → P0s):** 281 pass / 3 fail. Fixed since run 1: release/firstlaunch/fresh_clone/history all PASS. Fails: `dng.party_clear` (Deadmines: 'AutoBalance counts 1 players, not 5' right after dng.run_budget; Utgarde Keep: Ingvar wiped ×2 + timeout, earlier runs killed him first try; RFD and Ramparts PASS); `report.layer_budgets` (integration 1014/900 s: one lane again, 3.4 GB free memory). Diagnosing both party fails (from 16:52, ~75 min). Next gate run: Zach quits Chrome first (needs ≥5 GB free memory for two lanes).
+1. **M4 human gate (Zach, next):** play two dungeons with companions (~1.5–2 h). Review at the gate: the spec-change log loosenings (tank/healer/aoe/cc/skull-first moved to human-verify), the 45-min-per-dungeon clock, companions engaging before the pull. Gate run 3 (2026-10-13 00:46–04:17, main a053d69): 282 pass / 2 fail; **every game check PASS** incl. `dng.party_clear` (19.9 / 7.0 / 4.3 / 6.6 min), `dng.solo_clear`, `dng.run_budget`. Fails: `report.layer_budgets` (integration 999/900 s on one lane: 4.28 GB free memory at preflight) + `report.full_run`. m4-dungeon-companions archived (#24). Runs 1–2 fixes: #21, #22, #23.
+2. **Integration budget on one lane (P0, open):** the Mac rarely has 5 GB free while Zach uses it, so full runs fall back to one lane and miss 900 s by ~100 s. Options: make the budget lane-aware (loosening → Zach's call at the gate) or full runs only after closing apps. Recommended: lane-aware budget.
+3. **Release v0.1.3** with the `is_wow_client` space fix (affects every install), after Zach's wife's-laptop report on v0.1.2.
 2. **P0 flaky (watching):** comp.quest_shared; the next failure carries its diagnosis.
 
 **Follow-ups:**
