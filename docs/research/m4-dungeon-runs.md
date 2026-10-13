@@ -90,3 +90,14 @@ Limits: worldserver ≤ 6.0 GB, mysqld ≤ 1.0 GB, all three ≤ 7.0 GB (max(RSS
 2. **Run 1's budget failure was a bug in the check, not the stack.** A sample's time is stamped after its readings. The first sample, taken as the run started, carried a time 0.1 s after `run_party`'s start and failed the "at or before the start" rule. The rule now allows one sampling interval at each end. Re-judged under the fixed rule, run 1's own samples pass. Changing one of them (p95 101 ms, or worldserver 6.01 GB) fails it, and so does an empty sample list.
 3. **Headroom:** memory dominates. Worldserver peaked at 5.19 GB against the 6.0 GB limit. Update times stayed far under the limits (p95 at most 12 ms).
 4. **Wall time:** `dng.run_budget` takes about 25 min, made up of the worldserver restart, the 9.5-minute warm-up, the nav pass and the 13–14-minute clear. When the `perf.*` checks run in the same full run, they warm the world first and the wait is skipped. `dng.solo_clear` takes about 5.5 min.
+
+## M4 milestone gate (2026-10-12/13)
+Three unfiltered `hs run --tier full` runs. Each failure was fixed before the next run.
+
+| Run | `dng.party_clear` | `dng.solo_clear` | `dng.run_budget` | Other fails |
+|---|---|---|---|---|
+| 1 (main c88bffd) | FAIL: Mr. Smite pulled with 3 dead after a Gilnid timeout (fixed #21: a gather that runs out is held, revive only when quiet) | PASS | PASS | release/firstlaunch lookups under a spaced HOME (fixed #21), disk/branch GIVENs, layer budget |
+| 2 (main 02a7e1a) | FAIL: The Deadmines entry saw 1 player (not reproduced; entry-gather evidence added #23); Utgarde Keep: Ingvar reached by revived companions beside the reset boss (fixed #23: revive by summon at the probe) | PASS | PASS | layer budget |
+| 3 (main a053d69) | PASS: The Deadmines 19.9 min (Gilnid 1 wipe), Razorfen Downs 7.0, Hellfire Ramparts 4.3, Utgarde Keep 6.6 | PASS (2.1 min) | PASS | layer budget only: integration 999 s > 900 s, one lane (4.28 GB free memory at preflight, below the 5.0 GB two-lane threshold) |
+
+Between runs 1 and 2, #22 made the event boss's health read by GUID at first sight, then every 2 s and once after the fight, after a 22.7 s Vazruden kill outran the read.
