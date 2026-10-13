@@ -22,6 +22,7 @@ _Updated 2026-10-12 06:05. **Merged today:**
 - PR #15: first gate run must actually run solo_clear/run_budget; warm_up accepts a shorter HS_POP_WARMUP_S; sampler join race; misleading gm_off reason when `.gps` has no x.
 - PR #13: first four-dungeon end-to-end run is at the gate (~45 min); UK ground retry cleared once; 45-min clock reading (gate note); `run_party` early-return `why` not copied to `out`; slow fail for an event without EVENT_STAGE; Vazruden row name; poll z instead of the 1 s floor wait.
 - PR #12: early boss engagement (15/20 pulls) recorded, not failed (gate note); 45-min clock excludes nav/login; timed-out pulls not shown in the wipes row; selfbot spirit-release race on death; assert initself; Session.__exit__ should use set_selfbot; 3.4 doc/evidence paths. Task 1.1 done but unticked until the change is active.
+- Player portrait and the Character button draw as a magenta square (Zach's wife's laptop, v0.1.2, 2026-10-13; also on the dev Mac, e.g. the pause-menu screenshots). The 3D portrait isn't rendering under Wine; cause unconfirmed. Cosmetic.
 - F2: logic_scan misses `using namespace`. F3: dng.session1 123 s vs 90 s budget. F5: sleep-lint pending list (loosening, human gate). C6: summary wording.
 - The release checks own `.github/workflows/*`; narrow to release.yml.
 - **P0 flaky:** journey.pause / client.pause_menu gold-pixel screenshot heuristic failed once.
